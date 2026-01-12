@@ -39,8 +39,12 @@
       "identity": null,
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
+      "category": "public.app-category.utilities",
       "target": [
-        "dmg"
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        }
       ],
       "artifactName": "MacOS_CupNet-${version}.${ext}"
     },
