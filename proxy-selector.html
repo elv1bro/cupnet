@@ -1,74 +1,145 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Proxy Selector</title>
-    <!-- CHANGED: We removed 'self' and will rely on preload.js to do its job.
-         This is the strictest and safest policy. -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+    <title>Launch Settings</title>
     <link rel="stylesheet" href="styles.css">
+    <style>
+        /* Profiles panel */
+        #profiles-panel { margin-top: 10px; }
+        .profile-list { display: flex; flex-direction: column; gap: 5px; max-height: 200px; overflow-y: auto; }
+        .profile-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+            background: #f5f5f5; border: 1px solid #ddd; border-radius: 5px; font-size: 12px; cursor: pointer; }
+        .profile-item:hover { background: #eaf0ff; }
+        .profile-item.selected { background: #dbeafe; border-color: #93c5fd; }
+        .profile-name { font-weight: 600; flex: 1; }
+        .profile-meta { color: #888; font-size: 11px; }
+        .profile-latency { font-size: 11px; color: #555; background: #e8e8e8; padding: 1px 5px; border-radius: 8px; }
+        .profile-latency.fast { background: #dcfce7; color: #166534; }
+        .profile-latency.slow { background: #fef9c3; color: #854d0e; }
+        .profile-latency.dead { background: #fee2e2; color: #991b1b; }
+        .profile-actions { display: flex; gap: 4px; }
+        .profile-btn { padding: 3px 8px; font-size: 11px; border: none; border-radius: 3px; cursor: pointer; }
+        .profile-btn.test { background: #dbeafe; color: #1e40af; }
+        .profile-btn.test:hover { background: #bfdbfe; }
+        .profile-btn.use  { background: #dcfce7; color: #15803d; }
+        .profile-btn.use:hover  { background: #bbf7d0; }
+        .profile-btn.del  { background: #fee2e2; color: #b91c1c; }
+        .profile-btn.del:hover  { background: #fecaca; }
+
+        .add-profile-form { display: none; margin-top: 8px; }
+        .add-profile-form.visible { display: block; }
+        .add-profile-form .form-row { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+        .add-profile-form label { font-size: 12px; color: #555; }
+        .profile-save-row { display: flex; gap: 6px; }
+        .btn-xs { padding: 4px 10px; font-size: 12px; border: none; border-radius: 4px; cursor: pointer; }
+        .btn-xs.primary { background: #007bff; color: #fff; }
+        .btn-xs.primary:hover { background: #0056b3; }
+        .btn-xs.secondary { background: #6c757d; color: #fff; }
+    </style>
 </head>
 <body>
 <div class="proxy-container">
     <div class="app-header">
-        <img id="app-icon" src="" alt="App Icon" width="128" height="128">
+        <img id="app-icon" src="img.png" alt="App Icon" width="128" height="128">
         <h2 id="app-title">Launch Settings</h2>
     </div>
 
     <div class="two-column-layout">
 
+        <!-- ── Left column: Proxy ──────────────────────────────────────────── -->
         <div class="column left-column">
             <fieldset>
                 <legend>Proxy</legend>
                 <div class="form-group">
-                    <label for="new-proxy">Enter new proxy (<code>http://user:pass@host:port</code>):</label>
-                    <input type="text" id="new-proxy" placeholder="Proxy server">
+                    <label for="new-proxy">Enter proxy URL (<code>http://user:pass@host:port</code>):</label>
+                    <input type="text" id="new-proxy" placeholder="http://user:pass@host:port">
                 </div>
-
                 <div class="form-group">
-                    <label for="saved-proxies">Use saved proxy:</label>
+                    <label for="saved-proxies">Or select recently used:</label>
                     <select id="saved-proxies">
-                        <option value="">-- Select --</option>
+                        <option value="">— Select —</option>
                     </select>
                 </div>
-                
-                <!-- Секция для быстрой смены прокси удалена по запросу пользователя -->
+            </fieldset>
+
+            <!-- ── Saved Profiles ──────────────────────────────────────────── -->
+            <fieldset>
+                <legend>Saved Profiles
+                    <button id="btn-show-add-profile" class="btn-xs primary" style="margin-left:8px">+ Save</button>
+                </legend>
+
+                <div class="add-profile-form" id="add-profile-form">
+                    <div class="form-row">
+                        <label>Profile name</label>
+                        <input type="text" id="profile-name-input" placeholder="e.g. US East">
+                    </div>
+                    <div class="form-row">
+                        <label>Country (optional)</label>
+                        <input type="text" id="profile-country-input" placeholder="US" maxlength="4">
+                    </div>
+                    <p style="font-size:11px;color:#888;margin:0 0 8px">URL will be taken from the proxy field above and encrypted.</p>
+                    <div class="profile-save-row">
+                        <button class="btn-xs primary" id="btn-save-profile">Save</button>
+                        <button class="btn-xs secondary" id="btn-cancel-profile">Cancel</button>
+                    </div>
+                </div>
+
+                <div id="profiles-panel">
+                    <div id="profile-list" class="profile-list">
+                        <p style="color:#aaa;font-size:12px;text-align:center;margin:10px 0">No saved profiles</p>
+                    </div>
+                </div>
             </fieldset>
 
             <fieldset>
                 <legend>Tools</legend>
-                <div class="form-group screenshot-option">
-                    <input type="checkbox" id="auto-screenshot" class="large-checkbox">
-                    <label for="auto-screenshot" class="screenshot-label">
-                        Enable automatic screenshots every 5 seconds
-                    </label>
-                    <p class="help-text">Screenshots will be saved to log and visible in the log viewer</p>
+                <div class="form-group">
+                    <div class="screenshot-option">
+                        <input type="checkbox" id="auto-screenshot" class="large-checkbox">
+                        <label for="auto-screenshot" class="screenshot-label">
+                            Auto screenshots every 5 seconds
+                        </label>
+                    </div>
+                    <p class="help-text">Screenshots are saved to the DB and visible in the log viewer</p>
                 </div>
             </fieldset>
         </div>
 
-        <!-- Правая колонка -->
+        <!-- ── Right column: Logging ───────────────────────────────────────── -->
         <div class="column right-column">
+            <fieldset>
+                <legend>Start Page</legend>
+                <div class="form-group">
+                    <label for="homepage-input">Open on new tab (URL or leave blank for built-in page):</label>
+                    <input type="text" id="homepage-input" placeholder="https://example.com or leave blank">
+                    <p class="help-text">Leave blank to use the built-in new tab page (clock + search)</p>
+                </div>
+                <div class="form-group">
+                    <button id="use-newtab-btn" style="font-size:12px;padding:4px 10px">Use built-in page</button>
+                </div>
+            </fieldset>
             <fieldset>
                 <legend>Logging</legend>
                 <div class="form-group">
-                    <label for="log-dir-display">Log directory:</label>
+                    <label>Log directory (legacy JSONL backup):</label>
                     <div class="dir-selector">
-                        <span id="log-dir-display">Loading...</span>
-                        <button id="select-log-dir-btn">Select...</button>
+                        <span id="log-dir-display">Loading…</span>
+                        <button id="select-log-dir-btn">Select…</button>
                     </div>
                 </div>
                 <div class="form-group">
-                    <p id="log-dir-full-path">...</p>
+                    <p id="log-dir-full-path"></p>
                     <button id="open-log-dir-btn">Open Log Directory</button>
                 </div>
                 <div class="form-group">
                     <button id="open-log-viewer-btn">Open Log Viewer</button>
                 </div>
-                
                 <div class="form-group">
-                    <label for="url-filter-patterns">URL filter patterns (one per line, wildcards * supported):</label>
-                    <textarea id="url-filter-patterns" rows="4" placeholder="Example: *google.com*&#10;*facebook.com*&#10;*analytics*"></textarea>
+                    <label for="url-filter-patterns">URL filter patterns (one per line, * wildcard):</label>
+                    <textarea id="url-filter-patterns" rows="4"
+                        placeholder="*google.com*&#10;*analytics*&#10;*tracking*"></textarea>
                     <p class="help-text">URLs matching these patterns will be excluded from logging</p>
                 </div>
             </fieldset>
@@ -76,8 +147,8 @@
     </div>
 
     <div class="button-group">
-        <button id="start-btn">Start With Proxy</button>
-        <button id="no-proxy-btn">Start Without Proxy</button>
+        <button id="start-btn">Apply With Proxy</button>
+        <button id="no-proxy-btn">Apply Without Proxy</button>
     </div>
 </div>
 <script src="proxy-selector.js"></script>

@@ -5,8 +5,15 @@
   "description": "An Electron browser with proxy selection and advanced network logging.",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
-    "debug": "electron --inspect-brk .",
+    "start": "ELECTRON_RUN_AS_NODE= electron .",
+    "debug": "ELECTRON_RUN_AS_NODE= electron --inspect-brk .",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "rebuild:arm64": "arch -arm64 node node_modules/.bin/electron-rebuild -f -w better-sqlite3",
+    "setup:ffi": "cd ../greengo22 && npm install",
+    "test": "bash tests/run-all.sh",
+    "test:utils": "node tests/test-utils.js",
+    "test:mitm": "node tests/test-mitm.js",
+    "test:db": "ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/Electron.app/Contents/MacOS/Electron tests/test-db.js",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:mac": "electron-builder --mac dmg",
@@ -17,10 +24,13 @@
   "icon": "img.png",
   "license": "ISC",
   "devDependencies": {
+    "@electron/rebuild": "^3.6.0",
     "electron": "^28.0.0",
     "electron-builder": "^24.13.0"
   },
   "dependencies": {
+    "better-sqlite3": "^9.4.3",
+    "node-forge": "^1.3.3",
     "proxy-chain": "^2.5.9"
   },
   "build": {
@@ -43,7 +53,10 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["x64", "arm64"]
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
       ],
       "artifactName": "MacOS_CupNet-${version}.${ext}"

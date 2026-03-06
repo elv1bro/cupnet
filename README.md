@@ -1,186 +1,275 @@
-# CupNet - Advanced Network Monitoring Tool
+# CupNet 2.0
 
-![Main Interface](docs/image/main.png)
+Electron-браузер со встроенным прокси, перехватом сетевого трафика и расширенным логированием.
 
-CupNet is a powerful Electron-based desktop application designed for comprehensive network traffic monitoring, debugging, and analysis. It provides advanced features for tracking HTTP/HTTPS requests, WebSocket communications, and capturing browser screenshots with proxy support.
+---
 
-## Features
+## Запуск
 
-- **Complete Network Traffic Monitoring**: Track all HTTP/HTTPS requests and responses with detailed information
-- **WebSocket Monitoring**: Capture and analyze WebSocket connections, frames, errors, and closures
-- **Proxy Support**: Configure and quickly change proxies without session reload
-- **Automatic Screenshots**: Capture browser screenshots at regular intervals or based on activity
-- **Advanced Log Viewer**: Filter, search, and analyze network logs with a user-friendly interface
-- **Copy as cURL**: Generate cURL commands for any request with a single click
-- **Activity-Based Monitoring**: Intelligent screenshot capture based on window activity and mouse movement
+```bash
+cd node/cupnet
+npm install --ignore-scripts
+npm run rebuild:arm64       # только для Apple Silicon (arm64)
+ELECTRON_RUN_AS_NODE= npm start
+```
 
-![Browser Interface](docs/image/browser.png)
+> **Важно для macOS (Apple Silicon):** нативный модуль `better-sqlite3` должен быть скомпилирован под `arm64`. Скрипт `rebuild:arm64` делает это автоматически через `arch -arm64`.  
+> **Важно для запуска из Cursor IDE:** переменная `ELECTRON_RUN_AS_NODE` наследуется от IDE и переключает Electron в режим headless Node.js. Скрипт `start` явно сбрасывает её.
 
-## Installation
+---
 
-### Prerequisites
+## Архитектура
 
-- Node.js (v14.0.0 or higher)
-- npm (v6.0.0 or higher)
-- Electron (v13.0.0 or higher)
+```
+main.js                  — главный процесс Electron
+├── db.js                — SQLite база данных (better-sqlite3)
+├── tab-manager.js       — управление вкладками (BrowserView)
+├── request-interceptor.js — перехват запросов по сессии
+├── rules-engine.js      — движок правил (условия → действия)
+├── har-exporter.js      — экспорт в HAR 1.2
+├── preload.js           — IPC-мост для browser.html / proxy-selector.html
+└── preload-view.js      — минимальный preload для BrowserView-вкладок
 
-### 1. Install from Release (no build needed)
+browser.html             — главное окно (тулбар + таб-бар)
+browser-renderer.js      — логика тулбара и таб-бара
 
-> Auto-update is **disabled**. Download the latest installers from the **Releases** page and install manually.
+log-viewer.html          — окно просмотра сетевых логов
+log-viewer-renderer.js   — виртуальный скролл, фильтры, HAR, replay
 
-#### macOS
-1. Download `MacOS_CupNet-2025.8.15.dmg` from **Releases**.
-2. Open the `.dmg` and drag **CupNet** to **Applications**.
-3. If Gatekeeper warns, right-click the app → **Open**.
+proxy-selector.html      — окно настроек (прокси, стартовая страница…)
+proxy-selector.js        — логика настроек
 
-#### Windows
-1. Download `Windows_CupNet-2025.8.15.exe`.
-2. Run the installer; if SmartScreen warns, choose **More info → Run anyway**.
+rules.html               — редактор правил и перехватчика
+rules.js                 — логика редактора
 
-#### Linux (AppImage)
-1. Download `Linux_CupNet-2025.8.15.AppImage`.
-2. Make it executable and run:
-   ```bash
-   chmod +x Linux_CupNet-2025.8.15.AppImage
-   ./Linux_CupNet-2025.8.15.AppImage
-   
+new-tab.html             — встроенная стартовая страница
+quick-proxy-change.html  — быстрая смена прокси
+```
 
-### 2. Setup (build needed)
+---
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/cupnet.git
-   cd cupnet
-   ```
+## Что нового в версии 2.0
 
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
+### 1. SQLite-база данных (`db.js`)
 
-3. Start the application:
-   ```bash
-   npm start
-   ```
+Вместо записи в JSONL-файлы все данные теперь хранятся в SQLite через `better-sqlite3`.
 
-## Usage
+**Таблицы:**
 
-### Basic Navigation
+| Таблица | Описание |
+|---|---|
+| `sessions` | Сессии работы (старт/конец, прокси, вкладка) |
+| `requests` | HTTP-запросы с заголовками, телами, статусами и временем |
+| `ws_events` | WebSocket фреймы (send/recv) |
+| `screenshots` | Скриншоты в base64 |
+| `proxy_profiles` | Сохранённые прокси-профили (URL зашифрован) |
+| `rules` | Правила подсветки и уведомлений |
+| `intercept_rules` | Правила перехвата (block / modifyHeaders / mock) |
 
-1. **Main Browser Window**: Navigate to any website using the address bar
-2. **Log Viewer**: Access detailed logs by clicking the "Logs" button
-3. **Proxy Selector**: Configure and select proxies from the "Proxy" menu
+**FTS5 (Full-Text Search):**  
+Виртуальная таблица `requests_fts` с триггерами — полнотекстовый поиск по URL и телу ответа без сканирования всей таблицы.
 
-### Proxy Configuration
+**Индексы:**  
+`session_id`, `tab_id`, `url`, `status`, `created_at` — быстрая фильтрация по любому параметру.
 
-1. Open the Proxy Selector from the main menu
-2. Enter proxy details in the format `http://username:password@host:port`
-3. Enable "Auto Screenshots" checkbox if you want automatic screenshots every 5 seconds
-4. Click "Apply" to use the selected proxy
+---
 
-### Quick Proxy Change
+### 2. Многовкладочность (`tab-manager.js`)
 
-1. Click the "Quick Proxy" button in the main interface
-2. Enter the new proxy URL
-3. Click "Apply" to change the proxy without reloading the session
+- Каждая вкладка — отдельный `BrowserView` с изолированной `session.fromPartition`
+- Вкладки не разделяют cookies, кэш и прокси-настройки
+- При создании вкладки автоматически применяется текущий прокси
+- Таб-бар рендерится в `browser.html` динамически через IPC
+- `tab-list-updated` событие синхронизирует UI с состоянием вкладок
+- `target=_blank` ссылки открываются в новой вкладке (через `setWindowOpenHandler`)
+- Загрузка страницы (`did-start-loading` / `did-stop-loading`) → обновляет индикатор в тулбаре
+- Переключение вкладки → URL-бар обновляется до URL активной вкладки
 
-### Log Viewer
+---
 
-![Log Viewer Interface](docs/image/log.png)
+### 3. Перехват запросов (`request-interceptor.js`)
 
-The Log Viewer provides a comprehensive interface for analyzing network traffic:
+Прикрепляется к `tabSession` при создании каждой вкладки.
 
-- **Filtering**: Filter logs by type (HTTP, WebSocket, Screenshot) or status code
-- **Search**: Search for specific URLs or paths
-- **Details View**: Click on any log entry to view detailed information
-- **Copy as cURL**: Generate and copy cURL commands for any request
-- **Screenshot Viewer**: View, save, or copy captured screenshots
-- **JSONL File Support**: Open and analyze saved log files in JSONL format
+**Типы правил:**
 
-### WebSocket Monitoring
+| Тип | Что делает |
+|---|---|
+| `block` | Отменяет запрос (`cancel: true`) |
+| `modifyHeaders` | Добавляет/изменяет/удаляет заголовки запроса и ответа |
+| `mock` | Возвращает фиктивный ответ (статус + MIME + тело) |
 
-CupNet provides detailed monitoring of WebSocket communications:
+**Реализация (macOS / Electron 28+):**
+- `block` и `modifyHeaders` — через `webRequest.onBeforeSendHeaders` / `onHeadersReceived` (надёжные, не затрагивают тело)
+- `mock` — через `session.protocol.handle('http', ...)` и `session.protocol.handle('https', ...)` (новый API, заменяет устаревший `interceptStreamProtocol`)
+- Pass-through запросов через `net.fetch(request)` внутри обработчика — не вызывает рекурсии (документировано в Electron)
+- Удаление заголовков — регистронезависимое
+- `detachFromSession` — корректно отключает все хуки при закрытии вкладки
 
-- **Connection Tracking**: Monitor WebSocket connections and handshakes
-- **Frame Analysis**: View the content of sent and received WebSocket frames
-- **Error Logging**: Track and analyze WebSocket errors
-- **Connection Statistics**: View duration and frame count for closed connections
+---
 
-## Examples
+### 4. Движок правил (`rules-engine.js`)
 
-### Monitoring API Requests
+Обрабатывает каждый входящий HTTP-запрос и сопоставляет с активными правилами из БД.
 
-1. Navigate to a website that makes API requests
-2. Open the Log Viewer
-3. Filter by type "fetch" or "xhr"
-4. Click on any request to view headers, payload, and response
+**Поля условий:** `url`, `method`, `status`, `type`, `duration`, `responseBody`, `requestBody`, `host`, `error`
 
-### Debugging WebSocket Communications
+**Операторы:** `equals`, `notEquals`, `contains`, `notContains`, `startsWith`, `endsWith`, `matches` (regex), `gt`, `lt`, `gte`, `lte`, `between`, `exists`, `notExists`
 
-1. Connect to a website that uses WebSockets
-2. Open the Log Viewer
-3. Filter by type "websocket" or "websocket_frame"
-4. Analyze the WebSocket frames to debug communication issues
+**Действия при совпадении:**
+- `highlight` — подсвечивает строку в лог-вьювере выбранным цветом
+- `screenshot` — делает автоматический скриншот активной вкладки
+- `notification` — показывает системное уведомление (через `Notification` API Electron)
+- `block` — отменяет запрос
 
-### Capturing Activity-Based Screenshots
+---
 
-1. Enable "Auto Screenshots" in the Proxy Selector
-2. The application will automatically capture screenshots when:
-   - The window is active, OR
-   - The mouse has moved in the window within the last 30 seconds
+### 5. HAR-экспортер (`har-exporter.js`)
 
-## Architecture
+Экспортирует данные сессии из SQLite в формат **HAR 1.2** (HTTP Archive).
 
-CupNet is built on Electron with a modular architecture:
+- Корректно формирует структуру `log.entries` с timing, заголовками, телами
+- Поддерживает фильтрацию по `sessionId`
+- Файл сохраняется через `dialog.showSaveDialog` с расширением `.har`
+- Совместим с Chrome DevTools, Charles Proxy, Fiddler
 
-- **Main Process** (`main.js`): Handles core application functionality, proxy management, and screenshot capture
-- **Renderer Process**: Manages the user interface and interaction
-- **Chrome DevTools Protocol**: Used for network monitoring and WebSocket tracking
-- **ProxyChain**: Provides proxy server functionality with authentication support
+---
 
-## Comparison with Alternatives
+### 6. Просмотрщик логов (`log-viewer.html` + `log-viewer-renderer.js`)
 
-After evaluating numerous network monitoring tools, CupNet was developed to address the limitations found in existing solutions. Here's how CupNet compares to similar applications:
+#### Виртуальный скролл
+- Рендерится только видимая часть списка (фиксированный `ROW_HEIGHT`)
+- Корректно работает с сотнями тысяч записей без подвисания
+- Автопрокрутка с кнопкой отключения при ручном скролле
+- Клавиатурная навигация: `↑ ↓ Home End`
 
-### Alternatives Evaluated
+#### Фильтры и поиск
+- По типу (`XHR`, `Fetch`, `Document`, `WebSocket`…)
+- По HTTP-статусу
+- По вкладке (`tabId`)
+- По сессии
+- **FTS-поиск** (чекбокс) — полнотекстовый поиск через SQLite FTS5 по URL и телу ответа
 
-- **Charles Proxy**: A powerful tool but with a steep learning curve. Requires significant configuration for proxy settings and doesn't integrate screenshot functionality. WebSocket support is limited compared to CupNet's comprehensive frame analysis.
+#### Действия
+- **Export HAR** — экспорт текущей сессии в `.har`
+- **Replay** — повторная отправка запроса через `net.fetch`, сравнение с оригинальным ответом (diff)
+- **Intercept Rules** — открывает редактор правил прямо из лог-вьювера
+- **Подсветка** — записи, сработавшие по правилу, выделяются цветом в реальном времени
 
-- **Fiddler**: Offers good HTTP inspection but has limited WebSocket support. The proxy configuration is more complex and requires manual setup for each session. Lacks the activity-based monitoring features of CupNet.
+#### Детальная панель
+- Полные заголовки запроса и ответа
+- Тело ответа (с декодированием base64 для изображений)
+- Скриншоты (предпросмотр в панели)
+- Результат Replay с diff
 
-- **Wireshark**: Extremely powerful but overwhelming for many users. Operates at a lower network level, making it difficult to isolate specific application traffic. No built-in proxy support or screenshot capabilities.
+---
 
-- **Browser DevTools**: Native tools in browsers like Chrome and Firefox offer basic network monitoring but lack proxy integration, persistent logging, and the ability to capture screenshots automatically.
+### 7. Редактор правил (`rules.html` + `rules.js`)
 
-### CupNet Advantages
+Два раздела:
 
-- **Simplified Proxy Integration**: CupNet allows you to capture traffic with or without proxies with minimal configuration. The quick proxy change feature eliminates the need for session reloads.
+**Highlight Rules** — визуальные правила на основе условий:
+- Конструктор условий (поле + оператор + значение), несколько условий на одно правило
+- Действия: highlight (с выбором цвета), screenshot, notification, block
+- Включение/выключение каждого правила через toggle
+- Счётчик срабатываний (`hit_count`)
 
-- **Intuitive Interface**: Designed for ease of use without sacrificing powerful features. The log viewer provides clear organization of different request types.
+**Intercept Rules** — правила перехвата запросов:
+- `block` — без дополнительных параметров
+- `modifyHeaders` — JSON-поля для заголовков запроса/ответа и списков удаляемых заголовков
+- `mock` — HTTP-статус, MIME-тип, тело ответа
 
-- **Comprehensive WebSocket Support**: Full lifecycle monitoring of WebSocket connections with detailed frame analysis that many alternatives lack.
+---
 
-- **Intelligent Screenshot Capture**: Activity-based screenshot functionality that optimizes resource usage while ensuring you capture important visual states.
+### 8. Прокси-профили
 
-- **All-in-One Solution**: Combines network monitoring, proxy management, and screenshot capabilities in a single application without requiring complex setup or configuration.
+- Сохранение профилей с именем, страной и URL в зашифрованном виде
+- Шифрование через `safeStorage` Electron (AES через keychain macOS / libsecret Linux / DPAPI Windows)
+- Отображается только маскированный URL (пароль заменён на `***`)
+- Кнопка **Test** — проверяет доступность прокси и сохраняет задержку (`last_latency_ms`)
+- Цветовая индикация скорости: зелёный (<500ms), жёлтый (<2s), красный (>2s)
+- Кнопка **Use** — подставляет URL профиля в поле прокси
 
-CupNet was specifically designed to eliminate the frustrations encountered with other tools, providing a streamlined experience for developers and testers who need to monitor network activity efficiently.
+---
 
-## Contributing
+### 9. Стартовая страница (`new-tab.html`)
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Встроенная страница, открывающаяся в новых вкладках.
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+- **Часы** — большие, обновляются каждую секунду, дата на русском
+- **Поиск** с выбором поискового движка: Google, DuckDuckGo, Яндекс, Bing
+  - Умный разбор ввода: URL / hostname / IP / поисковый запрос
+  - Выбор движка сохраняется в `localStorage`
+- **Быстрые ссылки**: Google, GitHub, Gmail, YouTube, X, Google Translate
+- Тёмная тема, фоновая сетка
 
-## License
+**Настройка стартовой страницы:**  
+В Proxy Settings → секция «Start Page» — можно задать произвольный URL или оставить пустым для встроенной страницы.
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+---
 
-## Contact
+### 10. Тулбар и интерфейс
 
-Project Maintainer - elv1bro
-GitHub: [https://github.com/elv1bro/cupnet](https://github.com/elv1bro/cupnet)
+**Кнопки навигации** (SVG-иконки, без эмодзи):
+- ← Back, → Forward, ↻ Reload, ⌂ Home
+
+**Кнопки действий** (SVG-иконка + текстовая подпись):
+- `Log` — открывает Network Activity Log
+- `Screen` — делает скриншот активной вкладки
+- `DevTools` — открывает Chrome DevTools для активной BrowserView-вкладки
+
+**DevTools (исправлено):**  
+`F12` и `Cmd+Shift+I` (Shell) открывают DevTools правильного контекста. Меню → View:
+- `Developer Tools (Page)` — DevTools для сайта в активной вкладке
+- `Developer Tools (Shell)` — DevTools для `browser.html` (UI оболочки)
+
+---
+
+### 11. Исправленные баги
+
+| Проблема | Решение |
+|---|---|
+| DevTools открывался для `browser.html` вместо сайта | Кастомный обработчик `toggleDevTools` на активный BrowserView |
+| `TOOLBAR_HEIGHT = 120px` при реальных 95px | Исправлено на 95 (35 tab-bar + 60 toolbar) — убран зазор |
+| `did-finish-load` с `.on()` создавал дублирующие вкладки при reload | Заменено на `.once()` |
+| Индикатор загрузки не работал | `did-start-loading` / `did-stop-loading` форвардятся в toolbar |
+| URL-бар не обновлялся при навигации | `did-navigate` отправляет `url-updated` в mainWindow |
+| URL-бар не обновлялся при смене вкладки | `switchTab()` отправляет `url-updated` + `set-loading-state` |
+| `target=_blank` ссылки терялись | `setWindowOpenHandler` → открытие в новой вкладке |
+| Фавиконки всегда показывали 🌐 | `page-favicon-updated` → реальная `<img>` с fallback |
+| Перехватчик (`request-interceptor`) не работал | `attachToSession` не вызывался нигде — добавлен во все точки создания вкладок |
+| `interceptStreamProtocol` не работал на macOS в Electron 28 | Заменён на `session.protocol.handle()` (API Electron 25+) |
+| Бесконечная рекурсия при pass-through в перехватчике | `net.fetch(request)` внутри `protocol.handle` не рекурсивен |
+| Только `http` перехватывался, не `https` | Зарегистрированы обработчики для обоих протоколов |
+| `ELECTRON_RUN_AS_NODE=1` от Cursor IDE ломал запуск | `package.json start` явно сбрасывает переменную |
+| `better-sqlite3` скомпилирован под x86_64 на Apple Silicon | `rebuild:arm64` через `arch -arm64` + universal Node.js от Cursor |
+
+---
+
+## Структура базы данных
+
+```sql
+sessions          id, started_at, ended_at, proxy_info, tab_id, notes
+requests          id, session_id, tab_id, request_id, url, method,
+                  status, type, duration_ms, request_headers,
+                  response_headers, request_body, response_body, error, created_at
+ws_events         id, session_id, tab_id, url, direction, payload, created_at
+screenshots       id, session_id, tab_id, url, data_b64, created_at
+proxy_profiles    id, name, url_encrypted, url_display, country,
+                  last_tested_at, last_latency_ms, created_at
+rules             id, name, enabled, conditions(JSON), actions(JSON), hit_count
+intercept_rules   id, name, enabled, url_pattern, type, params(JSON)
+requests_fts      виртуальная FTS5 таблица (url + response_body)
+```
+
+---
+
+## Зависимости
+
+| Пакет | Версия | Назначение |
+|---|---|---|
+| `electron` | ^28.0.0 | Фреймворк приложения |
+| `better-sqlite3` | ^9.4.3 | Синхронный SQLite-драйвер |
+| `proxy-chain` | ^2.5.9 | Анонимизация прокси URL |
+| `@electron/rebuild` | ^3.6.0 | Пересборка нативных модулей |
+| `electron-builder` | ^24.13.0 | Сборка дистрибутива |
