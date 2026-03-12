@@ -206,6 +206,11 @@ select:focus { border-color: var(--accent); }
 .lv-btn.danger { border-color: #ef4444; color: #ef4444; }
 .lv-btn.danger:hover { background: rgba(239,68,68,0.1); }
 
+#lv-rec-btn { transition: all .2s; }
+#lv-rec-btn.recording { color: #ef4444; border-color: #ef4444; background: rgba(239,68,68,0.12); animation: rec-pulse 1.5s ease-in-out infinite; }
+@keyframes rec-pulse { 0%,100% { opacity: 1; } 50% { opacity: .6; } }
+#lv-rec-btn.stopped { color: var(--text-dim); }
+
 .lv-spacer { flex: 1; }
 
 #lv-count {
@@ -464,12 +469,42 @@ select:focus { border-color: var(--accent); }
 .lv-th:last-child { border-right: none; flex: 1; }
 
 /* Column widths */
-.col-idx      { width: 36px;  flex-shrink: 0; }
-.col-method   { width: 54px;  flex-shrink: 0; }
-.col-status   { width: 48px;  flex-shrink: 0; }
-.col-type     { width: 68px;  flex-shrink: 0; }
-.col-dur      { width: 58px;  flex-shrink: 0; }
-.col-path     { flex: 1; }
+.col-idx      { width: 30px;  flex-shrink: 0; }
+.col-method   { width: 48px;  flex-shrink: 0; }
+.col-status   { width: 44px;  flex-shrink: 0; }
+.col-mark     { width: 34px;  flex-shrink: 0; justify-content: center; }
+.col-host     { width: 128px; flex-shrink: 0; }
+.col-type     { width: 62px;  flex-shrink: 0; }
+.col-dur      { width: 54px;  flex-shrink: 0; }
+.col-path     { flex: 1; display: flex; align-items: center; overflow: hidden; }
+.tag-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    display: inline-block; border: 1px solid rgba(255,255,255,0.22);
+    background: transparent;
+    position: relative;
+}
+.tag-dot.tag-has-note::after {
+    content: '✓';
+    position: absolute;
+    right: -6px;
+    top: -7px;
+    font-size: 8px;
+    font-weight: 700;
+    color: #fbbf24;
+    line-height: 1;
+}
+.status-cookie {
+    margin-left: 2px;
+    font-size: 8px;
+    color: #86efac;
+    vertical-align: super;
+    line-height: 1;
+}
+.host-chip {
+    color: #9fb3d8;
+    font-size: 11px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* Scroll viewport */
 #lv-scroll {
@@ -573,6 +608,16 @@ select:focus { border-color: var(--accent); }
     color: var(--text);
     font-size: 11.5px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* External proxy badge */
+.ext-badge {
+    display: inline-block;
+    font-size: 8px; font-weight: 700;
+    padding: 1px 4px; border-radius: 3px;
+    background: #7c3aed; color: #e9d5ff;
+    margin-right: 4px; vertical-align: middle;
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
 }
 
 /* Rule highlight bar */
@@ -679,8 +724,51 @@ select:focus { border-color: var(--accent); }
     color: var(--text); font-size: 11px; cursor: pointer;
 }
 #lv-copy-url:hover { border-color: var(--accent); color: var(--text-hi); }
+#lv-create-mock-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 4px 10px; border-radius: 5px;
+    background: var(--bg2); border: 1px solid var(--border);
+    color: #f0a030; font-size: 11px; font-weight: 600; cursor: pointer;
+}
+#lv-create-mock-btn:hover { border-color: #f0a030; background: rgba(240,160,48,0.1); }
+#lv-create-mock-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 #lv-replay-diff {
     font-size: 11px; color: var(--text-dim);
+}
+#lv-mark-panel {
+    display: none;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg1);
+}
+#lv-mark-panel.visible { display: flex; }
+.mark-row { display: flex; align-items: center; gap: 8px; }
+.mark-title {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.4px;
+    text-transform: uppercase; color: var(--text-dim);
+    min-width: 74px;
+}
+.mark-colors { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mark-color {
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.25); cursor: pointer;
+}
+.mark-color.active { outline: 2px solid #ffffffcc; outline-offset: 1px; }
+#lv-mark-status {
+    font-size: 11px;
+    color: #4ade80;
+    min-height: 14px;
+}
+.mark-preview {
+    flex: 1;
+    min-width: 120px;
+    color: var(--text-dim);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* Detail tabs */
@@ -724,11 +812,25 @@ select:focus { border-color: var(--accent); }
 .hdr-section-title {
     font-size: 10px; font-weight: 700;
     text-transform: uppercase; letter-spacing: 0.6px;
+    display: flex; align-items: center; gap: 8px;
     color: var(--text-dim);
     padding: 8px 0 4px;
     border-bottom: 1px solid var(--border2);
     margin-bottom: 2px;
 }
+.hdr-copy-btn {
+    background: none; border: 1px solid var(--border2); color: var(--text-dim);
+    font-size: 10px; padding: 1px 7px; border-radius: 4px; cursor: pointer;
+    font-family: inherit; text-transform: none; letter-spacing: 0;
+    margin-left: auto;
+}
+.hdr-copy-btn:hover { color: var(--text-hi); border-color: var(--border); background: var(--bg2); }
+.ck-copy-btn {
+    background: none; border: 1px solid var(--border2); color: var(--text-dim);
+    font-size: 10px; padding: 1px 7px; border-radius: 4px; cursor: pointer;
+    font-family: inherit; margin-left: auto;
+}
+.ck-copy-btn:hover { color: var(--text-hi); border-color: var(--border); background: var(--bg2); }
 .hdr-row {
     display: grid;
     grid-template-columns: 200px 1fr;
@@ -752,6 +854,58 @@ select:focus { border-color: var(--accent); }
     line-height: 1.5;
     font-family: 'SF Mono','Fira Code','Courier New',monospace;
 }
+
+/* ── Cookies tab ─────────────────────────────────────────────────────────────── */
+.ck-section { padding: 10px 14px 0; }
+.ck-section-title {
+    font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--text-dim);
+    padding: 8px 0 6px;
+    border-bottom: 1px solid var(--border2);
+    margin-bottom: 0;
+    display: flex; align-items: center; gap: 6px;
+}
+.ck-count {
+    background: var(--accent); color: #fff;
+    font-size: 9px; font-weight: 700; letter-spacing: 0;
+    border-radius: 8px; padding: 1px 6px;
+}
+.ck-empty {
+    padding: 10px 0;
+    color: var(--text-dim); font-size: 11.5px; font-style: italic;
+}
+.ck-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ck-table th {
+    text-align: left; padding: 5px 10px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--text-dim);
+    border-bottom: 1px solid var(--border2);
+    background: var(--bg1);
+    position: sticky; top: 0;
+    white-space: nowrap;
+}
+.ck-table td {
+    padding: 5px 10px; border-bottom: 1px solid var(--border2);
+    vertical-align: top; word-break: break-all;
+    font-family: 'SF Mono','Fira Code','Courier New',monospace;
+    font-size: 11.5px;
+}
+.ck-table tr:last-child td { border-bottom: none; }
+.ck-table tr:hover td { background: var(--bg2); }
+.ck-td-name  { color: #7dd3fc; font-weight: 600; width: 22%; white-space: nowrap; }
+.ck-td-val   { color: var(--text); width: 30%; }
+.ck-td-attr  { color: var(--text-dim); font-size: 11px; }
+.ck-flag {
+    display: inline-block; margin-right: 4px; margin-bottom: 2px;
+    font-size: 10px; padding: 1px 6px; border-radius: 4px;
+    font-weight: 600; letter-spacing: 0.02em;
+}
+.ck-flag-secure   { background: rgba(34,197,94,0.15);  color: #4ade80; }
+.ck-flag-httponly { background: rgba(251,191,36,0.15); color: #fbbf24; }
+.ck-flag-samesite { background: rgba(96,165,250,0.15); color: #60a5fa; }
+.ck-flag-partitioned { background: rgba(192,132,252,0.15); color: #c084fc; }
+.ck-attr-row { font-size: 10.5px; color: var(--text-dim); }
 
 /* ── Form data table ────────────────────────────────────────────────────────── */
 .form-table { width: 100%; border-collapse: collapse; font-size: 12px; }
@@ -808,6 +962,19 @@ select:focus { border-color: var(--accent); }
     color: #d1d9f0;
     white-space: pre-wrap;
     word-break: break-all;
+}
+#comment-textarea {
+    width: 100%;
+    min-height: 200px;
+    resize: vertical;
+    background: var(--bg1);
+    color: var(--text-hi);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-family: 'SF Mono','Fira Code','Courier New',monospace;
+    font-size: 12px;
+    line-height: 1.5;
 }
 
 /* Replay result */
@@ -913,6 +1080,16 @@ select:focus { border-color: var(--accent); }
         </div>
     </div>
 
+    <!-- Set-Cookie filter -->
+    <label class="fts-toggle" id="sc-only-wrap" title="Only requests with Set-Cookie in response">
+        <input type="checkbox" id="sc-only-checkbox"> Set-Cookie
+    </label>
+
+    <!-- Hide OPTIONS filter -->
+    <label class="fts-toggle" id="hide-options-wrap" title="Hide OPTIONS (preflight) requests">
+        <input type="checkbox" id="hide-options-checkbox"> Hide OPTIONS
+    </label>
+
     <!-- Status multi-select -->
     <div class="ms-wrap" id="ms-status">
         <button class="ms-btn" id="ms-status-btn">
@@ -948,8 +1125,10 @@ select:focus { border-color: var(--accent); }
 
     <div class="lv-spacer"></div>
 
+    <button class="lv-btn" id="lv-rec-btn" title="Toggle recording on/off">⏺ Rec</button>
     <button class="lv-btn active" id="auto-scroll-btn" title="Toggle auto-scroll to latest">↓ Live</button>
     <button class="lv-btn" id="export-har-btn" title="Export as HAR">⬇ HAR</button>
+    <button class="lv-btn" id="trace-mode-btn" title="Trace: full req/res to DB. ⌘/Ctrl+click to open Trace window">📋 Trace</button>
     <button class="lv-btn" id="open-rules-btn" title="Rules & Interceptor">⚙ Rules</button>
     <button class="lv-btn danger" id="clear-logs" title="Clear all log entries">✕ Clear</button>
 </div>
@@ -965,6 +1144,8 @@ select:focus { border-color: var(--accent); }
             <div class="lv-th col-idx">#</div>
             <div class="lv-th col-method">Method</div>
             <div class="lv-th col-status">Status</div>
+            <div class="lv-th col-mark">Mark</div>
+            <div class="lv-th col-host">Host</div>
             <div class="lv-th col-type">Type</div>
             <div class="lv-th col-dur">Time</div>
             <div class="lv-th col-path">Path</div>
@@ -1028,16 +1209,36 @@ select:focus { border-color: var(--accent); }
 
             <!-- Replay bar -->
             <div id="lv-replay-bar">
-                <button id="lv-replay-btn">▶ Replay</button>
+                <button id="lv-replay-btn">✏ Request Editor</button>
                 <button id="lv-copy-url">⧉ Copy URL</button>
+                <button id="lv-create-mock-btn" title="Create mock intercept rule from this response">⚡ Mock Rule</button>
                 <span id="lv-replay-diff"></span>
             </div>
+            <div id="lv-mark-panel">
+                <div class="mark-row">
+                    <span class="mark-title">Tag color</span>
+                    <div class="mark-colors" id="lv-tag-colors"></div>
+                    <button class="body-act-btn" id="lv-tag-clear">Clear</button>
+                    <span id="lv-mark-status"></span>
+                </div>
+                <div class="mark-row">
+                    <span class="mark-title">Comment</span>
+                    <span id="lv-note-preview" class="mark-preview">No comment</span>
+                    <button class="body-act-btn" id="lv-note-open">Full</button>
+                </div>
+            </div>
+
+            <!-- Screenshot direct view (no tabs) -->
+            <div id="lv-screenshot-direct" style="display:none;padding:10px 0;flex:1;overflow:auto"></div>
 
             <!-- Tabs -->
             <div id="lv-tabs">
                 <button class="lv-tab-btn active" data-tab="headers">Headers</button>
+                <button class="lv-tab-btn" data-tab="cookies">Cookies</button>
                 <button class="lv-tab-btn" data-tab="request">Request</button>
                 <button class="lv-tab-btn" data-tab="response">Response</button>
+                <button class="lv-tab-btn" data-tab="raw">Raw</button>
+                <button class="lv-tab-btn" data-tab="comment">Comment</button>
             </div>
 
             <!-- Tab body -->
@@ -1046,20 +1247,42 @@ select:focus { border-color: var(--accent); }
                 <!-- Headers tab -->
                 <div class="lv-tab-content active" id="tab-headers">
                     <div class="hdr-section">
-                        <div class="hdr-section-title">Request Headers</div>
+                        <div class="hdr-section-title">
+                            Request Headers
+                            <button class="hdr-copy-btn" id="req-hdr-copy-btn" title="Copy as JSON">⎘ JSON</button>
+                        </div>
                         <div id="request-headers"></div>
                     </div>
                     <div class="hdr-section">
-                        <div class="hdr-section-title">Response Headers</div>
+                        <div class="hdr-section-title">
+                            Response Headers
+                            <button class="hdr-copy-btn" id="resp-hdr-copy-btn" title="Copy as JSON">⎘ JSON</button>
+                        </div>
                         <div id="response-headers"></div>
                     </div>
                 </div>
 
+                <!-- Cookies tab -->
+                <div class="lv-tab-content" id="tab-cookies">
+                    <div id="cookies-content"></div>
+                </div>
+
                 <!-- Request body -->
                 <div class="lv-tab-content" id="tab-request">
+                    <div id="req-query-section" style="display:none">
+                        <div class="body-toolbar">
+                            <span>Query Parameters</span>
+                            <span style="flex:1"></span>
+                            <button class="body-act-btn" id="qp-copy-obj-btn" title="Copy as JSON">⎘ JSON</button>
+                            <button class="body-act-btn" id="qp-copy-text-btn" title="Copy as key=value">⎘ Text</button>
+                        </div>
+                        <div id="query-params-wrap"></div>
+                    </div>
                     <div class="body-toolbar" id="req-body-info">
                         <span id="req-body-size">Request body</span>
+                        <span id="req-body-type-badge" class="form-type-badge" style="display:none"></span>
                         <span style="flex:1"></span>
+                        <button class="body-act-btn" id="req-copy-json-btn"  title="Copy as JSON" style="display:none">⎘ JSON</button>
                         <button class="body-act-btn" id="req-copy-text-btn"  title="Copy as plain text">⎘ Text</button>
                         <button class="body-act-btn" id="req-copy-arr-btn"   title="Copy as JS array">[ ] Array</button>
                         <button class="body-act-btn" id="req-copy-obj-btn"   title="Copy as JS object">{ } Object</button>
@@ -1083,6 +1306,29 @@ select:focus { border-color: var(--accent); }
                             <span id="replay-diff-label" style="color:var(--text-dim)"></span>
                         </div>
                         <div class="replay-body-pre" id="replay-body"></div>
+                    </div>
+                </div>
+
+                <!-- Raw HTTP (curl -v style) -->
+                <div class="lv-tab-content" id="tab-raw">
+                    <div class="body-toolbar">
+                        <span>Raw (curl -v style)</span>
+                        <span style="flex:1"></span>
+                        <button class="body-act-btn" id="raw-copy-btn" title="Copy raw to clipboard">⎘ Raw</button>
+                        <button class="body-act-btn" id="raw-curl-btn" title="Copy as curl command">⎘ curl</button>
+                    </div>
+                    <pre id="raw-http-content" class="body-content" style="margin:0;overflow-x:auto"></pre>
+                </div>
+
+                <!-- Comment -->
+                <div class="lv-tab-content" id="tab-comment">
+                    <div class="body-toolbar">
+                        <span>Request Comment</span>
+                        <span style="flex:1"></span>
+                    <span style="font-size:11px;color:var(--text-dim)">Autosave</span>
+                    </div>
+                    <div style="padding:10px 14px">
+                        <textarea id="comment-textarea" placeholder="Write your notes for this request..."></textarea>
                     </div>
                 </div>
 

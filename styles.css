@@ -482,28 +482,9 @@ legend {
     min-height: 14px;
 }
 
-/* --- Стили для прогресс-бара --- */
-#progress-bar-container {
-    height: 3px; /* Высота полоски */
-    background-color: #ddd;
-    opacity: 0; /* По умолчанию скрыт */
-    transition: opacity 0.3s ease-in-out;
-}
+/* (progress-bar-container removed — replaced by #loading-indicator) */
 
-#progress-bar-container.loading {
-    opacity: 1; /* Показываем, когда идет загрузка */
-}
-
-.progress-bar {
-    width: 100%;
-    height: 100%;
-    background-color: #007bff; /* Цвет полоски */
-    animation: loading-animation 2s linear infinite;
-    background-image: linear-gradient(45deg, rgba(255, 255, 255, .15) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, .15) 50%, rgba(255, 255, 255, .15) 75%, transparent 75%, transparent);
-    background-size: 40px 40px;
-}
-
-@keyframes loading-animation {
+@keyframes loading-animation-unused {
     from {
         background-position: 40px 0;
     }
@@ -535,8 +516,8 @@ legend {
     display: flex;
     align-items: center;
     gap: 5px;
-    padding: 0 10px 0 8px;
-    height: 30px;
+    padding: 2px 10px 2px 8px;
+    min-height: 30px;
     border: 1px solid #d1d5db;
     border-radius: 15px;
     background: transparent;
@@ -546,29 +527,50 @@ legend {
     font-weight: 600;
     flex-shrink: 0;
     white-space: nowrap;
-    max-width: 160px;
+    max-width: 240px;
     min-width: 64px;
     transition: background 0.12s, border-color 0.12s;
     -webkit-app-region: no-drag;
 }
 .proxy-pill-btn:hover { background: #e8eaf0; border-color: #9ca3af; }
 .proxy-pill-btn:active { background: #d8dae4; }
+/* Environment color states */
+.proxy-pill-btn.env-direct   { border-color: #9ca3af; }
+.proxy-pill-btn.env-proxy    { border-color: #a855f7; }
+.proxy-pill-btn.env-isolated { border-color: #f59e0b; }
 
 .proxy-dot {
     width: 7px; height: 7px;
     border-radius: 50%;
     background: #9ca3af;
     flex-shrink: 0;
-    transition: background 0.3s;
+    transition: background 0.3s, box-shadow 0.3s;
 }
-.proxy-dot.active { background: #22c55e; box-shadow: 0 0 4px #22c55e88; }
+.proxy-dot.active  { background: #a855f7; box-shadow: 0 0 4px #a855f788; }
+.proxy-dot.direct  { background: #d1d5db; box-shadow: 0 0 4px #d1d5db88; }
+.proxy-dot.isolated { background: #f59e0b; box-shadow: 0 0 4px #f59e0b88; }
 
+.pb-text-col {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    line-height: 1.15;
+    min-width: 0;
+}
 
 #pb-name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 1;
+}
+
+.pb-detail {
+    font-size: 9px;
+    font-weight: 400;
+    color: #888;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* ── Settings toggle button ─────────────────────────────────────────────────── */
@@ -631,7 +633,7 @@ legend {
     transition: max-height 0.22s ease;
     box-shadow: 0 6px 18px rgba(0,0,0,0.14);
 }
-#settings-panel.open { max-height: 260px; }
+#settings-panel.open { max-height: 300px; }
 
 /* Settings tabs */
 .sp-tab-bar {
@@ -862,6 +864,10 @@ legend {
 .tab-item.isolated { border-bottom: 2px solid rgba(245,158,11,0.5); }
 .tab-item.isolated.active { border-bottom-color: #f59e0b; }
 
+/* Direct tab — green underline */
+.tab-item.direct { border-bottom: 2px solid rgba(34,197,94,0.5); }
+.tab-item.direct.active { border-bottom-color: #22c55e; }
+
 #new-tab-btn {
     flex-shrink: 0;
     align-self: center;
@@ -914,6 +920,34 @@ legend {
     background: rgba(245,158,11,0.14);
     border-color: rgba(245,158,11,0.6);
     color: #b45309;
+}
+
+/* Direct tab button */
+#new-direct-tab-btn {
+    flex-shrink: 0;
+    align-self: center;
+    order: 10000;
+    width: 30px;
+    height: 24px;
+    border: 1.5px solid rgba(34,197,94,0.35);
+    background: rgba(34,197,94,0.06);
+    color: #16a34a;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    border-radius: 6px;
+    margin-left: 2px;
+    transition: background 0.15s, border-color 0.15s;
+}
+#new-direct-tab-btn svg { flex-shrink: 0; }
+#new-direct-tab-btn svg:first-child { width: 11px; height: 11px; }
+#new-direct-tab-btn .direct-home-icon { width: 9px; height: 9px; opacity: 0.85; }
+#new-direct-tab-btn:hover {
+    background: rgba(34,197,94,0.14);
+    border-color: rgba(34,197,94,0.6);
+    color: #15803d;
 }
 
 /* ── Browser toolbar ───────────────────────────────────────────────────────── */
@@ -976,6 +1010,15 @@ legend {
 }
 #url-input::placeholder { color: #9ca3af; }
 
+/* Address bar environment tint */
+#url-input.env-direct   { border-color: #d0d2d8; }
+#url-input.env-proxy    { border-color: rgba(168, 85, 247, 0.45); }
+#url-input.env-proxy:focus { border-color: #a855f7; box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.18); }
+#url-input.env-isolated { border-color: rgba(245, 158, 11, 0.45); }
+#url-input.env-isolated:focus { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18); }
+#url-input.env-newtab   { border-color: rgba(34, 197, 94, 0.4); }
+#url-input.env-newtab:focus { border-color: #22c55e; box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18); }
+
 /* (action-btn legacy — kept for any other potential usages) */
 .action-btn {
     flex-shrink: 0;
@@ -1000,18 +1043,27 @@ legend {
 .action-btn:hover { background: #e0e2e8; color: #111; }
 .action-label { white-space: nowrap; }
 
-/* --- СТИЛИ ДЛЯ ПУЛЬСИРУЮЩЕЙ ТОЧКИ --- */
+/* --- Loading indicator: progress bar under address bar --- */
 #loading-indicator {
     position: absolute;
-    right: 12px;
-    width: 8px;
-    height: 8px;
-    background-color: #3b82f6;
-    border-radius: 50%;
-    opacity: 0;
-    transform: scale(0.5);
-    transition: opacity 0.2s, transform 0.2s;
+    left: 16px;
+    right: 16px;
+    bottom: 3px;
+    height: 2px;
+    background: transparent;
+    overflow: hidden;
     pointer-events: none;
+    border-radius: 2px;
+}
+#loading-indicator::after {
+    content: '';
+    display: block;
+    width: 30%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, #3b82f6 20%, #60a5fa 50%, #3b82f6 80%, transparent);
+    border-radius: 2px;
+    transform: translateX(-100%);
+    opacity: 0;
 }
 
 /* Styles for screenshots in log viewer */
@@ -1211,23 +1263,19 @@ legend {
     margin: 0 auto;
 }
 
-/* Когда на панели есть класс .loading, показываем и анимируем точку */
-#browser-toolbar.loading #loading-indicator {
+/* Loading state: continuous progress bar + subtle input glow */
+#browser-toolbar.loading #loading-indicator::after {
     opacity: 1;
-    transform: scale(1);
-    animation: pulse 1.5s infinite;
+    animation: loading-slide 1.6s linear infinite;
+}
+#browser-toolbar.loading #url-input {
+    border-color: rgba(59, 130, 246, 0.5);
+    box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.15);
 }
 
-@keyframes pulse {
-    0% {
-        box-shadow: 0 0 0 0 rgba(0, 123, 255, 0.7);
-    }
-    70% {
-        box-shadow: 0 0 0 10px rgba(0, 123, 255, 0);
-    }
-    100% {
-        box-shadow: 0 0 0 0 rgba(0, 123, 255, 0);
-    }
+@keyframes loading-slide {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(433%); }
 }
 
 /* --- НОВЫЕ СТИЛИ ДЛЯ ИНТЕРФЕЙСА ПРОСМОТРА ЛОГОВ В СТИЛЕ FINDER --- */
@@ -2364,6 +2412,8 @@ a#copy-url:hover {
     .tab-item.active { background: #0d1117; color: #e2e8f0; border-bottom-color: #60a5fa; }
     .tab-item.isolated { border-bottom-color: rgba(245,158,11,0.5); }
     .tab-item.isolated.active { border-bottom-color: #f59e0b; }
+    .tab-item.direct { border-bottom-color: rgba(34,197,94,0.5); }
+    .tab-item.direct.active { border-bottom-color: #22c55e; }
     .tab-close:hover { background: #374151; color: #f87171; }
 
     /* Toolbar dark */
@@ -2403,7 +2453,19 @@ a#copy-url:hover {
     /* ── Proxy pill dark ── */
     .proxy-pill-btn { border-color: #374151; color: #9ca3af; }
     .proxy-pill-btn:hover { background: #252838; border-color: #4b5563; }
+    .proxy-pill-btn.env-direct   { border-color: #4b5563; }
+    .proxy-pill-btn.env-proxy    { border-color: #a855f7; }
+    .proxy-pill-btn.env-isolated { border-color: #f59e0b; }
     .proxy-dot { background: #4b5563; }
+    .pb-detail { color: #6b7280; }
+
+    /* Address bar dark env tint */
+    #url-input.env-proxy    { border-color: rgba(168, 85, 247, 0.4); }
+    #url-input.env-proxy:focus { border-color: #a855f7; box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.15); }
+    #url-input.env-isolated { border-color: rgba(245, 158, 11, 0.4); }
+    #url-input.env-isolated:focus { border-color: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15); }
+    #url-input.env-newtab   { border-color: rgba(34, 197, 94, 0.35); }
+    #url-input.env-newtab:focus { border-color: #22c55e; box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15); }
     .settings-toggle.active { background: #3b82f6 !important; color: #fff !important; }
     .toolbar-screenshot-btn { color: #9ca3af !important; }
 
@@ -2439,6 +2501,23 @@ a#copy-url:hover {
 }
 
 /* ── Rule notification toast ─────────────────────────────────────────────────── */
+.rules-hit-badge {
+    position: absolute;
+    top: 1px; right: 1px;
+    min-width: 16px; height: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: #ef4444;
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+    pointer-events: none;
+    animation: badge-pop 0.25s ease;
+}
+@keyframes badge-pop { from { transform: scale(0); } to { transform: scale(1); } }
+
 #rule-toast-container {
     position: fixed;
     bottom: 12px; right: 14px;

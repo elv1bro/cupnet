@@ -1,13 +1,57 @@
 'use strict';
 
+// ─── MITM CA trust: MUST run before Electron/Chromium init ────────────────────
+const path = require('path');
+const fs   = require('fs');
+const os   = require('os');
+
+// Resolve userData path manually (app.getPath is not yet available before require('electron'))
+// Electron stores it at: ~/Library/Application Support/<productName> (mac)
+//                        %APPDATA%/<productName> (win)
+//                        ~/.config/<productName> (linux)
+const PRODUCT_NAME = 'CupNet';
+function resolveUserDataDir() {
+    if (process.platform === 'darwin')
+        return path.join(os.homedir(), 'Library', 'Application Support', PRODUCT_NAME);
+    if (process.platform === 'win32')
+        return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), PRODUCT_NAME);
+    return path.join(os.homedir(), '.config', PRODUCT_NAME);
+}
+
+const { loadOrGenerateCA } = require('./mitm-proxy.js');
+const caDir = path.join(resolveUserDataDir(), 'mitm-ca');
+loadOrGenerateCA(caDir);
+const caPath = path.join(caDir, 'ca-cert.pem');
+if (fs.existsSync(caPath)) {
+    process.env.NODE_EXTRA_CA_CERTS = caPath;
+}
+
+const { sysLog, flushOnExit, initIPC: initSysLogIPC } = require('./sys-log');
+
 const {
     app, BrowserWindow, ipcMain, session, Menu, dialog,
     net, shell, nativeImage, clipboard, safeStorage, Notification
 } = require('electron');
-const path = require('path');
-const fs   = require('fs');
 const ProxyChain = require('proxy-chain');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
+
+// ─── Single instance lock (one CupNet per host/user session) ─────────────────
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+    app.quit();
+    process.exit(0);
+}
+
+app.on('second-instance', () => {
+    // Prevent starting a second backend stack (MITM/AzureTLS ports).
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win && !win.isDestroyed()) {
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+    }
+});
 
 // ─── Module imports (loaded after app.whenReady for safeStorage) ─────────────
 let db          = null;
@@ -33,16 +77,112 @@ const shouldFilterUrl = _shouldFilterUrl;
 
 // ─── MITM Proxy (required lazily inside app.whenReady) ───────────────────────
 let mitmProxy = null;
+const { MitmProxy, ExternalProxyPort } = require('./mitm-proxy.js');
 
 async function startMitmProxy() {
     if (mitmProxy) return mitmProxy;
-    const { MitmProxy, generateCAAsync } = require('./mitm-proxy.js');
-    // Async CA generation — doesn't block event loop / UI
-    await generateCAAsync();
+    // CA already generated at startup (for NODE_EXTRA_CA_CERTS)
     mitmProxy = new MitmProxy({
         port:       8877,
         browser:    'chrome_120',
         workerPath: path.join(__dirname, 'azure-tls-worker.js'),
+        onRequestLogged: (entry) => {
+            let tabId = entry.tabId ?? null;
+            if (!tabId) {
+                const active = tabManager?.getActiveTab();
+                if (active && !active.direct) tabId = active.id;
+            }
+            const sessionId = entry.sessionId != null ? entry.sessionId : currentSessionId;
+
+            // Trace mode: full request/response to DB + live update to trace window
+            const s = cachedSettings || loadSettings();
+            if (s.traceMode && db) {
+                try {
+                    const traceRow = {
+                        ts: new Date().toISOString(),
+                        method: entry.method,
+                        url: entry.url,
+                        requestHeaders: entry.requestHeaders || {},
+                        requestBody: entry.requestBody || null,
+                        status: entry.status,
+                        responseHeaders: entry.responseHeaders || {},
+                        responseBody: entry.responseBody,
+                        duration: entry.duration,
+                        tabId: tabId || null,
+                        sessionId: sessionId != null ? sessionId : null,
+                        browser: s.tlsProfile || 'chrome',
+                        proxy: persistentAnonymizedProxyUrl ? '(set)' : null,
+                    };
+                    const traceId = db.insertTraceEntry(traceRow);
+                    if (traceId && traceWindows.length > 0) {
+                        const summary = { id: traceId, ts: traceRow.ts, method: entry.method, url: entry.url, status: entry.status, duration_ms: entry.duration };
+                        for (const w of traceWindows) {
+                            if (!w.isDestroyed()) w.webContents.send('new-trace-entry', summary);
+                        }
+                    }
+                } catch (e) { console.error('[trace] insert failed:', e.message); }
+            }
+
+            if (!isLoggingEnabled || !db) return;
+            if (!tabId || sessionId == null) return;
+            const reqId = entry.requestId;
+            if (reqId) {
+                if (_seenRequestIds.has(reqId)) return;
+                _seenRequestIds.add(reqId);
+                if (_seenRequestIds.size > 5000) {
+                    const iter = _seenRequestIds.values();
+                    for (let i = 0; i < 2500; i++) iter.next();
+                    const keep = new Set();
+                    for (const v of iter) keep.add(v);
+                    _seenRequestIds.clear();
+                    for (const v of keep) _seenRequestIds.add(v);
+                }
+            } else {
+                const dedupKey = `${sessionId}:${tabId}:${entry.url}:${entry.method}:${entry.status}`;
+                const now = Date.now();
+                const last = _lastMitmLogKey.get(dedupKey);
+                if (last != null && now - last < MITM_DEDUP_MS) return;
+                _lastMitmLogKey.set(dedupKey, now);
+                if (_lastMitmLogKey.size > 500) {
+                    const cutoff = now - 2000;
+                    for (const k of _lastMitmLogKey.keys()) {
+                        if (_lastMitmLogKey.get(k) < cutoff) _lastMitmLogKey.delete(k);
+                    }
+                }
+            }
+            try {
+                const logEntry = {
+                    id: entry.requestId || `mitm_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+                    url: entry.url,
+                    method: entry.method,
+                    status: entry.status,
+                    type: entry.type || 'Document',
+                    request:  { headers: entry.requestHeaders || {}, body: entry.requestBody || null },
+                    response: { statusCode: entry.status, headers: entry.responseHeaders || {}, mimeType: null },
+                    duration: entry.duration,
+                    duration_ms: entry.duration,
+                    responseBody: entry.responseBody || null,
+                };
+                const sessId = parseInt(String(sessionId), 10) || sessionId;
+                const dbId = db.insertRequest(sessId, tabId, {
+                    requestId: entry.requestId || logEntry.id,
+                    url: logEntry.url,
+                    method: logEntry.method,
+                    status: logEntry.response?.statusCode,
+                    type: logEntry.type,
+                    duration: logEntry.duration,
+                    requestHeaders: logEntry.request?.headers,
+                    responseHeaders: logEntry.response?.headers,
+                    requestBody: entry.requestBody || null,
+                    responseBody: logEntry.responseBody,
+                });
+                if (dbId) logEntry.id = dbId;
+                logEntryCount++;
+                _broadcastLogEntryToViewers({ ...logEntry, tabId, sessionId: sessId });
+            } catch (e) {
+                console.error('[main] MITM log insert failed:', e.message);
+            }
+        },
     });
     await mitmProxy.start();
     console.log('[main] MITM proxy started on', mitmProxy.getProxyUrl());
@@ -67,6 +207,20 @@ function saveUiPref(key, value) {
 }
 
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
+// Force all traffic through MITM proxy (session.setProxy is unreliable in Electron)
+app.commandLine.appendSwitch('proxy-server', 'http=127.0.0.1:8877;https=127.0.0.1:8877');
+// Bypass MITM for YouTube — avoids AzureTLS DNS/HTTP2 issues (no such host, PROTOCOL_ERROR)
+// YouTube videoplayback: URL подписан по IP клиента; через MITM IP не совпадает → 403
+// Read bypass domains early (before app.whenReady) for the command-line switch
+{
+    const earlySettingsPath = path.join(app.getPath('userData'), 'settings.json');
+    let earlyBypass = [];
+    try { earlyBypass = JSON.parse(fs.readFileSync(earlySettingsPath, 'utf8')).bypassDomains || []; } catch {}
+    const bypassList = ['<local>', '*.youtube.com', '*.googlevideo.com', ...earlyBypass];
+    app.commandLine.appendSwitch('proxy-bypass-list', [...new Set(bypassList)].join(','));
+}
+// Accept MITM self-signed certs (required when using proxy with fake TLS)
+app.commandLine.appendSwitch('ignore-certificate-errors');
 app.commandLine.appendSwitch('force-webrtc-ip-handling-policy', 'disable_non_proxied_udp');
 app.commandLine.appendSwitch('webrtc-ip-handling-policy', 'default_public_interface_only');
 app.commandLine.appendSwitch('enable-webrtc-hide-local-ips-with-mdns', 'true');
@@ -75,58 +229,452 @@ app.commandLine.appendSwitch('disable-webgl-debug-renderer-info');
 // ─── App state ────────────────────────────────────────────────────────────────
 let actProxy                   = '';
 let mainWindow                 = null;
+let forceAppQuit               = false;
 let logViewerWindow            = null; // kept for backward-compat (first window reference)
 const logViewerWindows         = [];   // all open log-viewer windows
+const traceWindows            = [];   // all open trace-viewer windows
 // Map<webContentsId, sessionId|null> for log-viewer windows opened on a specific session
 const logViewerInitSessions    = new Map();
 let rulesWindow                = null;
 let cookieManagerWindow        = null;
 let proxyManagerWindow         = null;
+let consoleViewerWindow        = null;
+let pageAnalyzerWindow         = null;
+let ivacScoutWindow            = null;
+
+function confirmExitDialog(win) {
+    const owner = (win && !win.isDestroyed()) ? win : (BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]);
+    const choice = dialog.showMessageBoxSync(owner, {
+        type: 'question',
+        buttons: ['Cancel', 'Exit'],
+        defaultId: 1,
+        cancelId: 0,
+        title: 'Exit CupNet',
+        message: 'Close CupNet and all windows?',
+        detail: 'All browser windows, proxy workers, and active sessions will be closed.',
+        noLink: true,
+    });
+    return choice === 1;
+}
 let loggingModalWindow         = null;
-// Map<webContentsId, initData> for request editor windows
-const requestEditorInitData    = new Map();
+let ivacScoutProcess           = null;
 let persistentAnonymizedProxyUrl = null;
+let connectedProfileId           = null;
+let connectedProfileName         = null;
+let connectedResolvedVars        = {};
 let isLoggingEnabled           = false;
 let hadLoggingBeenStopped      = false; // true after first explicit stop; controls modal on re-enable
 let currentSessionId           = null;
 let logStatusInterval          = null;
 let cachedSettings             = null;
 let logEntryCount              = 0;
-let autoScreenshotInterval     = 0;   // seconds; 0 = disabled
-let screenshotTimer            = null;
 let lastScreenshotBuffer       = null; // for dedup comparison
 let activeFingerprint          = null; // { user_agent, timezone, language } or null
 let mitmStartPromise           = null; // Promise resolving when MITM is ready
+let mitmReady                  = false;
+let startupMetrics             = {
+    appReadyTs: 0,
+    windowCreatedTs: 0,
+    firstPaintTs: 0,
+    mitmReadyTs: 0,
+    longTaskCount: 0,
+    logged: false,
+};
 let isWindowActive             = false;
 let lastMouseMoveTime          = 0;
+const screenshotCooldownByReason = new Map();
+let screenshotLimiterWindow    = [];
+let _lastPendingForTracking    = null;
+let _lastProxyStatusSig        = '';
+let _lastTlsProfileBroadcast   = null;
+
+// Batch log-entry IPC to avoid renderer jank on high traffic.
+const LOG_IPC_BATCH_MS = 50;
+const LOG_IPC_BATCH_MAX = 200;
+const _logIpcQueues = new Map(); // webContents.id -> { entries, timer, win }
+const INTERCEPT_IPC_BATCH_MS = 80;
+const INTERCEPT_IPC_BATCH_MAX = 100;
+const _interceptIpcQueues = new Map(); // webContents.id -> { entries, timer, win }
+const _recentInterceptEvents = [];
+const RECENT_INTERCEPT_MAX = 120;
+const _recentInterceptEvents = [];
+const RECENT_INTERCEPT_MAX = 120;
+const _recentInterceptEvents = [];
+const RECENT_INTERCEPT_MAX = 120;
+
+function _flushLogIpcQueue(wcId) {
+    const q = _logIpcQueues.get(wcId);
+    if (!q) return;
+    if (q.timer) { clearTimeout(q.timer); q.timer = null; }
+    const win = q.win;
+    if (!win || win.isDestroyed()) {
+        _logIpcQueues.delete(wcId);
+        return;
+    }
+    const entries = q.entries.splice(0, q.entries.length);
+    if (!entries.length) return;
+    try {
+        win.webContents.send('new-log-entry-batch', entries);
+    } catch {}
+}
+
+function _enqueueLogEntryIpc(win, entry) {
+    if (!win || win.isDestroyed()) return;
+    const wcId = win.webContents.id;
+    let q = _logIpcQueues.get(wcId);
+    if (!q) {
+        q = { entries: [], timer: null, win };
+        _logIpcQueues.set(wcId, q);
+    } else {
+        q.win = win;
+    }
+    q.entries.push(entry);
+    if (q.entries.length >= LOG_IPC_BATCH_MAX) {
+        _flushLogIpcQueue(wcId);
+        return;
+    }
+    if (!q.timer) {
+        q.timer = setTimeout(() => _flushLogIpcQueue(wcId), LOG_IPC_BATCH_MS);
+    }
+}
+
+function _broadcastLogEntryToViewers(entry) {
+    for (const w of logViewerWindows) {
+        _enqueueLogEntryIpc(w, entry);
+    }
+}
+
+function _flushInterceptIpcQueue(wcId) {
+    const q = _interceptIpcQueues.get(wcId);
+    if (!q) return;
+    if (q.timer) { clearTimeout(q.timer); q.timer = null; }
+    const win = q.win;
+    if (!win || win.isDestroyed()) {
+        _interceptIpcQueues.delete(wcId);
+        return;
+    }
+    const entries = q.entries.splice(0, q.entries.length);
+    if (!entries.length) return;
+    try {
+        win.webContents.send('intercept-rule-matched-batch', entries);
+    } catch {}
+}
+
+function _enqueueInterceptIpc(win, info) {
+    if (!win || win.isDestroyed()) return;
+    const wcId = win.webContents.id;
+    let q = _interceptIpcQueues.get(wcId);
+    if (!q) {
+        q = { entries: [], timer: null, win };
+        _interceptIpcQueues.set(wcId, q);
+    } else {
+        q.win = win;
+    }
+    q.entries.push(info);
+    if (q.entries.length >= INTERCEPT_IPC_BATCH_MAX) {
+        _flushInterceptIpcQueue(wcId);
+        return;
+    }
+    if (!q.timer) {
+        q.timer = setTimeout(() => _flushInterceptIpcQueue(wcId), INTERCEPT_IPC_BATCH_MS);
+    }
+}
+
+function broadcastInterceptRuleMatched(info) {
+    const event = { ...info, ts: info?.ts || Date.now() };
+    _recentInterceptEvents.push(event);
+    if (_recentInterceptEvents.length > RECENT_INTERCEPT_MAX) {
+        _recentInterceptEvents.splice(0, _recentInterceptEvents.length - RECENT_INTERCEPT_MAX);
+    }
+    _enqueueInterceptIpc(mainWindow, event);
+    for (const w of logViewerWindows) _enqueueInterceptIpc(w, event);
+    _enqueueInterceptIpc(rulesWindow, event);
+}
+
+function maybeLogMockToNetworkActivity(info) {
+    if (!info || info.type !== 'mock') return;
+    if (!isLoggingEnabled || !db) return;
+    const tab = info.tabId ? tabManager?.getTab(info.tabId) : null;
+    const sessionId = tab?.sessionId ?? currentSessionId;
+    if (!sessionId) return;
+    const status = Number(info.status) || 200;
+    const method = (info.method || 'GET').toUpperCase();
+    const mimeType = info.mimeType || 'text/plain';
+    const body = typeof info.body === 'string' ? info.body : '';
+    try {
+        const dbId = db.insertRequest(sessionId, info.tabId || null, {
+            requestId: `mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            url: info.url || '',
+            method,
+            status,
+            type: 'mock',
+            duration: 0,
+            requestHeaders: null,
+            responseHeaders: { 'content-type': mimeType },
+            requestBody: null,
+            responseBody: body,
+            error: null,
+        });
+        if (!dbId) return;
+        _broadcastLogEntryToViewers({
+            id: dbId,
+            url: info.url || '',
+            method,
+            status,
+            type: 'mock',
+            duration: 0,
+            duration_ms: 0,
+            response: { statusCode: status, headers: { 'content-type': mimeType } },
+            responseBody: body,
+            tabId: info.tabId || null,
+            sessionId,
+        });
+    } catch (e) {
+        console.error('[main] mock log insert failed:', e.message);
+    }
+}
+
+function maybeLogMockToNetworkActivity(info) {
+    if (!info || info.type !== 'mock') return;
+    if (!isLoggingEnabled || !db) return;
+    const tab = info.tabId ? tabManager?.getTab(info.tabId) : null;
+    const sessionId = tab?.sessionId ?? currentSessionId;
+    if (!sessionId) return;
+    const status = Number(info.status) || 200;
+    const method = (info.method || 'GET').toUpperCase();
+    const mimeType = info.mimeType || 'text/plain';
+    const body = typeof info.body === 'string' ? info.body : '';
+    try {
+        const dbId = db.insertRequest(sessionId, info.tabId || null, {
+            requestId: `mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            url: info.url || '',
+            method,
+            status,
+            type: 'mock',
+            duration: 0,
+            requestHeaders: null,
+            responseHeaders: { 'content-type': mimeType },
+            requestBody: null,
+            responseBody: body,
+            error: null,
+        });
+        if (!dbId) return;
+        const msg = {
+            id: dbId,
+            url: info.url || '',
+            method,
+            status,
+            type: 'mock',
+            duration: 0,
+            duration_ms: 0,
+            response: { statusCode: status, headers: { 'content-type': mimeType } },
+            responseBody: body,
+            tabId: info.tabId || null,
+            sessionId,
+        };
+        _broadcastLogEntryToViewers(msg);
+    } catch (e) {
+        console.error('[main] mock log insert failed:', e.message);
+    }
+}
+
+function broadcastTlsProfileChanged(profile) {
+    if (!profile) return;
+    if (_lastTlsProfileBroadcast === profile) return;
+    _lastTlsProfileBroadcast = profile;
+    BrowserWindow.getAllWindows().forEach(w => {
+        try { if (!w.isDestroyed()) w.webContents.send('tls-profile-changed', profile); } catch {}
+    });
+}
+
+// ─── External Proxy Ports ────────────────────────────────────────────────────
+const activeExtPorts = new Map(); // port → { instance: ExternalProxyPort, sessionId, config }
+const extPortErrors  = new Map(); // port → error string (set when start fails)
+
+function getExtPortsConfigPath() {
+    return path.join(resolveUserDataDir(), 'ext-ports.json');
+}
+
+function loadExtPortsConfig() {
+    try {
+        const raw = fs.readFileSync(getExtPortsConfigPath(), 'utf8');
+        return JSON.parse(raw);
+    } catch { return { ports: [] }; }
+}
+
+function saveExtPortsConfig(config) {
+    try { fs.writeFileSync(getExtPortsConfigPath(), JSON.stringify(config, null, 2)); } catch (e) {
+        sysLog('warn', 'ext-proxy', 'Failed to save ext-ports config: ' + (e?.message || e));
+    }
+}
+
+function getLocalIp() {
+    const ifaces = os.networkInterfaces();
+    for (const name of Object.keys(ifaces)) {
+        for (const iface of ifaces[name]) {
+            if (iface.family === 'IPv4' && !iface.internal) return iface.address;
+        }
+    }
+    return '127.0.0.1';
+}
+
+function generatePassword(len = 8) {
+    return crypto.randomBytes(len).toString('base64url').slice(0, len);
+}
 
 const MOUSE_ACTIVITY_TIMEOUT = 90000;
 const settingsFilePath = path.join(app.getPath('userData'), 'settings.json');
-const iconPath = getAssetPath('img.png');
+const iconPath = fs.existsSync(getAssetPath('icons/icon.png'))
+    ? getAssetPath('icons/icon.png')
+    : getAssetPath('img.png');
+
+function applyRuntimeAppIcon() {
+    try {
+        const img = nativeImage.createFromPath(iconPath);
+        if (img.isEmpty()) return;
+        // macOS dev mode: Electron bundle icon is default, force Dock icon at runtime.
+        if (process.platform === 'darwin' && app.dock) {
+            app.dock.setIcon(img);
+        }
+    } catch (e) {
+        console.warn('[icon] applyRuntimeAppIcon failed:', e.message);
+    }
+}
+
+// ─── Console capture (stdout/stderr → console viewer window) ──────────────────
+const _consoleBuffer = [];
+const _CONSOLE_BUFFER_MAX = 3000;
+let _consoleBatchTimer = null;
+let _consoleBatch = [];
+
+function _flushConsoleBatch() {
+    _consoleBatchTimer = null;
+    if (!_consoleBatch.length) return;
+    const batch = _consoleBatch;
+    _consoleBatch = [];
+    if (consoleViewerWindow && !consoleViewerWindow.isDestroyed()) {
+        consoleViewerWindow.webContents.send('console-log', batch);
+    }
+}
+
+function captureConsoleLine(text) {
+    const clean = text.replace(/\n+$/, '');
+    if (!clean) return;
+    const lines = clean.split('\n');
+    for (const line of lines) {
+        if (!line) continue;
+        const entry = { text: line, ts: Date.now() };
+        _consoleBuffer.push(entry);
+        if (_consoleBuffer.length > _CONSOLE_BUFFER_MAX) {
+            _consoleBuffer.splice(0, 1000);
+        }
+        _consoleBatch.push(entry);
+    }
+    if (!_consoleBatchTimer) {
+        _consoleBatchTimer = setTimeout(_flushConsoleBatch, 60);
+    }
+}
+
+const _origStdoutWrite = process.stdout.write.bind(process.stdout);
+const _origStderrWrite = process.stderr.write.bind(process.stderr);
+
+process.stdout.write = function (chunk, encoding, callback) {
+    captureConsoleLine(typeof chunk === 'string' ? chunk : chunk.toString());
+    return _origStdoutWrite(chunk, encoding, callback);
+};
+process.stderr.write = function (chunk, encoding, callback) {
+    captureConsoleLine(typeof chunk === 'string' ? chunk : chunk.toString());
+    return _origStderrWrite(chunk, encoding, callback);
+};
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
+const SETTINGS_DEFAULTS = {
+    lastLogPath: null,
+    filterPatterns: ['*google.com*', '*cloudflare.com*', '*analytics*', '*tracking*'],
+    homepage: '',
+    pasteUnlock: true,
+    traceMode: false,
+    tracking: {
+        onUserClick: true,
+        onPageLoadComplete: true,
+        onNetworkPendingChange: true,
+        onMouseActivity: true,
+        onRuleMatchScreenshot: true,
+        pendingDeltaThreshold: 3,
+        cooldownMs: 2000,
+        maxPerMinute: 12,
+    },
+    bypassDomains: ['challenges.cloudflare.com'],
+    trafficOpts: {
+        trafficEnabled: false,
+        blockImages: false,
+        blockCSS: false,
+        blockFonts: false,
+        blockMedia: false,
+        blockWebSocket: false,
+        captchaWhitelist: [
+            '*.google.com', '*.gstatic.com', '*.recaptcha.net',
+            'challenges.cloudflare.com', '*.hcaptcha.com',
+        ],
+    },
+};
+
 function loadSettings() {
-    const defaults = {
-        lastLogPath: null,
-        filterPatterns: ['*google.com*', '*cloudflare.com*', '*analytics*', '*tracking*'],
-        autoScreenshot: 5,
-        homepage: '',
-        pasteUnlock: true,  // Don't F*** With Paste — unblocks copy/cut/paste on all pages
-    };
+    if (cachedSettings) return cachedSettings;
     try {
         if (fs.existsSync(settingsFilePath)) {
             const raw = JSON.parse(fs.readFileSync(settingsFilePath, 'utf8'));
-            cachedSettings = { ...defaults, ...raw };
+            cachedSettings = {
+                ...SETTINGS_DEFAULTS,
+                ...raw,
+                trafficOpts: { ...SETTINGS_DEFAULTS.trafficOpts, ...(raw.trafficOpts || {}) },
+                tracking: normalizeTrackingSettings(raw.tracking),
+            };
             return cachedSettings;
         }
-    } catch {}
-    cachedSettings = defaults;
+    } catch (e) {
+        sysLog('warn', 'settings', 'Failed to load settings: ' + e.message);
+    }
+    cachedSettings = { ...SETTINGS_DEFAULTS, tracking: normalizeTrackingSettings() };
     return cachedSettings;
 }
 
+let _saveSettingsTimer = null;
 function saveSettings(s) {
     cachedSettings = s;
-    try { fs.writeFileSync(settingsFilePath, JSON.stringify(s, null, 2)); } catch {}
+    if (_saveSettingsTimer) clearTimeout(_saveSettingsTimer);
+    _saveSettingsTimer = setTimeout(() => {
+        _saveSettingsTimer = null;
+        fs.writeFile(settingsFilePath, JSON.stringify(s, null, 2), (err) => {
+            if (err) sysLog('warn', 'settings', 'Failed to save: ' + err.message);
+        });
+    }, 300);
+}
+
+function normalizeTrackingSettings(raw) {
+    const base = SETTINGS_DEFAULTS.tracking;
+    const src = raw && typeof raw === 'object' ? raw : {};
+    return {
+        onUserClick: src.onUserClick !== false,
+        onPageLoadComplete: src.onPageLoadComplete !== false,
+        onNetworkPendingChange: src.onNetworkPendingChange !== false,
+        onMouseActivity: src.onMouseActivity !== false,
+        onRuleMatchScreenshot: src.onRuleMatchScreenshot !== false,
+        pendingDeltaThreshold: Math.max(1, Math.min(50, Number(src.pendingDeltaThreshold) || base.pendingDeltaThreshold)),
+        cooldownMs: Math.max(200, Math.min(30000, Number(src.cooldownMs) || base.cooldownMs)),
+        maxPerMinute: Math.max(1, Math.min(120, Number(src.maxPerMinute) || base.maxPerMinute)),
+    };
+}
+
+function getTrackingSettings() {
+    const s = loadSettings();
+    if (!s.tracking || typeof s.tracking !== 'object') {
+        s.tracking = normalizeTrackingSettings();
+        saveSettings(s);
+    } else {
+        s.tracking = normalizeTrackingSettings(s.tracking);
+    }
+    return s.tracking;
 }
 
 /** Returns the URL to open in a new tab (homepage or built-in new-tab page). */
@@ -134,6 +682,35 @@ function getNewTabUrl() {
     const hp = cachedSettings?.homepage?.trim();
     if (hp) return hp;
     return `file://${path.join(__dirname, 'new-tab.html')}`;
+}
+
+// ─── MITM bypass domains ──────────────────────────────────────────────────────
+const HARDCODED_BYPASS = ['<local>', '*.youtube.com', '*.googlevideo.com'];
+
+function buildBypassList(userDomains) {
+    const all = [...HARDCODED_BYPASS, ...(userDomains || [])];
+    return [...new Set(all)].join(',');
+}
+
+function applyBypassDomains(userDomains) {
+    if (!tabManager) return;
+    const bypassStr = buildBypassList(userDomains);
+    const mitmRules = 'http=127.0.0.1:8877;https=127.0.0.1:8877';
+    const opts = { proxyRules: mitmRules, proxyBypassRules: bypassStr };
+    try {
+        const { session: ses } = require('electron');
+        const shared = ses.fromPartition('persist:shared');
+        shared.setProxy(opts).catch(e => sysLog('warn', 'proxy', 'shared session setProxy failed: ' + (e?.message || e)));
+    } catch (e) { sysLog('warn', 'proxy', 'updateBypassDomains failed: ' + (e?.message || e)); }
+    tabManager.setBypassRules(bypassStr);
+    console.log('[main] bypass domains updated:', bypassStr);
+}
+
+// ─── Traffic content filters ──────────────────────────────────────────────────
+function applyTrafficFilters(trafficOpts) {
+    if (!tabManager) return;
+    tabManager.setTrafficOpts(trafficOpts || {});
+    console.log('[main] traffic filters updated:', JSON.stringify(trafficOpts));
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
@@ -173,29 +750,30 @@ async function getRealIp() {
 
 // parseProxyTemplate and extractTemplateVars imported from ./utils
 
-/** Fetch current IP + geo info through the active proxy */
+/** Fetch current IP + geo info — uses direct session when no proxy is active */
+let _lastIpGeoError = '';
+
 async function checkCurrentIpGeo() {
     const empty = { ip: 'unknown', city: '', region: '', country: '', country_name: '', org: '', timezone: '' };
 
-    async function fetchWithTimeout(url, timeoutMs = 5000) {
+    const useDirectFetch = !persistentAnonymizedProxyUrl;
+
+    async function fetchWithTimeout(url, timeoutMs = 8000) {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), timeoutMs);
         try {
+            if (useDirectFetch) {
+                const directSess = session.fromPartition('direct-ip-check');
+                await directSess.setProxy({ mode: 'direct' });
+                return await directSess.fetch(url, { signal: ctrl.signal });
+            }
             return await net.fetch(url, { signal: ctrl.signal });
         } finally {
             clearTimeout(timer);
         }
     }
 
-    // Try three services in order — first one that returns a valid IP wins
     const sources = [
-        async () => {
-            const r = await fetchWithTimeout('https://ipapi.co/json/');
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
-            const d = await r.json();
-            if (!d.ip) throw new Error('no ip');
-            return { ip: d.ip, city: d.city || '', region: d.region || '', country: d.country || '', country_name: d.country_name || d.country || '', org: d.org || '', timezone: d.timezone || '' };
-        },
         async () => {
             const r = await fetchWithTimeout('https://ipinfo.io/json');
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -210,23 +788,53 @@ async function checkCurrentIpGeo() {
             if (!d.ip) throw new Error('no ip');
             return { ip: d.ip, city: '', region: '', country: d.country || '', country_name: d.country || '', org: '', timezone: '' };
         },
+        async () => {
+            const r = await fetchWithTimeout('https://ipapi.co/json/');
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const d = await r.json();
+            if (!d.ip) throw new Error('no ip');
+            return { ip: d.ip, city: d.city || '', region: d.region || '', country: d.country || '', country_name: d.country_name || d.country || '', org: d.org || '', timezone: d.timezone || '' };
+        },
+        async () => {
+            const r = await fetchWithTimeout('https://api.ipify.org?format=json');
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            const d = await r.json();
+            if (!d.ip) throw new Error('no ip');
+            return { ip: d.ip, city: '', region: '', country: '', country_name: '', org: '', timezone: '' };
+        },
     ];
 
+    let lastErr = null;
     for (const source of sources) {
-        try { return await source(); } catch { /* try next */ }
+        try {
+            const result = await source();
+            if (result?.ip && result.ip !== 'unknown') {
+                _lastIpGeoError = '';
+                return result;
+            }
+        } catch (e) { lastErr = e; }
+    }
+    const errMsg = lastErr?.message || String(lastErr);
+    if (errMsg !== _lastIpGeoError) {
+        console.warn('[checkIpGeo] all sources failed:', errMsg);
+        _lastIpGeoError = errMsg;
     }
     return empty;
 }
 
 /** Broadcast proxy status to ALL windows, proxy manager, and all tab BrowserViews */
 function notifyProxyStatus() {
-    // `mode` distinguishes "Direct (through MITM)" from "no upstream set at all"
     const isDirect = !persistentAnonymizedProxyUrl && actProxy === '';
     const info = {
         active:    !!persistentAnonymizedProxyUrl,
-        proxyName: actProxy || '',
+        proxyName: connectedProfileName || actProxy || '',
         mode:      isDirect ? 'direct' : (persistentAnonymizedProxyUrl ? 'proxy' : 'none'),
+        profileId: connectedProfileId || null,
+        resolvedVars: connectedResolvedVars || {},
     };
+    const sig = JSON.stringify(info);
+    if (sig === _lastProxyStatusSig) return;
+    _lastProxyStatusSig = sig;
     // Broadcast to every BrowserWindow (main, proxy manager, request editor, log viewer…)
     for (const win of BrowserWindow.getAllWindows()) {
         try {
@@ -245,6 +853,41 @@ function notifyProxyStatus() {
     }
 }
 
+function notifyMitmReady() {
+    const info = { ready: !!mitmReady, ts: Date.now() };
+    for (const win of BrowserWindow.getAllWindows()) {
+        try {
+            if (!win.isDestroyed()) win.webContents.send('mitm-ready-changed', info);
+        } catch {}
+    }
+    if (tabManager) {
+        for (const tab of tabManager.getAllTabs()) {
+            try {
+                if (tab.view && !tab.view.webContents.isDestroyed()) {
+                    tab.view.webContents.send('mitm-ready-changed', info);
+                }
+            } catch {}
+        }
+    }
+}
+
+function maybeLogStartupMetrics() {
+    if (startupMetrics.logged) return;
+    if (!startupMetrics.appReadyTs || !startupMetrics.windowCreatedTs || !startupMetrics.firstPaintTs) return;
+    const appReadyToWindowCreatedMs = startupMetrics.windowCreatedTs - startupMetrics.appReadyTs;
+    const windowCreatedToFirstPaintMs = startupMetrics.firstPaintTs - startupMetrics.windowCreatedTs;
+    const firstPaintToMitmReadyMs = startupMetrics.mitmReadyTs
+        ? (startupMetrics.mitmReadyTs - startupMetrics.firstPaintTs)
+        : null;
+    startupMetrics.logged = true;
+    console.log('[perf] startup-metrics', JSON.stringify({
+        appReadyToWindowCreatedMs,
+        windowCreatedToFirstPaintMs,
+        firstPaintToMitmReadyMs,
+        uiLongTaskCountFirst10s: startupMetrics.longTaskCount || 0,
+    }));
+}
+
 /** Broadcast updated proxy profiles list to proxy manager + main window */
 function notifyProxyProfilesList() {
     const list = db.getProxyProfiles();
@@ -258,25 +901,55 @@ function notifyProxyProfilesList() {
 
 // Track webContents that already have CDP attached so we don't double-register
 const _cdpAttachedWc = new WeakSet();
+const _trackingLoadAttachedWc = new WeakSet();
+
+// Deduplicate MITM logs: by requestId (Chrome's unique ID) when available; else by url+method+status within 400ms
+const _seenRequestIds = new Set();
+const _lastMitmLogKey = new Map(); // key -> timestamp (fallback when no requestId)
+const MITM_DEDUP_MS = 400;
 
 // ─── CDP network logging ──────────────────────────────────────────────────────
 async function setupNetworkLogging(webContents, tabId, sessionId) {
     if (!webContents || webContents.isDestroyed()) return;
     const ongoingRequests   = new Map();
     const ongoingWebsockets = new Map();
+    // ExtraInfo queue: for redirect chains Chrome fires responseReceivedExtraInfo
+    // once per hop with the same requestId. We buffer them in arrival order and
+    // consume one entry per finalized response (redirect or final).
+    const extraInfoQueue    = new Map(); // requestId → [{headers}, ...]
     const cdp = webContents.debugger;
+
+    if (!_trackingLoadAttachedWc.has(webContents)) {
+        _trackingLoadAttachedWc.add(webContents);
+        webContents.on('did-finish-load', () => {
+            try {
+                if (!tabManager || tabManager.getActiveTabId() !== tabId) return;
+                requestScreenshot({ reason: 'page-load', meta: { tabId } }).catch(() => {});
+            } catch {}
+        });
+        webContents.once('destroyed', () => _trackingLoadAttachedWc.delete(webContents));
+    }
 
     // Periodic stale-entry cleanup: requests that never got loadingFinished/Failed
     // (e.g. cancelled by navigation) would otherwise live in the Map forever.
     const _staleCleanupTimer = setInterval(() => {
-        const cutoff = Date.now() - 5 * 60 * 1000; // 5 min
+        const cutoff = Date.now() - 5 * 60 * 1000;
         for (const [id, entry] of ongoingRequests) {
-            if ((entry._addedAt || 0) < cutoff) {
-                ongoingRequests.delete(id);
-            }
+            if ((entry._addedAt || 0) < cutoff) ongoingRequests.delete(id);
+        }
+        for (const [id, entry] of ongoingWebsockets) {
+            if ((entry.created || 0) < cutoff) ongoingWebsockets.delete(id);
+        }
+        for (const [id, queue] of extraInfoQueue) {
+            if (queue._addedAt && queue._addedAt < cutoff) extraInfoQueue.delete(id);
         }
     }, 60_000);
-    webContents.once('destroyed', () => clearInterval(_staleCleanupTimer));
+    webContents.once('destroyed', () => {
+        clearInterval(_staleCleanupTimer);
+        ongoingRequests.clear();
+        ongoingWebsockets.clear();
+        extraInfoQueue.clear();
+    });
 
     // Detach existing listeners cleanly before re-attaching (e.g. after clear-logs)
     if (_cdpAttachedWc.has(webContents)) {
@@ -304,6 +977,12 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
         maxResourceBufferSize:  10 * 1024 * 1024,  // 10 MB per individual resource
     }).catch(() => {});
 
+    // Fetch.enable: inject X-CupNet-TabId/SessionId so MITM can attribute requests to tabs.
+    // requestStage: 'Request' only — avoid response-stage interception (can cause hangs).
+    await cdp.sendCommand('Fetch.enable', {
+        patterns: [{ urlPattern: '*', requestStage: 'Request' }]
+    }).catch(() => {});
+
     // Apply active fingerprint via CDP now that the debugger is attached
     if (activeFingerprint) {
         if (activeFingerprint.user_agent) {
@@ -319,7 +998,13 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
         }
     }
 
-    const finalizeLog = (logEntry) => {
+    const _logQueue = [];
+    let _logQueueScheduled = false;
+    const _processLogQueue = () => {
+        _logQueueScheduled = false;
+        const batch = _logQueue.splice(0, 50);
+        for (const logEntry of batch) {
+        const reqKey = logEntry.id;
         logEntryCount++;
 
         // ── Write to SQLite ──
@@ -329,7 +1014,9 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
             } else if (logEntry.type === 'screenshot') {
                 db.insertScreenshot(sessionId, tabId, logEntry.path, logEntry.imageData || null);
             } else {
-                db.insertRequest(sessionId, tabId, {
+                // insertRequest returns the SQLite integer id — store it on logEntry
+                // so the log viewer can call getRequestDetail(id) for lazy header/body load.
+                const dbId = db.insertRequest(sessionId, tabId, {
                     requestId: logEntry.id,
                     url: logEntry.url,
                     method: logEntry.method,
@@ -342,6 +1029,7 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
                     responseBody: logEntry.responseBody || null,
                     error: logEntry.error || null
                 });
+                if (dbId) logEntry.id = dbId; // replace CDP string id with real DB integer id
 
                 // Run rules engine (may not be loaded yet during early startup)
                 if (rulesEngine) {
@@ -368,15 +1056,42 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
         // ── Forward to log viewer (only if any window open) ──
         if (logViewerWindows.length > 0) {
             const msg = { ...logEntry, tabId, sessionId };
-            for (const w of logViewerWindows) {
-                if (!w.isDestroyed()) w.webContents.send('new-log-entry', msg);
-            }
+            _broadcastLogEntryToViewers(msg);
         }
 
-        ongoingRequests.delete(logEntry.id);
+        ongoingRequests.delete(reqKey);
+        }
+        if (_logQueue.length) {
+            _logQueueScheduled = true;
+            setImmediate(_processLogQueue);
+        }
+    };
+    const finalizeLog = (logEntry) => {
+        _logQueue.push(logEntry);
+        if (!_logQueueScheduled) {
+            _logQueueScheduled = true;
+            setImmediate(_processLogQueue);
+        }
     };
 
     cdp.on('message', async (_, method, params) => {
+        // Fetch.requestPaused: inject X-CupNet-TabId/SessionId for MITM tab attribution
+        if (method === 'Fetch.requestPaused') {
+            const { requestId, request, responseStatusCode } = params;
+            if (responseStatusCode == null) {
+                const h = request.headers || {};
+                const headers = Object.entries(h).map(([name, value]) => ({ name, value }));
+                headers.push({ name: 'X-CupNet-TabId', value: String(tabId) });
+                headers.push({ name: 'X-CupNet-SessionId', value: String(sessionId) });
+                headers.push({ name: 'X-CupNet-RequestId', value: String(requestId) });
+                cdp.sendCommand('Fetch.continueRequest', { requestId, headers }).catch(() => {});
+            } else {
+                cdp.sendCommand('Fetch.continueResponse', { requestId }).catch(() => {
+                    cdp.sendCommand('Fetch.continueRequest', { requestId }).catch(() => {});
+                });
+            }
+        }
+
         if (!isLoggingEnabled) return;
 
         const settings      = cachedSettings || loadSettings();
@@ -410,6 +1125,9 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
         }
 
         // ── HTTP requests ─────────────────────────────────────────────────────
+        // Skip CDP HTTP logging when MITM is active — MITM logs all proxy traffic (302+200)
+        // to avoid duplicates (CDP would report merged navigation as single 200)
+        if (method === 'Network.requestWillBeSent' && mitmProxy) return;
         if (method === 'Network.requestWillBeSent') {
             const { requestId, request, timestamp, type, redirectResponse } = params;
             if (request.url.startsWith('data:')) return;
@@ -418,18 +1136,39 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
             // (with the redirect status 301/302) before creating the new one.
             if (redirectResponse) {
                 const prevEntry = ongoingRequests.get(requestId);
+                const queue = extraInfoQueue.get(requestId) || [];
+                const extraH = queue.shift() || (prevEntry && prevEntry._extraHeaders) || {};
+                if (!queue.length) extraInfoQueue.delete(requestId);
+
                 if (prevEntry && !prevEntry._finalizing) {
                     prevEntry._finalizing = true;
                     ongoingRequests.delete(requestId);
+                    // redirectResponse.headers is filtered — merge with full ExtraInfo set
                     prevEntry.response = {
                         statusCode: redirectResponse.status,
-                        headers:    redirectResponse.headers,
+                        headers:    Object.assign({}, redirectResponse.headers, extraH),
                         mimeType:   redirectResponse.mimeType || null,
                     };
                     prevEntry.duration = Math.round((timestamp - prevEntry.startTime) * 1000);
-                    // Redirect responses have no body
                     prevEntry.responseBody = null;
                     finalizeLog(prevEntry);
+                } else {
+                    // prevEntry missing (e.g. first request filtered) — create synthetic redirect entry
+                    // so 302 with Set-Cookie is always visible in Network Activity
+                    const redirectUrl = redirectResponse.url || request.url;
+                    if (!shouldFilterUrl(redirectUrl, filterPatterns)) {
+                        finalizeLog({
+                            id: requestId + '_redirect', url: redirectUrl, method: request.method,
+                            startTime: timestamp - 0.001, type: type,
+                            request:  { headers: {}, body: null },
+                            response: {
+                                statusCode: redirectResponse.status,
+                                headers:    Object.assign({}, redirectResponse.headers, extraH),
+                                mimeType:   redirectResponse.mimeType || null,
+                            },
+                            duration: 0, responseBody: null, _addedAt: Date.now(),
+                        });
+                    }
                 }
             }
 
@@ -442,9 +1181,51 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
                 _addedAt: Date.now(),
             });
         }
+        // Chrome strips Cookie from requestWillBeSent.request.headers.
+        // requestWillBeSentExtraInfo has the FULL request headers including Cookie
+        // and associatedCookies list. Fires after requestWillBeSent so entry exists.
+        if (method === 'Network.requestWillBeSentExtraInfo') {
+            const entry = ongoingRequests.get(params.requestId);
+            if (entry) {
+                // Overwrite with full headers (superset of filtered headers)
+                if (params.headers) {
+                    entry.request = entry.request || {};
+                    entry.request.headers = Object.assign({}, entry.request.headers, params.headers);
+                }
+                // Store associated cookies explicitly for the Cookies tab
+                if (params.associatedCookies?.length) {
+                    entry._sentCookies = params.associatedCookies
+                        .filter(ac => !ac.blockedReasons?.length)
+                        .map(ac => ({ name: ac.cookie.name, value: ac.cookie.value }));
+                    // Also inject into Cookie header so parseRequestCookies finds them
+                    const cookieStr = entry._sentCookies.map(c => `${c.name}=${c.value}`).join('; ');
+                    if (cookieStr) entry.request.headers['Cookie'] = cookieStr;
+                }
+            }
+        }
         if (method === 'Network.responseReceived') {
             const entry = ongoingRequests.get(params.requestId);
             if (entry) entry.response = { statusCode: params.response.status, headers: params.response.headers, mimeType: params.response.mimeType };
+        }
+        // Chrome strips Set-Cookie (and others) from responseReceived.headers.
+        // responseReceivedExtraInfo has the FULL response headers.
+        // For redirect chains the same requestId fires ExtraInfo once per hop — use a queue.
+        if (method === 'Network.responseReceivedExtraInfo') {
+            const extraHeaders = params.headers || {};
+            const queue = extraInfoQueue.get(params.requestId);
+            if (queue) {
+                queue.push(extraHeaders);
+            } else {
+                extraInfoQueue.set(params.requestId, [extraHeaders]);
+            }
+            // Merge immediately into ongoing entry if response already arrived
+            const entry = ongoingRequests.get(params.requestId);
+            if (entry) {
+                entry._extraHeaders = extraHeaders;
+                if (entry.response) {
+                    entry.response.headers = Object.assign({}, entry.response.headers, extraHeaders);
+                }
+            }
         }
         if (method === 'Network.loadingFinished') {
             const entry = ongoingRequests.get(params.requestId);
@@ -454,6 +1235,16 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
                 entry._finalizing = true;
                 ongoingRequests.delete(params.requestId);
                 entry.duration = Math.round((params.timestamp - entry.startTime) * 1000);
+
+                // Consume the remaining ExtraInfo for the final response
+                {
+                    const queue = extraInfoQueue.get(params.requestId) || [];
+                    const extraH = queue.shift() || entry._extraHeaders || {};
+                    extraInfoQueue.delete(params.requestId);
+                    if (extraH && entry.response) {
+                        entry.response.headers = Object.assign({}, entry.response.headers, extraH);
+                    }
+                }
 
                 // Retry loop: HTML Document bodies are sometimes not yet available
                 // on the first call right after loadingFinished (timing issue).
@@ -498,7 +1289,13 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
         }
     });
 
-    webContents.on('destroyed', () => { try { if (cdp.isAttached()) cdp.detach(); } catch {} });
+    webContents.on('destroyed', () => {
+        ongoingRequests.clear();
+        ongoingWebsockets.clear();
+        extraInfoQueue.clear();
+        try { cdp.removeAllListeners('message'); } catch {}
+        try { if (cdp.isAttached()) cdp.detach(); } catch {}
+    });
 }
 
 function handleRuleActions(actions, logEntry) {
@@ -529,7 +1326,7 @@ function handleRuleActions(actions, logEntry) {
             }
         }
         if (action.type === 'screenshot') {
-            captureScreenshot().catch(() => {});
+            requestScreenshot({ reason: 'rule', meta: { ruleName: action.ruleName || '' } }).catch(() => {});
         }
     }
 }
@@ -541,7 +1338,7 @@ async function applyFingerprintToWebContents(wc, fp) {
     if (!fp || !wc || wc.isDestroyed()) return;
     // Session-level UA changes HTTP headers + new tab defaults
     if (fp.user_agent) {
-        try { wc.session.setUserAgent(fp.user_agent, fp.language || ''); } catch {}
+        try { wc.session.setUserAgent(fp.user_agent, fp.language || ''); } catch (e) { sysLog('warn', 'fingerprint', 'setUserAgent failed: ' + (e?.message || e)); }
     }
     // CDP-level overrides — works on already-attached debugger
     const cdp = wc.debugger;
@@ -556,13 +1353,14 @@ async function applyFingerprintToWebContents(wc, fp) {
         if (fp.timezone) {
             await cdp.sendCommand('Emulation.setTimezoneOverride', { timezoneId: fp.timezone });
         }
-    } catch {}
+    } catch (e) { sysLog('warn', 'fingerprint', 'CDP fingerprint emulation failed: ' + (e?.message || e)); }
 }
 
 /** Apply fingerprint to all open tabs. */
 async function applyFingerprintToAllTabs(fp) {
     if (!tabManager) return;
     for (const tab of tabManager.getAllTabs()) {
+        if (tab.direct) continue;
         if (tab?.view?.webContents && !tab.view.webContents.isDestroyed()) {
             await applyFingerprintToWebContents(tab.view.webContents, fp).catch(() => {});
         }
@@ -576,9 +1374,9 @@ async function resetFingerprintOnWebContents(wc) {
         const cdp = wc.debugger;
         if (!cdp.isAttached()) return;
         // Restore empty UA override (falls back to Electron/Chromium default)
-        await cdp.sendCommand('Emulation.setUserAgentOverride', { userAgent: '' }).catch(() => {});
-        await cdp.sendCommand('Emulation.setTimezoneOverride',  { timezoneId: '' }).catch(() => {});
-    } catch {}
+        await cdp.sendCommand('Emulation.setUserAgentOverride', { userAgent: '' }).catch(e => sysLog('warn', 'fingerprint', 'reset UA override failed: ' + (e?.message || e)));
+        await cdp.sendCommand('Emulation.setTimezoneOverride',  { timezoneId: '' }).catch(e => sysLog('warn', 'fingerprint', 'reset timezone override failed: ' + (e?.message || e)));
+    } catch (e) { sysLog('warn', 'fingerprint', 'resetFingerprintOnWebContents failed: ' + (e?.message || e)); }
 }
 
 // ─── Log status updater ───────────────────────────────────────────────────────
@@ -587,36 +1385,47 @@ function startLogStatusUpdater() {
     let _lastSentCount = -1;
     let _lastSentSession = null;
     logStatusInterval = setInterval(() => {
-        if (!mainWindow || mainWindow.isDestroyed()) return;
         const payload = isLoggingEnabled && currentSessionId
             ? { enabled: true, sessionId: currentSessionId, count: logEntryCount }
             : { enabled: false, sessionId: null, count: 0 };
-        // Skip IPC if nothing changed
         if (payload.count === _lastSentCount && payload.sessionId === _lastSentSession) return;
         _lastSentCount   = payload.count;
         _lastSentSession = payload.sessionId;
-        mainWindow.webContents.send('update-log-status', payload);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('update-log-status', payload);
+        }
+        for (const w of logViewerWindows) {
+            if (!w.isDestroyed()) w.webContents.send('update-log-status', payload);
+        }
     }, 5000);
 }
 
-/** Send the current logging state immediately to the main window. */
+/** Send the current logging state immediately to the main window AND all log-viewer windows. */
 function sendLogStatus() {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
     const payload = isLoggingEnabled && currentSessionId
         ? { enabled: true, sessionId: currentSessionId, count: logEntryCount }
         : { enabled: false, sessionId: null, count: 0 };
-    mainWindow.webContents.send('update-log-status', payload);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update-log-status', payload);
+    }
+    for (const w of logViewerWindows) {
+        if (!w.isDestroyed()) w.webContents.send('update-log-status', payload);
+    }
 }
 
 // ─── Screenshots ──────────────────────────────────────────────────────────────
 /** Capture a screenshot of the active tab and save to DB (with dedup). */
-async function captureScreenshot() {
+async function captureScreenshot(opts = {}) {
     try {
+        const reasonRaw = typeof opts.reason === 'string' ? opts.reason : 'manual';
+        const reason = reasonRaw.replace(/[^a-z0-9_-]/gi, '_').slice(0, 40) || 'manual';
+
         // H1: skip when window is not focused/visible — avoids GPU work in background
         if (!isWindowActive) return { success: false, skipped: true, reason: 'inactive' };
 
         const activeTab = tabManager ? tabManager.getActiveTab() : null;
         if (!activeTab || activeTab.view.webContents.isDestroyed()) throw new Error('No active tab');
+        if (activeTab.direct) return { success: false, skipped: true, reason: 'direct' };
 
         // Skip activity timeout check (always capture when timer fires)
         const wc = activeTab.view.webContents;
@@ -643,7 +1452,7 @@ async function captureScreenshot() {
             const now = new Date();
             const ts  = now.toTimeString().split(' ')[0].replace(/:/g, '-');
             const ms  = now.getMilliseconds().toString().padStart(3, '0');
-            const virtualPath = `autoscreen::/${autoScreenshotInterval}sec/${ts}.${ms}.png`;
+            const virtualPath = `autoscreen::/${reason}/${ts}.${ms}.png`;
             const b64 = buffer.toString('base64');
             const ssId = db.insertScreenshot(currentSessionId, activeTab.id, virtualPath, b64);
             logEntryCount++;
@@ -657,9 +1466,7 @@ async function captureScreenshot() {
                 session_id: currentSessionId,
                 created_at: now.toISOString(),
             };
-            for (const w of logViewerWindows) {
-                if (!w.isDestroyed()) w.webContents.send('new-log-entry', entry);
-            }
+            _broadcastLogEntryToViewers(entry);
         }
         // Notify toolbar to play flash + reset visual countdown
         if (mainWindow && !mainWindow.isDestroyed()) {
@@ -672,19 +1479,39 @@ async function captureScreenshot() {
     }
 }
 
-/**
- * Start / stop the auto-screenshot timer.
- * @param {number} seconds  0 = off; 1–60 = interval in seconds
- */
-function toggleAutoScreenshot(seconds) {
-    const intervalSec = Math.max(0, Math.min(60, Number(seconds) || 0));
-    autoScreenshotInterval = intervalSec;
-    if (screenshotTimer) { clearInterval(screenshotTimer); screenshotTimer = null; }
-    if (intervalSec > 0) {
-        screenshotTimer = setInterval(() => {
-            captureScreenshot().catch(() => {});
-        }, intervalSec * 1000);
+function isScreenshotReasonEnabled(reason, tracking) {
+    switch (reason) {
+        case 'click': return !!tracking.onUserClick;
+        case 'page-load': return !!tracking.onPageLoadComplete;
+        case 'network-pending': return !!tracking.onNetworkPendingChange;
+        case 'mouse-activity': return !!tracking.onMouseActivity;
+        case 'rule': return !!tracking.onRuleMatchScreenshot;
+        default: return true;
     }
+}
+
+async function requestScreenshot({ reason = 'manual', force = false, meta = null } = {}) {
+    const now = Date.now();
+    const tracking = getTrackingSettings();
+    if (!force && !isScreenshotReasonEnabled(reason, tracking)) {
+        return { success: false, skipped: true, reason: 'trigger_disabled' };
+    }
+
+    const key = String(reason || 'manual');
+    const lastByReason = screenshotCooldownByReason.get(key) || 0;
+    if (!force && now - lastByReason < tracking.cooldownMs) {
+        return { success: false, skipped: true, reason: 'cooldown' };
+    }
+    screenshotCooldownByReason.set(key, now);
+
+    screenshotLimiterWindow = screenshotLimiterWindow.filter(ts => now - ts < 60_000);
+    if (!force && screenshotLimiterWindow.length >= tracking.maxPerMinute) {
+        return { success: false, skipped: true, reason: 'rate_limit' };
+    }
+
+    const res = await captureScreenshot({ reason, meta });
+    if (res?.success) screenshotLimiterWindow.push(now);
+    return res;
 }
 
 // ─── Proxy helpers ────────────────────────────────────────────────────────────
@@ -707,7 +1534,7 @@ async function testProxy(upstreamProxyUrl) {
     } finally {
         if (testWin) testWin.destroy();
         if (anonUrl) await ProxyChain.closeAnonymizedProxy(anonUrl, true);
-        try { await session.fromPartition(partition).clearStorageData(); } catch {}
+        try { await session.fromPartition(partition).clearStorageData(); } catch (e) { sysLog('warn', 'proxy', 'clearStorageData after proxy test failed: ' + (e?.message || e)); }
     }
 }
 
@@ -744,20 +1571,22 @@ async function quickChangeProxy(proxyUrl) {
 
 // ─── Window creation ──────────────────────────────────────────────────────────
 function createMainWindow() {
+    if (startupMetrics.windowCreatedTs === 0) startupMetrics.windowCreatedTs = Date.now();
     mainWindow = new BrowserWindow({
         width: 1200, height: 800, minWidth: 900, minHeight: 600,
+        show: false,
+        backgroundColor: '#0f1117',
         icon: iconPath,
         webPreferences: { preload: path.join(__dirname, 'preload.js') }
     });
-    mainWindow.maximize();
     mainWindow.loadFile(getAssetPath('browser.html'));
+    mainWindow.once('ready-to-show', () => {
+        applyRuntimeAppIcon();
+        try { mainWindow.maximize(); } catch {}
+        try { mainWindow.show(); } catch {}
+    });
 
     mainWindow.webContents.once('did-finish-load', async () => {
-        // Wait for MITM to be ready so the first tab is immediately protected.
-        // This typically takes < 500ms; the new-tab page (file://) loads fine
-        // even if MITM is still starting because file:// is never proxied.
-        try { await mitmStartPromise; } catch {}
-
         // Create first tab (once — prevents duplicate tabs on reload)
         const firstTabId = await tabManager.createTab(persistentAnonymizedProxyUrl || null, getNewTabUrl());
         tabManager.switchTab(firstTabId);
@@ -769,16 +1598,19 @@ function createMainWindow() {
         }
         startLogStatusUpdater();
         // Clean up empty sessions from previous runs (keep current session)
-        try { db.deleteEmptySessions(currentSessionId); } catch {}
+        try { db.deleteEmptySessions(currentSessionId); } catch (e) { sysLog('warn', 'db', 'deleteEmptySessions failed: ' + (e?.message || e)); }
 
 
         // Send initial data to browser toolbar
         const s = loadSettings();
-        tabManager.setPasteUnlock(s.pasteUnlock !== false); // true by default
+        tabManager.setPasteUnlock(s.pasteUnlock !== false);
+        if (s.bypassDomains?.length) applyBypassDomains(s.bypassDomains);
+        if (s.trafficOpts) applyTrafficFilters(s.trafficOpts);
         mainWindow.webContents.send('init-settings', {
             filterPatterns: s.filterPatterns || [],
-            autoScreenshot: s.autoScreenshot ?? 5,
             pasteUnlock:    s.pasteUnlock !== false,
+            bypassDomains:  s.bypassDomains || [],
+            tracking:       getTrackingSettings(),
         });
         notifyProxyProfilesList();
         notifyProxyStatus();
@@ -801,6 +1633,14 @@ function createMainWindow() {
     mainWindow.on('focus', () => { isWindowActive = true; lastMouseMoveTime = Date.now(); });
     mainWindow.on('blur', () => { isWindowActive = false; });
     mainWindow.on('resize', () => tabManager.relayout());
+    mainWindow.on('close', (e) => {
+        if (forceAppQuit) return;
+        if (!confirmExitDialog(mainWindow)) {
+            e.preventDefault();
+            return;
+        }
+        forceAppQuit = true;
+    });
     mainWindow.on('closed', () => {
         mainWindow = null;
         // Close all secondary windows and terminate the process
@@ -839,7 +1679,6 @@ function createMainWindow() {
     buildMenu();
     isWindowActive = true;
     lastMouseMoveTime = Date.now();
-    toggleAutoScreenshot(cachedSettings?.autoScreenshot ?? 5);
 }
 
 
@@ -878,8 +1717,14 @@ function createLogViewerWindow(sessionId = null) {
     logViewerInitSessions.set(wcId, sessionId);
 
     logViewerWindows.push(win);
-    // Keep backward-compat reference to last opened window
     logViewerWindow = win;
+
+    win.webContents.once('did-finish-load', () => {
+        const payload = isLoggingEnabled && currentSessionId
+            ? { enabled: true, sessionId: currentSessionId, count: logEntryCount }
+            : { enabled: false, sessionId: null, count: 0 };
+        win.webContents.send('update-log-status', payload);
+    });
 
     win.on('closed', () => {
         logViewerInitSessions.delete(wcId);
@@ -889,17 +1734,601 @@ function createLogViewerWindow(sessionId = null) {
     });
 }
 
+function getLiveLogViewerWindow() {
+    return logViewerWindows.find(w =>
+        !w.isDestroyed() && !logViewerInitSessions.get(w.webContents.id)
+    ) || null;
+}
 
-/** Broadcast updated tab list to cookie manager — debounced to coalesce rapid bursts */
+function createTraceViewerWindow() {
+    const win = new BrowserWindow({
+        width: 1100, height: 720, minWidth: 700, minHeight: 400,
+        title: 'Trace', icon: iconPath,
+        webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+    });
+    win.loadFile(getAssetPath('trace-viewer.html'));
+    traceWindows.push(win);
+    win.on('closed', () => {
+        const idx = traceWindows.indexOf(win);
+        if (idx !== -1) traceWindows.splice(idx, 1);
+    });
+}
+
+function createConsoleViewerWindow() {
+    if (consoleViewerWindow && !consoleViewerWindow.isDestroyed()) {
+        consoleViewerWindow.focus();
+        return;
+    }
+    consoleViewerWindow = new BrowserWindow({
+        width: 1000, height: 600, minWidth: 600, minHeight: 300,
+        title: 'System Console', icon: iconPath,
+        webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+    });
+    consoleViewerWindow.loadFile(getAssetPath('console-viewer.html'));
+    consoleViewerWindow.on('closed', () => { consoleViewerWindow = null; });
+}
+
+function createPageAnalyzerWindow() {
+    if (pageAnalyzerWindow && !pageAnalyzerWindow.isDestroyed()) {
+        pageAnalyzerWindow.focus();
+        _sendAnalyzerTabs();
+        return;
+    }
+    pageAnalyzerWindow = new BrowserWindow({
+        width: 1020, height: 700, minWidth: 700, minHeight: 450,
+        title: 'Page Analyzer', icon: iconPath,
+        webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+    });
+    pageAnalyzerWindow.loadFile(getAssetPath('page-analyzer.html'));
+    pageAnalyzerWindow.webContents.on('did-finish-load', () => _sendAnalyzerTabs());
+    pageAnalyzerWindow.on('closed', () => { pageAnalyzerWindow = null; });
+}
+
+function createIvacScoutWindow() {
+    if (ivacScoutWindow && !ivacScoutWindow.isDestroyed()) {
+        ivacScoutWindow.focus();
+        return;
+    }
+    ivacScoutWindow = new BrowserWindow({
+        width: 980, height: 760, minWidth: 740, minHeight: 540,
+        title: 'API Scout', icon: iconPath,
+        webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+    });
+    ivacScoutWindow.loadFile(getAssetPath('ivac-scout.html'));
+    ivacScoutWindow.webContents.once('did-finish-load', () => {
+        ivacScoutWindow.webContents.send('ivac-scout-state', { running: !!ivacScoutProcess });
+    });
+    ivacScoutWindow.on('closed', () => { ivacScoutWindow = null; });
+}
+
+function sendIvacScoutLog(line) {
+    if (ivacScoutWindow && !ivacScoutWindow.isDestroyed()) {
+        ivacScoutWindow.webContents.send('ivac-scout-log', line);
+    }
+}
+
+function getIvacScoutContext() {
+    const active = tabManager?.getActiveTab?.();
+    const activeUrl = active?.url || '';
+    const url = /^https?:\/\//i.test(activeUrl) ? activeUrl : 'https://appointment.ivacbd.com/';
+
+    const tlsProfile = loadSettings().tlsProfile || 'chrome';
+    const proxyActive = !!persistentAnonymizedProxyUrl;
+    const proxyLabel = proxyActive ? (connectedProfileName || 'Proxy') : 'Direct';
+    const proxyUrl = proxyActive ? persistentAnonymizedProxyUrl : '';
+
+    return { url, tlsProfile, proxyActive, proxyLabel, proxyUrl };
+}
+
+function stopIvacScoutProcess() {
+    if (!ivacScoutProcess || ivacScoutProcess.killed) return false;
+    try { ivacScoutProcess.kill('SIGTERM'); } catch {}
+    return true;
+}
+
+function runIvacScoutProcess(opts = {}) {
+    return new Promise((resolve, reject) => {
+        if (ivacScoutProcess) {
+            reject(new Error('Scout already running'));
+            return;
+        }
+
+        const scriptPath = path.join(__dirname, 'scripts', 'debug-ivac.js');
+        if (!fs.existsSync(scriptPath)) {
+            reject(new Error('Scout script not found: ' + scriptPath));
+            return;
+        }
+
+        const args = [scriptPath];
+        const ctx = getIvacScoutContext();
+        const runUrl = opts.url && /^https?:\/\//i.test(String(opts.url)) ? String(opts.url) : ctx.url;
+        args.push('--url', runUrl);
+        if (ctx.proxyUrl) args.push('--proxy', String(ctx.proxyUrl));
+        args.push('--browser', String(ctx.tlsProfile || 'chrome'));
+
+        // In packaged app run Electron binary as node; in dev use system node.
+        const isPackaged = process.defaultApp === false && !process.env.ELECTRON_IS_DEV;
+        const nodeBin = isPackaged ? process.execPath : (process.platform === 'win32' ? 'node.exe' : 'node');
+        const env = isPackaged
+            ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+            : { ...process.env };
+
+        ivacScoutProcess = spawn(nodeBin, args, {
+            cwd: __dirname,
+            env,
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        if (ivacScoutWindow && !ivacScoutWindow.isDestroyed()) {
+            ivacScoutWindow.webContents.send('ivac-scout-state', { running: true });
+        }
+
+        let settled = false;
+        const settle = (ok, payload) => {
+            if (settled) return;
+            settled = true;
+            resolve({ ok, ...payload });
+        };
+
+        ivacScoutProcess.stdout.setEncoding('utf8');
+        ivacScoutProcess.stderr.setEncoding('utf8');
+
+        ivacScoutProcess.stdout.on('data', (chunk) => {
+            for (const line of String(chunk).split(/\r?\n/)) {
+                if (line.trim()) sendIvacScoutLog(line);
+            }
+        });
+        ivacScoutProcess.stderr.on('data', (chunk) => {
+            for (const line of String(chunk).split(/\r?\n/)) {
+                if (line.trim()) sendIvacScoutLog('[stderr] ' + line);
+            }
+        });
+
+        ivacScoutProcess.on('error', (err) => {
+            sendIvacScoutLog('[main] spawn error: ' + err.message);
+            ivacScoutProcess = null;
+            if (ivacScoutWindow && !ivacScoutWindow.isDestroyed()) {
+                ivacScoutWindow.webContents.send('ivac-scout-state', { running: false });
+                ivacScoutWindow.webContents.send('ivac-scout-done', { ok: false, exitCode: -1, error: err.message });
+            }
+            settle(false, { exitCode: -1, error: err.message });
+        });
+
+        ivacScoutProcess.on('close', (code) => {
+            const exitCode = Number.isInteger(code) ? code : -1;
+            let summary = null;
+            try {
+                const summaryPath = path.join(__dirname, '_debug', 'summary.json');
+                if (fs.existsSync(summaryPath)) {
+                    summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+                }
+            } catch (e) {
+                sendIvacScoutLog('[main] summary parse error: ' + e.message);
+            }
+            ivacScoutProcess = null;
+            if (ivacScoutWindow && !ivacScoutWindow.isDestroyed()) {
+                ivacScoutWindow.webContents.send('ivac-scout-state', { running: false });
+                ivacScoutWindow.webContents.send('ivac-scout-done', { ok: exitCode === 0, exitCode, summary });
+            }
+            settle(exitCode === 0, { exitCode, summary });
+        });
+    });
+}
+
+function _sendAnalyzerTabs() {
+    if (!pageAnalyzerWindow || pageAnalyzerWindow.isDestroyed() || !tabManager) return;
+    pageAnalyzerWindow.webContents.send('analyzer-tabs-list', tabManager.getTabList());
+}
+
+const _analyzeFormsScript = `function(){
+    var forms = document.querySelectorAll('form');
+    var result = [];
+    forms.forEach(function(form, fi) {
+        var f = { index: fi, id: form.id||'', name: form.name||'', action: form.action||'', method: (form.method||'GET').toUpperCase(), className: form.className||'', fields: [] };
+        var els = form.elements;
+        for (var i=0; i<els.length; i++) {
+            var el = els[i];
+            var tag = el.tagName.toLowerCase();
+            if (tag==='fieldset') continue;
+            var cs = window.getComputedStyle(el);
+            var visible = cs.display !== 'none' && cs.visibility !== 'hidden' && cs.opacity !== '0' && el.offsetWidth > 0;
+            f.fields.push({
+                index: i, tag: tag, type: el.type||'', name: el.name||'', id: el.id||'',
+                value: (el.type==='file') ? '' : (el.value||'').substring(0,500),
+                placeholder: el.placeholder||'',
+                hidden: el.type==='hidden', readonly: el.readOnly||false, disabled: el.disabled||false,
+                required: el.required||false, visible: visible,
+                className: (el.className||'').substring(0,100),
+                options: tag==='select' ? Array.from(el.options).map(function(o){return{value:o.value,text:o.text,selected:o.selected}}).slice(0,50) : undefined
+            });
+        }
+        result.push(f);
+    });
+    return result;
+}`;
+
+const _analyzeCaptchaScript = `function(){
+    var r = { recaptcha: [], hcaptcha: [], turnstile: [], other: [], pageUrl: location.href };
+
+    /* ── reCAPTCHA v2 (widget divs) ── */
+    document.querySelectorAll('.g-recaptcha, [data-sitekey]').forEach(function(el){
+        var sk = el.getAttribute('data-sitekey')||'';
+        if (!sk) { var s=document.querySelector('script[src*="recaptcha"]'); if(s){var m=(s.src||'').match(/[?&]render=([^&]+)/);if(m)sk=m[1];} }
+        r.recaptcha.push({ version:'v2', sitekey:sk, action:'', dataS:el.getAttribute('data-s')||'',
+            callback:el.getAttribute('data-callback')||'', theme:el.getAttribute('data-theme')||'light',
+            size:el.getAttribute('data-size')||'normal', selector:'.g-recaptcha', iframe:false });
+    });
+
+    /* ── reCAPTCHA v3 (script-based) ── */
+    document.querySelectorAll('script[src*="recaptcha/api.js"]').forEach(function(s){
+        var m=(s.src||'').match(/[?&]render=([^&]+)/);
+        if(m && m[1]!=='explicit'){
+            var exists=r.recaptcha.some(function(x){return x.sitekey===m[1]&&x.version==='v3'});
+            if(!exists) r.recaptcha.push({version:'v3',sitekey:m[1],action:'',dataS:'',callback:'',theme:'',size:'invisible',selector:'script[src*=recaptcha]',iframe:false});
+        }
+    });
+
+    /* ── reCAPTCHA v2 enterprise ── */
+    document.querySelectorAll('script[src*="recaptcha/enterprise.js"]').forEach(function(s){
+        var m=(s.src||'').match(/[?&]render=([^&]+)/);
+        if(m){
+            var exists=r.recaptcha.some(function(x){return x.sitekey===m[1]});
+            if(!exists) r.recaptcha.push({version:'enterprise',sitekey:m[1],action:'',dataS:'',callback:'',theme:'',size:'',selector:'script[src*=enterprise]',iframe:false});
+        }
+    });
+
+    /* ── hCaptcha ── */
+    document.querySelectorAll('.h-captcha, [data-hcaptcha-widget-id]').forEach(function(el){
+        r.hcaptcha.push({ sitekey:el.getAttribute('data-sitekey')||'', theme:el.getAttribute('data-theme')||'',
+            size:el.getAttribute('data-size')||'normal', selector:'.h-captcha', iframe:false });
+    });
+
+    /* ── Cloudflare Turnstile (div-based) ── */
+    document.querySelectorAll('.cf-turnstile, [data-turnstile-widget-id]').forEach(function(el){
+        r.turnstile.push({ sitekey:el.getAttribute('data-sitekey')||'', action:el.getAttribute('data-action')||'',
+            cData:el.getAttribute('data-cdata')||'', theme:el.getAttribute('data-theme')||'auto',
+            size:el.getAttribute('data-size')||'normal', selector:'.cf-turnstile', iframe:false });
+    });
+
+    /* ── iframe-based detection (reCAPTCHA, hCaptcha, Turnstile / challenge-platform) ── */
+    document.querySelectorAll('iframe').forEach(function(f){
+        var s=f.src||'';
+        if(s.includes('google.com/recaptcha') || s.includes('recaptcha/api2') || s.includes('recaptcha/enterprise')){
+            var m=s.match(/[?&]k=([^&]+)/);
+            var sk=m?m[1]:'';
+            var isV3=s.includes('size=invisible');
+            var exists=r.recaptcha.some(function(x){return x.sitekey===sk});
+            if(!exists) r.recaptcha.push({version:isV3?'v3':'v2',sitekey:sk,action:'',dataS:'',callback:'',theme:'',size:isV3?'invisible':'normal',selector:'iframe',iframeSrc:s.substring(0,300),iframe:true});
+        }
+        if(s.includes('hcaptcha.com')){
+            var m2=s.match(/[?&]sitekey=([^&]+)/);
+            var exists2=r.hcaptcha.some(function(x){return x.sitekey===(m2?m2[1]:'')});
+            if(!exists2) r.hcaptcha.push({sitekey:m2?m2[1]:'',theme:'',size:'normal',selector:'iframe',iframeSrc:s.substring(0,300),iframe:true});
+        }
+        if(s.includes('challenges.cloudflare.com') || s.includes('turnstile')){
+            var m3=s.match(/\\/([0-9a-zA-Z_-]{20,})/);
+            var sk3=m3?m3[1]:'';
+            if(!sk3){var p=s.split('/');for(var i=0;i<p.length;i++){if(p[i]&&p[i].startsWith('0x')){sk3=p[i];break;}}}
+            var exists3=r.turnstile.some(function(x){return x.sitekey===sk3&&x.iframeSrc===s.substring(0,300)});
+            if(!exists3) r.turnstile.push({sitekey:sk3,action:'managed',cData:'',theme:'auto',size:'normal',selector:'iframe',iframeSrc:s.substring(0,300),iframe:true});
+        }
+    });
+
+    /* ── Check scripts for dynamically loaded captchas ── */
+    document.querySelectorAll('script').forEach(function(s){
+        var src=s.src||'';
+        if(src.includes('hcaptcha.com/1/api.js')){
+            var m=src.match(/[?&]sitekey=([^&]+)/);
+            if(m&&!r.hcaptcha.some(function(x){return x.sitekey===m[1]})){
+                r.hcaptcha.push({sitekey:m[1],theme:'',size:'normal',selector:'script',iframe:false});
+            }
+        }
+        if(src.includes('challenges.cloudflare.com/turnstile')){
+            if(!r.turnstile.length) r.turnstile.push({sitekey:'',action:'',cData:'',theme:'auto',size:'normal',selector:'script[src*=turnstile]',iframe:false});
+        }
+    });
+
+    r.found = r.recaptcha.length>0 || r.hcaptcha.length>0 || r.turnstile.length>0;
+    r.totalCount = r.recaptcha.length + r.hcaptcha.length + r.turnstile.length;
+    return r;
+}`;
+
+const _analyzeMetaScript = `function(){
+    var r = { title: document.title||'', url: location.href, charset: document.characterSet||'', doctype: document.doctype?document.doctype.name:'',
+        meta: [], links: [], scripts: { inline:0, external:0, srcs:[] }, iframes: [] };
+    document.querySelectorAll('meta').forEach(function(m){
+        r.meta.push({ name: m.name||m.getAttribute('property')||m.httpEquiv||'', content: (m.content||'').substring(0,200) });
+    });
+    document.querySelectorAll('link[rel]').forEach(function(l){
+        r.links.push({ rel: l.rel, href: (l.href||'').substring(0,200), type: l.type||'' });
+    });
+    document.querySelectorAll('script').forEach(function(s){ if(s.src){r.scripts.external++;r.scripts.srcs.push(s.src.substring(0,200))}else{r.scripts.inline++} });
+    document.querySelectorAll('iframe').forEach(function(f){ r.iframes.push({ src: (f.src||'').substring(0,200), id: f.id||'', name: f.name||'' }); });
+    return r;
+}`;
+
+const _analyzeEndpointsScript = `async function(){
+    function abs(url) { try { return new URL(url, location.href).toString(); } catch { return null; } }
+    function extractApiEndpoints(jsCode) {
+        var patterns = [
+            /["'\`](\\/api\\/[^"'\\\`\\s]+)["'\\\`]/g,
+            /["'\`](\\/auth[^"'\\\`\\s]*)["'\\\`]/g,
+            /["'\`](\\/login[^"'\\\`\\s]*)["'\\\`]/g,
+            /["'\`](\\/otp[^"'\\\`\\s]*)["'\\\`]/g,
+            /["'\`](\\/verify[^"'\\\`\\s]*)["'\\\`]/g,
+            /["'\`](\\/user[^"'\\\`\\s]*)["'\\\`]/g,
+            /["'\`](\\/appointment[^"'\\\`\\s]*)["'\\\`]/g,
+            /["'\`](\\/slot[^"'\\\`\\s]*)["'\\\`]/g,
+            /["'\`](\\/queue[^"'\\\`\\s]*)["'\\\`]/g,
+            /["'\`](\\/applicant[^"'\\\`\\s]*)["'\\\`]/g,
+            /fetch\\(["'\\\`]([^"'\\\`]+)["'\\\`]/g,
+            /axios\\.[a-z]+\\(["'\\\`]([^"'\\\`]+)["'\\\`]/g,
+            /\\.post\\(["'\\\`]([^"'\\\`]+)["'\\\`]/g,
+            /\\.get\\(["'\\\`]([^"'\\\`]+)["'\\\`]/g,
+            /["'\`]((?:https?:\\/\\/[^"'\\\`\\s]+)?\\/[^"'\\\`\\s]*(?:api|auth|otp|appointment|slot|queue|user|profile|invoice|payment|verify|login)[^"'\\\`\\s]*)["'\\\`]/gi
+        ];
+        var found = new Set();
+        var src = String(jsCode || '');
+        // Minified bundles often store URLs as escaped strings (e.g. "\\/api\\/v1").
+        var normalized = src.replace(/\\\\\\//g, '/').replace(/\\\\u002f/gi, '/');
+        var variants = [src, normalized];
+        for (var v = 0; v < variants.length; v++) {
+            var code = variants[v];
+            for (var i = 0; i < patterns.length; i++) {
+                var p = patterns[i], m;
+                p.lastIndex = 0;
+                while ((m = p.exec(code)) !== null) found.add(m[1]);
+            }
+        }
+        return Array.from(found);
+    }
+    function classifyEndpoint(ep) {
+        var s = String(ep || '').toLowerCase();
+        if (s.includes('/auth') || s.includes('/signin') || s.includes('/signup') || s.includes('/login')) return 'auth';
+        if (s.includes('/otp') || s.includes('verifyotp') || s.includes('phone-otp')) return 'otp';
+        if (s.includes('/slot') || s.includes('/appointment') || s.includes('/reserve')) return 'booking';
+        if (s.includes('/payment') || s.includes('/invoice') || s.includes('/tran_')) return 'payment';
+        if (s.includes('/profile') || s.includes('/user')) return 'profile';
+        if (s.startsWith('/')) return 'api-path';
+        return 'other';
+    }
+    function isLikelyApiEndpoint(ep) {
+        if (!ep) return false;
+        var s = String(ep).trim();
+        if (!s) return false;
+        var l = s.toLowerCase();
+        if (l.startsWith('/assets/')) return false;
+        if (l.startsWith('/cdn-cgi/')) return false;
+        if (/\\.(png|jpg|jpeg|gif|svg|webp|css|js|map|woff2?|ttf|eot)(\\?|$)/i.test(l)) return false;
+        if (l.startsWith('http://') || l.startsWith('https://')) {
+            try { l = new URL(l).pathname.toLowerCase(); } catch {}
+        }
+        if (/^\\/(api|auth|otp|appointment|slot|queue|user|profile|invoice|payment|file|forgot-password|verify|login)\\b/.test(l)) return true;
+        if (/\\/(api|auth|otp|appointment|slot|queue|invoice|payment|verify|login)\\b/.test(l)) return true;
+        if (/\\$\\{[^}]+\\}/.test(s)) return true;
+        return false;
+    }
+
+    var started = Date.now();
+    var r = {
+        pageUrl: location.href,
+        statusHint: (document.body && /just a moment/i.test(document.body.innerText || '')) ? 'challenge' : 'ok',
+        scriptUrls: [],
+        scannedScripts: [],
+        endpoints: [],
+        endpointsDetailed: [],
+        categoryCounts: {},
+        durationMs: 0
+    };
+    var endpointSet = new Set();
+    var endpointSources = {};
+    var endpointHits = {};
+    var endpointMeta = {};
+    function addEndpoint(ep, source, line, preview) {
+        if (!ep) return;
+        endpointSet.add(ep);
+        if (!endpointSources[ep]) endpointSources[ep] = new Set();
+        if (source) endpointSources[ep].add(source);
+        if (!endpointMeta[ep]) endpointMeta[ep] = { methods: new Set(), payloadKeys: new Set() };
+        if (!endpointHits[ep]) endpointHits[ep] = [];
+        if (source || line || preview) {
+            var key = (source || '') + '|' + (line || 0) + '|' + (preview || '');
+            var exists = endpointHits[ep].some(function(h){
+                return ((h.source || '') + '|' + (h.line || 0) + '|' + (h.preview || '')) === key;
+            });
+            if (!exists) {
+                endpointHits[ep].push({
+                    source: source || '',
+                    line: line || 0,
+                    preview: (preview || '').slice(0, 220),
+                });
+            }
+        }
+    }
+    function addMethod(ep, method) {
+        if (!ep || !method) return;
+        if (!endpointMeta[ep]) endpointMeta[ep] = { methods: new Set(), payloadKeys: new Set() };
+        endpointMeta[ep].methods.add(String(method).toUpperCase());
+    }
+    function addPayloadKeys(ep, keys) {
+        if (!ep || !keys || !keys.length) return;
+        if (!endpointMeta[ep]) endpointMeta[ep] = { methods: new Set(), payloadKeys: new Set() };
+        for (var i = 0; i < keys.length; i++) endpointMeta[ep].payloadKeys.add(keys[i]);
+    }
+    function extractObjectKeysFromText(txt) {
+        var s = String(txt || '');
+        if (!s) return [];
+        var m = s.match(/\{([^{}]{1,900})\}/);
+        if (!m) return [];
+        var body = m[1];
+        var keys = [];
+        var parts = body.split(',');
+        for (var i = 0; i < parts.length; i++) {
+            var p = parts[i].trim();
+            var km = p.match(/["'\`]?(?:[A-Za-z_$][A-Za-z0-9_$-]*)["'\`]?\s*:/);
+            if (!km) continue;
+            var key = km[0].replace(/[:\s"'\`]/g, '');
+            if (key && key.length < 60 && keys.indexOf(key) === -1) keys.push(key);
+        }
+        return keys.slice(0, 20);
+    }
+    function scanCodeByLines(code, sourceLabel) {
+        var lines = String(code || '').split(/\\r?\\n/);
+        for (var li = 0; li < lines.length; li++) {
+            var lineText = lines[li];
+            var patterns = [
+                /["'\`](\\/api\\/[^"'\\\`\\s]+)["'\\\`]/g,
+                /["'\`](\\/auth[^"'\\\`\\s]*)["'\\\`]/g,
+                /["'\`](\\/login[^"'\\\`\\s]*)["'\\\`]/g,
+                /["'\`](\\/otp[^"'\\\`\\s]*)["'\\\`]/g,
+                /["'\`](\\/verify[^"'\\\`\\s]*)["'\\\`]/g,
+                /["'\`](\\/user[^"'\\\`\\s]*)["'\\\`]/g,
+                /["'\`](\\/appointment[^"'\\\`\\s]*)["'\\\`]/g,
+                /["'\`](\\/slot[^"'\\\`\\s]*)["'\\\`]/g,
+                /["'\`](\\/queue[^"'\\\`\\s]*)["'\\\`]/g,
+                /["'\`](\\/applicant[^"'\\\`\\s]*)["'\\\`]/g,
+                /fetch\\(["'\\\`]([^"'\\\`]+)["'\\\`]/g,
+                /axios\\.[a-z]+\\(["'\\\`]([^"'\\\`]+)["'\\\`]/g,
+                /\\.post\\(["'\\\`]([^"'\\\`]+)["'\\\`]/g,
+                /\\.get\\(["'\\\`]([^"'\\\`]+)["'\\\`]/g
+            ];
+            for (var pi = 0; pi < patterns.length; pi++) {
+                var re = patterns[pi];
+                var m;
+                while ((m = re.exec(lineText)) !== null) {
+                    addEndpoint(m[1], sourceLabel, li + 1, lineText.trim());
+                    if (pi <= 9) {
+                        // direct path literal in code; method unknown
+                    } else if (pi === 10) {
+                        var mm = lineText.match(/method\s*:\s*["'\`]([A-Za-z]+)["'\`]/i);
+                        addMethod(m[1], mm ? mm[1] : 'GET');
+                        var km1 = lineText.match(/body\s*:\s*JSON\.stringify\((\{[^)]*\})\)/i);
+                        if (km1) addPayloadKeys(m[1], extractObjectKeysFromText(km1[1]));
+                    } else if (pi === 11 || pi === 12) {
+                        addMethod(m[1], 'POST');
+                        var km2 = lineText.match(/post\([^,]+,\s*(\{[^)]*\})/i);
+                        if (km2) addPayloadKeys(m[1], extractObjectKeysFromText(km2[1]));
+                    } else if (pi === 13) {
+                        addMethod(m[1], 'GET');
+                    }
+                }
+            }
+        }
+    }
+    function addEndpointHitFromText(ep, sourceLabel, text) {
+        var src = String(sourceLabel || '');
+        var t = String(text || '');
+        var idx = t.indexOf(ep);
+        if (idx < 0) idx = t.toLowerCase().indexOf(String(ep || '').toLowerCase());
+        if (idx < 0) {
+            addEndpoint(ep, src, 1, '');
+            return;
+        }
+        var before = t.slice(0, idx);
+        var line = before.split(/\\r?\\n/).length;
+        var from = Math.max(0, idx - 90);
+        var to = Math.min(t.length, idx + Math.max(40, String(ep || '').length + 90));
+        var preview = t.slice(from, to).replace(/\\s+/g, ' ').trim();
+        addEndpoint(ep, src, line, preview);
+    }
+
+    var inline = Array.from(document.querySelectorAll('script:not([src])'));
+    for (var i = 0; i < inline.length; i++) {
+        var code = inline[i].textContent || '';
+        var eps = extractApiEndpoints(code);
+        for (var j = 0; j < eps.length; j++) {
+            addEndpoint(eps[j], '(inline)');
+            addEndpointHitFromText(eps[j], '(inline)', code);
+        }
+        scanCodeByLines(code, '(inline)');
+        r.scannedScripts.push({ url: '(inline)', statusCode: 200, bodyLength: code.length, endpointHits: eps.length });
+    }
+
+    var srcEls = Array.from(document.querySelectorAll('script[src]'));
+    var urls = srcEls.map(function(s){ return abs(s.getAttribute('src') || s.src); }).filter(Boolean);
+    r.scriptUrls = Array.from(new Set(urls));
+
+    for (var k = 0; k < r.scriptUrls.length; k++) {
+        var u = r.scriptUrls[k];
+        try {
+            var resp = await fetch(u, { credentials: 'include', cache: 'no-store' });
+            var txt = await resp.text();
+            var fe = extractApiEndpoints(txt);
+            for (var z = 0; z < fe.length; z++) {
+                addEndpoint(fe[z], u);
+                addEndpointHitFromText(fe[z], u, txt);
+            }
+            scanCodeByLines(txt, u);
+            r.scannedScripts.push({ url: u, statusCode: resp.status, bodyLength: txt.length, endpointHits: fe.length });
+        } catch (e) {
+            r.scannedScripts.push({ url: u, statusCode: 0, bodyLength: 0, endpointHits: 0, error: e.message || String(e) });
+        }
+    }
+
+    var perfRes = (performance.getEntriesByType('resource') || []);
+    for (var p = 0; p < perfRes.length; p++) {
+        var en = perfRes[p];
+        var nm = en && en.name ? String(en.name) : '';
+        if (!nm) continue;
+        var low = nm.toLowerCase();
+        if (low.includes('/api/') || low.includes('/auth') || low.includes('/otp') || low.includes('/appointment') || low.includes('/slot')) {
+            try {
+                var path = new URL(nm).pathname;
+                if (path) addEndpoint(path, 'performance', 1, nm);
+            } catch {}
+        }
+    }
+
+    var rawEndpoints = Array.from(endpointSet);
+    r.endpoints = rawEndpoints.filter(isLikelyApiEndpoint).sort();
+    if (!r.endpoints.length && rawEndpoints.length) {
+        // Fallback: keep potentially useful paths when strict classifier is too aggressive.
+        r.endpoints = rawEndpoints.filter(function(ep){
+            var s = String(ep || '').toLowerCase();
+            if (!s) return false;
+            if (s.startsWith('/assets/') || s.startsWith('/cdn-cgi/')) return false;
+            if (/\\.(png|jpg|jpeg|gif|svg|webp|css|js|map|woff2?|ttf|eot)(\\?|$)/i.test(s)) return false;
+            return s.includes('/') || s.includes('http://') || s.includes('https://');
+        }).sort();
+    }
+    r.endpointsDetailed = r.endpoints.map(function(ep){
+        var srcs = endpointSources[ep] ? Array.from(endpointSources[ep]) : [];
+        var hits = endpointHits[ep] ? endpointHits[ep].slice(0, 5) : [];
+        var methods = endpointMeta[ep] ? Array.from(endpointMeta[ep].methods) : [];
+        var payloadKeys = endpointMeta[ep] ? Array.from(endpointMeta[ep].payloadKeys) : [];
+        return { path: ep, sources: srcs, hits: hits, methods: methods, payloadKeys: payloadKeys };
+    });
+    for (var q = 0; q < r.endpoints.length; q++) {
+        var cat = classifyEndpoint(r.endpoints[q]);
+        r.categoryCounts[cat] = (r.categoryCounts[cat] || 0) + 1;
+    }
+    r.durationMs = Date.now() - started;
+    return r;
+}`;
+
+/** Re-attach interceptor (mock/block rules) to all non-direct tabs when rules change. */
+function reattachInterceptorToAllTabs() {
+    if (!interceptor || !tabManager) return;
+    for (const tab of tabManager.getAllTabs()) {
+        if (tab.direct) continue;
+        try { interceptor.attachToSession(tab.tabSession, tab.id); } catch {}
+    }
+}
+
+/** Broadcast updated tab list to cookie manager & page analyzer — debounced */
 let _notifyTabsTimer = null;
 function notifyCookieManagerTabs() {
     if (_notifyTabsTimer) clearTimeout(_notifyTabsTimer);
     _notifyTabsTimer = setTimeout(() => {
         _notifyTabsTimer = null;
+        const list = tabManager.getTabList();
         if (cookieManagerWindow && !cookieManagerWindow.isDestroyed()) {
-            cookieManagerWindow.webContents.send('tabs-updated', tabManager.getTabList());
+            cookieManagerWindow.webContents.send('tabs-updated', list);
         }
-    }, 150);   // coalesce bursts within 150ms
+        if (pageAnalyzerWindow && !pageAnalyzerWindow.isDestroyed()) {
+            pageAnalyzerWindow.webContents.send('analyzer-tabs-updated', list);
+        }
+    }, 150);
 }
 
 function createCookieManagerWindow(initialTabId) {
@@ -1001,6 +2430,11 @@ function createRulesWindow() {
         webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
     });
     rulesWindow.loadFile(getAssetPath('rules.html'));
+    rulesWindow.webContents.once('did-finish-load', () => {
+        if (_recentInterceptEvents.length > 0) {
+            rulesWindow.webContents.send('intercept-rule-matched-batch', _recentInterceptEvents.slice(-80));
+        }
+    });
     rulesWindow.on('closed', () => { rulesWindow = null; });
 }
 
@@ -1008,11 +2442,51 @@ function buildMenu() {
     const menu = Menu.buildFromTemplate([
         {
             label: 'File', submenu: [
-                { label: 'Proxy Manager',        click: () => createProxyManagerWindow() },
-                { label: 'Rules & Interceptor',  click: () => createRulesWindow() },
-                { label: 'Cookie Manager', click: () => createCookieManagerWindow(tabManager?.getActiveTabId()) },
+                { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: async () => {
+                    if (!tabManager || !mainWindow) return;
+                    const id = await tabManager.createTab(persistentAnonymizedProxyUrl || null, getNewTabUrl(), false, currentSessionId);
+                    tabManager.switchTab(id);
+                    const tab = tabManager.getTab(id);
+                    if (tab) { setupNetworkLogging(tab.view.webContents, id, currentSessionId); interceptor.attachToSession(tab.tabSession, id); }
+                    notifyCookieManagerTabs();
+                }},
+                { label: 'New Isolated Tab', accelerator: 'CmdOrCtrl+Shift+T', click: async () => {
+                    if (!tabManager || !mainWindow) return;
+                    const id = await tabManager.createTab(persistentAnonymizedProxyUrl || null, getNewTabUrl(), true, null);
+                    tabManager.switchTab(id);
+                    const tab = tabManager.getTab(id);
+                    if (tab) { setupNetworkLogging(tab.view.webContents, id, currentSessionId); if (interceptor) { try { interceptor.attachToSession(tab.tabSession, id); } catch(e) {} } }
+                    notifyCookieManagerTabs();
+                }},
+                { label: 'New Direct Tab', accelerator: 'CmdOrCtrl+Shift+D', click: async () => {
+                    if (!tabManager || !mainWindow) return;
+                    const id = await tabManager.createDirectTab(getNewTabUrl());
+                    tabManager.switchTab(id);
+                    notifyCookieManagerTabs();
+                }},
+                { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => {
+                    if (!tabManager) return;
+                    const id = tabManager.getActiveTabId();
+                    if (id) tabManager.closeTab(id);
+                }},
+                { type: 'separator' },
+                { label: 'Focus Address Bar', accelerator: 'CmdOrCtrl+L', click: () => {
+                    mainWindow?.webContents.send('focus-url-bar');
+                }},
+                { type: 'separator' },
+                { label: 'Proxy Manager', accelerator: 'CmdOrCtrl+P', click: () => createProxyManagerWindow() },
+                { label: 'Network Activity', accelerator: 'CmdOrCtrl+Shift+L', click: () => createLogViewerWindow() },
+                { label: 'Cookie Manager', accelerator: 'CmdOrCtrl+Shift+C', click: () => createCookieManagerWindow(tabManager?.getActiveTabId()) },
+                { label: 'Rules & Interceptor', click: () => createRulesWindow() },
+                { label: 'System Console', accelerator: 'CmdOrCtrl+Shift+K', click: () => createConsoleViewerWindow() },
+                { label: 'Page Analyzer', accelerator: 'CmdOrCtrl+Shift+A', click: () => createPageAnalyzerWindow() },
+                { label: 'API Scout', click: () => createIvacScoutWindow() },
+                { type: 'separator' },
                 { label: 'Enable Logging', type: 'checkbox', checked: isLoggingEnabled,
                   click: (item) => { isLoggingEnabled = item.checked; sendLogStatus(); } },
+                { label: 'Take Screenshot', accelerator: 'F2', click: () => {
+                    requestScreenshot({ reason: 'click' }).catch(() => {});
+                }},
                 { type: 'separator' },
                 { role: 'quit', label: 'Exit' }
             ]
@@ -1031,42 +2505,49 @@ function buildMenu() {
             { label: 'Developer Tools (Shell)', accelerator: 'CmdOrCtrl+Shift+I',
               click: () => mainWindow?.webContents.toggleDevTools() },
             { type: 'separator' },
-            { label: 'Network Activity', click: () => createLogViewerWindow() }
+            { label: 'Next Tab', accelerator: 'Ctrl+Tab', click: () => { mainWindow?.webContents.send('switch-tab-rel', 1); }},
+            { label: 'Previous Tab', accelerator: 'Ctrl+Shift+Tab', click: () => { mainWindow?.webContents.send('switch-tab-rel', -1); }},
+            { type: 'separator' },
+            { label: 'Trace', click: () => {
+                const s = cachedSettings || loadSettings();
+                if (s.traceMode || (db && db.countTraceEntries() > 0)) createTraceViewerWindow();
+            }}
         ]}
     ]);
     Menu.setApplicationMenu(menu);
 }
 
+// ─── Certificate verification (must be before whenReady) ────────────────────────
+app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
+    event.preventDefault();
+    callback(true); // Accept our MITM certs
+});
+
 // ─── App ready ────────────────────────────────────────────────────────────────
-app.whenReady().then(() => {
-    // Set dock / taskbar icon (important in dev mode — electron binary has no custom icon)
-    // Use PNG — .icns is not accepted by app.dock.setIcon() in Electron 28
-    if (process.platform === 'darwin' && app.dock) {
-        try {
-            const pngPath = getAssetPath('icons/icon.png');
-            app.dock.setIcon(fs.existsSync(pngPath) ? pngPath : iconPath);
-        } catch (e) {
-            console.warn('[dock] setIcon failed:', e.message);
-        }
-    }
+app.whenReady().then(async () => {
+    startupMetrics.appReadyTs = Date.now();
+    applyRuntimeAppIcon();
 
     // Load only the critical modules synchronously
     db         = require('./db');
     tabManager = require('./tab-manager');
     db.init();
     loadSettings();
+    initSysLogIPC();
 
     // Non-critical modules loaded after window is shown
     setImmediate(() => {
         harExporter = require('./har-exporter');
         rulesEngine = require('./rules-engine');
         interceptor = require('./request-interceptor');
+        interceptor.setOnRuleMatch((info) => {
+            broadcastInterceptRuleMatched(info);
+            maybeLogMockToNetworkActivity(info);
+        });
     });
 
-    // Start MITM proxy early — parallel with window load so it's ready
-    // when the user first navigates. Stored as a Promise so did-finish-load
-    // can await it before creating the first tab.
-    mitmStartPromise = startMitmProxy().then(proxy => {
+    // Start MITM proxy in background so first window appears immediately
+    mitmStartPromise = startMitmProxy().then(async proxy => {
         const { session: electronSession } = require('electron');
         const caCertPem = proxy.getCACert(); // eslint-disable-line no-unused-vars
 
@@ -1077,26 +2558,46 @@ app.whenReady().then(() => {
         trustMitmCA(electronSession.defaultSession);
         tabManager.setTrustMitmCA(trustMitmCA);
 
+        const mitmOpts = { proxyRules: 'http=127.0.0.1:8877;https=127.0.0.1:8877', proxyBypassRules: buildBypassList((cachedSettings || loadSettings()).bypassDomains) };
+        await electronSession.defaultSession.setProxy(mitmOpts).catch(e => sysLog('warn', 'proxy', 'defaultSession MITM proxy setup failed: ' + (e?.message || e)));
+        console.log('[main] defaultSession → MITM 127.0.0.1:8877');
+
         const { session: s } = require('electron');
         const sharedSess = s.fromPartition('persist:cupnet-shared');
         trustMitmCA(sharedSess);
-        sharedSess.setProxy({
-            proxyRules: 'http=127.0.0.1:8877;https=127.0.0.1:8877',
-        }).then(() => {
-            console.log('[main] Shared session routed through MITM proxy');
-        });
+        await sharedSess.setProxy(mitmOpts);
+        console.log('[main] Shared session → proxy 127.0.0.1:8877');
 
         const startupProfile = loadSettings().tlsProfile || 'chrome';
         proxy.setBrowser(startupProfile);
         console.log(`[main] MITM startup profile: ${startupProfile}`);
+        mitmReady = true;
+        startupMetrics.mitmReadyTs = Date.now();
+        notifyMitmReady();
+        maybeLogStartupMetrics();
 
         // Push stats to all windows every second (only if something changed)
         let _prevStatsJson = '';
         const statsBroadcast = setInterval(() => {
             if (!mitmProxy) return;
+            const stats = mitmProxy.getStats();
+            if (_lastPendingForTracking == null) {
+                _lastPendingForTracking = Number(stats.pending) || 0;
+            } else {
+                const tracking = getTrackingSettings();
+                const pendingNow = Number(stats.pending) || 0;
+                const delta = Math.abs(pendingNow - _lastPendingForTracking);
+                if (tracking.onNetworkPendingChange && delta >= tracking.pendingDeltaThreshold) {
+                    requestScreenshot({
+                        reason: 'network-pending',
+                        meta: { pending: pendingNow, prevPending: _lastPendingForTracking, delta },
+                    }).catch(() => {});
+                }
+                _lastPendingForTracking = pendingNow;
+            }
+
             const wins = BrowserWindow.getAllWindows().filter(w => !w.isDestroyed());
             if (!wins.length) return;
-            const stats = mitmProxy.getStats();
             const json  = `${stats.requests}|${stats.pending}|${stats.errors}|${stats.avgMs}|${stats.reqPerSec}|${stats.browser}`;
             if (json === _prevStatsJson) return;
             _prevStatsJson = json;
@@ -1104,9 +2605,31 @@ app.whenReady().then(() => {
         }, 1000);
         app.on('before-quit', () => clearInterval(statsBroadcast));
 
+        const mouseTrackingTimer = setInterval(() => {
+            const tracking = getTrackingSettings();
+            if (!tracking.onMouseActivity) return;
+            if (!isWindowActive) return;
+            if (Date.now() - lastMouseMoveTime > 6000) return;
+            requestScreenshot({ reason: 'mouse-activity' }).catch(() => {});
+        }, 5000);
+        app.on('before-quit', () => clearInterval(mouseTrackingTimer));
+
         return proxy;
     }).catch(e => {
         console.error('[main] MITM proxy failed to start:', e.message);
+        mitmReady = false;
+        notifyMitmReady();
+    });
+
+    ipcMain.handle('mitm-ready-state', () => ({ ready: !!mitmReady, ts: Date.now() }));
+    ipcMain.on('ui-first-paint', () => {
+        if (!startupMetrics.firstPaintTs) {
+            startupMetrics.firstPaintTs = Date.now();
+            maybeLogStartupMetrics();
+        }
+    });
+    ipcMain.on('ui-long-task-count', (_, count) => {
+        startupMetrics.longTaskCount = Number(count) || 0;
     });
 
     // ── Mouse activity ───────────────────────────────────────────────────────
@@ -1128,7 +2651,7 @@ app.whenReady().then(() => {
     ipcMain.handle('close-tab', async (_, tabId) => {
         const tab = tabManager.getTab(tabId);
         if (tab) {
-            try { interceptor.detachFromSession(tab.tabSession); } catch {}
+            try { interceptor.detachFromSession(tab.tabSession); } catch (e) { sysLog('warn', 'tabs', 'interceptor detach on close-tab failed: ' + (e?.message || e)); }
         }
         const result = tabManager.closeTab(tabId);
         notifyCookieManagerTabs();
@@ -1147,12 +2670,8 @@ app.whenReady().then(() => {
     ipcMain.on('navigate-to', (event, rawInput) => {
         const url = resolveNavigationUrl(rawInput);
         if (!url) return;
-        if (mainWindow && event.sender.id === mainWindow.webContents.id) {
-            const tab = tabManager.getActiveTab();
-            if (tab && !tab.view.webContents.isDestroyed()) tab.view.webContents.loadURL(url).catch(() => {});
-        } else {
-            if (!event.sender.isDestroyed()) event.sender.loadURL(url).catch(() => {});
-        }
+        // Always load in active tab — avoids sender-id confusion (URL bar vs new-tab)
+        tabManager.navigate(url);
     });
     ipcMain.on('nav-back', () => {
         const tab = tabManager.getActiveTab();
@@ -1186,6 +2705,12 @@ app.whenReady().then(() => {
         return db.getRequest(id);
     });
 
+    ipcMain.handle('set-request-annotation', async (_, id, data) => {
+        if (!id) return { success: false, error: 'Invalid request id' };
+        db.setRequestAnnotation(id, data || {});
+        return { success: true };
+    });
+
     ipcMain.handle('fts-search', async (_, query, sessionId) => {
         return db.ftsSearch(query, sessionId || null);
     });
@@ -1217,6 +2742,7 @@ app.whenReady().then(() => {
             currentSessionId = sess ? sess.id : null;
             logEntryCount = 0;
             for (const tab of tabManager.getAllTabs()) {
+                if (tab.direct) continue;
                 tab.sessionId = currentSessionId;
                 setupNetworkLogging(tab.view.webContents, tab.id, currentSessionId);
             }
@@ -1250,6 +2776,7 @@ app.whenReady().then(() => {
             hadLoggingBeenStopped = false;
             // Re-attach logging for every tab so new tabs opened while paused also log
             for (const tab of tabManager.getAllTabs()) {
+                if (tab.direct) continue;
                 tab.sessionId = currentSessionId;
                 setupNetworkLogging(tab.view.webContents, tab.id, currentSessionId);
             }
@@ -1264,6 +2791,7 @@ app.whenReady().then(() => {
         logEntryCount = 0;
         hadLoggingBeenStopped = false;
         for (const tab of tabManager.getAllTabs()) {
+            if (tab.direct) continue;
             tab.sessionId = currentSessionId;
             setupNetworkLogging(tab.view.webContents, tab.id, currentSessionId);
         }
@@ -1295,6 +2823,12 @@ app.whenReady().then(() => {
         return logViewerInitSessions.get(e.sender.id) ?? null;
     });
 
+    ipcMain.handle('get-log-status', () => {
+        return isLoggingEnabled && currentSessionId
+            ? { enabled: true, sessionId: currentSessionId, count: logEntryCount }
+            : { enabled: false, sessionId: null, count: 0 };
+    });
+
     // ── Existing logs (DB-backed) ────────────────────────────────────────────
     ipcMain.handle('get-existing-logs', async () => {
         if (!currentSessionId) return [];
@@ -1316,6 +2850,7 @@ app.whenReady().then(() => {
             logEntryCount = 0;
             // Re-attach logging for every open tab so they write to the new session
             for (const tab of tabManager.getAllTabs()) {
+                if (tab.direct) continue;
                 tab.sessionId = currentSessionId;
                 setupNetworkLogging(tab.view.webContents, tab.id, currentSessionId);
             }
@@ -1374,11 +2909,184 @@ app.whenReady().then(() => {
 
     // ── Intercept rules ──────────────────────────────────────────────────────
     ipcMain.handle('get-intercept-rules', async () => db.getAllInterceptRules());
-    ipcMain.handle('save-intercept-rule', async (_, rule) => db.saveInterceptRule(rule));
-    ipcMain.handle('delete-intercept-rule', async (_, id) => { db.deleteInterceptRule(id); return true; });
+    ipcMain.handle('save-intercept-rule', async (_, rule) => {
+        const id = db.saveInterceptRule(rule);
+        if (interceptor) {
+            interceptor.invalidateRulesCache();
+            reattachInterceptorToAllTabs();
+        }
+        return id;
+    });
+    ipcMain.handle('delete-intercept-rule', async (_, id) => {
+        db.deleteInterceptRule(id);
+        if (interceptor) {
+            interceptor.invalidateRulesCache();
+            reattachInterceptorToAllTabs();
+        }
+        return true;
+    });
+
+    ipcMain.handle('test-intercept-notification', async () => {
+        function broadcast(info) {
+            broadcastInterceptRuleMatched(info);
+        }
+        broadcast({ type: 'mock', ruleName: 'Test Mock Rule', url: 'https://example.com/api/data', detail: '200 application/json', bodyPreview: '{"status":"ok","message":"mocked response"}' });
+        setTimeout(() => broadcast({ type: 'block', ruleName: 'Test Block Rule', url: 'https://example.com/ads/tracker.js' }), 800);
+        setTimeout(() => broadcast({ type: 'modifyHeaders', ruleName: 'Test Modify Rule', url: 'https://example.com/api/auth', detail: 'Set: X-Custom-Token; Remove: Cookie' }), 1600);
+        return true;
+    });
 
     // ── Proxy Manager ────────────────────────────────────────────────────────
     ipcMain.handle('open-proxy-manager', async () => { createProxyManagerWindow(); return true; });
+
+    // ── Console Viewer ───────────────────────────────────────────────────────
+    ipcMain.handle('open-console-viewer', async () => { createConsoleViewerWindow(); return true; });
+    ipcMain.handle('get-console-history', () => _consoleBuffer.slice());
+    ipcMain.handle('save-console-log', async (_, content) => {
+        const { canceled, filePath } = await dialog.showSaveDialog(consoleViewerWindow || mainWindow, {
+            title: 'Save Console Log',
+            defaultPath: path.join(app.getPath('downloads'), `cupnet-console-${Date.now()}.log`),
+            filters: [{ name: 'Log Files', extensions: ['log', 'txt'] }]
+        });
+        if (canceled || !filePath) return false;
+        fs.writeFileSync(filePath, content, 'utf-8');
+        return true;
+    });
+
+    // ── Page Analyzer ────────────────────────────────────────────────────────
+    ipcMain.handle('open-page-analyzer', async () => { createPageAnalyzerWindow(); return true; });
+    ipcMain.handle('open-ivac-scout', async () => { createIvacScoutWindow(); return true; });
+    ipcMain.handle('get-ivac-scout-context', async () => getIvacScoutContext());
+    ipcMain.handle('run-ivac-scout', async (_, opts) => runIvacScoutProcess(opts || {}));
+    ipcMain.handle('stop-ivac-scout', async () => ({ stopped: stopIvacScoutProcess() }));
+    ipcMain.handle('open-ivac-dump-folder', async () => {
+        const dumpDir = path.join(__dirname, '_debug');
+        fs.mkdirSync(dumpDir, { recursive: true });
+        await shell.openPath(dumpDir);
+        return true;
+    });
+
+    ipcMain.handle('analyze-page-forms', async (_, tabId) => {
+        const tab = tabManager.getTab(tabId);
+        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return [];
+        try {
+            return await tab.view.webContents.executeJavaScript(`(${_analyzeFormsScript})()`);
+        } catch { return []; }
+    });
+
+    ipcMain.handle('analyze-page-captcha', async (_, tabId) => {
+        const tab = tabManager.getTab(tabId);
+        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return {};
+        try {
+            return await tab.view.webContents.executeJavaScript(`(${_analyzeCaptchaScript})()`);
+        } catch { return {}; }
+    });
+
+    ipcMain.handle('analyze-page-meta', async (_, tabId) => {
+        const tab = tabManager.getTab(tabId);
+        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return {};
+        try {
+            return await tab.view.webContents.executeJavaScript(`(${_analyzeMetaScript})()`);
+        } catch { return {}; }
+    });
+
+    ipcMain.handle('analyze-page-endpoints', async (_, tabId) => {
+        const tab = tabManager.getTab(tabId);
+        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return {};
+        try {
+            return await tab.view.webContents.executeJavaScript(`(${_analyzeEndpointsScript})()`);
+        } catch { return {}; }
+    });
+
+    ipcMain.handle('page-analyzer-action', async (_, tabId, action) => {
+        const tab = tabManager.getTab(tabId);
+        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return false;
+        try {
+            const fi = Number(action.formIndex);
+            const fld = Number(action.fieldIndex);
+            const valueLiteral = JSON.stringify(action.value == null ? '' : String(action.value));
+            const script = `(function(){
+                var forms=document.querySelectorAll('form');
+                if(!forms[${fi}]) return 'no-form';
+                var el=forms[${fi}].elements[${fld}];
+                if(!el) return 'no-field';
+                var act='${action.type}';
+                var newValue=${valueLiteral};
+                function ensureVisible(node) {
+                    if (!node || node.nodeType !== 1) return;
+                    var cur = node;
+                    while (cur && cur.nodeType === 1) {
+                        var cs = window.getComputedStyle(cur);
+                        if (cur.hidden) cur.hidden = false;
+                        if (cur.getAttribute && cur.getAttribute('aria-hidden') === 'true') cur.removeAttribute('aria-hidden');
+                        if (cs.display === 'none') {
+                            cur.style.display = '';
+                            if (window.getComputedStyle(cur).display === 'none') cur.style.display = 'block';
+                        }
+                        if (cs.visibility === 'hidden') cur.style.visibility = 'visible';
+                        if (cs.opacity === '0') cur.style.opacity = '1';
+                        cur = cur.parentElement;
+                    }
+                }
+                if(act==='focus'){
+                    el.scrollIntoView({behavior:'smooth',block:'center'});
+                    el.focus();
+                    el.style.outline='3px solid #3b82f6';
+                    el.style.outlineOffset='2px';
+                    setTimeout(function(){el.style.outline='';el.style.outlineOffset=''},3000);
+                } else if(act==='show'){
+                    if(el.type==='hidden') el.type='text';
+                    ensureVisible(el);
+                    el.removeAttribute && el.removeAttribute('hidden');
+                    if (el.getAttribute && el.getAttribute('aria-hidden') === 'true') el.removeAttribute('aria-hidden');
+                    el.style.cssText='display:block !important;visibility:visible !important;opacity:1 !important;position:static !important;width:auto !important;height:auto !important;min-height:24px !important;border:2px dashed #f59e0b !important;padding:4px !important;background:rgba(245,158,11,0.08) !important;';
+                    el.scrollIntoView({behavior:'smooth',block:'center'});
+                } else if(act==='hide'){
+                    el.hidden = true;
+                    if (el.setAttribute) el.setAttribute('aria-hidden', 'true');
+                    el.style.setProperty('display', 'none', 'important');
+                    el.style.setProperty('visibility', 'hidden', 'important');
+                    el.style.setProperty('opacity', '0', 'important');
+                } else if(act==='toggle-disabled'){
+                    el.disabled = !el.disabled;
+                } else if(act==='toggle-password-visibility'){
+                    var t = (el.type || '').toLowerCase();
+                    if (t === 'password') {
+                        try { el.type = 'text'; } catch {}
+                    } else if (t === 'text') {
+                        try { el.type = 'password'; } catch {}
+                    }
+                } else if(act==='set-value'){
+                    var tag = (el.tagName || '').toLowerCase();
+                    var type = (el.type || '').toLowerCase();
+                    if (type === 'checkbox' || type === 'radio') {
+                        var v = String(newValue).toLowerCase();
+                        el.checked = (v === '1' || v === 'true' || v === 'yes' || v === 'on');
+                    } else if (tag === 'select') {
+                        el.value = newValue;
+                    } else {
+                        el.value = newValue;
+                    }
+                    try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch {}
+                    try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch {}
+                }
+                return 'ok';
+            })()`;
+            const result = await tab.view.webContents.executeJavaScript(script);
+            return result === 'ok';
+        } catch { return false; }
+    });
+
+    const _appStartTime = Date.now();
+    let _startupSplashConsumed = false;
+    function consumeStartupSplashState() {
+        if (_startupSplashConsumed) return { show: false, durationMs: 0 };
+        _startupSplashConsumed = true;
+        return { show: true, durationMs: 3000 };
+    }
+    ipcMain.handle('get-uptime', () => Date.now() - _appStartTime);
+    ipcMain.handle('consume-startup-splash', () => consumeStartupSplashState());
+    ipcMain.handle('get-app-version', () => app.getVersion());
 
     ipcMain.handle('get-ui-pref', (_, key, def) => {
         const v = loadUiPrefs()[key];
@@ -1388,12 +3096,33 @@ app.whenReady().then(() => {
 
     ipcMain.handle('check-ip-geo', async () => checkCurrentIpGeo());
 
+    ipcMain.handle('get-direct-ip', async () => {
+        try {
+            const directSess = session.fromPartition('direct-ip-check');
+            await directSess.setProxy({ mode: 'direct' });
+            const win = new BrowserWindow({ show: false, webPreferences: { session: directSess } });
+            try {
+                await win.loadURL('https://ipinfo.io/json');
+                const text = await win.webContents.executeJavaScript('document.body.innerText');
+                const d = JSON.parse(text);
+                return { ip: d.ip || '', city: d.city || '', country: d.country || '', country_name: d.country || '', region: d.region || '', org: d.org || '' };
+            } finally {
+                win.destroy();
+            }
+        } catch (e) {
+            sysLog('warn', 'direct-ip', 'Failed to get direct IP: ' + (e?.message || e));
+            return { ip: '', city: '', country: '', country_name: '' };
+        }
+    });
+
     ipcMain.handle('get-current-proxy', async () => {
         const isDirect = !persistentAnonymizedProxyUrl && actProxy === '';
         return {
             active:    !!persistentAnonymizedProxyUrl,
-            proxyName: actProxy || '',
+            proxyName: connectedProfileName || actProxy || '',
             mode:      isDirect ? 'direct' : (persistentAnonymizedProxyUrl ? 'proxy' : 'none'),
+            profileId: connectedProfileId || null,
+            resolvedVars: connectedResolvedVars || {},
         };
     });
 
@@ -1403,25 +3132,23 @@ app.whenReady().then(() => {
         if (!row) return { success: false, error: 'Profile not found' };
         let template = null;
         if (row.url_encrypted && safeStorage.isEncryptionAvailable()) {
-            try { template = safeStorage.decryptString(row.url_encrypted); } catch {}
+            try { template = safeStorage.decryptString(row.url_encrypted); } catch (e) { sysLog('warn', 'proxy', 'decrypt proxy template failed: ' + (e?.message || e)); }
         }
         if (!template) return { success: false, error: 'Cannot decrypt template' };
 
-        // Merge saved variables with ephemeral overrides (e.g. SID)
         const savedVars  = row.variables ? JSON.parse(row.variables) : {};
         const mergedVars = { ...savedVars, ...(ephemeralVars || {}) };
-        const resolvedUrl = parseProxyTemplate(template, mergedVars);
+        const resolvedVars = {};
+        const resolvedUrl = parseProxyTemplate(template, mergedVars, resolvedVars);
 
         try {
             await quickChangeProxy(resolvedUrl);
-            // Apply to all tab sessions and also default session (for net.fetch IP checks)
+            mitmProxy?.setUpstream(persistentAnonymizedProxyUrl);
             await tabManager.setProxyAll(persistentAnonymizedProxyUrl);
             try {
-                const rules = persistentAnonymizedProxyUrl
-                    ? (() => { const u = new URL(persistentAnonymizedProxyUrl); return `${u.hostname}:${u.port}`; })()
-                    : null;
-                if (rules) await session.defaultSession.setProxy({ proxyRules: rules });
-            } catch {}
+                const u = new URL(persistentAnonymizedProxyUrl);
+                await session.defaultSession.setProxy({ proxyRules: `${u.hostname}:${u.port}` });
+            } catch (e) { sysLog('warn', 'proxy', 'setProxy for connect-proxy-template failed: ' + (e?.message || e)); }
 
             // Apply fingerprint from profile
             activeFingerprint = {
@@ -1433,7 +3160,7 @@ app.whenReady().then(() => {
                 // Apply session-level UA for all tab sessions
                 for (const tab of tabManager.getAllTabs()) {
                     if (tab?.view?.webContents && !tab.view.webContents.isDestroyed()) {
-                        try { tab.view.webContents.session.setUserAgent(activeFingerprint.user_agent, activeFingerprint.language || ''); } catch {}
+                        try { tab.view.webContents.session.setUserAgent(activeFingerprint.user_agent, activeFingerprint.language || ''); } catch (e) { sysLog('warn', 'fingerprint', 'setUserAgent for tab failed: ' + (e?.message || e)); }
                     }
                 }
             }
@@ -1457,20 +3184,20 @@ app.whenReady().then(() => {
                     mitmProxy._activeJa3 = null;
                 }
                 // Notify toolbar
-                BrowserWindow.getAllWindows().forEach(w => w.webContents.send('tls-profile-changed', tlsProfile));
+                broadcastTlsProfileChanged(tlsProfile);
             }
 
+            connectedProfileId = profileId;
+            connectedProfileName = row.name || null;
+            connectedResolvedVars = resolvedVars || {};
             buildMenu();
             notifyProxyStatus();
-            // No page reload needed: all tabs always connect via local MITM (:8877);
-            // the MITM upstream switches instantly — new connections pick it up.
 
-            // Fetch IP/geo and update profile
             checkCurrentIpGeo().then(geo => {
                 db.updateProxyProfileGeo(profileId, geo.ip, `${geo.city}, ${geo.country_name}`);
                 notifyProxyProfilesList();
-            }).catch(() => {});
-            return { success: true, resolvedUrl };
+            }).catch(e => sysLog('warn', 'proxy', 'geo check after proxy connect failed: ' + (e?.message || e)));
+            return { success: true, resolvedUrl, resolvedVars };
         } catch (e) {
             return { success: false, error: e.message };
         }
@@ -1480,16 +3207,19 @@ app.whenReady().then(() => {
         try {
             if (!proxyUrl || typeof proxyUrl !== 'string') return { success: false, error: 'Invalid proxy URL' };
             const anonymized = await quickChangeProxy(proxyUrl);
+            mitmProxy?.setUpstream(anonymized);
             await tabManager.setProxyAll(anonymized);
             try {
                 const u = new URL(anonymized);
                 await session.defaultSession.setProxy({ proxyRules: `${u.hostname}:${u.port}` });
-            } catch {}
+            } catch (e) { sysLog('warn', 'proxy', 'setProxy for quick-proxy-change failed: ' + (e?.message || e)); }
             buildMenu();
             notifyProxyStatus();
             return { success: true, message: 'Proxy applied successfully' };
         } catch (e) { return { success: false, error: e.message }; }
     });
+
+    const MITM_PROXY_OPTS = { proxyRules: 'http=127.0.0.1:8877;https=127.0.0.1:8877', proxyBypassRules: buildBypassList((cachedSettings || loadSettings()).bypassDomains) };
 
     ipcMain.handle('disconnect-proxy', async () => {
         try {
@@ -1498,14 +3228,18 @@ app.whenReady().then(() => {
                 persistentAnonymizedProxyUrl = null;
             }
             actProxy = '';
+            connectedProfileId = null;
+            connectedProfileName = null;
+            connectedResolvedVars = {};
+            mitmProxy?.setUpstream(null);
             await tabManager.setProxyAll(null);
-            try { await session.defaultSession.setProxy({ mode: 'direct' }); } catch {}
+            try { await session.defaultSession.setProxy(MITM_PROXY_OPTS); } catch (e) { sysLog('warn', 'proxy', 'setProxy MITM on disconnect failed: ' + (e?.message || e)); }
 
             // Reset fingerprint overrides
             if (activeFingerprint) {
                 for (const tab of tabManager.getAllTabs()) {
                     if (tab?.view?.webContents && !tab.view.webContents.isDestroyed()) {
-                        resetFingerprintOnWebContents(tab.view.webContents).catch(() => {});
+                        resetFingerprintOnWebContents(tab.view.webContents).catch(e => sysLog('warn', 'fingerprint', 'reset fingerprint on disconnect failed: ' + (e?.message || e)));
                     }
                 }
                 activeFingerprint = null;
@@ -1567,7 +3301,7 @@ app.whenReady().then(() => {
         if (!row) return { success: false, error: 'Profile not found' };
         let template = null;
         if (row.url_encrypted && safeStorage.isEncryptionAvailable()) {
-            try { template = safeStorage.decryptString(row.url_encrypted); } catch {}
+            try { template = safeStorage.decryptString(row.url_encrypted); } catch (e) { sysLog('warn', 'proxy', 'decrypt test proxy template failed: ' + (e?.message || e)); }
         }
         if (!template) return { success: false, error: 'Cannot decrypt' };
         const savedVars  = row.variables ? JSON.parse(row.variables) : {};
@@ -1608,7 +3342,7 @@ app.whenReady().then(() => {
         const row = db.getProxyProfileEncrypted(id);
         if (!row) return null;
         if (row.url_encrypted && safeStorage.isEncryptionAvailable()) {
-            try { return safeStorage.decryptString(row.url_encrypted); } catch {}
+            try { return safeStorage.decryptString(row.url_encrypted); } catch (e) { sysLog('warn', 'proxy', 'decrypt profile URL failed: ' + (e?.message || e)); }
         }
         return null;
     });
@@ -1620,7 +3354,7 @@ app.whenReady().then(() => {
         if (!row) return { success: false, error: 'Profile not found' };
         let url = null;
         if (row.url_encrypted && safeStorage.isEncryptionAvailable()) {
-            try { url = safeStorage.decryptString(row.url_encrypted); } catch {}
+            try { url = safeStorage.decryptString(row.url_encrypted); } catch (e) { sysLog('warn', 'proxy', 'decrypt profile URL for test failed: ' + (e?.message || e)); }
         }
         if (!url) return { success: false, error: 'Cannot decrypt URL' };
         const start = Date.now();
@@ -1654,6 +3388,47 @@ app.whenReady().then(() => {
             clipboard.writeImage(nativeImage.createFromBuffer(Buffer.from(imageData, 'base64')));
             return { success: true };
         } catch (err) { return { success: false, error: err.message }; }
+    });
+
+    // ── Trace mode (full req/res to cupnet-trace.jsonl) ───────────────────────
+    ipcMain.handle('get-trace-mode', async () => (cachedSettings || loadSettings()).traceMode === true);
+    ipcMain.handle('set-trace-mode', async (_, enabled) => {
+        const s = loadSettings();
+        s.traceMode = !!enabled;
+        saveSettings(s);
+        return true;
+    });
+    ipcMain.handle('get-trace-path', async () => path.join(app.getPath('userData'), 'cupnet-trace.jsonl'));
+    ipcMain.handle('open-trace-file', async () => {
+        const p = path.join(app.getPath('userData'), 'cupnet-trace.jsonl');
+        if (fs.existsSync(p)) shell.openPath(p);
+        else shell.showItemInFolder(app.getPath('userData'));
+        return true;
+    });
+    ipcMain.handle('has-trace-data', async () => {
+        const s = cachedSettings || loadSettings();
+        if (s.traceMode) return true;
+        return db && db.countTraceEntries() > 0;
+    });
+    ipcMain.handle('open-trace-viewer', () => {
+        const live = traceWindows.find(w => !w.isDestroyed());
+        if (live) { if (live.isMinimized()) live.restore(); live.focus(); return; }
+        const s = cachedSettings || loadSettings();
+        if (!s.traceMode && (!db || db.countTraceEntries() === 0)) return;
+        createTraceViewerWindow();
+    });
+    ipcMain.handle('get-trace-entries', async (_, limit, offset) => {
+        return db ? db.queryTraceEntries(limit ?? 300, offset ?? 0) : [];
+    });
+    ipcMain.handle('get-trace-entry', async (_, id) => {
+        return db ? db.getTraceEntry(id) : null;
+    });
+    ipcMain.handle('count-trace-entries', async () => {
+        return db ? db.countTraceEntries() : 0;
+    });
+    ipcMain.handle('clear-trace-entries', async () => {
+        if (db) db.clearTraceEntries();
+        return true;
     });
 
     // ── Homepage ─────────────────────────────────────────────────────────────
@@ -1698,7 +3473,7 @@ app.whenReady().then(() => {
             const cookies = await tab.tabSession.cookies.get(filter);
             for (const c of cookies) {
                 const url = `${c.secure ? 'https' : 'http'}://${c.domain.replace(/^\./, '')}${c.path || '/'}`;
-                try { await tab.tabSession.cookies.remove(url, c.name); } catch {}
+                try { await tab.tabSession.cookies.remove(url, c.name); } catch (e) { sysLog('warn', 'tabs', 'cookie remove failed: ' + (e?.message || e)); }
             }
             await tab.tabSession.cookies.flushStore();
             return { success: true, count: cookies.length };
@@ -1715,7 +3490,7 @@ app.whenReady().then(() => {
             let count = 0;
             for (const c of cookies) {
                 const url = `${c.secure ? 'https' : 'http'}://${c.domain.replace(/^\./, '')}${c.path || '/'}`;
-                try { await toTab.tabSession.cookies.set({ ...c, url }); count++; } catch {}
+                try { await toTab.tabSession.cookies.set({ ...c, url }); count++; } catch (e) { sysLog('warn', 'tabs', 'cookie share/set failed: ' + (e?.message || e)); }
             }
             await toTab.tabSession.cookies.flushStore();
             return { success: true, count };
@@ -1729,7 +3504,7 @@ app.whenReady().then(() => {
         if (result?.success && interceptor) {
             const tab = tabManager.getTab(tid);
             if (tab) {
-                try { interceptor.attachToSession(tab.tabSession, tid); } catch {}
+                try { interceptor.attachToSession(tab.tabSession, tid); } catch (e) { sysLog('warn', 'tabs', 'interceptor attach on isolate-tab failed: ' + (e?.message || e)); }
             }
         }
         return result;
@@ -1747,9 +3522,16 @@ app.whenReady().then(() => {
         if (tab) {
             setupNetworkLogging(tab.view.webContents, tabId, currentSessionId);
             if (interceptor) {
-                try { interceptor.attachToSession(tab.tabSession, tabId); } catch {}
+                try { interceptor.attachToSession(tab.tabSession, tabId); } catch (e) { sysLog('warn', 'tabs', 'interceptor attach on new-isolated-tab failed: ' + (e?.message || e)); }
             }
         }
+        notifyCookieManagerTabs();
+        return tabId;
+    });
+
+    ipcMain.handle('new-direct-tab', async () => {
+        const tabId = await tabManager.createDirectTab(getNewTabUrl());
+        tabManager.switchTab(tabId);
         notifyCookieManagerTabs();
         return tabId;
     });
@@ -1791,7 +3573,37 @@ app.whenReady().then(() => {
     });
 
     ipcMain.handle('open-log-viewer', () => {
+        // Toolbar button: focus the existing live window instead of opening a new one
+        const liveWin = getLiveLogViewerWindow();
+        if (liveWin) {
+            if (liveWin.isMinimized()) liveWin.restore();
+            liveWin.focus();
+            return { success: true };
+        }
         createLogViewerWindow();
+        return { success: true };
+    });
+
+    ipcMain.handle('open-log-viewer-with-url', (_, url) => {
+        const sendFocus = (win) => {
+            if (win && !win.isDestroyed()) {
+                win.webContents.send('focus-request-url', { url: String(url || '') });
+            }
+        };
+        let liveWin = getLiveLogViewerWindow();
+        if (liveWin) {
+            if (liveWin.isMinimized()) liveWin.restore();
+            liveWin.focus();
+            sendFocus(liveWin);
+            return { success: true };
+        }
+        createLogViewerWindow();
+        liveWin = getLiveLogViewerWindow();
+        if (liveWin && !liveWin.webContents.isLoading()) {
+            sendFocus(liveWin);
+        } else if (liveWin) {
+            liveWin.webContents.once('did-finish-load', () => sendFocus(liveWin));
+        }
         return { success: true };
     });
 
@@ -1812,6 +3624,21 @@ app.whenReady().then(() => {
     });
 
     ipcMain.handle('open-rules-window', () => { createRulesWindow(); return true; });
+
+    ipcMain.handle('open-rules-window-with-mock', (_, data) => {
+        createRulesWindow();
+        const sendPrefill = () => {
+            if (rulesWindow && !rulesWindow.isDestroyed()) {
+                rulesWindow.webContents.send('prefill-intercept-rule', data);
+            }
+        };
+        if (rulesWindow && !rulesWindow.isDestroyed() && !rulesWindow.webContents.isLoading()) {
+            sendPrefill();
+        } else if (rulesWindow) {
+            rulesWindow.webContents.once('did-finish-load', sendPrefill);
+        }
+        return true;
+    });
 
     // ── Request Editor ───────────────────────────────────────────────────────
     ipcMain.handle('open-request-editor', async (_, entryId) => {
@@ -1880,9 +3707,7 @@ app.whenReady().then(() => {
                         tabId:        null,
                         sessionId:    currentSessionId,
                     };
-                    for (const w of logViewerWindows) {
-                        if (!w.isDestroyed()) w.webContents.send('new-log-entry', entry);
-                    }
+                    _broadcastLogEntryToViewers(entry);
                 }
             } catch (e) { /* non-fatal */ }
         }
@@ -1893,12 +3718,13 @@ app.whenReady().then(() => {
                 const profile = tlsProfile || loadSettings().tlsProfile || 'chrome';
                 const currentProxy = loadSettings().currentProxy || null;
                 const res = await mitmProxy.worker.request({
-                    method:  reqMethod,
+                    method:            reqMethod,
                     url,
-                    headers: headers || {},
-                    body:    body || null,
-                    proxy:   currentProxy,
-                    browser: profile,
+                    headers:           headers || {},
+                    body:              body || undefined,
+                    proxy:            currentProxy,
+                    browser:          profile,
+                    disableRedirects: true,
                 });
                 const duration = Date.now() - start;
                 if (res.error) {
@@ -1906,12 +3732,18 @@ app.whenReady().then(() => {
                     maybeLog(out);
                     return out;
                 }
+                let respBody = '';
+                if (res.bodyBase64) {
+                    try { respBody = Buffer.from(res.bodyBase64, 'base64').toString('utf8'); } catch {}
+                } else if (typeof res.body === 'string') {
+                    respBody = res.body;
+                }
                 const out = {
                     success: true,
                     status: res.statusCode,
                     statusText: '',
                     headers: res.headers || {},
-                    body: typeof res.body === 'string' ? res.body : (res.body || ''),
+                    body: respBody,
                     duration,
                     tlsProfile: profile,
                 };
@@ -1950,8 +3782,10 @@ app.whenReady().then(() => {
         const s = loadSettings();
         return {
             filterPatterns:  s.filterPatterns  || [],
-            autoScreenshot:  s.autoScreenshot  ?? 5,  // seconds (0=off)
-            pasteUnlock:     s.pasteUnlock !== false,  // true by default
+            pasteUnlock:     s.pasteUnlock !== false,
+            bypassDomains:   s.bypassDomains || [],
+            trafficOpts:     s.trafficOpts || {},
+            tracking:        getTrackingSettings(),
         };
     });
 
@@ -1985,6 +3819,27 @@ app.whenReady().then(() => {
         return true;
     });
 
+    ipcMain.handle('save-bypass-domains', async (_, domains) => {
+        const s = loadSettings();
+        s.bypassDomains = Array.isArray(domains) ? domains : [];
+        saveSettings(s);
+        applyBypassDomains(s.bypassDomains);
+        return true;
+    });
+
+    ipcMain.handle('save-traffic-opts', async (_, opts) => {
+        const s = loadSettings();
+        s.trafficOpts = { ...(s.trafficOpts || {}), ...opts };
+        saveSettings(s);
+        applyTrafficFilters(s.trafficOpts);
+        return true;
+    });
+
+    ipcMain.handle('get-traffic-opts', () => {
+        const s = loadSettings();
+        return s.trafficOpts || {};
+    });
+
     // Performance metrics — all Chrome/Electron processes
     ipcMain.handle('get-app-metrics', () => {
         try {
@@ -2012,7 +3867,9 @@ app.whenReady().then(() => {
                     persistentAnonymizedProxyUrl = null;
                 }
                 actProxy = '';
+                mitmProxy?.setUpstream(null);
                 await tabManager.setProxyAll(null);
+                try { await session.defaultSession.setProxy(MITM_PROXY_OPTS); } catch (e) { sysLog('warn', 'proxy', 'setProxy MITM on quick-disconnect failed: ' + (e?.message || e)); }
                 buildMenu();
                 notifyProxyStatus();
                 return { success: true };
@@ -2027,11 +3884,12 @@ app.whenReady().then(() => {
                 : {};
             const resolvedUrl = parseProxyTemplate(raw, savedVars);
             await quickChangeProxy(resolvedUrl);
+            mitmProxy?.setUpstream(persistentAnonymizedProxyUrl);
             await tabManager.setProxyAll(persistentAnonymizedProxyUrl);
             try {
                 const u = new URL(persistentAnonymizedProxyUrl);
                 await session.defaultSession.setProxy({ proxyRules: `${u.hostname}:${u.port}` });
-            } catch {}
+            } catch (e) { sysLog('warn', 'proxy', 'setProxy for quick-connect-profile failed: ' + (e?.message || e)); }
             // Apply fingerprint from this profile
             activeFingerprint = {
                 user_agent: encData.user_agent || null,
@@ -2063,25 +3921,30 @@ app.whenReady().then(() => {
         s.tlsProfile = p;
         saveSettings(s);
         mitmProxy?.setBrowser(p);
-        BrowserWindow.getAllWindows().forEach(w => w.webContents.send('tls-profile-changed', p));
+        broadcastTlsProfileChanged(p);
         return { success: true, profile: p };
     });
 
     ipcMain.handle('connect-direct', async (_, tlsProfile) => {
         try {
             if (persistentAnonymizedProxyUrl) {
-                await ProxyChain.closeAnonymizedProxy(persistentAnonymizedProxyUrl, true).catch(() => {});
+                await ProxyChain.closeAnonymizedProxy(persistentAnonymizedProxyUrl, true).catch(e => sysLog('warn', 'proxy', 'closeAnonymizedProxy on connect-direct failed: ' + (e?.message || e)));
                 persistentAnonymizedProxyUrl = null;
             }
             actProxy = '';
+            connectedProfileId = null;
+            connectedProfileName = null;
+            connectedResolvedVars = {};
             if (mitmProxy) {
                 mitmProxy.setUpstream(null);
                 mitmProxy._activeJa3 = null;
             }
 
+            const mitmOpts = { proxyRules: 'http=127.0.0.1:8877;https=127.0.0.1:8877', proxyBypassRules: buildBypassList((cachedSettings || loadSettings()).bypassDomains) };
             const { session: s } = require('electron');
             const sharedSess = s.fromPartition('persist:cupnet-shared');
-            await sharedSess.setProxy({ proxyRules: 'http=127.0.0.1:8877;https=127.0.0.1:8877' });
+            sharedSess.setCertificateVerifyProc((_, cb) => cb(0));
+            await sharedSess.setProxy(mitmOpts);
 
             const p = ['chrome','firefox','safari','ios','edge','opera'].includes(tlsProfile) ? tlsProfile : 'chrome';
             mitmProxy?.setBrowser(p);
@@ -2089,22 +3952,216 @@ app.whenReady().then(() => {
             settings.tlsProfile = p;
             saveSettings(settings);
 
-            for (const tab of tabManager.getAllTabs()) {
-                if (tab?.tabSession) {
-                    try { await tab.tabSession.setProxy({ proxyRules: 'http=127.0.0.1:8877;https=127.0.0.1:8877' }); } catch {}
-                }
-            }
+            await tabManager.setProxyAll(null);
 
             buildMenu();
             notifyProxyStatus();
-            BrowserWindow.getAllWindows().forEach(w => w.webContents.send('tls-profile-changed', p));
+            broadcastTlsProfileChanged(p);
             return { success: true };
         } catch (e) {
             return { success: false, error: e.message };
         }
     });
 
-    // ── Start app immediately — window shows before heavy init ───────────────
+    // ── External Proxy Ports ──────────────────────────────────────────────────
+
+    async function startExtPort(config) {
+        if (activeExtPorts.has(config.port)) return activeExtPorts.get(config.port);
+        const sess = db.createExternalSession(`ext:${config.port}`, `ext_${config.port}`, config.port);
+        const instance = new ExternalProxyPort(mitmProxy, {
+            port: config.port,
+            login: config.login,
+            password: config.password,
+            name: config.name,
+            sessionId: sess.id,
+            followRedirects: config.followRedirects || false,
+            onRequestLogged: (entry) => {
+                if (!db) return;
+                try {
+                    const logEntry = {
+                        id: `ext_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+                        url: entry.url,
+                        method: entry.method,
+                        status: entry.status,
+                        type: entry.type || 'Document',
+                        request: { headers: entry.requestHeaders || {}, body: entry.requestBody || null },
+                        response: { statusCode: entry.status, headers: entry.responseHeaders || {}, mimeType: null },
+                        duration: entry.duration,
+                        duration_ms: entry.duration,
+                        responseBody: entry.responseBody || null,
+                        source: 'external',
+                        extPort: entry.extPort,
+                        extName: entry.extName,
+                    };
+                    const dbId = db.insertRequest(entry.sessionId, entry.tabId, {
+                        requestId: logEntry.id,
+                        url: logEntry.url,
+                        method: logEntry.method,
+                        status: logEntry.response?.statusCode,
+                        type: logEntry.type,
+                        duration: logEntry.duration,
+                        requestHeaders: logEntry.request?.headers,
+                        responseHeaders: logEntry.response?.headers,
+                        requestBody: entry.requestBody || null,
+                        responseBody: logEntry.responseBody,
+                    });
+                    if (dbId) logEntry.id = dbId;
+                    _broadcastLogEntryToViewers({ ...logEntry, tabId: entry.tabId, sessionId: entry.sessionId });
+                } catch (e) { sysLog('warn', 'ext-proxy', `Log insert failed for port ${config.port}: ${e?.message}`); }
+            },
+        });
+        try {
+            await instance.start();
+            extPortErrors.delete(config.port);
+        } catch (e) {
+            extPortErrors.set(config.port, e.message);
+            sysLog('error', 'ext-proxy', `Failed to start port ${config.port}: ${e.message}`);
+            throw e;
+        }
+        activeExtPorts.set(config.port, { instance, sessionId: sess.id, config });
+        sysLog('info', 'ext-proxy', `Started external proxy on port ${config.port} → session #${sess.id}`);
+        return activeExtPorts.get(config.port);
+    }
+
+    async function stopExtPort(port) {
+        const entry = activeExtPorts.get(port);
+        if (!entry) return;
+        entry.instance.stop();
+        if (entry.sessionId) db.endSession(entry.sessionId);
+        activeExtPorts.delete(port);
+        extPortErrors.delete(port);
+        sysLog('info', 'ext-proxy', `Stopped external proxy on port ${port}`);
+    }
+
+    function getExtPortsList() {
+        const localIp = getLocalIp();
+        const list = [];
+        const config = loadExtPortsConfig();
+        for (const c of config.ports) {
+            const active = activeExtPorts.get(c.port);
+            const reqCount = active?.sessionId ? (db.countRequests({ sessionId: active.sessionId }) || 0) : 0;
+            list.push({
+                port: c.port,
+                name: c.name,
+                login: c.login,
+                password: c.password,
+                autoStart: c.autoStart ?? false,
+                followRedirects: c.followRedirects ?? false,
+                active: !!active,
+                sessionId: active?.sessionId || null,
+                requestCount: reqCount,
+                error: extPortErrors.get(c.port) || null,
+                localIp,
+            });
+        }
+        return list;
+    }
+
+    ipcMain.handle('ext-proxy:list', () => getExtPortsList());
+
+    ipcMain.handle('ext-proxy:create', async (_, opts) => {
+        try {
+            const port = parseInt(opts.port, 10);
+            if (!port || port < 1024 || port > 65535) return { success: false, error: 'Port must be 1024-65535' };
+            const config = loadExtPortsConfig();
+            if (config.ports.find(p => p.port === port)) return { success: false, error: `Port ${port} already configured` };
+            const entry = {
+                port,
+                name: opts.name || `External :${port}`,
+                login: opts.login || 'cupnet',
+                password: opts.password || generatePassword(),
+                autoStart: opts.autoStart ?? true,
+            };
+            config.ports.push(entry);
+            saveExtPortsConfig(config);
+            await startExtPort(entry);
+            return { success: true, port, password: entry.password };
+        } catch (e) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('ext-proxy:start', async (_, port) => {
+        try {
+            const config = loadExtPortsConfig();
+            const entry = config.ports.find(p => p.port === port);
+            if (!entry) return { success: false, error: 'Port not found' };
+            if (activeExtPorts.has(port)) return { success: true, already: true };
+            await startExtPort(entry);
+            return { success: true };
+        } catch (e) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('ext-proxy:stop', async (_, port) => {
+        try {
+            await stopExtPort(port);
+            return { success: true };
+        } catch (e) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('ext-proxy:delete', async (_, port) => {
+        try {
+            await stopExtPort(port);
+            const config = loadExtPortsConfig();
+            config.ports = config.ports.filter(p => p.port !== port);
+            saveExtPortsConfig(config);
+            return { success: true };
+        } catch (e) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('ext-proxy:reset-session', async (_, port) => {
+        try {
+            const entry = activeExtPorts.get(port);
+            if (!entry) return { success: false, error: 'Port not active' };
+            if (entry.sessionId) db.endSession(entry.sessionId);
+            const sess = db.createExternalSession(`ext:${port}`, `ext_${port}`, port);
+            entry.sessionId = sess.id;
+            entry.instance.sessionId = sess.id;
+            entry.instance._reqCount = 0;
+            sysLog('info', 'ext-proxy', `Reset session for port ${port} → new session #${sess.id}`);
+            return { success: true, sessionId: sess.id };
+        } catch (e) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('ext-proxy:get-local-ip', () => getLocalIp());
+
+    ipcMain.handle('ext-proxy:set-port', async (_, oldPort, newPort) => {
+        try {
+            const port = parseInt(newPort, 10);
+            if (!port || port < 1024 || port > 65535) return { success: false, error: 'Port must be 1024-65535' };
+            const config = loadExtPortsConfig();
+            const entry = config.ports.find(p => p.port === oldPort);
+            if (!entry) return { success: false, error: 'Port config not found' };
+            const wasActive = activeExtPorts.has(oldPort);
+            if (wasActive) await stopExtPort(oldPort);
+            entry.port = port;
+            saveExtPortsConfig(config);
+            return { success: true };
+        } catch (e) { return { success: false, error: e.message }; }
+    });
+
+    ipcMain.handle('ext-proxy:set-redirects', async (_, port, follow) => {
+        try {
+            const config = loadExtPortsConfig();
+            const entry = config.ports.find(p => p.port === port);
+            if (!entry) return { success: false, error: 'Port not found' };
+            entry.followRedirects = !!follow;
+            saveExtPortsConfig(config);
+            const active = activeExtPorts.get(port);
+            if (active?.instance) active.instance.followRedirects = !!follow;
+            return { success: true };
+        } catch (e) { return { success: false, error: e.message }; }
+    });
+
+    // Ensure default external port exists on first run
+    const extConfig = loadExtPortsConfig();
+    if (extConfig.ports.length === 0) {
+        const defaultPort = { port: 7777, name: 'Default', login: 'cupnet', password: generatePassword(), autoStart: false };
+        extConfig.ports.push(defaultPort);
+        saveExtPortsConfig(extConfig);
+        sysLog('info', 'ext-proxy', `Created default external port 9001 (first run)`);
+    }
+    // External ports are started manually via the UI widget on new-tab page
+
+    // Start app window after IPC handlers are registered, but without waiting for MITM readiness.
     createMainWindow();
 
     app.on('activate', () => {
@@ -2112,17 +4169,44 @@ app.whenReady().then(() => {
     });
 });
 
-app.on('will-quit', async () => {
+app.on('before-quit', (e) => {
+    if (forceAppQuit) return;
+    e.preventDefault();
+    if (!confirmExitDialog(mainWindow)) return;
+    forceAppQuit = true;
+    app.quit();
+});
+
+app.on('will-quit', () => {
+    stopIvacScoutProcess();
+    for (const q of _logIpcQueues.values()) {
+        if (q.timer) clearTimeout(q.timer);
+    }
+    _logIpcQueues.clear();
+    for (const q of _interceptIpcQueues.values()) {
+        if (q.timer) clearTimeout(q.timer);
+    }
+    _interceptIpcQueues.clear();
     if (logStatusInterval) clearInterval(logStatusInterval);
     if (screenshotTimer) clearInterval(screenshotTimer);
+    if (_saveSettingsTimer) { clearTimeout(_saveSettingsTimer); _saveSettingsTimer = null; }
+    if (_consoleBatchTimer) { clearTimeout(_consoleBatchTimer); _consoleBatchTimer = null; }
+    if (_notifyTabsTimer) { clearTimeout(_notifyTabsTimer); _notifyTabsTimer = null; }
+    if (mitmProxy) { try { mitmProxy.stop(); } catch {} }
     if (persistentAnonymizedProxyUrl) {
-        await ProxyChain.closeAnonymizedProxy(persistentAnonymizedProxyUrl, true).catch(() => {});
+        try { require('proxy-chain').closeAnonymizedProxy(persistentAnonymizedProxyUrl, true); } catch (e) { sysLog('warn', 'proxy', 'closeAnonymizedProxy on quit failed: ' + (e?.message || e)); }
     }
+    for (const [port, entry] of activeExtPorts) {
+        try { entry.instance.stop(); } catch {}
+        try { if (entry.sessionId && db) db.endSession(entry.sessionId); } catch {}
+    }
+    activeExtPorts.clear();
     if (tabManager) tabManager.destroyAll();
     if (db) {
         if (currentSessionId) db.endSession(currentSessionId);
         db.close();
     }
+    flushOnExit();
 });
 
 app.on('window-all-closed', () => {

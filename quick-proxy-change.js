@@ -2,8 +2,13 @@
 
 
 
+let _lastMouseReport = 0;
 document.addEventListener('mousemove', () => {
-  window.electronAPI.reportMouseActivity();
+  const now = Date.now();
+  if (now - _lastMouseReport > 5000) {
+    _lastMouseReport = now;
+    window.electronAPI.reportMouseActivity();
+  }
 });
 
 document.addEventListener('DOMContentLoaded', () => {

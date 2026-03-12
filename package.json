@@ -18,7 +18,8 @@
     "dist": "electron-builder",
     "dist:mac": "electron-builder --mac dmg",
     "dist:win": "electron-builder --win nsis",
-    "dist:linux": "electron-builder --linux AppImage"
+    "dist:linux": "electron-builder --linux AppImage",
+    "icons:build": "icon-gen -i img.png -o icons --ico --ico-name icon --icns --icns-name icon -r && node -e \"require('fs').copyFileSync('img.png','icons/icon.png')\""
   },
   "author": "Elvi",
   "icon": "img.png",
@@ -26,7 +27,8 @@
   "devDependencies": {
     "@electron/rebuild": "^3.6.0",
     "electron": "^28.0.0",
-    "electron-builder": "^24.13.0"
+    "electron-builder": "^24.13.0",
+    "icon-gen": "^5.0.0"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.3",
@@ -39,10 +41,18 @@
       "github"
     ],
     "asar": true,
+    "asarUnpack": [
+      "azuretls/lib/*.dylib",
+      "azuretls/lib/*.dll",
+      "azuretls/lib/*.so",
+      "node_modules/better-sqlite3/**/*.node",
+      "node_modules/@2060.io/**/*.node"
+    ],
     "files": [
       "**/*",
       "!dist",
-      "!node_modules/.cache"
+      "!node_modules/.cache",
+      "!azuretls/node_modules/.cache"
     ],
     "mac": {
       "icon": "icons/icon.icns",
