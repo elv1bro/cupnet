@@ -628,12 +628,18 @@ legend {
     background: #f4f5f9;
     border-bottom: 2px solid #c4c8d4;
     z-index: 200;
-    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: hidden;
     max-height: 0;
     transition: max-height 0.22s ease;
     box-shadow: 0 6px 18px rgba(0,0,0,0.14);
 }
-#settings-panel.open { max-height: 300px; }
+#settings-panel.open {
+    max-height: 430px;
+    overflow-y: auto;
+}
 
 /* Settings tabs */
 .sp-tab-bar {
@@ -665,7 +671,12 @@ legend {
     border-color: #bfdbfe;
     box-shadow: 0 1px 4px rgba(59,130,246,0.18);
 }
-.sp-tab-body { flex: 1; overflow: hidden; }
+.sp-tab-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
 
 /* Performance tab */
 .sp-perf-wrap { padding: 8px 14px 6px; display: flex; flex-direction: column; gap: 5px; height: 100%; }
@@ -778,6 +789,164 @@ legend {
     font-size: 12px; color: #374151; cursor: pointer;
 }
 .sp-checkbox-label input { cursor: pointer; }
+
+/* Tracking tab */
+.tracking-layout {
+    display: grid;
+    grid-template-columns: 1.45fr 1fr;
+    gap: 12px;
+    padding: 12px 16px 14px;
+    align-items: start;
+}
+.tracking-section {
+    min-width: 0;
+}
+.tracking-section-limits {
+    border-left: 1px solid #d1d5db;
+    padding-left: 12px;
+}
+.tracking-section-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+.tracking-actions {
+    display: inline-flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.tracking-action-btn {
+    padding: 3px 8px;
+    font-size: 10.5px;
+}
+.tracking-title {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 700;
+    color: #4b5563;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+.tracking-subtitle {
+    margin: 4px 0 0;
+    font-size: 11px;
+    color: #6b7280;
+}
+.tracking-table {
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    background: #ffffff;
+    overflow: hidden;
+}
+.tracking-row {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 8px 10px 9px;
+    border-bottom: 1px solid #e5e7eb;
+    cursor: pointer;
+}
+.tracking-row:last-child { border-bottom: 0; }
+.tracking-row:has(input:checked) {
+    background: rgba(59, 130, 246, 0.08);
+}
+.tracking-row-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 18px;
+}
+.tracking-row-main input[type="checkbox"] {
+    width: 12px;
+    height: 12px;
+    margin: 0;
+    flex: 0 0 auto;
+}
+.tracking-row-label {
+    font-size: 12px;
+    color: #1f2937;
+    line-height: 1.2;
+    text-align: left;
+}
+.tracking-row-hint {
+    font-size: 11px;
+    color: #6b7280;
+    line-height: 1.35;
+    text-align: left;
+    margin-left: 20px;
+}
+.tracking-limits {
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    background: #ffffff;
+    padding: 10px;
+    display: grid;
+    gap: 8px;
+}
+.tracking-limit-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 8px;
+}
+.tracking-limit-label {
+    font-size: 11px;
+    color: #4b5563;
+}
+.tracking-limit-input {
+    width: 74px;
+    text-align: center;
+}
+.tracking-limit-input-wide {
+    width: 90px;
+}
+.tracking-footnote {
+    margin-top: 2px;
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: #6b7280;
+}
+
+/* Screenshot trigger info in Network Activity */
+.type-chip.type-ss-trigger {
+    margin-left: 4px;
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 10px;
+    background: rgba(59, 130, 246, 0.12);
+    color: #1d4ed8;
+    border: 1px solid rgba(59, 130, 246, 0.28);
+}
+.ss-preview-wrap {
+    position: relative;
+    display: inline-block;
+    max-width: 100%;
+}
+.ss-click-marker {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    margin-left: -7px;
+    margin-top: -7px;
+    border-radius: 50%;
+    border: 2px solid #ef4444;
+    background: rgba(239, 68, 68, 0.28);
+    box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.16);
+    pointer-events: none;
+}
+.ss-trigger-pill {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    color: #1d4ed8;
+    border: 1px solid rgba(59, 130, 246, 0.26);
+    background: rgba(59, 130, 246, 0.1);
+    border-radius: 10px;
+    padding: 1px 7px;
+    margin-right: auto;
+}
 
 /* ── Tab bar ────────────────────────────────────────────────────────────────── */
 #tab-bar {
@@ -2498,6 +2667,38 @@ a#copy-url:hover {
     .sp-perf-table td { color: #c9d3e8; }
     .sp-perf-title { color: #6b7280; }
     .sp-perf-hint { color: #4b5568; }
+
+    .tracking-section-limits { border-left-color: #2d3142; }
+    .tracking-title { color: #8b93a7; }
+    .tracking-subtitle { color: #6b7280; }
+    .tracking-table { background: #1a1f2d; border-color: #2f3a52; }
+    .tracking-row { border-bottom-color: #2a344a; }
+    .tracking-row:has(input:checked) { background: rgba(96, 165, 250, 0.12); }
+    .tracking-row-label { color: #d7deed; }
+    .tracking-row-hint { color: #93a0b8; }
+    .tracking-limits {
+        background: #1a1f2d;
+        border-color: #2f3a52;
+    }
+    .tracking-limit-label { color: #c0cadf; }
+    .tracking-footnote { color: #93a0b8; }
+    .tracking-action-btn { background: #1e2233; border-color: #374151; color: #c0cadf; }
+    .tracking-action-btn:hover { background: #252838; }
+    .type-chip.type-ss-trigger {
+        background: rgba(96, 165, 250, 0.14);
+        color: #93c5fd;
+        border-color: rgba(96, 165, 250, 0.28);
+    }
+    .ss-click-marker {
+        border-color: #f87171;
+        background: rgba(248, 113, 113, 0.28);
+        box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.16);
+    }
+    .ss-trigger-pill {
+        color: #93c5fd;
+        border-color: rgba(96, 165, 250, 0.28);
+        background: rgba(96, 165, 250, 0.14);
+    }
 }
 
 /* ── Rule notification toast ─────────────────────────────────────────────────── */

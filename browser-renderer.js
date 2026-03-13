@@ -19,6 +19,7 @@ const logViewerBtn   = document.getElementById('log-viewer-btn');
 const screenshotBtn  = document.getElementById('screenshot-btn');
 const devtoolsBtn    = document.getElementById('devtools-btn');
 const cookiesBtn     = document.getElementById('cookies-btn');
+const dnsBtn         = document.getElementById('dns-btn');
 const reqEditorBtn   = document.getElementById('req-editor-btn');
 const rulesBtn       = document.getElementById('rules-btn');
 const consoleBtn     = document.getElementById('console-btn');
@@ -30,23 +31,6 @@ const pbDot          = document.getElementById('pb-dot');
 const pbName         = document.getElementById('pb-name');
 const settingsToggle = document.getElementById('settings-toggle-btn');
 
-// ─── Settings panel refs ──────────────────────────────────────────────────────
-const settingsPanel   = document.getElementById('settings-panel');
-const spFilters       = document.getElementById('sp-filter-patterns');
-const spSaveFilters   = document.getElementById('sp-save-filters');
-const spPasteUnlock   = document.getElementById('sp-paste-unlock');
-const spBypassDomains = document.getElementById('sp-bypass-domains');
-const spSaveBypass    = document.getElementById('sp-save-bypass');
-const spTrackClick    = document.getElementById('sp-track-click');
-const spTrackPageLoad = document.getElementById('sp-track-page-load');
-const spTrackPending  = document.getElementById('sp-track-network-pending');
-const spTrackMouse    = document.getElementById('sp-track-mouse');
-const spTrackRule     = document.getElementById('sp-track-rule');
-const spTrackPendingThreshold = document.getElementById('sp-track-pending-threshold');
-const spTrackCooldownMs       = document.getElementById('sp-track-cooldown-ms');
-const spTrackMaxPerMinute     = document.getElementById('sp-track-max-per-minute');
-const spPerfTbody     = document.getElementById('sp-perf-tbody');
-const spPerfUpdated   = document.getElementById('sp-perf-updated');
 const toastContainer  = document.getElementById('rule-toast-container');
 
 // ─── Navigation ───────────────────────────────────────────────────────────────
@@ -90,6 +74,10 @@ api.onTabWillNavigate?.((data) => {
         // Force-update + blur: page navigation started, typed draft is no longer relevant.
         _setToolbarUrlIfChanged(normalized, { respectFocus: false, blur: true });
         ssHandleUrlChange(normalized);
+        _interceptHitCount = 0;
+        updateRulesHitBadge();
+        _dnsHitCount = 0;
+        updateDnsHitBadge();
     }
 });
 
@@ -359,6 +347,8 @@ api.onTabUrlChanged((data) => {
         _interceptHitCount = 0;
         updateRulesHitBadge();
     }
+    _dnsHitCount = 0;
+    updateDnsHitBadge();
 });
 
 // ─── Right toolbar actions ────────────────────────────────────────────────────
@@ -449,6 +439,11 @@ if (cookiesBtn) {
         const tabs = await api.getTabs();
         const active = tabs.find(t => t.isActive);
         api.openCookieManager(active?.id || null);
+    });
+}
+if (dnsBtn) {
+    dnsBtn.addEventListener('click', () => {
+        api.openDnsManager();
     });
 }
 if (reqEditorBtn) {
@@ -599,6 +594,10 @@ function _onActiveTabChanged(tabData) {
     if (wasDirect !== _isDirectTabActive) _renderPill();
     else _renderPill();
     if (_isDirectTabActive || !_lastProxyInfo?.active) _fetchDirectIpGeo();
+    _interceptHitCount = 0;
+    updateRulesHitBadge();
+    _dnsHitCount = 0;
+    updateDnsHitBadge();
 }
 
 // Click opens Proxy Manager
@@ -616,173 +615,9 @@ api.getCurrentProxy().then((info) => {
     if (info?.active) _fetchProxyIpGeo();
 }).catch(() => {});
 
-// ─── Settings panel ───────────────────────────────────────────────────────────
-let settingsOpen     = false;
-let activeSpTab      = 'general';
-let perfPollTimer    = null;
-const SETTINGS_PANEL_HEIGHT = 300; // Must match CSS max-height in #settings-panel.open
-
-function switchSpTab(name) {
-    activeSpTab = name;
-    document.querySelectorAll('.sp-tab-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.spTab === name);
-    });
-    document.querySelectorAll('.sp-tab-body').forEach(el => {
-        el.style.display = el.id === `sp-tab-${name}` ? '' : 'none';
-    });
-    if (name === 'performance') startPerfPoll();
-    else stopPerfPoll();
-}
-
-document.querySelectorAll('.sp-tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => switchSpTab(btn.dataset.spTab));
-});
-
-function toggleSettings() {
-    settingsOpen = !settingsOpen;
-    settingsPanel.classList.toggle('open', settingsOpen);
-    settingsToggle.classList.toggle('active', settingsOpen);
-    api.setToolbarHeight(settingsOpen ? SETTINGS_PANEL_HEIGHT : 0).catch(() => {});
-    if (!settingsOpen) stopPerfPoll();
-    else if (activeSpTab === 'performance') startPerfPoll();
-}
-
-settingsToggle.addEventListener('click', toggleSettings);
-
-// ─── Performance metrics ──────────────────────────────────────────────────────
-
-function fmtMb(kb) { return (kb / 1024).toFixed(1); }
-
-function renderPerfMetrics(metrics) {
-    if (!spPerfTbody) return;
-    if (!metrics?.length) {
-        spPerfTbody.innerHTML = '<tr><td colspan="6" class="sp-perf-loading">No data</td></tr>';
-        return;
-    }
-    const typeClass = t => {
-        if (t === 'Browser')  return 'sp-perf-type-browser';
-        if (t === 'Renderer') return 'sp-perf-type-renderer';
-        if (t === 'GPU')      return 'sp-perf-type-gpu';
-        return 'sp-perf-type-utility';
-    };
-    spPerfTbody.innerHTML = metrics.map(m => {
-        const cpuHigh = m.cpuPercent > 30 ? ' sp-perf-cpu-high' : '';
-        return `<tr>
-            <td><span class="sp-perf-type ${typeClass(m.type)}">${m.type}${m.name ? ` (${m.name})` : ''}</span></td>
-            <td style="font-size:10px;color:#9ca3af">${m.pid}</td>
-            <td class="num${cpuHigh}">${m.cpuPercent.toFixed(1)}%</td>
-            <td class="num">${fmtMb(m.memWorkingSet)}</td>
-            <td class="num">${fmtMb(m.memPrivate)}</td>
-            <td style="font-size:10px">${m.sandboxed ? '✓' : '—'}</td>
-        </tr>`;
-    }).join('');
-    if (spPerfUpdated) spPerfUpdated.textContent = new Date().toLocaleTimeString();
-}
-
-async function fetchAndRenderPerf() {
-    try {
-        const metrics = await api.getAppMetrics();
-        renderPerfMetrics(metrics);
-    } catch { /* ignore */ }
-}
-
-function startPerfPoll() {
-    stopPerfPoll();
-    fetchAndRenderPerf();
-    perfPollTimer = setInterval(fetchAndRenderPerf, 3000);
-}
-
-function stopPerfPoll() {
-    if (perfPollTimer) { clearInterval(perfPollTimer); perfPollTimer = null; }
-}
-
-function applyPasteUnlock(enabled) {
-    if (spPasteUnlock) spPasteUnlock.checked = !!enabled;
-}
-
-function applyBypassDomains(domains) {
-    if (spBypassDomains) spBypassDomains.value = (domains || []).join('\n');
-}
-
-function applyTrackingSettings(cfg = {}) {
-    if (spTrackClick) spTrackClick.checked = cfg.onUserClick !== false;
-    if (spTrackPageLoad) spTrackPageLoad.checked = cfg.onPageLoadComplete !== false;
-    if (spTrackPending) spTrackPending.checked = cfg.onNetworkPendingChange !== false;
-    if (spTrackMouse) spTrackMouse.checked = cfg.onMouseActivity !== false;
-    if (spTrackRule) spTrackRule.checked = cfg.onRuleMatchScreenshot !== false;
-    if (spTrackPendingThreshold) spTrackPendingThreshold.value = Math.max(1, Math.min(50, Number(cfg.pendingDeltaThreshold) || 3));
-    if (spTrackCooldownMs) spTrackCooldownMs.value = Math.max(200, Math.min(30000, Number(cfg.cooldownMs) || 2000));
-    if (spTrackMaxPerMinute) spTrackMaxPerMinute.value = Math.max(1, Math.min(120, Number(cfg.maxPerMinute) || 12));
-}
-
-function collectTrackingSettings() {
-    return {
-        onUserClick: spTrackClick?.checked !== false,
-        onPageLoadComplete: spTrackPageLoad?.checked !== false,
-        onNetworkPendingChange: spTrackPending?.checked !== false,
-        onMouseActivity: spTrackMouse?.checked !== false,
-        onRuleMatchScreenshot: spTrackRule?.checked !== false,
-        pendingDeltaThreshold: Math.max(1, Math.min(50, Number(spTrackPendingThreshold?.value) || 3)),
-        cooldownMs: Math.max(200, Math.min(30000, Number(spTrackCooldownMs?.value) || 2000)),
-        maxPerMinute: Math.max(1, Math.min(120, Number(spTrackMaxPerMinute?.value) || 12)),
-    };
-}
-
-let _trackingSaveDebounce = null;
-function scheduleTrackingSave() {
-    if (_trackingSaveDebounce) clearTimeout(_trackingSaveDebounce);
-    _trackingSaveDebounce = setTimeout(() => {
-        _trackingSaveDebounce = null;
-        api.saveTrackingSettings?.(collectTrackingSettings());
-    }, 250);
-}
-
-// Populate from init-settings event (sent on window load)
-api.onInitSettings((data) => {
-    if (spFilters) {
-        spFilters.value = (data.filterPatterns || []).join('\n');
-    }
-    applyPasteUnlock(data.pasteUnlock !== false);
-    applyBypassDomains(data.bypassDomains);
-    applyTrackingSettings(data.tracking || {});
-});
-
-// Also load on demand (settings panel opened before init event arrives)
-api.getSettingsAll().then((data) => {
-    if (spFilters && (!spFilters.value) && data?.filterPatterns) {
-        spFilters.value = data.filterPatterns.join('\n');
-    }
-    applyPasteUnlock(data?.pasteUnlock !== false);
-    applyBypassDomains(data?.bypassDomains);
-    applyTrackingSettings(data?.tracking || {});
-}).catch(() => {});
-
-[
-    spTrackClick, spTrackPageLoad, spTrackPending, spTrackMouse, spTrackRule,
-    spTrackPendingThreshold, spTrackCooldownMs, spTrackMaxPerMinute,
-].forEach((el) => el?.addEventListener('change', scheduleTrackingSave));
-
-// Paste unlock toggle
-spPasteUnlock?.addEventListener('change', () => {
-    api.setPasteUnlock(spPasteUnlock.checked);
-});
-
-// Filter patterns
-spSaveFilters?.addEventListener('click', () => {
-    const patterns = (spFilters?.value || '').split('\n').map(l => l.trim()).filter(Boolean);
-    api.saveFilterPatterns(patterns);
-    const btn = spSaveFilters;
-    btn.textContent = 'Saved ✓';
-    setTimeout(() => { btn.textContent = 'Save filters'; }, 1500);
-});
-
-// MITM Bypass domains
-spSaveBypass?.addEventListener('click', () => {
-    const domains = (spBypassDomains?.value || '').split('\n').map(l => l.trim()).filter(Boolean);
-    api.saveBypassDomains(domains);
-    const btn = spSaveBypass;
-    btn.textContent = 'Saved ✓';
-    setTimeout(() => { btn.textContent = 'Save'; }, 1500);
+// ─── Settings ────────────────────────────────────────────────────────────────
+settingsToggle?.addEventListener('click', () => {
+    api.openSettingsTab?.();
 });
 
 // ─── Rule notification toasts ─────────────────────────────────────────────────
@@ -818,7 +653,9 @@ api.onRuleNotification && api.onRuleNotification(showRuleToast);
 
 // ─── Intercept hit badge on Rules button ──────────────────────────────────────
 const rulesHitBadge = document.getElementById('rules-hit-badge');
+const dnsHitBadge = document.getElementById('dns-hit-badge');
 let _interceptHitCount = 0;
+let _dnsHitCount = 0;
 
 function updateRulesHitBadge() {
     if (!rulesHitBadge) return;
@@ -827,6 +664,16 @@ function updateRulesHitBadge() {
         rulesHitBadge.style.display = '';
     } else {
         rulesHitBadge.style.display = 'none';
+    }
+}
+
+function updateDnsHitBadge() {
+    if (!dnsHitBadge) return;
+    if (_dnsHitCount > 0) {
+        dnsHitBadge.textContent = _dnsHitCount > 99 ? '99+' : _dnsHitCount;
+        dnsHitBadge.style.display = '';
+    } else {
+        dnsHitBadge.style.display = 'none';
     }
 }
 
@@ -839,6 +686,18 @@ api.onInterceptRuleMatchedBatch?.((items) => {
     if (!Array.isArray(items) || items.length === 0) return;
     _interceptHitCount += items.length;
     updateRulesHitBadge();
+});
+
+function _onDnsRuleMatched(info) {
+    const active = tabs.find(t => t.isActive);
+    if (info?.tabId && active && info.tabId !== active.id) return;
+    _dnsHitCount++;
+    updateDnsHitBadge();
+}
+api.onDnsRuleMatched?.(_onDnsRuleMatched);
+api.onDnsRuleMatchedBatch?.((items) => {
+    if (!Array.isArray(items) || items.length === 0) return;
+    for (const info of items) _onDnsRuleMatched(info);
 });
 
 

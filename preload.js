@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     newTab:                  (proxy)   => ipcRenderer.invoke('new-tab', proxy),
     newIsolatedTab:          ()        => ipcRenderer.invoke('new-isolated-tab'),
     newDirectTab:            ()        => ipcRenderer.invoke('new-direct-tab'),
+    openSettingsTab:         ()        => ipcRenderer.invoke('open-settings-tab'),
     closeTab:                (id)      => ipcRenderer.invoke('close-tab', id),
     switchTab:               (id)      => ipcRenderer.invoke('switch-tab', id),
     getTabs:                 ()        => ipcRenderer.invoke('get-tabs'),
@@ -104,6 +105,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── HAR & Replay ──────────────────────────────────────────────────────
     exportHar:               (sid)     => ipcRenderer.invoke('export-har', sid),
+    exportBundle:            (payload) => ipcRenderer.invoke('export-bundle', payload),
+    importBundle:            ()        => ipcRenderer.invoke('import-bundle'),
+    diffRequests:            (a, b)    => ipcRenderer.invoke('diff-requests', a, b),
+    openCompareViewer:       ()        => ipcRenderer.invoke('open-compare-viewer'),
+    getCompare:              ()        => ipcRenderer.invoke('compare-get'),
+    setCompareSlot:          (side, requestId) => ipcRenderer.invoke('compare-set-slot', side, requestId),
+    clearCompareSlot:        (side)    => ipcRenderer.invoke('compare-clear-slot', side),
+    runCompare:              (options) => ipcRenderer.invoke('compare-run', options || {}),
+    onCompareUpdated:        (cb)      => sub('compare-updated', cb),
+    formatJsonDiffHtml:      (leftText, rightText) => ipcRenderer.invoke('jsondiff-format-html', leftText, rightText),
     replayRequest:           (id)      => ipcRenderer.invoke('replay-request', id),
 
     // ── Rules ──────────────────────────────────────────────────────────────
@@ -157,6 +168,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onSetActiveCookieTab:    (cb)      => sub('set-active-tab', cb),
     onCookieTabsList:        (cb)      => sub('tabs-list', cb),
     onTabsUpdated:           (cb)      => sub('tabs-updated', cb),
+
+    // ── DNS Manager ──────────────────────────────────────────────────────────
+    openDnsManager:          ()        => ipcRenderer.invoke('open-dns-manager'),
+    getDnsOverrides:         ()        => ipcRenderer.invoke('dns-overrides-list'),
+    saveDnsOverride:         (rule)    => ipcRenderer.invoke('dns-overrides-save', rule),
+    deleteDnsOverride:       (id)      => ipcRenderer.invoke('dns-overrides-delete', id),
+    toggleDnsOverride:       (id, en)  => ipcRenderer.invoke('dns-overrides-toggle', id, en),
+    onDnsOverridesUpdated:   (cb)      => sub('dns-overrides-updated', cb),
+    onDnsRuleMatched:        (cb)      => sub('dns-rule-matched', cb),
+    onDnsRuleMatchedBatch:   (cb)      => sub('dns-rule-matched-batch', cb),
 
     // ── Request Editor ──────────────────────────────────────────────────────────
     openRequestEditor:       (id)      => ipcRenderer.invoke('open-request-editor', id),

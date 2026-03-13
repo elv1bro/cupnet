@@ -46,6 +46,7 @@ const searchInput    = document.getElementById('search-input');
 const ftsCheckbox    = document.getElementById('fts-checkbox');
 const scOnlyCheckbox     = document.getElementById('sc-only-checkbox');
 const hideOptionsCheckbox = document.getElementById('hide-options-checkbox');
+const hideScreenshotCheckbox = document.getElementById('hide-screenshot-checkbox');
 const clearSearchBtn = document.getElementById('clear-search');
 const filterSession  = document.getElementById('filter-session');
 // Multi-select state (empty Set = "all")
@@ -55,11 +56,15 @@ const selectedTabs     = new Set();
 const lvCount        = document.getElementById('lv-count');
 const autoScrollBtn  = document.getElementById('auto-scroll-btn');
 const exportHarBtn   = document.getElementById('export-har-btn');
+const exportBundleBtn = document.getElementById('export-bundle-btn');
+const importBundleBtn = document.getElementById('import-bundle-btn');
 const traceModeBtn  = document.getElementById('trace-mode-btn');
 const openRulesBtn   = document.getElementById('open-rules-btn');
 const clearLogsBtn   = document.getElementById('clear-logs');
 const replayBar      = document.getElementById('lv-replay-bar');
 const replayBtn      = document.getElementById('lv-replay-btn');
+const addToCompareBtn = document.getElementById('lv-add-to-compare');
+const openCompareBtn = document.getElementById('lv-open-compare');
 const rawBtn         = document.getElementById('lv-raw-btn');
 const copyUrlBtn     = document.getElementById('lv-copy-url');
 const replayDiff     = document.getElementById('lv-replay-diff');
@@ -76,6 +81,12 @@ const commentSaveBtn = document.getElementById('comment-save-btn');
 const markStatus     = document.getElementById('lv-mark-status');
 const tabBtns        = document.querySelectorAll('.lv-tab-btn');
 const tabContents    = document.querySelectorAll('.lv-tab-content');
+const protectionModal = document.getElementById('protection-modal');
+const protectionConfirmBtn = document.getElementById('protection-confirm-btn');
+const protectionCancelBtn = document.getElementById('protection-cancel-btn');
+const compareSideModal = document.getElementById('compare-side-modal');
+const compareSidePicker = document.getElementById('compare-side-picker');
+const compareSideCancelBtn = document.getElementById('compare-side-cancel-btn');
 const recBtn         = document.getElementById('lv-rec-btn');
 const TAG_COLORS     = ['#ef4444', '#f59e0b', '#facc15', '#22c55e', '#06b6d4', '#3b82f6', '#a855f7', '#f472b6'];
 const NOTE_AUTOSAVE_MS = 500;
@@ -177,6 +188,56 @@ function shortTypeLabel(type) {
         screenshot: 'SS',
     };
     return map[t] || (t.length > 5 ? t.slice(0, 5) : t);
+}
+function parseScreenshotTriggerFromPath(url) {
+    const m = String(url || '').match(/^autoscreen::\/([^/]+)\//i);
+    return m ? String(m[1]).toLowerCase() : '';
+}
+function screenshotTriggerLabel(trigger) {
+    const t = String(trigger || '').toLowerCase();
+    const map = {
+        click: 'Click',
+        'page-load': 'Load',
+        'network-pending': 'Pending',
+        'mouse-activity': 'Mouse',
+        'scroll-end': 'Scroll',
+        'typing-end': 'Typing',
+        rule: 'Rule',
+        manual: 'Manual',
+    };
+    return map[t] || (t ? t : '—');
+}
+function getScreenshotMeta(entry) {
+    if (!entry) return null;
+    if (entry.screenshotMeta && typeof entry.screenshotMeta === 'object') return entry.screenshotMeta;
+    return null;
+}
+function getScreenshotTrigger(entry) {
+    const meta = getScreenshotMeta(entry);
+    return String(meta?.trigger || parseScreenshotTriggerFromPath(entry?.url || entry?.path || '') || '').toLowerCase();
+}
+function getScreenshotPageUrl(entry) {
+    const meta = getScreenshotMeta(entry);
+    const u = String(meta?.pageUrl || entry?.url || '').trim();
+    return u || '—';
+}
+function enableScreenshotHoverZoom(wrapEl) {
+    if (!wrapEl) return;
+    const set = (xPercent, yPercent, zoom) => {
+        wrapEl.style.setProperty('--ss-ox', `${xPercent.toFixed(3)}%`);
+        wrapEl.style.setProperty('--ss-oy', `${yPercent.toFixed(3)}%`);
+        wrapEl.style.setProperty('--ss-zoom', String(zoom));
+    };
+    set(50, 50, 1);
+    wrapEl.addEventListener('mouseenter', () => set(50, 50, 2.0));
+    wrapEl.addEventListener('mousemove', (ev) => {
+        const r = wrapEl.getBoundingClientRect();
+        if (!r.width || !r.height) return;
+        const x = ((ev.clientX - r.left) / r.width) * 100;
+        const y = ((ev.clientY - r.top) / r.height) * 100;
+        set(Math.max(0, Math.min(100, x)), Math.max(0, Math.min(100, y)), 2.0);
+    });
+    wrapEl.addEventListener('mouseleave', () => set(50, 50, 1));
 }
 function notePreviewText(note) {
     const s = String(note || '').trim();
@@ -311,6 +372,65 @@ function buildRawHttp(entry) {
     return `${reqPart}\n\n${resPart}`;
 }
 
+function chooseProtectionLevel() {
+    if (!protectionModal || !protectionConfirmBtn || !protectionCancelBtn) {
+        return Promise.resolve('Raw');
+    }
+    return new Promise((resolve) => {
+        const cleanup = () => {
+            protectionModal.classList.remove('visible');
+            protectionConfirmBtn.removeEventListener('click', onConfirm);
+            protectionCancelBtn.removeEventListener('click', onCancel);
+            protectionModal.removeEventListener('click', onBackdrop);
+            document.removeEventListener('keydown', onEsc);
+        };
+        const onConfirm = () => {
+            const selected = protectionModal.querySelector('input[name="protection-level"]:checked');
+            const level = selected ? selected.value : 'Raw';
+            cleanup();
+            resolve(level);
+        };
+        const onCancel = () => {
+            cleanup();
+            resolve(null);
+        };
+        const onBackdrop = (e) => {
+            if (e.target === protectionModal) onCancel();
+        };
+        const onEsc = (e) => {
+            if (e.key === 'Escape') onCancel();
+        };
+        protectionConfirmBtn.addEventListener('click', onConfirm);
+        protectionCancelBtn.addEventListener('click', onCancel);
+        protectionModal.addEventListener('click', onBackdrop);
+        document.addEventListener('keydown', onEsc);
+        protectionModal.classList.add('visible');
+    });
+}
+
+async function openCompareSidePickerForEntry(entry) {
+    if (!entry?.id || !compareSideModal || !compareSidePicker) return;
+    const cmpState = await api.getCompare?.().catch(() => null);
+    compareSidePicker.innerHTML = '';
+    for (const side of ['left', 'right']) {
+        const current = cmpState?.[side];
+        const btn = document.createElement('button');
+        btn.className = 'cmp-side-btn';
+        btn.type = 'button';
+        btn.innerHTML = `<div class="side-label">${side === 'left' ? 'Left (A)' : 'Right (B)'}</div><div class="side-info">${current?.url ? esc(truncUrl(current.url)) : 'Empty'}</div>`;
+        btn.addEventListener('click', async () => {
+            await api.setCompareSlot?.(side, entry.id).catch(() => {});
+            compareSideModal.classList.remove('visible');
+            const otherSide = side === 'left' ? 'right' : 'left';
+            if (cmpState?.[otherSide]) {
+                await api.openCompareViewer?.().catch(() => {});
+            }
+        });
+        compareSidePicker.appendChild(btn);
+    }
+    compareSideModal.classList.add('visible');
+}
+
 // ─── Virtual scroll ───────────────────────────────────────────────────────────
 function calcWindow() {
     const vh   = lvScroll.clientHeight;
@@ -359,6 +479,7 @@ function buildRow(entry, idx) {
 
     const hl = highlightRules[url];
     if (hl) { row.style.borderLeft = `3px solid ${hl}`; row.classList.add('hl-rule'); }
+    if (String(type).toLowerCase() === 'mock') row.classList.add('lv-row-mock');
 
     if (type === 'screenshot') {
         row.classList.add('lv-row-screenshot');
@@ -366,15 +487,29 @@ function buildRow(entry, idx) {
         const ts = entry.created_at
             ? new Date(entry.created_at).toLocaleTimeString()
             : '';
+        const trig = getScreenshotTrigger(entry);
+        const trigLbl = screenshotTriggerLabel(trig);
+        const typeLbl = trigLbl;
+        const pageUrl = getScreenshotPageUrl(entry);
+        const pageHost = 'screen';
+        const tag = String(entry.tag || '').trim();
+        const hasNote = !!(entry.has_note || (entry.note && String(entry.note).trim()));
+        const tagTitle = [
+            tag ? `tag: ${tag}` : null,
+            hasNote ? 'note: yes' : null,
+        ].filter(Boolean).join(' | ') || 'No mark';
+        const tagDot = tag
+            ? `<span class="tag-dot ${hasNote ? 'tag-has-note' : ''}" style="background:${esc(tag)}" title="${esc(tagTitle)}"></span>`
+            : `<span class="tag-dot tag-none ${hasNote ? 'tag-has-note' : ''}" title="${esc(tagTitle)}"></span>`;
         row.innerHTML =
             `<div class="lv-td col-idx">${idx + 1}</div>` +
-            `<div class="lv-td col-method"><span class="method-badge m-other">📷</span></div>` +
-            `<div class="lv-td col-status"><span class="lv-status s-ok">—</span></div>` +
-            `<div class="lv-td col-mark">—</div>` +
-            `<div class="lv-td col-host"><span class="host-chip" title="${esc(host)}">${esc(host)}</span></div>` +
-            `<div class="lv-td col-type"><span class="type-chip type-screenshot">SS</span></div>` +
+            `<div class="lv-td col-method"><span class="method-badge m-other">Scrn</span></div>` +
+            `<div class="lv-td col-status"><span class="lv-status s-2xx">OK</span></div>` +
+            `<div class="lv-td col-mark"><div class="mark-stack">${tagDot}</div></div>` +
+            `<div class="lv-td col-host"><span class="host-chip" title="${esc(pageHost)}">${esc(pageHost)}</span></div>` +
+            `<div class="lv-td col-type"><span class="type-chip type-screenshot" title="Screenshot trigger">${esc(typeLbl)}</span></div>` +
             `<div class="lv-td col-dur"><span class="lv-dur">${ts}</span></div>` +
-            `<div class="lv-td col-path"><span class="lv-path">${esc(url)}</span></div>`;
+            `<div class="lv-td col-path"><span class="ss-row-badge" title="Screenshot entry">📸</span><span class="lv-path" title="${esc(pageUrl)}">${esc(pageUrl)}</span></div>`;
         row.addEventListener('click', () => selectEntry(idx));
         return row;
     }
@@ -382,6 +517,9 @@ function buildRow(entry, idx) {
     const scCount = countSetCookies(entry);
     const extBadge = (entry.source === 'external' || (entry.tabId || entry.tab_id || '').startsWith('ext_'))
         ? `<span class="ext-badge" title="External proxy :${entry.extPort || ''}">EXT</span>` : '';
+    const mockBadge = String(type).toLowerCase() === 'mock'
+        ? '<span class="mock-badge" title="Mocked by intercept rule">MOCK</span>'
+        : '';
     const tagCls = entry.has_note ? 'tag-dot tag-has-note' : 'tag-dot';
     const tagDot = entry.tag
         ? `<span class="${tagCls}" style="background:${esc(entry.tag)}" title="${esc(entry.has_note ? 'Tag + note' : 'Tag')}"></span>`
@@ -397,7 +535,7 @@ function buildRow(entry, idx) {
         `<div class="lv-td col-host"><span class="host-chip" title="${esc(host)}">${esc(host)}</span></div>` +
         `<div class="lv-td col-type"><span class="type-chip" title="${esc(type)}">${esc(shortTypeLabel(type))}</span></div>` +
         `<div class="lv-td col-dur"><span class="lv-dur ${durCls(dur)}">${formatDur(dur)}</span></div>` +
-        `<div class="lv-td col-path">${extBadge}<span class="lv-path" title="${esc(url)}">${esc(truncUrl(url))}</span></div>`;
+        `<div class="lv-td col-path">${mockBadge}${extBadge}<span class="lv-path" title="${esc(url)}">${esc(truncUrl(url))}</span></div>`;
 
     row.addEventListener('click', () => selectEntry(idx));
     return row;
@@ -546,6 +684,10 @@ function entryPassesFilter(e) {
     if (hideOptionsCheckbox?.checked) {
         if ((e.method || '').toUpperCase() === 'OPTIONS') return false;
     }
+    // Hide screenshot entries
+    if (hideScreenshotCheckbox?.checked) {
+        if (String(e.type || '').toLowerCase() === 'screenshot') return false;
+    }
 
     // Session filter: use direct state variable (not the hidden <select>)
     if (sessionFilterMode !== null && sessionFilterMode !== 'all') {
@@ -566,6 +708,9 @@ async function applyFilters() {
         }
         if (hideOptionsCheckbox?.checked) {
             filteredEntries = filteredEntries.filter(e => (e.method || '').toUpperCase() !== 'OPTIONS');
+        }
+        if (hideScreenshotCheckbox?.checked) {
+            filteredEntries = filteredEntries.filter(e => String(e.type || '').toLowerCase() !== 'screenshot');
         }
     } else {
         filteredEntries = allEntries.filter(entryPassesFilter);
@@ -898,6 +1043,14 @@ function showDetail(entry) {
         copyUrlBtn.textContent = '✓ Copied';
         setTimeout(() => { copyUrlBtn.textContent = '⧉ Copy URL'; }, 1500);
     };
+    if (addToCompareBtn) {
+        addToCompareBtn.style.display = showReplay ? '' : 'none';
+        addToCompareBtn.onclick = () => openCompareSidePickerForEntry(entry);
+    }
+    if (openCompareBtn) {
+        openCompareBtn.style.display = showReplay ? '' : 'none';
+        openCompareBtn.onclick = () => api.openCompareViewer?.();
+    }
 
     const ssDirect  = document.getElementById('lv-screenshot-direct');
     const lvTabs    = document.getElementById('lv-tabs');
@@ -914,17 +1067,34 @@ function showDetail(entry) {
         if (markPanel) markPanel.classList.remove('visible');
         ssDirect.style.display = '';
         ssDirect.innerHTML = '<div class="body-empty" id="ss-loading">⏳ Loading…</div>';
+        const ssMeta = getScreenshotMeta(entry) || {};
+        const ssTrigger = getScreenshotTrigger(entry);
+        const ssTriggerLabel = screenshotTriggerLabel(ssTrigger);
+        const click = ssMeta.click && Number.isFinite(Number(ssMeta.click.xNorm)) && Number.isFinite(Number(ssMeta.click.yNorm))
+            ? { xNorm: Math.max(0, Math.min(1, Number(ssMeta.click.xNorm))), yNorm: Math.max(0, Math.min(1, Number(ssMeta.click.yNorm))) }
+            : null;
+        document.getElementById('d-type').textContent = ssTrigger ? `screenshot (${ssTriggerLabel})` : 'screenshot';
 
         const renderSS = (b64) => {
             if (!b64) { ssDirect.innerHTML = '<div class="body-empty">No screenshot data</div>'; return; }
+            const marker = click
+                ? `<span class="ss-click-marker" style="left:${(click.xNorm * 100).toFixed(3)}%;top:${(click.yNorm * 100).toFixed(3)}%" title="Click position"></span>`
+                : '';
             ssDirect.innerHTML = `
                 <div class="screenshot-wrap">
                     <div class="ss-action-bar">
+                        <span class="ss-trigger-pill" title="Screenshot trigger">${esc(ssTriggerLabel)}</span>
                         <button class="body-act-btn" id="ss-copy-btn">⎘ Copy image</button>
                         <button class="body-act-btn" id="ss-save-btn">↓ Save PNG</button>
                     </div>
-                    <img id="ss-preview-img" src="data:image/png;base64,${b64}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);display:block">
+                    <div class="ss-preview-wrap">
+                        <div class="ss-zoom-stage">
+                            <img id="ss-preview-img" src="data:image/png;base64,${b64}" style="max-width:100%;border-radius:6px;border:1px solid var(--border);display:block">
+                            ${marker}
+                        </div>
+                    </div>
                 </div>`;
+            enableScreenshotHoverZoom(document.querySelector('.ss-preview-wrap'));
             document.getElementById('ss-copy-btn')?.addEventListener('click', async () => {
                 try {
                     const blob = await fetch(`data:image/png;base64,${b64}`).then(r => r.blob());
@@ -1763,6 +1933,7 @@ searchInput?.addEventListener('input', debouncedFilter);
 ftsCheckbox?.addEventListener('change', applyFilters);
 scOnlyCheckbox?.addEventListener('change', applyFilters);
 hideOptionsCheckbox?.addEventListener('change', applyFilters);
+hideScreenshotCheckbox?.addEventListener('change', applyFilters);
 clearSearchBtn?.addEventListener('click', () => { searchInput.value = ''; applyFilters(); });
 filterSession?.addEventListener('change', applyFilters);
 setupMultiSelects();
@@ -1790,6 +1961,84 @@ exportHarBtn?.addEventListener('click', async () => {
     exportHarBtn.disabled = true; exportHarBtn.textContent = '⟳ Exporting…';
     try { await api.exportHar(currentSessionId); }
     finally { exportHarBtn.disabled = false; exportHarBtn.textContent = '⬇ HAR'; }
+});
+
+exportBundleBtn?.addEventListener('click', async () => {
+    const protectionLevel = await chooseProtectionLevel();
+    if (!protectionLevel) return;
+    const selected = selectedIndex >= 0 ? filteredEntries[selectedIndex] : null;
+    const shouldExportSelectedOnly = !!(selected && selected.id && window.confirm('Export only selected request?\nOK = selected only\nCancel = whole session'));
+    const payload = {
+        sessionId: currentSessionId,
+        protectionLevel,
+        requestIds: shouldExportSelectedOnly ? [selected.id] : [],
+        notes: {
+            summary: selected?.note || '',
+            owner: '',
+        },
+    };
+    exportBundleBtn.disabled = true;
+    exportBundleBtn.textContent = '⟳ Bundle…';
+    try {
+        const res = await api.exportBundle(payload);
+        if (res?.success) {
+            const stats = res.stats || {};
+            alert(`Bundle exported.\nRequests: ${stats.requests || 0}\nProtection: ${stats.protectionLevel || protectionLevel}\nRedacted fields: ${stats.redactedFields || 0}`);
+        } else if (!res?.canceled) {
+            alert(`Bundle export failed: ${res?.error || 'unknown error'}`);
+        }
+    } finally {
+        exportBundleBtn.disabled = false;
+        exportBundleBtn.textContent = '⬇ Bundle';
+    }
+});
+
+importBundleBtn?.addEventListener('click', async () => {
+    importBundleBtn.disabled = true;
+    importBundleBtn.textContent = '⟳ Import…';
+    try {
+        const res = await api.importBundle();
+        if (!res?.success) {
+            if (!res?.canceled) alert(`Bundle import failed: ${res?.error || 'unknown error'}`);
+            return;
+        }
+        const preview = res.preview || {};
+        const ok = window.confirm(
+            `Bundle preview:\n` +
+            `Schema: ${preview.schemaVersion}\n` +
+            `Exported: ${preview.exportedAt || 'n/a'}\n` +
+            `Protection: ${preview.protectionLevel}\n` +
+            `Requests: ${preview.requests || 0}\n` +
+            `Trace: ${preview.trace || 0}\n\n` +
+            'Restore this context into current log viewer?'
+        );
+        if (!ok) return;
+        const bundle = res.bundle || {};
+        const imported = Array.isArray(bundle.traffic?.requests) ? bundle.traffic.requests.slice().reverse() : [];
+        allEntries = imported.map((e) => ({ ...e, _fromBundle: true }));
+        filteredEntries = allEntries.slice();
+        selectedIndex = -1;
+        autoScrollEnabled = false;
+        autoScrollBtn?.classList.remove('active');
+        if (autoScrollBtn) autoScrollBtn.textContent = '↓ Paused';
+        knownTabs = new Set(allEntries.map(e => e.tab_id || e.tabId).filter(Boolean));
+        updateTabFilter();
+        updateCount();
+        renderVirtual();
+        detailEmpty.style.display = '';
+        detailPanel.style.display = 'none';
+        alert('Bundle imported into viewer context.');
+    } finally {
+        importBundleBtn.disabled = false;
+        importBundleBtn.textContent = '⬆ Bundle';
+    }
+});
+
+compareSideCancelBtn?.addEventListener('click', () => {
+    compareSideModal?.classList.remove('visible');
+});
+compareSideModal?.addEventListener('click', (e) => {
+    if (e.target === compareSideModal) compareSideModal.classList.remove('visible');
 });
 
 openRulesBtn?.addEventListener('click', () => api.openRulesWindow());

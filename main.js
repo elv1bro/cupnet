@@ -35,6 +35,20 @@ const {
 const ProxyChain = require('proxy-chain');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+let _jsonDiffModulePromise = null;
+
+async function loadJsonDiffModules() {
+    if (!_jsonDiffModulePromise) {
+        _jsonDiffModulePromise = Promise.all([
+            import('jsondiffpatch'),
+            import('jsondiffpatch/formatters/html'),
+        ]).then(([jdp, htmlFmt]) => ({
+            jsondiffpatch: jdp?.default || jdp,
+            formatter: htmlFmt?.default || htmlFmt,
+        }));
+    }
+    return _jsonDiffModulePromise;
+}
 
 // ─── Single instance lock (one CupNet per host/user session) ─────────────────
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
@@ -71,6 +85,8 @@ const {
     shouldFilterUrl: _shouldFilterUrl,
     SEARCH_ENGINE,
 } = require('./utils');
+const bundleUtils = require('./bundle-utils');
+const diffUtils = require('./diff-utils');
 
 // Re-export shouldFilterUrl under the same name used throughout this file
 const shouldFilterUrl = _shouldFilterUrl;
@@ -93,6 +109,17 @@ async function startMitmProxy() {
                 if (active && !active.direct) tabId = active.id;
             }
             const sessionId = entry.sessionId != null ? entry.sessionId : currentSessionId;
+            if (entry?.dnsOverride?.host && entry?.dnsOverride?.ip) {
+                broadcastDnsRuleMatched({
+                    ruleName: `${entry.dnsOverride.host} -> ${entry.dnsOverride.ip}`,
+                    host: entry.dnsOverride.host,
+                    ip: entry.dnsOverride.ip,
+                    url: entry.url || '',
+                    method: entry.method || 'GET',
+                    tabId: tabId || null,
+                    sessionId: sessionId ?? null,
+                });
+            }
 
             // Trace mode: full request/response to DB + live update to trace window
             const s = cachedSettings || loadSettings();
@@ -237,10 +264,13 @@ const traceWindows            = [];   // all open trace-viewer windows
 const logViewerInitSessions    = new Map();
 let rulesWindow                = null;
 let cookieManagerWindow        = null;
+let dnsManagerWindow           = null;
 let proxyManagerWindow         = null;
+let compareViewerWindow        = null;
 let consoleViewerWindow        = null;
 let pageAnalyzerWindow         = null;
 let ivacScoutWindow            = null;
+const comparePair              = { left: null, right: null };
 
 function confirmExitDialog(win) {
     const owner = (win && !win.isDestroyed()) ? win : (BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]);
@@ -249,8 +279,8 @@ function confirmExitDialog(win) {
         buttons: ['Cancel', 'Exit'],
         defaultId: 1,
         cancelId: 0,
-        title: 'Exit CupNet',
-        message: 'Close CupNet and all windows?',
+        title: 'Exit [CupNet]',
+        message: 'Close [CupNet] and all windows?',
         detail: 'All browser windows, proxy workers, and active sessions will be closed.',
         noLink: true,
     });
@@ -285,6 +315,8 @@ let lastMouseMoveTime          = 0;
 const screenshotCooldownByReason = new Map();
 let screenshotLimiterWindow    = [];
 let _lastPendingForTracking    = null;
+const _wcIdToTabId             = new Map(); // webContents.id -> tabId
+const _lastPointerByTabId      = new Map(); // tabId -> { xNorm, yNorm, ts }
 let _lastProxyStatusSig        = '';
 let _lastTlsProfileBroadcast   = null;
 
@@ -297,10 +329,11 @@ const INTERCEPT_IPC_BATCH_MAX = 100;
 const _interceptIpcQueues = new Map(); // webContents.id -> { entries, timer, win }
 const _recentInterceptEvents = [];
 const RECENT_INTERCEPT_MAX = 120;
-const _recentInterceptEvents = [];
-const RECENT_INTERCEPT_MAX = 120;
-const _recentInterceptEvents = [];
-const RECENT_INTERCEPT_MAX = 120;
+const DNS_IPC_BATCH_MS = 80;
+const DNS_IPC_BATCH_MAX = 100;
+const _dnsIpcQueues = new Map(); // webContents.id -> { entries, timer, win }
+const _recentDnsEvents = [];
+const RECENT_DNS_MAX = 150;
 
 function _flushLogIpcQueue(wcId) {
     const q = _logIpcQueues.get(wcId);
@@ -391,6 +424,52 @@ function broadcastInterceptRuleMatched(info) {
     _enqueueInterceptIpc(rulesWindow, event);
 }
 
+function _flushDnsIpcQueue(wcId) {
+    const q = _dnsIpcQueues.get(wcId);
+    if (!q) return;
+    if (q.timer) { clearTimeout(q.timer); q.timer = null; }
+    const win = q.win;
+    if (!win || win.isDestroyed()) {
+        _dnsIpcQueues.delete(wcId);
+        return;
+    }
+    const entries = q.entries.splice(0, q.entries.length);
+    if (!entries.length) return;
+    try {
+        win.webContents.send('dns-rule-matched-batch', entries);
+    } catch {}
+}
+
+function _enqueueDnsIpc(win, info) {
+    if (!win || win.isDestroyed()) return;
+    const wcId = win.webContents.id;
+    let q = _dnsIpcQueues.get(wcId);
+    if (!q) {
+        q = { entries: [], timer: null, win };
+        _dnsIpcQueues.set(wcId, q);
+    } else {
+        q.win = win;
+    }
+    q.entries.push(info);
+    if (q.entries.length >= DNS_IPC_BATCH_MAX) {
+        _flushDnsIpcQueue(wcId);
+        return;
+    }
+    if (!q.timer) {
+        q.timer = setTimeout(() => _flushDnsIpcQueue(wcId), DNS_IPC_BATCH_MS);
+    }
+}
+
+function broadcastDnsRuleMatched(info) {
+    const event = { ...info, ts: info?.ts || Date.now() };
+    _recentDnsEvents.push(event);
+    if (_recentDnsEvents.length > RECENT_DNS_MAX) {
+        _recentDnsEvents.splice(0, _recentDnsEvents.length - RECENT_DNS_MAX);
+    }
+    _enqueueDnsIpc(mainWindow, event);
+    _enqueueDnsIpc(dnsManagerWindow, event);
+}
+
 function maybeLogMockToNetworkActivity(info) {
     if (!info || info.type !== 'mock') return;
     if (!isLoggingEnabled || !db) return;
@@ -429,50 +508,6 @@ function maybeLogMockToNetworkActivity(info) {
             tabId: info.tabId || null,
             sessionId,
         });
-    } catch (e) {
-        console.error('[main] mock log insert failed:', e.message);
-    }
-}
-
-function maybeLogMockToNetworkActivity(info) {
-    if (!info || info.type !== 'mock') return;
-    if (!isLoggingEnabled || !db) return;
-    const tab = info.tabId ? tabManager?.getTab(info.tabId) : null;
-    const sessionId = tab?.sessionId ?? currentSessionId;
-    if (!sessionId) return;
-    const status = Number(info.status) || 200;
-    const method = (info.method || 'GET').toUpperCase();
-    const mimeType = info.mimeType || 'text/plain';
-    const body = typeof info.body === 'string' ? info.body : '';
-    try {
-        const dbId = db.insertRequest(sessionId, info.tabId || null, {
-            requestId: `mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-            url: info.url || '',
-            method,
-            status,
-            type: 'mock',
-            duration: 0,
-            requestHeaders: null,
-            responseHeaders: { 'content-type': mimeType },
-            requestBody: null,
-            responseBody: body,
-            error: null,
-        });
-        if (!dbId) return;
-        const msg = {
-            id: dbId,
-            url: info.url || '',
-            method,
-            status,
-            type: 'mock',
-            duration: 0,
-            duration_ms: 0,
-            response: { statusCode: status, headers: { 'content-type': mimeType } },
-            responseBody: body,
-            tabId: info.tabId || null,
-            sessionId,
-        };
-        _broadcastLogEntryToViewers(msg);
     } catch (e) {
         console.error('[main] mock log insert failed:', e.message);
     }
@@ -598,7 +633,8 @@ const SETTINGS_DEFAULTS = {
         onUserClick: true,
         onPageLoadComplete: true,
         onNetworkPendingChange: true,
-        onMouseActivity: true,
+        onMouseActivity: false,
+        onScrollEnd: false,
         onRuleMatchScreenshot: true,
         pendingDeltaThreshold: 3,
         cooldownMs: 2000,
@@ -658,7 +694,8 @@ function normalizeTrackingSettings(raw) {
         onUserClick: src.onUserClick !== false,
         onPageLoadComplete: src.onPageLoadComplete !== false,
         onNetworkPendingChange: src.onNetworkPendingChange !== false,
-        onMouseActivity: src.onMouseActivity !== false,
+        onMouseActivity: src.onMouseActivity === true,
+        onScrollEnd: src.onScrollEnd === true,
         onRuleMatchScreenshot: src.onRuleMatchScreenshot !== false,
         pendingDeltaThreshold: Math.max(1, Math.min(50, Number(src.pendingDeltaThreshold) || base.pendingDeltaThreshold)),
         cooldownMs: Math.max(200, Math.min(30000, Number(src.cooldownMs) || base.cooldownMs)),
@@ -677,11 +714,17 @@ function getTrackingSettings() {
     return s.tracking;
 }
 
+function getInternalPageUrl(pageName) {
+    const name = String(pageName || '').trim().toLowerCase();
+    const file = name === 'settings' ? 'settings.html' : 'new-tab.html';
+    return `file://${path.join(__dirname, file)}`;
+}
+
 /** Returns the URL to open in a new tab (homepage or built-in new-tab page). */
 function getNewTabUrl() {
     const hp = cachedSettings?.homepage?.trim();
     if (hp) return hp;
-    return `file://${path.join(__dirname, 'new-tab.html')}`;
+    return getInternalPageUrl('new-tab');
 }
 
 // ─── MITM bypass domains ──────────────────────────────────────────────────────
@@ -911,6 +954,7 @@ const MITM_DEDUP_MS = 400;
 // ─── CDP network logging ──────────────────────────────────────────────────────
 async function setupNetworkLogging(webContents, tabId, sessionId) {
     if (!webContents || webContents.isDestroyed()) return;
+    _wcIdToTabId.set(webContents.id, tabId);
     const ongoingRequests   = new Map();
     const ongoingWebsockets = new Map();
     // ExtraInfo queue: for redirect chains Chrome fires responseReceivedExtraInfo
@@ -946,6 +990,7 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
     }, 60_000);
     webContents.once('destroyed', () => {
         clearInterval(_staleCleanupTimer);
+        _wcIdToTabId.delete(webContents.id);
         ongoingRequests.clear();
         ongoingWebsockets.clear();
         extraInfoQueue.clear();
@@ -1012,7 +1057,7 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
             if (logEntry.type === 'websocket_frame' || logEntry.type === 'websocket_closed' || logEntry.type === 'websocket_error') {
                 db.insertWsEvent(sessionId, tabId, logEntry.url || '', logEntry.direction || 'recv', logEntry.data || logEntry.error || null);
             } else if (logEntry.type === 'screenshot') {
-                db.insertScreenshot(sessionId, tabId, logEntry.path, logEntry.imageData || null);
+                db.insertScreenshot(sessionId, tabId, logEntry.path, logEntry.imageData || null, logEntry.screenshotMeta || null);
             } else {
                 // insertRequest returns the SQLite integer id — store it on logEntry
                 // so the log viewer can call getRequestDetail(id) for lazy header/body load.
@@ -1419,6 +1464,8 @@ async function captureScreenshot(opts = {}) {
     try {
         const reasonRaw = typeof opts.reason === 'string' ? opts.reason : 'manual';
         const reason = reasonRaw.replace(/[^a-z0-9_-]/gi, '_').slice(0, 40) || 'manual';
+        const screenshotMeta = (opts.meta && typeof opts.meta === 'object') ? { ...opts.meta } : {};
+        screenshotMeta.trigger = reason;
 
         // H1: skip when window is not focused/visible — avoids GPU work in background
         if (!isWindowActive) return { success: false, skipped: true, reason: 'inactive' };
@@ -1429,6 +1476,17 @@ async function captureScreenshot(opts = {}) {
 
         // Skip activity timeout check (always capture when timer fires)
         const wc = activeTab.view.webContents;
+
+        if (reason === 'click' && !screenshotMeta.click) {
+            const p = _lastPointerByTabId.get(activeTab.id);
+            if (p && Number.isFinite(p.xNorm) && Number.isFinite(p.yNorm) && (Date.now() - (p.ts || 0) < 15000)) {
+                screenshotMeta.click = {
+                    xNorm: Math.max(0, Math.min(1, Number(p.xNorm))),
+                    yNorm: Math.max(0, Math.min(1, Number(p.yNorm))),
+                    ts: Number(p.ts) || Date.now(),
+                };
+            }
+        }
 
         // Skip home/new-tab page — don't photograph the start screen
         const currentUrl = wc.getURL() || '';
@@ -1453,18 +1511,22 @@ async function captureScreenshot(opts = {}) {
             const ts  = now.toTimeString().split(' ')[0].replace(/:/g, '-');
             const ms  = now.getMilliseconds().toString().padStart(3, '0');
             const virtualPath = `autoscreen::/${reason}/${ts}.${ms}.png`;
+            screenshotMeta.pageUrl = currentUrl;
+            screenshotMeta.virtualPath = virtualPath;
             const b64 = buffer.toString('base64');
-            const ssId = db.insertScreenshot(currentSessionId, activeTab.id, virtualPath, b64);
+            const ssId = db.insertScreenshot(currentSessionId, activeTab.id, currentUrl, b64, screenshotMeta);
             logEntryCount++;
             // Don't send base64 in the live IPC event — viewer fetches it on demand to avoid memory bloat
             const entry = {
                 type:       'screenshot',
                 timestamp:  Date.now(),
                 path:       virtualPath,
+                url:        currentUrl,
                 ssDbId:     ssId,          // numeric DB id for lazy fetch
                 tabId:      activeTab.id,
                 session_id: currentSessionId,
                 created_at: now.toISOString(),
+                screenshotMeta,
             };
             _broadcastLogEntryToViewers(entry);
         }
@@ -1485,12 +1547,13 @@ function isScreenshotReasonEnabled(reason, tracking) {
         case 'page-load': return !!tracking.onPageLoadComplete;
         case 'network-pending': return !!tracking.onNetworkPendingChange;
         case 'mouse-activity': return !!tracking.onMouseActivity;
+        case 'scroll-end': return !!tracking.onScrollEnd;
         case 'rule': return !!tracking.onRuleMatchScreenshot;
         default: return true;
     }
 }
 
-async function requestScreenshot({ reason = 'manual', force = false, meta = null } = {}) {
+async function requestScreenshot({ reason = 'manual', force = false, meta = null, skipRateLimit = false } = {}) {
     const now = Date.now();
     const tracking = getTrackingSettings();
     if (!force && !isScreenshotReasonEnabled(reason, tracking)) {
@@ -1499,18 +1562,20 @@ async function requestScreenshot({ reason = 'manual', force = false, meta = null
 
     const key = String(reason || 'manual');
     const lastByReason = screenshotCooldownByReason.get(key) || 0;
-    if (!force && now - lastByReason < tracking.cooldownMs) {
+    if (!force && !skipRateLimit && now - lastByReason < tracking.cooldownMs) {
         return { success: false, skipped: true, reason: 'cooldown' };
     }
-    screenshotCooldownByReason.set(key, now);
+    if (!skipRateLimit) screenshotCooldownByReason.set(key, now);
 
-    screenshotLimiterWindow = screenshotLimiterWindow.filter(ts => now - ts < 60_000);
-    if (!force && screenshotLimiterWindow.length >= tracking.maxPerMinute) {
-        return { success: false, skipped: true, reason: 'rate_limit' };
+    if (!skipRateLimit) {
+        screenshotLimiterWindow = screenshotLimiterWindow.filter(ts => now - ts < 60_000);
+        if (!force && screenshotLimiterWindow.length >= tracking.maxPerMinute) {
+            return { success: false, skipped: true, reason: 'rate_limit' };
+        }
     }
 
     const res = await captureScreenshot({ reason, meta });
-    if (res?.success) screenshotLimiterWindow.push(now);
+    if (res?.success && !skipRateLimit) screenshotLimiterWindow.push(now);
     return res;
 }
 
@@ -1684,7 +1749,7 @@ function createMainWindow() {
 
 function createRequestEditorWindow(data) {
     const win = new BrowserWindow({
-        width: 1100, height: 780, minWidth: 760, minHeight: 540,
+        width: 1250, height: 780, minWidth: 760, minHeight: 540,
         title: 'Request Editor', icon: iconPath,
         webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
     });
@@ -1732,6 +1797,171 @@ function createLogViewerWindow(sessionId = null) {
         if (idx !== -1) logViewerWindows.splice(idx, 1);
         if (logViewerWindow === win) logViewerWindow = logViewerWindows[logViewerWindows.length - 1] || null;
     });
+}
+
+function _serializeCompareRowRequest(req) {
+    if (!req) return null;
+    return {
+        id: req.id,
+        url: req.url || '',
+        method: req.method || 'GET',
+        status: req.status ?? null,
+        created_at: req.created_at || null,
+        session_id: req.session_id ?? null,
+        match_key: diffUtils.requestMatchKey(req),
+    };
+}
+
+
+let compareResult = null;
+
+function _comparePayload() {
+    return {
+        left: comparePair.left ? { ...comparePair.left } : null,
+        right: comparePair.right ? { ...comparePair.right } : null,
+        result: compareResult,
+    };
+}
+
+function _requestsForSessionAsc(sessionId) {
+    if (!sessionId) return [];
+    const rows = db.queryRequestsFull({ sessionId: Number(sessionId) }, 10000, 0);
+    return rows.slice().reverse();
+}
+
+function _parseHeadersMaybe(h) {
+    if (!h) return {};
+    if (typeof h === 'string') {
+        try { return JSON.parse(h); } catch { return {}; }
+    }
+    if (typeof h === 'object') return { ...h };
+    return {};
+}
+
+function _stripNoiseHeaders(headers, enabled) {
+    if (!enabled) return headers;
+    const noise = new Set([
+        'date', 'expires', 'last-modified', 'etag', 'age',
+        'x-request-id', 'x-correlation-id', 'x-amzn-trace-id',
+        'cf-ray', 'cf-cache-status', 'server-timing',
+        'x-served-by', 'x-cache', 'x-cache-hits', 'x-timer',
+        'set-cookie',
+    ]);
+    const out = {};
+    for (const [k, v] of Object.entries(headers || {})) {
+        if (!noise.has(String(k || '').toLowerCase())) out[k] = v;
+    }
+    return out;
+}
+
+function _reqWithCompareOptions(req, options) {
+    const out = { ...req };
+    out.request_headers = _stripNoiseHeaders(_parseHeadersMaybe(req.request_headers), !!options?.removeNoiseHeaders);
+    out.response_headers = _stripNoiseHeaders(_parseHeadersMaybe(req.response_headers), !!options?.removeNoiseHeaders);
+    return out;
+}
+
+function _safeUrl(url) {
+    try { return new URL(String(url || '')); } catch { return null; }
+}
+
+function _queryKeys(url) {
+    const u = _safeUrl(url);
+    if (!u) return new Set();
+    return new Set(Array.from(u.searchParams.keys()).map(k => k.toLowerCase()));
+}
+
+function _pathTokens(url) {
+    const u = _safeUrl(url);
+    const p = u?.pathname || String(url || '').split('?')[0] || '';
+    return p.split('/').filter(Boolean).map(s => s.toLowerCase());
+}
+
+function _tokenSimilarity(aTokens, bTokens) {
+    const a = new Set(aTokens);
+    const b = new Set(bTokens);
+    if (!a.size && !b.size) return 1;
+    const inter = [...a].filter(x => b.has(x)).length;
+    const union = new Set([...a, ...b]).size || 1;
+    return inter / union;
+}
+
+function _statusClass(code) {
+    const n = Number(code || 0);
+    if (!n) return 0;
+    return Math.floor(n / 100);
+}
+
+function _pairScore(leftReq, rightReq, i, j, level = 'standard') {
+    const leftKey = diffUtils.requestMatchKey(leftReq);
+    const rightKey = diffUtils.requestMatchKey(rightReq);
+    const exactKey = leftKey && rightKey && leftKey === rightKey;
+    const leftMethod = String(leftReq.method || '').toUpperCase();
+    const rightMethod = String(rightReq.method || '').toUpperCase();
+    const sameMethod = leftMethod === rightMethod;
+    const pathSim = _tokenSimilarity(_pathTokens(leftReq.url), _pathTokens(rightReq.url));
+    const sameStatusClass = _statusClass(leftReq.status) === _statusClass(rightReq.status);
+    const lq = _queryKeys(leftReq.url);
+    const rq = _queryKeys(rightReq.url);
+    const qInter = [...lq].filter(k => rq.has(k)).length;
+    const qUnion = new Set([...lq, ...rq]).size || 1;
+    const qSim = qInter / qUnion;
+    const indexPenalty = Math.min(Math.abs(i - j), 40);
+    let score = 0;
+    if (exactKey) score += 100;
+    if (sameMethod) score += 18;
+    score += Math.round(pathSim * (level === 'deep' ? 24 : 12));
+    score += Math.round(qSim * 14);
+    if (sameStatusClass) score += 6;
+    score -= indexPenalty;
+    const allowFallback = level === 'deep';
+    const acceptable = exactKey || (allowFallback && sameMethod && pathSim >= 0.55);
+    return { score, acceptable, exactKey };
+}
+
+function _confidence(score, exactKey) {
+    if (exactKey && score >= 105) return 'high';
+    if (score >= 80) return 'high';
+    if (score >= 60) return 'medium';
+    return 'low';
+}
+
+
+function _broadcastCompareUpdated() {
+    const payload = _comparePayload();
+    try {
+        if (compareViewerWindow && !compareViewerWindow.isDestroyed()) {
+            compareViewerWindow.webContents.send('compare-updated', payload);
+        }
+    } catch {}
+    for (const w of logViewerWindows) {
+        try {
+            if (!w.isDestroyed()) w.webContents.send('compare-updated', payload);
+        } catch {}
+    }
+}
+
+function createCompareViewerWindow() {
+    if (compareViewerWindow && !compareViewerWindow.isDestroyed()) {
+        compareViewerWindow.focus();
+        _broadcastCompareUpdated();
+        return compareViewerWindow;
+    }
+    compareViewerWindow = new BrowserWindow({
+        width: 1360,
+        height: 920,
+        minWidth: 980,
+        minHeight: 680,
+        title: 'Compare',
+        icon: iconPath,
+        webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+    });
+    compareViewerWindow.loadFile(getAssetPath('compare-viewer.html'));
+    compareViewerWindow.webContents.once('did-finish-load', () => {
+        _broadcastCompareUpdated();
+    });
+    compareViewerWindow.on('closed', () => { compareViewerWindow = null; });
+    return compareViewerWindow;
 }
 
 function getLiveLogViewerWindow() {
@@ -2145,6 +2375,7 @@ const _analyzeEndpointsScript = `async function(){
             }
         }
     }
+
     function addMethod(ep, method) {
         if (!ep || !method) return;
         if (!endpointMeta[ep]) endpointMeta[ep] = { methods: new Set(), payloadKeys: new Set() };
@@ -2331,6 +2562,34 @@ function notifyCookieManagerTabs() {
     }, 150);
 }
 
+function isValidDnsHost(host) {
+    const value = String(host || '').trim().toLowerCase();
+    if (!value || value.length > 253) return false;
+    const parts = value.split('.');
+    if (parts.some(p => !p || p.length > 63)) return false;
+    return parts.every(p => /^[a-z0-9-]+$/i.test(p) && !p.startsWith('-') && !p.endsWith('-'));
+}
+
+function isValidIpv4(ip) {
+    const value = String(ip || '').trim();
+    const m = value.match(/^(\d{1,3})(?:\.(\d{1,3})){3}$/);
+    if (!m) return false;
+    return value.split('.').every(part => Number(part) >= 0 && Number(part) <= 255);
+}
+
+function syncDnsOverridesToMitm() {
+    if (!db || !mitmProxy || typeof mitmProxy.setDnsOverrides !== 'function') return;
+    try {
+        const rules = db.getDnsOverrides().filter(r => !!r.enabled);
+        mitmProxy.setDnsOverrides(rules);
+        if (dnsManagerWindow && !dnsManagerWindow.isDestroyed()) {
+            dnsManagerWindow.webContents.send('dns-overrides-updated', db.getDnsOverrides());
+        }
+    } catch (e) {
+        sysLog('warn', 'dns', 'syncDnsOverridesToMitm failed: ' + (e?.message || e));
+    }
+}
+
 function createCookieManagerWindow(initialTabId) {
     if (cookieManagerWindow && !cookieManagerWindow.isDestroyed()) {
         cookieManagerWindow.focus();
@@ -2348,6 +2607,26 @@ function createCookieManagerWindow(initialTabId) {
         cookieManagerWindow.webContents.send('tabs-list', tabManager.getTabList());
     });
     cookieManagerWindow.on('closed', () => { cookieManagerWindow = null; });
+}
+
+function createDnsManagerWindow() {
+    if (dnsManagerWindow && !dnsManagerWindow.isDestroyed()) {
+        dnsManagerWindow.focus();
+        return;
+    }
+    dnsManagerWindow = new BrowserWindow({
+        width: 920, height: 660, minWidth: 720, minHeight: 480,
+        title: 'DNS Manager', icon: iconPath,
+        webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
+    });
+    dnsManagerWindow.loadFile(getAssetPath('dns-manager.html'));
+    dnsManagerWindow.webContents.on('did-finish-load', () => {
+        if (db) dnsManagerWindow.webContents.send('dns-overrides-updated', db.getDnsOverrides());
+        if (_recentDnsEvents.length > 0) {
+            dnsManagerWindow.webContents.send('dns-rule-matched-batch', _recentDnsEvents.slice(-100));
+        }
+    });
+    dnsManagerWindow.on('closed', () => { dnsManagerWindow = null; });
 }
 
 function createLoggingModalWindow(data, buttonHint) {
@@ -2477,6 +2756,7 @@ function buildMenu() {
                 { label: 'Proxy Manager', accelerator: 'CmdOrCtrl+P', click: () => createProxyManagerWindow() },
                 { label: 'Network Activity', accelerator: 'CmdOrCtrl+Shift+L', click: () => createLogViewerWindow() },
                 { label: 'Cookie Manager', accelerator: 'CmdOrCtrl+Shift+C', click: () => createCookieManagerWindow(tabManager?.getActiveTabId()) },
+                { label: 'DNS Manager', accelerator: 'CmdOrCtrl+Shift+M', click: () => createDnsManagerWindow() },
                 { label: 'Rules & Interceptor', click: () => createRulesWindow() },
                 { label: 'System Console', accelerator: 'CmdOrCtrl+Shift+K', click: () => createConsoleViewerWindow() },
                 { label: 'Page Analyzer', accelerator: 'CmdOrCtrl+Shift+A', click: () => createPageAnalyzerWindow() },
@@ -2570,6 +2850,7 @@ app.whenReady().then(async () => {
 
         const startupProfile = loadSettings().tlsProfile || 'chrome';
         proxy.setBrowser(startupProfile);
+        syncDnsOverridesToMitm();
         console.log(`[main] MITM startup profile: ${startupProfile}`);
         mitmReady = true;
         startupMetrics.mitmReadyTs = Date.now();
@@ -2634,6 +2915,85 @@ app.whenReady().then(async () => {
 
     // ── Mouse activity ───────────────────────────────────────────────────────
     ipcMain.on('report-mouse-activity', () => { lastMouseMoveTime = Date.now(); });
+    ipcMain.on('report-tab-pointer', (event, payload) => {
+        try {
+            const tabId = _wcIdToTabId.get(event.sender.id);
+            if (!tabId || !payload || typeof payload !== 'object') return;
+            const xNorm = Number(payload.xNorm);
+            const yNorm = Number(payload.yNorm);
+            if (!Number.isFinite(xNorm) || !Number.isFinite(yNorm)) return;
+            _lastPointerByTabId.set(tabId, {
+                xNorm: Math.max(0, Math.min(1, xNorm)),
+                yNorm: Math.max(0, Math.min(1, yNorm)),
+                ts: Number(payload.ts) || Date.now(),
+            });
+        } catch {}
+    });
+    ipcMain.on('report-tab-click', (event, payload) => {
+        try {
+            const tabId = _wcIdToTabId.get(event.sender.id);
+            if (!tabId || !payload || typeof payload !== 'object') return;
+            if (!tabManager || tabManager.getActiveTabId() !== tabId) return;
+            const xNorm = Number(payload.xNorm);
+            const yNorm = Number(payload.yNorm);
+            if (!Number.isFinite(xNorm) || !Number.isFinite(yNorm)) return;
+            const click = {
+                xNorm: Math.max(0, Math.min(1, xNorm)),
+                yNorm: Math.max(0, Math.min(1, yNorm)),
+                ts: Number(payload.ts) || Date.now(),
+            };
+            _lastPointerByTabId.set(tabId, click);
+            requestScreenshot({
+                reason: 'click',
+                skipRateLimit: true,
+                meta: {
+                    tabId,
+                    click,
+                    button: Number.isFinite(Number(payload.button)) ? Number(payload.button) : 0,
+                },
+            }).catch(() => {});
+        } catch {}
+    });
+    ipcMain.on('report-tab-typing-end', (event, payload) => {
+        try {
+            const tabId = _wcIdToTabId.get(event.sender.id);
+            if (!tabId || !payload || typeof payload !== 'object') return;
+            if (!tabManager || tabManager.getActiveTabId() !== tabId) return;
+            const xNorm = Number(payload.xNorm);
+            const yNorm = Number(payload.yNorm);
+            const click = {
+                xNorm: Number.isFinite(xNorm) ? Math.max(0, Math.min(1, xNorm)) : 0.5,
+                yNorm: Number.isFinite(yNorm) ? Math.max(0, Math.min(1, yNorm)) : 0.5,
+                ts: Number(payload.ts) || Date.now(),
+            };
+            _lastPointerByTabId.set(tabId, click);
+            requestScreenshot({
+                reason: 'typing-end',
+                skipRateLimit: true,
+                meta: { tabId, click },
+            }).catch(() => {});
+        } catch {}
+    });
+    ipcMain.on('report-tab-scroll-end', (event, payload) => {
+        try {
+            const tabId = _wcIdToTabId.get(event.sender.id);
+            if (!tabId || !payload || typeof payload !== 'object') return;
+            if (!tabManager || tabManager.getActiveTabId() !== tabId) return;
+            const xNorm = Number(payload.xNorm);
+            const yNorm = Number(payload.yNorm);
+            const click = {
+                xNorm: Number.isFinite(xNorm) ? Math.max(0, Math.min(1, xNorm)) : 0.5,
+                yNorm: Number.isFinite(yNorm) ? Math.max(0, Math.min(1, yNorm)) : 0.5,
+                ts: Number(payload.ts) || Date.now(),
+            };
+            _lastPointerByTabId.set(tabId, click);
+            requestScreenshot({
+                reason: 'scroll-end',
+                skipRateLimit: true,
+                meta: { tabId, click },
+            }).catch(() => {});
+        } catch {}
+    });
 
     // ── Tab management ───────────────────────────────────────────────────────
     ipcMain.handle('new-tab', async (_, proxyRules) => {
@@ -2643,6 +3003,33 @@ app.whenReady().then(async () => {
         if (tab) {
             setupNetworkLogging(tab.view.webContents, tabId, currentSessionId);
             interceptor.attachToSession(tab.tabSession, tabId);
+        }
+        notifyCookieManagerTabs();
+        return tabId;
+    });
+
+    ipcMain.handle('open-settings-tab', async () => {
+        const settingsUrl = getInternalPageUrl('settings');
+        for (const tab of tabManager.getAllTabs()) {
+            const currentUrl = tab?.view?.webContents?.isDestroyed()
+                ? ''
+                : (tab?.view?.webContents?.getURL?.() || tab?.url || '');
+            if (currentUrl && currentUrl.includes('settings.html')) {
+                tabManager.switchTab(tab.id);
+                return tab.id;
+            }
+        }
+        const tabId = await tabManager.createTab(
+            persistentAnonymizedProxyUrl || null,
+            settingsUrl,
+            false,
+            currentSessionId
+        );
+        tabManager.switchTab(tabId);
+        const tab = tabManager.getTab(tabId);
+        if (tab) {
+            setupNetworkLogging(tab.view.webContents, tabId, currentSessionId);
+            if (interceptor) interceptor.attachToSession(tab.tabSession, tabId);
         }
         notifyCookieManagerTabs();
         return tabId;
@@ -2668,6 +3055,12 @@ app.whenReady().then(async () => {
 
     // ── Navigation ───────────────────────────────────────────────────────────
     ipcMain.on('navigate-to', (event, rawInput) => {
+        const raw = String(rawInput || '').trim();
+        const alias = raw.toLowerCase();
+        if (alias === 'cupnet://settings' || alias === 'cupnet:settings') {
+            tabManager.navigate(getInternalPageUrl('settings'));
+            return;
+        }
         const url = resolveNavigationUrl(rawInput);
         if (!url) return;
         // Always load in active tab — avoids sender-id confusion (URL bar vs new-tab)
@@ -2872,6 +3265,90 @@ app.whenReady().then(async () => {
             fs.writeFileSync(filePath, JSON.stringify(har, null, 2));
             return { success: true, path: filePath };
         } catch (e) { return { success: false, error: e.message }; }
+    });
+
+    // ── Incident bundle export/import ────────────────────────────────────────
+    ipcMain.handle('export-bundle', async (_, payload = {}) => {
+        const sid = payload.sessionId || currentSessionId || null;
+        const protectionLevel = String(payload.protectionLevel || 'Raw');
+        const requestIds = Array.isArray(payload.requestIds) ? payload.requestIds : [];
+        const { canceled, filePath } = await dialog.showSaveDialog(logViewerWindow, {
+            title: 'Export Incident Bundle',
+            defaultPath: path.join(app.getPath('downloads'), `cupnet-bundle-${sid || 'manual'}-${Date.now()}.json`),
+            filters: [{ name: 'Bundle Files', extensions: ['json', 'bundle'] }],
+        });
+        if (canceled) return { success: false, canceled: true };
+        try {
+            const bundle = bundleUtils.buildBundle({
+                db,
+                sessionId: sid,
+                requestIds,
+                protectionLevel,
+                appVersion: app.getVersion(),
+            });
+            if (payload.notes && typeof payload.notes === 'object') {
+                bundle.notes = { ...(bundle.notes || {}), ...payload.notes };
+            }
+            fs.writeFileSync(filePath, JSON.stringify(bundle, null, 2), 'utf8');
+            return {
+                success: true,
+                path: filePath,
+                stats: {
+                    requests: bundle.traffic?.requests?.length || 0,
+                    protectionLevel: bundle.meta?.protectionLevel || protectionLevel,
+                    redactedFields: bundle.meta?.redactionReport?.redactedFieldsCount || 0,
+                },
+            };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    ipcMain.handle('import-bundle', async () => {
+        const { canceled, filePaths } = await dialog.showOpenDialog(logViewerWindow, {
+            title: 'Import Incident Bundle',
+            properties: ['openFile'],
+            filters: [{ name: 'Bundle/JSON files', extensions: ['json', 'bundle'] }],
+        });
+        if (canceled || !filePaths.length) return { success: false, canceled: true };
+        try {
+            const raw = fs.readFileSync(filePaths[0], 'utf8');
+            const bundle = JSON.parse(raw);
+            const check = bundleUtils.validateBundle(bundle);
+            if (!check.ok) return { success: false, error: check.error };
+            const preview = {
+                schemaVersion: bundle.schemaVersion,
+                exportedAt: bundle.meta?.exportedAt || null,
+                protectionLevel: bundle.meta?.protectionLevel || 'Raw',
+                requests: Array.isArray(bundle.traffic?.requests) ? bundle.traffic.requests.length : 0,
+                trace: Array.isArray(bundle.traffic?.trace) ? bundle.traffic.trace.length : 0,
+            };
+            return { success: true, filePath: filePaths[0], preview, bundle };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    ipcMain.handle('diff-requests', async (_, leftId, rightId) => {
+        const left = db.getRequest(Number(leftId));
+        const right = db.getRequest(Number(rightId));
+        if (!left || !right) return { success: false, error: 'Request not found for diff' };
+        const result = diffUtils.compareRequests(left, right);
+        if (!result.ok) return { success: false, error: result.error || 'Diff error' };
+        return { success: true, diff: result };
+    });
+
+    ipcMain.handle('jsondiff-format-html', async (_, leftText, rightText) => {
+        try {
+            const mods = await loadJsonDiffModules();
+            const left = JSON.parse(String(leftText || ''));
+            const right = JSON.parse(String(rightText || ''));
+            const delta = mods.jsondiffpatch.diff(left, right);
+            const html = mods.formatter.format(delta, left);
+            return { success: true, html };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
     });
 
     // ── Replay request ───────────────────────────────────────────────────────
@@ -3365,7 +3842,10 @@ app.whenReady().then(async () => {
     });
 
     // ── Screenshots ──────────────────────────────────────────────────────────
-    ipcMain.handle('take-screenshot', async () => captureScreenshot());
+    ipcMain.handle('take-screenshot', async (_, reason, meta) => {
+        const normalizedReason = typeof reason === 'string' && reason.trim() ? reason.trim() : 'click';
+        return requestScreenshot({ reason: normalizedReason, meta });
+    });
 
     // Lazy-load single screenshot image data by DB id (avoids sending all base64 on log-viewer open)
     ipcMain.handle('get-screenshot-data', (_, id) => db.getScreenshotData(id) || null);
@@ -3497,6 +3977,54 @@ app.whenReady().then(async () => {
         } catch (e) { return { success: false, error: e.message }; }
     });
 
+    // ── DNS Overrides ────────────────────────────────────────────────────────
+    ipcMain.handle('open-dns-manager', async () => {
+        createDnsManagerWindow();
+        return true;
+    });
+
+    ipcMain.handle('dns-overrides-list', async () => {
+        return db ? db.getDnsOverrides() : [];
+    });
+
+    ipcMain.handle('dns-overrides-save', async (_, payload) => {
+        const host = String(payload?.host || '').trim().toLowerCase();
+        const ip = String(payload?.ip || '').trim();
+        const enabled = payload?.enabled !== false;
+        const id = payload?.id ? Number(payload.id) : null;
+
+        if (!isValidDnsHost(host)) return { success: false, error: 'Invalid host' };
+        if (!isValidIpv4(ip)) return { success: false, error: 'Invalid IPv4 address' };
+
+        try {
+            const savedId = db.saveDnsOverride({ id, host, ip, enabled });
+            syncDnsOverridesToMitm();
+            return { success: true, id: savedId };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    ipcMain.handle('dns-overrides-delete', async (_, id) => {
+        try {
+            db.deleteDnsOverride(Number(id));
+            syncDnsOverridesToMitm();
+            return { success: true };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    ipcMain.handle('dns-overrides-toggle', async (_, id, enabled) => {
+        try {
+            db.toggleDnsOverride(Number(id), !!enabled);
+            syncDnsOverridesToMitm();
+            return { success: true };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
     ipcMain.handle('isolate-tab', async (_, tabId) => {
         const tid = tabId || tabManager.getActiveTabId();
         const result = await tabManager.isolateTab(tid);
@@ -3605,6 +4133,124 @@ app.whenReady().then(async () => {
             liveWin.webContents.once('did-finish-load', () => sendFocus(liveWin));
         }
         return { success: true };
+    });
+
+    ipcMain.handle('open-compare-viewer', () => {
+        createCompareViewerWindow();
+        return { success: true };
+    });
+
+    ipcMain.handle('compare-get', () => {
+        return _comparePayload();
+    });
+
+    ipcMain.handle('compare-set-slot', (_, side, requestId) => {
+        const slot = String(side || '').toLowerCase();
+        const reqId = Number(requestId);
+        if (slot !== 'left' && slot !== 'right') return { success: false, error: 'Invalid side' };
+        if (!Number.isInteger(reqId) || reqId <= 0) return { success: false, error: 'Invalid request id' };
+        const req = db.getRequest(reqId);
+        if (!req) return { success: false, error: 'Request not found' };
+        comparePair[slot] = _serializeCompareRowRequest(req);
+        compareResult = null;
+        _broadcastCompareUpdated();
+        return { success: true, ..._comparePayload() };
+    });
+
+    ipcMain.handle('compare-clear-slot', (_, side) => {
+        const slot = String(side || '').toLowerCase();
+        if (slot !== 'left' && slot !== 'right') return { success: false, error: 'Invalid side' };
+        comparePair[slot] = null;
+        compareResult = null;
+        _broadcastCompareUpdated();
+        return { success: true, ..._comparePayload() };
+    });
+
+    ipcMain.handle('compare-run', (_, options = {}) => {
+        if (!comparePair.left || !comparePair.right) {
+            return { success: false, error: 'Need both left and right anchors' };
+        }
+        const level = ['quick', 'standard', 'deep'].includes(String(options.level || '').toLowerCase())
+            ? String(options.level).toLowerCase()
+            : 'standard';
+        const LEFT_COUNT = level === 'quick' ? 12 : (level === 'deep' ? 30 : 20);
+        const RIGHT_SEARCH = level === 'quick' ? 60 : (level === 'deep' ? 140 : 100);
+
+        const leftReqs = _requestsForSessionAsc(comparePair.left.session_id);
+        const rightReqs = _requestsForSessionAsc(comparePair.right.session_id);
+        const leftPos = leftReqs.findIndex(r => Number(r.id) === Number(comparePair.left.id));
+        const rightPos = rightReqs.findIndex(r => Number(r.id) === Number(comparePair.right.id));
+
+        const leftSlice = leftReqs.slice(Math.max(0, leftPos), leftPos + LEFT_COUNT);
+        const rightPool = rightReqs.slice(Math.max(0, rightPos), rightPos + RIGHT_SEARCH);
+
+        const leftList = leftSlice.map(r => _serializeCompareRowRequest(r));
+        const rightUsed = new Set();
+        const pairs = [];
+
+        for (let i = 0; i < leftSlice.length; i++) {
+            let best = { idx: -1, score: -Infinity, exactKey: false };
+            for (let j = 0; j < rightPool.length; j++) {
+                if (rightUsed.has(j)) continue;
+                const s = _pairScore(leftSlice[i], rightPool[j], i, j, level);
+                if (!s.acceptable) continue;
+                if (s.score > best.score) best = { idx: j, score: s.score, exactKey: s.exactKey };
+            }
+            if (best.idx >= 0) {
+                rightUsed.add(best.idx);
+                const leftCmp = _reqWithCompareOptions(leftSlice[i], options);
+                const rightCmp = _reqWithCompareOptions(rightPool[best.idx], options);
+                const cmp = diffUtils.compareRequests(leftCmp, rightCmp);
+                pairs.push({
+                    type: 'match',
+                    leftIndex: i,
+                    rightId: rightPool[best.idx].id,
+                    left: _serializeCompareRowRequest(leftSlice[i]),
+                    right: _serializeCompareRowRequest(rightPool[best.idx]),
+                    diff: cmp?.ok ? cmp : null,
+                    summary: cmp?.summary || null,
+                    score: best.score,
+                    confidence: _confidence(best.score, best.exactKey),
+                });
+            } else {
+                pairs.push({
+                    type: 'missing-right',
+                    leftIndex: i,
+                    left: _serializeCompareRowRequest(leftSlice[i]),
+                    right: null, diff: null, summary: null,
+                });
+            }
+        }
+
+        const rightList = rightPool.map((r, j) => {
+            const ser = _serializeCompareRowRequest(r);
+            ser._paired = rightUsed.has(j);
+            return ser;
+        });
+
+        for (let j = 0; j < rightPool.length; j++) {
+            if (!rightUsed.has(j)) {
+                pairs.push({
+                    type: 'missing-left',
+                    leftIndex: -1,
+                    left: null,
+                    right: _serializeCompareRowRequest(rightPool[j]),
+                    diff: null, summary: null,
+                });
+            }
+        }
+
+        compareResult = {
+            options: {
+                level,
+                removeNoiseHeaders: !!options.removeNoiseHeaders,
+            },
+            leftList,
+            rightList,
+            pairs,
+        };
+        _broadcastCompareUpdated();
+        return { success: true, ..._comparePayload() };
     });
 
     ipcMain.handle('open-jsonl-file', async () => {
@@ -3804,12 +4450,18 @@ app.whenReady().then(async () => {
     });
 
     ipcMain.handle('set-auto-screenshot', async (_, seconds) => {
-        const sec = Math.max(0, Math.min(60, Number(seconds) || 0));
         const s = loadSettings();
-        s.autoScreenshot = sec;
+        s.autoScreenshot = Math.max(0, Math.min(60, Number(seconds) || 0)); // legacy compatibility
         saveSettings(s);
-        toggleAutoScreenshot(sec);
         return true;
+    });
+
+    ipcMain.handle('get-tracking-settings', () => getTrackingSettings());
+    ipcMain.handle('save-tracking-settings', (_, cfg) => {
+        const s = loadSettings();
+        s.tracking = normalizeTrackingSettings(cfg);
+        saveSettings(s);
+        return s.tracking;
     });
 
     ipcMain.handle('save-filter-patterns', async (_, patterns) => {
@@ -4187,8 +4839,11 @@ app.on('will-quit', () => {
         if (q.timer) clearTimeout(q.timer);
     }
     _interceptIpcQueues.clear();
+    for (const q of _dnsIpcQueues.values()) {
+        if (q.timer) clearTimeout(q.timer);
+    }
+    _dnsIpcQueues.clear();
     if (logStatusInterval) clearInterval(logStatusInterval);
-    if (screenshotTimer) clearInterval(screenshotTimer);
     if (_saveSettingsTimer) { clearTimeout(_saveSettingsTimer); _saveSettingsTimer = null; }
     if (_consoleBatchTimer) { clearTimeout(_consoleBatchTimer); _consoleBatchTimer = null; }
     if (_notifyTabsTimer) { clearTimeout(_notifyTabsTimer); _notifyTabsTimer = null; }

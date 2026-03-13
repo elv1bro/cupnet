@@ -540,6 +540,8 @@ select:focus { border-color: var(--accent); }
     width: 2px; background: var(--accent);
 }
 .lv-row.lv-error { background: rgba(239,68,68,0.06); }
+.lv-row.lv-row-mock { background: rgba(245,158,11,0.06); }
+.lv-row.lv-row-mock:hover { background: rgba(245,158,11,0.12) !important; }
 
 .lv-td {
     display: flex; align-items: center;
@@ -617,6 +619,18 @@ select:focus { border-color: var(--accent); }
     background: #7c3aed; color: #e9d5ff;
     margin-right: 4px; vertical-align: middle;
     letter-spacing: 0.5px;
+    flex-shrink: 0;
+}
+.mock-badge {
+    display: inline-block;
+    font-size: 8px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(245,158,11,0.22);
+    color: #fbbf24;
+    margin-right: 4px;
+    letter-spacing: 0.4px;
     flex-shrink: 0;
 }
 
@@ -1009,18 +1023,175 @@ select:focus { border-color: var(--accent); }
 .ss-action-bar { display: flex; gap: 6px; margin-bottom: 8px; }
 
 /* Screenshot row in list */
-.lv-row-screenshot { background: rgba(34,197,94,0.04); }
-.lv-row-screenshot:hover { background: rgba(34,197,94,0.08) !important; }
+.lv-row-screenshot {
+    background: rgba(34,197,94,0.10);
+    box-shadow: inset 2px 0 0 rgba(74,222,128,0.75);
+}
+.lv-row-screenshot:hover { background: rgba(34,197,94,0.16) !important; }
+.lv-row-screenshot .lv-path { color: #e7fbe9; font-weight: 600; }
 .type-screenshot { background: rgba(34,197,94,0.15) !important; color: #4ade80 !important; border-color: rgba(34,197,94,0.3) !important; }
+.type-ss-trigger { background: rgba(59,130,246,0.16) !important; color: #93c5fd !important; border-color: rgba(59,130,246,0.3) !important; }
+.ss-row-badge {
+    font-size: 11px;
+    font-weight: 700;
+    margin-right: 6px;
+    opacity: 1;
+    color: #86efac;
+    text-shadow: 0 0 8px rgba(34,197,94,0.35);
+    flex-shrink: 0;
+}
 .ss-row-thumb { display: flex; align-items: center; gap: 8px; }
 .ss-thumb {
     width: 48px; height: 28px; object-fit: cover;
     border-radius: 4px; border: 1px solid rgba(34,197,94,0.3);
     flex-shrink: 0; opacity: 0.85;
 }
+.ss-preview-wrap {
+    position: relative;
+    display: inline-block;
+    overflow: hidden;
+    border-radius: 6px;
+    cursor: zoom-in;
+}
+.ss-zoom-stage {
+    position: relative;
+    transform-origin: var(--ss-ox, 50%) var(--ss-oy, 50%);
+    transform: scale(var(--ss-zoom, 1));
+    transition: transform 120ms ease-out;
+    will-change: transform;
+}
+.ss-click-marker {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    margin-left: -6px;
+    margin-top: -6px;
+    border-radius: 50%;
+    border: 2px solid #f59e0b;
+    background: rgba(245,158,11,0.22);
+    box-shadow: 0 0 0 2px rgba(0,0,0,0.35);
+    pointer-events: none;
+}
+.ss-click-marker::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 4px;
+    height: 4px;
+    margin-left: -2px;
+    margin-top: -2px;
+    border-radius: 50%;
+    background: #fbbf24;
+}
+.ss-trigger-pill {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 99px;
+    background: rgba(59,130,246,0.16);
+    color: #93c5fd;
+    border: 1px solid rgba(59,130,246,0.28);
+}
 
 /* Empty body */
 .body-empty { padding: 16px 14px; color: var(--text-dim); font-size: 12px; font-style: italic; }
+
+.cmp-side-picker {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+}
+.cmp-side-btn {
+    flex: 1;
+    border: 1px solid var(--border);
+    background: var(--bg2);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 14px 10px;
+    text-align: center;
+    cursor: pointer;
+    font-size: 12px;
+}
+.cmp-side-btn:hover { border-color: var(--accent); color: var(--text-hi); }
+.cmp-side-btn .side-label { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+.cmp-side-btn .side-info { font-size: 10px; color: var(--text-dim); }
+#lv-add-to-compare,
+#lv-open-compare {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 5px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 11px;
+    cursor: pointer;
+}
+#lv-add-to-compare:hover,
+#lv-open-compare:hover { border-color: var(--accent); color: var(--text-hi); }
+
+/* ── Overlay dialogs ──────────────────────────────────────────────────────── */
+.lv-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 20000;
+}
+.lv-overlay.visible { display: flex; }
+.lv-dialog {
+    width: min(420px, calc(100vw - 24px));
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+    padding: 12px;
+}
+.lv-dialog-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-hi);
+    margin-bottom: 8px;
+}
+.lv-dialog-note {
+    color: var(--text-dim);
+    font-size: 11px;
+    margin-bottom: 10px;
+}
+.lv-dialog-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 10px;
+}
+.lv-radio-grid {
+    display: grid;
+    gap: 8px;
+}
+.lv-radio-card {
+    border: 1px solid var(--border2);
+    border-radius: 7px;
+    padding: 8px 10px;
+    background: var(--bg0);
+    cursor: pointer;
+}
+.lv-radio-card:has(input:checked) {
+    border-color: var(--accent);
+    background: rgba(59, 126, 248, 0.12);
+}
+.lv-radio-card input { margin-right: 6px; }
+.lv-radio-sub {
+    display: block;
+    margin-left: 20px;
+    margin-top: 2px;
+    color: var(--text-dim);
+    font-size: 10.5px;
+}
     </style>
 </head>
 <body>
@@ -1089,6 +1260,9 @@ select:focus { border-color: var(--accent); }
     <label class="fts-toggle" id="hide-options-wrap" title="Hide OPTIONS (preflight) requests">
         <input type="checkbox" id="hide-options-checkbox"> Hide OPTIONS
     </label>
+    <label class="fts-toggle" id="hide-screenshot-wrap" title="Hide screenshot entries">
+        <input type="checkbox" id="hide-screenshot-checkbox"> Hide Screenshot
+    </label>
 
     <!-- Status multi-select -->
     <div class="ms-wrap" id="ms-status">
@@ -1128,6 +1302,8 @@ select:focus { border-color: var(--accent); }
     <button class="lv-btn" id="lv-rec-btn" title="Toggle recording on/off">⏺ Rec</button>
     <button class="lv-btn active" id="auto-scroll-btn" title="Toggle auto-scroll to latest">↓ Live</button>
     <button class="lv-btn" id="export-har-btn" title="Export as HAR">⬇ HAR</button>
+    <button class="lv-btn" id="export-bundle-btn" title="Export incident bundle with redaction level">⬇ Bundle</button>
+    <button class="lv-btn" id="import-bundle-btn" title="Import incident bundle">⬆ Bundle</button>
     <button class="lv-btn" id="trace-mode-btn" title="Trace: full req/res to DB. ⌘/Ctrl+click to open Trace window">📋 Trace</button>
     <button class="lv-btn" id="open-rules-btn" title="Rules & Interceptor">⚙ Rules</button>
     <button class="lv-btn danger" id="clear-logs" title="Clear all log entries">✕ Clear</button>
@@ -1211,6 +1387,8 @@ select:focus { border-color: var(--accent); }
             <div id="lv-replay-bar">
                 <button id="lv-replay-btn">✏ Request Editor</button>
                 <button id="lv-copy-url">⧉ Copy URL</button>
+                <button id="lv-add-to-compare">Add to Compare</button>
+                <button id="lv-open-compare">Open Compare Window</button>
                 <button id="lv-create-mock-btn" title="Create mock intercept rule from this response">⚡ Mock Rule</button>
                 <span id="lv-replay-diff"></span>
             </div>
@@ -1342,6 +1520,42 @@ select:focus { border-color: var(--accent); }
 
 <!-- hidden inputs kept for compatibility -->
 <input type="text" id="request-body-hidden" style="display:none">
+
+<div id="protection-modal" class="lv-overlay">
+    <div class="lv-dialog">
+        <div class="lv-dialog-title">Export bundle protection</div>
+        <div class="lv-dialog-note">Choose redaction level (default: Raw).</div>
+        <div class="lv-radio-grid">
+            <label class="lv-radio-card">
+                <input type="radio" name="protection-level" value="Raw" checked> Raw
+                <span class="lv-radio-sub">No masking. Maximum fidelity.</span>
+            </label>
+            <label class="lv-radio-card">
+                <input type="radio" name="protection-level" value="Balanced"> Balanced
+                <span class="lv-radio-sub">Mask secrets/PII but keep structure.</span>
+            </label>
+            <label class="lv-radio-card">
+                <input type="radio" name="protection-level" value="Strict"> Strict
+                <span class="lv-radio-sub">Aggressive masking, body summary/hash only.</span>
+            </label>
+        </div>
+        <div class="lv-dialog-actions">
+            <button class="lv-btn" id="protection-cancel-btn">Cancel</button>
+            <button class="lv-btn active" id="protection-confirm-btn">Export</button>
+        </div>
+    </div>
+</div>
+
+<div id="compare-side-modal" class="lv-overlay">
+    <div class="lv-dialog" style="width:min(340px,calc(100vw - 24px))">
+        <div class="lv-dialog-title">Add to Compare</div>
+        <div class="lv-dialog-note">Place this request as Left (A) or Right (B).</div>
+        <div id="compare-side-picker" class="cmp-side-picker"></div>
+        <div class="lv-dialog-actions">
+            <button class="lv-btn" id="compare-side-cancel-btn">Cancel</button>
+        </div>
+    </div>
+</div>
 
 <script src="log-viewer-renderer.js"></script>
 </body>
