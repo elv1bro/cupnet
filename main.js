@@ -87,6 +87,7 @@ const {
 } = require('./utils');
 const bundleUtils = require('./bundle-utils');
 const diffUtils = require('./diff-utils');
+const { solveTurnstileWithCapMonster, CaptchaSolverError } = require('./captcha-solver');
 
 // Re-export shouldFilterUrl under the same name used throughout this file
 const shouldFilterUrl = _shouldFilterUrl;
@@ -653,6 +654,13 @@ const SETTINGS_DEFAULTS = {
             'challenges.cloudflare.com', '*.hcaptcha.com',
         ],
     },
+    capmonster: {
+        apiKey: '',
+        autoInject: true,
+        autoSubmit: false,
+        pollTimeoutMs: 90000,
+        pollIntervalMs: 3000,
+    },
 };
 
 function loadSettings() {
@@ -665,13 +673,18 @@ function loadSettings() {
                 ...raw,
                 trafficOpts: { ...SETTINGS_DEFAULTS.trafficOpts, ...(raw.trafficOpts || {}) },
                 tracking: normalizeTrackingSettings(raw.tracking),
+                capmonster: normalizeCapmonsterSettings(raw.capmonster),
             };
             return cachedSettings;
         }
     } catch (e) {
         sysLog('warn', 'settings', 'Failed to load settings: ' + e.message);
     }
-    cachedSettings = { ...SETTINGS_DEFAULTS, tracking: normalizeTrackingSettings() };
+    cachedSettings = {
+        ...SETTINGS_DEFAULTS,
+        tracking: normalizeTrackingSettings(),
+        capmonster: normalizeCapmonsterSettings(),
+    };
     return cachedSettings;
 }
 
@@ -701,6 +714,29 @@ function normalizeTrackingSettings(raw) {
         cooldownMs: Math.max(200, Math.min(30000, Number(src.cooldownMs) || base.cooldownMs)),
         maxPerMinute: Math.max(1, Math.min(120, Number(src.maxPerMinute) || base.maxPerMinute)),
     };
+}
+
+function normalizeCapmonsterSettings(raw) {
+    const base = SETTINGS_DEFAULTS.capmonster;
+    const src = raw && typeof raw === 'object' ? raw : {};
+    return {
+        apiKey: String(src.apiKey || '').trim(),
+        autoInject: src.autoInject !== false,
+        autoSubmit: src.autoSubmit === true,
+        pollTimeoutMs: Math.max(30000, Math.min(180000, Number(src.pollTimeoutMs) || base.pollTimeoutMs)),
+        pollIntervalMs: Math.max(1000, Math.min(10000, Number(src.pollIntervalMs) || base.pollIntervalMs)),
+    };
+}
+
+function getCapmonsterSettings() {
+    const s = loadSettings();
+    if (!s.capmonster || typeof s.capmonster !== 'object') {
+        s.capmonster = normalizeCapmonsterSettings();
+        saveSettings(s);
+    } else {
+        s.capmonster = normalizeCapmonsterSettings(s.capmonster);
+    }
+    return s.capmonster;
 }
 
 function getTrackingSettings() {
@@ -2179,6 +2215,15 @@ const _analyzeFormsScript = `function(){
 
 const _analyzeCaptchaScript = `function(){
     var r = { recaptcha: [], hcaptcha: [], turnstile: [], other: [], pageUrl: location.href };
+    function addTurnstile(item){
+        if(!item) return;
+        var sk = String(item.sitekey || '');
+        var frame = String(item.iframeSrc || '');
+        var ex = r.turnstile.some(function(x){
+            return String(x.sitekey||'')===sk && String(x.iframeSrc||'')===frame && String(x.selector||'')===String(item.selector||'');
+        });
+        if(!ex) r.turnstile.push(item);
+    }
 
     /* ── reCAPTCHA v2 (widget divs) ── */
     document.querySelectorAll('.g-recaptcha, [data-sitekey]').forEach(function(el){
@@ -2254,7 +2299,29 @@ const _analyzeCaptchaScript = `function(){
             }
         }
         if(src.includes('challenges.cloudflare.com/turnstile')){
-            if(!r.turnstile.length) r.turnstile.push({sitekey:'',action:'',cData:'',theme:'auto',size:'normal',selector:'script[src*=turnstile]',iframe:false});
+            if(!r.turnstile.length) addTurnstile({sitekey:'',action:'',cData:'',theme:'auto',size:'normal',selector:'script[src*=turnstile]',iframe:false});
+        }
+
+        var txt = '';
+        try { txt = (s.textContent || '').slice(0, 40000); } catch {}
+        if(!txt) return;
+        if(txt.indexOf('turnstile') === -1 && txt.indexOf('sitekey') === -1) return;
+        var mSitekey = txt.match(/sitekey\\s*[:=]\\s*['"]([0-9a-zA-Z_-]{10,})['"]/i);
+        if(!mSitekey){
+            mSitekey = txt.match(/['"]sitekey['"]\\s*[:,]\\s*['"]([0-9a-zA-Z_-]{10,})['"]/i);
+        }
+        var mAction = txt.match(/action\\s*[:=]\\s*['"]([^'"]{1,80})['"]/i);
+        var mCdata = txt.match(/cData\\s*[:=]\\s*['"]([^'"]{1,200})['"]/i);
+        if(mSitekey && mSitekey[1]){
+            addTurnstile({
+                sitekey: mSitekey[1] || '',
+                action: mAction ? mAction[1] : '',
+                cData: mCdata ? mCdata[1] : '',
+                theme: 'auto',
+                size: 'normal',
+                selector: 'script:inline:turnstile',
+                iframe: false
+            });
         }
     });
 
@@ -3459,6 +3526,284 @@ app.whenReady().then(async () => {
         } catch { return {}; }
     });
 
+    async function injectTurnstileTokenToTab(tabId, payload = {}) {
+        const tab = tabManager.getTab(tabId);
+        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) {
+            return { injected: false, submitted: false, updatedCount: 0, reason: 'tab-not-found' };
+        }
+        const tokenLiteral = JSON.stringify(String(payload.token || ''));
+        const sitekeyLiteral = JSON.stringify(String(payload.sitekey || ''));
+        const actionLiteral = JSON.stringify(String(payload.action || ''));
+        const autoSubmitLiteral = payload.autoSubmit === true ? 'true' : 'false';
+        const script = `(function(){
+            var token = ${tokenLiteral};
+            var sitekey = ${sitekeyLiteral};
+            var action = ${actionLiteral};
+            var autoSubmit = ${autoSubmitLiteral};
+            if (!token) return { injected:false, submitted:false, updatedCount:0, reason:'missing-token' };
+            var updated = 0;
+            var callbacksInvoked = 0;
+            var forms = [];
+            var callbackFns = [];
+            var callbackNames = [];
+            function safePushCallback(fn, name){
+                if (typeof fn !== 'function') return;
+                if (callbackFns.indexOf(fn) !== -1) return;
+                callbackFns.push(fn);
+                callbackNames.push(name || 'anonymous');
+            }
+            function setNativeValue(inp, value) {
+                try {
+                    var proto = (inp && inp.tagName === 'TEXTAREA') ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                    var desc = Object.getOwnPropertyDescriptor(proto, 'value');
+                    if (desc && typeof desc.set === 'function') {
+                        desc.set.call(inp, value);
+                        return;
+                    }
+                } catch {}
+                try { inp.value = value; } catch {}
+            }
+            function markInput(inp) {
+                if (!inp) return;
+                try {
+                    setNativeValue(inp, token);
+                    inp.setAttribute('value', token);
+                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                    inp.dispatchEvent(new Event('blur', { bubbles: true }));
+                    updated++;
+                    if (inp.form && forms.indexOf(inp.form) === -1) forms.push(inp.form);
+                } catch {}
+            }
+            function all(sel) {
+                try { return Array.from(document.querySelectorAll(sel)); } catch { return []; }
+            }
+            all('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]').forEach(markInput);
+            all('input[id$="_response"], textarea[id$="_response"]').forEach(function(el){
+                var id = String(el.id || '').toLowerCase();
+                if (id.indexOf('cf-chl-widget-') === 0) markInput(el);
+            });
+            all('.cf-turnstile, [data-turnstile-widget-id]').forEach(function(node){
+                var nodeSitekey = String(node.getAttribute('data-sitekey') || '');
+                var nodeAction = String(node.getAttribute('data-action') || '');
+                var cbName = String(node.getAttribute('data-callback') || '').trim();
+                if (cbName && typeof window[cbName] === 'function') safePushCallback(window[cbName], cbName);
+                if (sitekey && nodeSitekey && sitekey !== nodeSitekey) return;
+                if (action && nodeAction && action !== nodeAction) return;
+                var form = node.closest('form');
+                var holder = form || node.parentElement || document.body;
+                if (!holder) return;
+                var hidden = holder.querySelector('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]');
+                if (!hidden) {
+                    hidden = document.createElement('input');
+                    hidden.type = 'hidden';
+                    hidden.name = 'cf-turnstile-response';
+                    holder.appendChild(hidden);
+                }
+                markInput(hidden);
+            });
+
+            try {
+                var knownCbNames = ['onTurnstileSuccess', 'turnstileCallback', 'onCaptchaSolved', 'onCaptchaSuccess'];
+                knownCbNames.forEach(function(name){
+                    if (typeof window[name] === 'function') safePushCallback(window[name], name);
+                });
+            } catch {}
+
+            try {
+                var cfg = window.___turnstile_cfg;
+                var clients = cfg && cfg.clients ? cfg.clients : null;
+                var visited = [];
+                function walk(obj, depth) {
+                    if (!obj || depth > 6) return;
+                    if (visited.indexOf(obj) !== -1) return;
+                    visited.push(obj);
+                    var keys = [];
+                    try { keys = Object.keys(obj); } catch { return; }
+                    for (var i = 0; i < keys.length; i++) {
+                        var k = keys[i];
+                        var v = obj[k];
+                        if (!v) continue;
+                        if (typeof v === 'function') continue;
+                        if (typeof v === 'object') {
+                            try {
+                                if (typeof v.callback === 'function') {
+                                    var sk = String(v.sitekey || v.siteKey || '');
+                                    var ac = String(v.action || '');
+                                    var skOk = !sitekey || !sk || sk === sitekey;
+                                    var acOk = !action || !ac || ac === action;
+                                    if (skOk && acOk) safePushCallback(v.callback, '___turnstile_cfg.callback');
+                                }
+                            } catch {}
+                            walk(v, depth + 1);
+                        }
+                    }
+                }
+                if (clients && typeof clients === 'object') walk(clients, 0);
+            } catch {}
+
+            callbackFns.forEach(function(fn){
+                try {
+                    fn(token);
+                    callbacksInvoked++;
+                } catch {}
+            });
+            var submitted = false;
+            if (autoSubmit) {
+                var form = forms.find(function(f){ return !!f; }) || document.querySelector('form');
+                if (form) {
+                    try {
+                        if (typeof form.requestSubmit === 'function') form.requestSubmit();
+                        else form.submit();
+                        submitted = true;
+                    } catch {}
+                }
+            }
+            var injected = updated > 0 || callbacksInvoked > 0;
+            return {
+                injected: injected,
+                submitted: submitted,
+                updatedCount: updated,
+                callbacksInvoked: callbacksInvoked,
+                reason: injected ? 'ok' : 'no-input-found'
+            };
+        })()`;
+        try {
+            return await tab.view.webContents.executeJavaScript(script);
+        } catch {
+            return { injected: false, submitted: false, updatedCount: 0, reason: 'script-execution-failed' };
+        }
+    }
+
+    function formatSolverError(err) {
+        const fallback = { code: 'SOLVER_ERROR', message: 'Unknown solver error', retryable: true };
+        if (!err) return fallback;
+        const code = String(err.code || 'SOLVER_ERROR');
+        const message = String(err.message || fallback.message);
+        const nonRetryable = new Set(['MISSING_API_KEY', 'INVALID_API_KEY', 'MISSING_PAGE_URL', 'MISSING_SITEKEY', 'TASK_NOT_SUPPORTED']);
+        return {
+            code,
+            message,
+            retryable: !nonRetryable.has(code),
+            details: err.details || {},
+        };
+    }
+
+    function extractTurnstileSitekey(item = {}) {
+        const direct = String(item.sitekey || '').trim();
+        if (direct) return direct;
+        const iframeSrc = String(item.iframeSrc || '').trim();
+        if (!iframeSrc) return '';
+        try {
+            const u = new URL(iframeSrc);
+            return String(
+                u.searchParams.get('k')
+                || u.searchParams.get('sitekey')
+                || u.searchParams.get('render')
+                || ''
+            ).trim();
+        } catch {
+            return '';
+        }
+    }
+
+    async function discoverTurnstilePayloadFromPage(tabId, fallbackPayload = {}) {
+        const tab = tabManager.getTab(tabId);
+        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return fallbackPayload;
+        const base = { ...(fallbackPayload || {}) };
+        if (!base.pageUrl) {
+            try { base.pageUrl = tab.view.webContents.getURL() || tab.url || ''; } catch {}
+        }
+        if (base.sitekey) return base;
+        try {
+            const data = await tab.view.webContents.executeJavaScript(`(${_analyzeCaptchaScript})()`);
+            const turns = Array.isArray(data?.turnstile) ? data.turnstile : [];
+            const item = turns.find(x => extractTurnstileSitekey(x)) || turns[0] || {};
+            const discoveredSitekey = extractTurnstileSitekey(item);
+            return {
+                ...base,
+                sitekey: discoveredSitekey || base.sitekey || '',
+                action: base.action || item.action || '',
+                cData: base.cData || item.cData || '',
+                iframeSrc: base.iframeSrc || item.iframeSrc || '',
+                pageUrl: base.pageUrl || data?.pageUrl || '',
+            };
+        } catch {
+            return base;
+        }
+    }
+
+    ipcMain.handle('get-capmonster-settings', () => getCapmonsterSettings());
+    ipcMain.handle('save-capmonster-settings', (_, cfg) => {
+        const s = loadSettings();
+        s.capmonster = normalizeCapmonsterSettings({ ...(s.capmonster || {}), ...(cfg || {}) });
+        saveSettings(s);
+        return s.capmonster;
+    });
+    ipcMain.handle('inject-turnstile-token', async (_, tabId, payload) => {
+        return await injectTurnstileTokenToTab(tabId, payload || {});
+    });
+    ipcMain.handle('solve-turnstile-captcha', async (_, tabId, captcha, options = {}) => {
+        try {
+            const tab = tabManager.getTab(tabId);
+            if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) {
+                return { ok: false, error: { code: 'TAB_NOT_FOUND', message: 'Target tab not found.', retryable: false } };
+            }
+            const settings = getCapmonsterSettings();
+            const merged = {
+                ...settings,
+                ...(options || {}),
+                apiKey: String((options && options.apiKey) || settings.apiKey || '').trim(),
+            };
+            const hydratedCaptcha = await discoverTurnstilePayloadFromPage(tabId, {
+                ...(captcha || {}),
+                sitekey: extractTurnstileSitekey(captcha || {}),
+            });
+            const pageUrl = String(hydratedCaptcha.pageUrl || tab.url || tab.view.webContents.getURL() || '');
+            const sitekey = String(hydratedCaptcha.sitekey || '');
+            const action = String(hydratedCaptcha.action || '');
+            const cData = String(hydratedCaptcha.cData || '');
+            const userAgent = String(tab.view.webContents.getUserAgent() || '');
+
+            const solved = await solveTurnstileWithCapMonster({
+                apiKey: merged.apiKey,
+                pageUrl,
+                sitekey,
+                action,
+                cData,
+                userAgent,
+                timeoutMs: merged.pollTimeoutMs,
+                pollIntervalMs: merged.pollIntervalMs,
+            });
+
+            let injectResult = { injected: false, submitted: false, updatedCount: 0, reason: 'auto-inject-disabled' };
+            if (merged.autoInject) {
+                injectResult = await injectTurnstileTokenToTab(tabId, {
+                    token: solved.token,
+                    sitekey,
+                    action,
+                    autoSubmit: merged.autoSubmit === true,
+                });
+            }
+
+            return {
+                ok: true,
+                token: solved.token,
+                taskId: solved.taskId,
+                cost: solved.cost,
+                solveCount: solved.solveCount,
+                createdAt: solved.createdAt,
+                endedAt: solved.endedAt,
+                inject: injectResult,
+            };
+        } catch (err) {
+            if (err instanceof CaptchaSolverError) {
+                return { ok: false, error: formatSolverError(err) };
+            }
+            return { ok: false, error: formatSolverError(new CaptchaSolverError('SOLVER_ERROR', err?.message || 'Unknown solver error')) };
+        }
+    });
+
     ipcMain.handle('analyze-page-meta', async (_, tabId) => {
         const tab = tabManager.getTab(tabId);
         if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return {};
@@ -4432,6 +4777,7 @@ app.whenReady().then(async () => {
             bypassDomains:   s.bypassDomains || [],
             trafficOpts:     s.trafficOpts || {},
             tracking:        getTrackingSettings(),
+            capmonster:      getCapmonsterSettings(),
         };
     });
 
