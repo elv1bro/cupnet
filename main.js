@@ -26,7 +26,7 @@ if (fs.existsSync(caPath)) {
     process.env.NODE_EXTRA_CA_CERTS = caPath;
 }
 
-const { sysLog, flushOnExit, initIPC: initSysLogIPC } = require('./sys-log');
+const { sysLog, safeCatch, flushOnExit, initIPC: initSysLogIPC } = require('./sys-log');
 
 const {
     app, BrowserWindow, ipcMain, session, Menu, dialog,
@@ -67,6 +67,16 @@ app.on('second-instance', () => {
     }
 });
 
+process.on('unhandledRejection', (reason) => {
+    const msg = reason instanceof Error ? reason.stack || reason.message : String(reason);
+    sysLog('error', 'process', 'unhandledRejection: ' + msg);
+});
+
+process.on('uncaughtException', (err) => {
+    const msg = err instanceof Error ? err.stack || err.message : String(err);
+    sysLog('critical', 'process', 'uncaughtException: ' + msg);
+});
+
 // ─── Module imports (loaded after app.whenReady for safeStorage) ─────────────
 let db          = null;
 let tabManager  = null;
@@ -88,6 +98,8 @@ const {
 const bundleUtils = require('./bundle-utils');
 const diffUtils = require('./diff-utils');
 const { solveTurnstileWithCapMonster, CaptchaSolverError } = require('./captcha-solver');
+const { networkPolicy } = require('./network-policy');
+const { ProxyResilienceManager } = require('./proxy-resilience');
 
 // Re-export shouldFilterUrl under the same name used throughout this file
 const shouldFilterUrl = _shouldFilterUrl;
@@ -110,6 +122,7 @@ async function startMitmProxy() {
                 if (active && !active.direct) tabId = active.id;
             }
             const sessionId = entry.sessionId != null ? entry.sessionId : currentSessionId;
+            _recordLatencySample(entry.duration);
             if (entry?.dnsOverride?.host && entry?.dnsOverride?.ip) {
                 broadcastDnsRuleMatched({
                     ruleName: `${entry.dnsOverride.host} -> ${entry.dnsOverride.ip}`,
@@ -141,13 +154,18 @@ async function startMitmProxy() {
                         browser: s.tlsProfile || 'chrome',
                         proxy: persistentAnonymizedProxyUrl ? '(set)' : null,
                     };
-                    const traceId = db.insertTraceEntry(traceRow);
-                    if (traceId && traceWindows.length > 0) {
+                    const insertPromise = typeof db.insertTraceEntryQueued === 'function'
+                        ? db.insertTraceEntryQueued(traceRow)
+                        : db.insertTraceEntryAsync(traceRow);
+                    insertPromise.then((traceId) => {
+                        if (!traceId || traceWindows.length === 0) return;
                         const summary = { id: traceId, ts: traceRow.ts, method: entry.method, url: entry.url, status: entry.status, duration_ms: entry.duration };
                         for (const w of traceWindows) {
                             if (!w.isDestroyed()) w.webContents.send('new-trace-entry', summary);
                         }
-                    }
+                    }).catch((err) => {
+                        safeCatch({ module: 'main', eventCode: 'db.write.failed', context: { op: 'insertTraceEntryQueued' } }, err);
+                    });
                 } catch (e) { console.error('[trace] insert failed:', e.message); }
             }
 
@@ -192,7 +210,7 @@ async function startMitmProxy() {
                     responseBody: entry.responseBody || null,
                 };
                 const sessId = parseInt(String(sessionId), 10) || sessionId;
-                const dbId = db.insertRequest(sessId, tabId, {
+                db.insertRequestAsync(sessId, tabId, {
                     requestId: entry.requestId || logEntry.id,
                     url: logEntry.url,
                     method: logEntry.method,
@@ -203,15 +221,43 @@ async function startMitmProxy() {
                     responseHeaders: logEntry.response?.headers,
                     requestBody: entry.requestBody || null,
                     responseBody: logEntry.responseBody,
+                }).then((dbId) => {
+                    if (dbId) logEntry.id = dbId;
+                    logEntryCount++;
+                    _broadcastLogEntryToViewers({ ...logEntry, tabId, sessionId: sessId });
+                }).catch((err) => {
+                    console.error('[main] MITM log insert failed:', err?.message || err);
                 });
-                if (dbId) logEntry.id = dbId;
-                logEntryCount++;
-                _broadcastLogEntryToViewers({ ...logEntry, tabId, sessionId: sessId });
             } catch (e) {
                 console.error('[main] MITM log insert failed:', e.message);
             }
         },
     });
+    if (mitmProxy?.worker) {
+        mitmProxy.worker.on('worker-exited', (ev) => {
+            stabilityMetrics.gauges.workerRestarts = Number(ev?.restartCount) || stabilityMetrics.gauges.workerRestarts;
+            emitStabilityEvent('warn', 'worker.exited', {
+                code: ev?.code ?? null,
+                restartInMs: ev?.delayMs ?? null,
+                restartCount: ev?.restartCount ?? null,
+            });
+        });
+        mitmProxy.worker.on('worker-ready', () => {
+            emitStabilityEvent('info', 'worker.ready');
+        });
+        mitmProxy.worker.on('worker-request-timeout', (ev) => {
+            stabilityMetrics.counters.workerTimeouts++;
+            emitStabilityEvent('warn', 'worker.request_timeout', {
+                timeoutMs: ev?.timeoutMs ?? null,
+                requestId: ev?.id || '',
+            });
+        });
+        mitmProxy.worker.on('worker-overloaded', (ev) => {
+            stabilityMetrics.counters.workerOverloaded++;
+            if (ev?.queueDepth != null) stabilityMetrics.gauges.queueDepth = ev.queueDepth;
+            emitStabilityEvent('warn', 'worker.overloaded', ev || {});
+        });
+    }
     await mitmProxy.start();
     console.log('[main] MITM proxy started on', mitmProxy.getProxyUrl());
     return mitmProxy;
@@ -243,7 +289,11 @@ app.commandLine.appendSwitch('proxy-server', 'http=127.0.0.1:8877;https=127.0.0.
 {
     const earlySettingsPath = path.join(app.getPath('userData'), 'settings.json');
     let earlyBypass = [];
-    try { earlyBypass = JSON.parse(fs.readFileSync(earlySettingsPath, 'utf8')).bypassDomains || []; } catch {}
+    try {
+        earlyBypass = JSON.parse(fs.readFileSync(earlySettingsPath, 'utf8')).bypassDomains || [];
+    } catch (err) {
+        safeCatch({ module: 'main', eventCode: 'settings.parse.failed', context: { file: earlySettingsPath } }, err, 'info');
+    }
     const bypassList = ['<local>', '*.youtube.com', '*.googlevideo.com', ...earlyBypass];
     app.commandLine.appendSwitch('proxy-bypass-list', [...new Set(bypassList)].join(','));
 }
@@ -320,6 +370,54 @@ const _wcIdToTabId             = new Map(); // webContents.id -> tabId
 const _lastPointerByTabId      = new Map(); // tabId -> { xNorm, yNorm, ts }
 let _lastProxyStatusSig        = '';
 let _lastTlsProfileBroadcast   = null;
+const proxyResilience = new ProxyResilienceManager(networkPolicy.breaker);
+const stabilityMetrics = {
+    counters: {
+        proxyConnectFailed: 0,
+        proxyQuarantined: 0,
+        proxyCircuitOpened: 0,
+        workerOverloaded: 0,
+        workerTimeouts: 0,
+        retriesExhausted: 0,
+    },
+    gauges: {
+        queueDepth: 0,
+        workerRestarts: 0,
+        p95LatencyMs: 0,
+        dbWriteQueueHighDepth: 0,
+        dbWriteQueueLowDepth: 0,
+        dbWriteQueueDroppedLow: 0,
+        dbWriteQueueDroppedHigh: 0,
+    },
+    hist: {
+        requestLatencyMs: [],
+    },
+};
+const _lastSloAlertAt = new Map();
+
+function _recordLatencySample(ms) {
+    const v = Math.max(0, Number(ms) || 0);
+    stabilityMetrics.hist.requestLatencyMs.push(v);
+    if (stabilityMetrics.hist.requestLatencyMs.length > 500) {
+        stabilityMetrics.hist.requestLatencyMs.splice(0, stabilityMetrics.hist.requestLatencyMs.length - 500);
+    }
+    const sorted = [...stabilityMetrics.hist.requestLatencyMs].sort((a, b) => a - b);
+    const idx = Math.floor(Math.max(0, sorted.length - 1) * 0.95);
+    stabilityMetrics.gauges.p95LatencyMs = sorted.length ? sorted[idx] : 0;
+}
+
+function emitStabilityEvent(level, eventName, data = {}) {
+    const suffix = Object.keys(data).length ? ' ' + JSON.stringify(data) : '';
+    sysLog(level, 'stability', `${eventName}${suffix}`);
+}
+
+function emitSloWarnOnce(key, data, cooldownMs = 30000) {
+    const now = Date.now();
+    const prev = _lastSloAlertAt.get(key) || 0;
+    if (now - prev < cooldownMs) return;
+    _lastSloAlertAt.set(key, now);
+    emitStabilityEvent('warn', key, data);
+}
 
 // Batch log-entry IPC to avoid renderer jank on high traffic.
 const LOG_IPC_BATCH_MS = 50;
@@ -349,7 +447,9 @@ function _flushLogIpcQueue(wcId) {
     if (!entries.length) return;
     try {
         win.webContents.send('new-log-entry-batch', entries);
-    } catch {}
+    } catch (err) {
+        safeCatch({ module: 'main', eventCode: 'ipc.broadcast.failed', context: { channel: 'new-log-entry-batch' } }, err);
+    }
 }
 
 function _enqueueLogEntryIpc(win, entry) {
@@ -391,7 +491,9 @@ function _flushInterceptIpcQueue(wcId) {
     if (!entries.length) return;
     try {
         win.webContents.send('intercept-rule-matched-batch', entries);
-    } catch {}
+    } catch (err) {
+        safeCatch({ module: 'main', eventCode: 'ipc.broadcast.failed', context: { channel: 'intercept-rule-matched-batch' } }, err);
+    }
 }
 
 function _enqueueInterceptIpc(win, info) {
@@ -438,7 +540,9 @@ function _flushDnsIpcQueue(wcId) {
     if (!entries.length) return;
     try {
         win.webContents.send('dns-rule-matched-batch', entries);
-    } catch {}
+    } catch (err) {
+        safeCatch({ module: 'main', eventCode: 'ipc.broadcast.failed', context: { channel: 'dns-rule-matched-batch' } }, err);
+    }
 }
 
 function _enqueueDnsIpc(win, info) {
@@ -482,7 +586,7 @@ function maybeLogMockToNetworkActivity(info) {
     const mimeType = info.mimeType || 'text/plain';
     const body = typeof info.body === 'string' ? info.body : '';
     try {
-        const dbId = db.insertRequest(sessionId, info.tabId || null, {
+        db.insertRequestAsync(sessionId, info.tabId || null, {
             requestId: `mock_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             url: info.url || '',
             method,
@@ -494,20 +598,23 @@ function maybeLogMockToNetworkActivity(info) {
             requestBody: null,
             responseBody: body,
             error: null,
-        });
-        if (!dbId) return;
-        _broadcastLogEntryToViewers({
-            id: dbId,
-            url: info.url || '',
-            method,
-            status,
-            type: 'mock',
-            duration: 0,
-            duration_ms: 0,
-            response: { statusCode: status, headers: { 'content-type': mimeType } },
-            responseBody: body,
-            tabId: info.tabId || null,
-            sessionId,
+        }).then((dbId) => {
+            if (!dbId) return;
+            _broadcastLogEntryToViewers({
+                id: dbId,
+                url: info.url || '',
+                method,
+                status,
+                type: 'mock',
+                duration: 0,
+                duration_ms: 0,
+                response: { statusCode: status, headers: { 'content-type': mimeType } },
+                responseBody: body,
+                tabId: info.tabId || null,
+                sessionId,
+            });
+        }).catch((err) => {
+            console.error('[main] mock log insert failed:', err?.message || err);
         });
     } catch (e) {
         console.error('[main] mock log insert failed:', e.message);
@@ -519,7 +626,9 @@ function broadcastTlsProfileChanged(profile) {
     if (_lastTlsProfileBroadcast === profile) return;
     _lastTlsProfileBroadcast = profile;
     BrowserWindow.getAllWindows().forEach(w => {
-        try { if (!w.isDestroyed()) w.webContents.send('tls-profile-changed', profile); } catch {}
+        try { if (!w.isDestroyed()) w.webContents.send('tls-profile-changed', profile); } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'ipc.broadcast.failed', context: { channel: 'tls-profile-changed' } }, err, 'info');
+        }
     });
 }
 
@@ -819,6 +928,26 @@ function sanitizeProxyUrl(proxyUrl) {
     return proxyUrl; // original unchanged — caller uses it for actual connection
 }
 
+function withTimeout(promise, timeoutMs, timeoutMessage = 'Operation timeout') {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+        Promise.resolve(promise).then(
+            (v) => { clearTimeout(timer); resolve(v); },
+            (e) => { clearTimeout(timer); reject(e); }
+        );
+    });
+}
+
+async function netFetchWithTimeout(url, options = {}, timeoutMs = networkPolicy.timeouts.upstreamRequestMs) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+        return await net.fetch(url, { ...options, signal: ctrl.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 async function getRealIp() {
     try {
         const r = await net.fetch('https://ipinfo.io/json');
@@ -837,7 +966,7 @@ async function checkCurrentIpGeo() {
 
     const useDirectFetch = !persistentAnonymizedProxyUrl;
 
-    async function fetchWithTimeout(url, timeoutMs = 8000) {
+    async function fetchWithTimeout(url, timeoutMs = networkPolicy.timeouts.ipGeoMs) {
         const ctrl = new AbortController();
         const timer = setTimeout(() => ctrl.abort(), timeoutMs);
         try {
@@ -918,7 +1047,9 @@ function notifyProxyStatus() {
     for (const win of BrowserWindow.getAllWindows()) {
         try {
             if (!win.isDestroyed()) win.webContents.send('proxy-status-changed', info);
-        } catch {}
+        } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'ipc.broadcast.failed', context: { channel: 'proxy-status-changed.window' } }, err, 'info');
+        }
     }
     // Also push to all open tab BrowserViews (e.g. new-tab.html proxy widget)
     if (tabManager) {
@@ -927,7 +1058,9 @@ function notifyProxyStatus() {
                 if (tab.view && !tab.view.webContents.isDestroyed()) {
                     tab.view.webContents.send('proxy-status-changed', info);
                 }
-            } catch {}
+            } catch (err) {
+                safeCatch({ module: 'main', eventCode: 'ipc.broadcast.failed', context: { channel: 'proxy-status-changed.tab' } }, err, 'info');
+            }
         }
     }
 }
@@ -937,7 +1070,9 @@ function notifyMitmReady() {
     for (const win of BrowserWindow.getAllWindows()) {
         try {
             if (!win.isDestroyed()) win.webContents.send('mitm-ready-changed', info);
-        } catch {}
+        } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'ipc.broadcast.failed', context: { channel: 'mitm-ready-changed.window' } }, err, 'info');
+        }
     }
     if (tabManager) {
         for (const tab of tabManager.getAllTabs()) {
@@ -945,7 +1080,9 @@ function notifyMitmReady() {
                 if (tab.view && !tab.view.webContents.isDestroyed()) {
                     tab.view.webContents.send('mitm-ready-changed', info);
                 }
-            } catch {}
+            } catch (err) {
+                safeCatch({ module: 'main', eventCode: 'ipc.broadcast.failed', context: { channel: 'mitm-ready-changed.tab' } }, err, 'info');
+            }
         }
     }
 }
@@ -1004,8 +1141,12 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
         webContents.on('did-finish-load', () => {
             try {
                 if (!tabManager || tabManager.getActiveTabId() !== tabId) return;
-                requestScreenshot({ reason: 'page-load', meta: { tabId } }).catch(() => {});
-            } catch {}
+                requestScreenshot({ reason: 'page-load', meta: { tabId } }).catch((err) => {
+                    safeCatch({ module: 'main', eventCode: 'screenshot.capture.failed', context: { reason: 'page-load', tabId } }, err, 'info');
+                });
+            } catch (err) {
+                safeCatch({ module: 'main', eventCode: 'screenshot.capture.failed', context: { reason: 'page-load', tabId } }, err, 'info');
+            }
         });
         webContents.once('destroyed', () => _trackingLoadAttachedWc.delete(webContents));
     }
@@ -1037,7 +1178,9 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
         try {
             cdp.removeAllListeners('message');
             cdp.removeAllListeners('detach');   // C1: prevent listener accumulation
-        } catch {}
+        } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'cdp.detach.failed', context: { phase: 'reattach.remove-listeners', tabId } }, err, 'info');
+        }
     } else {
         try {
             if (!cdp.isAttached()) cdp.attach('1.3');
@@ -1056,13 +1199,17 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
     await cdp.sendCommand('Network.enable', {
         maxTotalBufferSize:    100 * 1024 * 1024,  // 100 MB total across all resources
         maxResourceBufferSize:  10 * 1024 * 1024,  // 10 MB per individual resource
-    }).catch(() => {});
+    }).catch((err) => {
+        safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Network.enable', tabId } }, err, 'info');
+    });
 
     // Fetch.enable: inject X-CupNet-TabId/SessionId so MITM can attribute requests to tabs.
     // requestStage: 'Request' only — avoid response-stage interception (can cause hangs).
     await cdp.sendCommand('Fetch.enable', {
         patterns: [{ urlPattern: '*', requestStage: 'Request' }]
-    }).catch(() => {});
+    }).catch((err) => {
+        safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Fetch.enable', tabId } }, err, 'info');
+    });
 
     // Apply active fingerprint via CDP now that the debugger is attached
     if (activeFingerprint) {
@@ -1070,18 +1217,22 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
             cdp.sendCommand('Emulation.setUserAgentOverride', {
                 userAgent:      activeFingerprint.user_agent,
                 acceptLanguage: activeFingerprint.language || '',
-            }).catch(() => {});
+            }).catch((err) => {
+                safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Emulation.setUserAgentOverride', tabId } }, err, 'info');
+            });
         }
         if (activeFingerprint.timezone) {
             cdp.sendCommand('Emulation.setTimezoneOverride', {
                 timezoneId: activeFingerprint.timezone,
-            }).catch(() => {});
+            }).catch((err) => {
+                safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Emulation.setTimezoneOverride', tabId } }, err, 'info');
+            });
         }
     }
 
     const _logQueue = [];
     let _logQueueScheduled = false;
-    const _processLogQueue = () => {
+    const _processLogQueue = async () => {
         _logQueueScheduled = false;
         const batch = _logQueue.splice(0, 50);
         for (const logEntry of batch) {
@@ -1091,13 +1242,13 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
         // ── Write to SQLite ──
         try {
             if (logEntry.type === 'websocket_frame' || logEntry.type === 'websocket_closed' || logEntry.type === 'websocket_error') {
-                db.insertWsEvent(sessionId, tabId, logEntry.url || '', logEntry.direction || 'recv', logEntry.data || logEntry.error || null);
+                await db.insertWsEventAsync(sessionId, tabId, logEntry.url || '', logEntry.direction || 'recv', logEntry.data || logEntry.error || null);
             } else if (logEntry.type === 'screenshot') {
-                db.insertScreenshot(sessionId, tabId, logEntry.path, logEntry.imageData || null, logEntry.screenshotMeta || null);
+                await db.insertScreenshotAsync(sessionId, tabId, logEntry.path, logEntry.imageData || null, logEntry.screenshotMeta || null);
             } else {
                 // insertRequest returns the SQLite integer id — store it on logEntry
                 // so the log viewer can call getRequestDetail(id) for lazy header/body load.
-                const dbId = db.insertRequest(sessionId, tabId, {
+                const dbId = await db.insertRequestAsync(sessionId, tabId, {
                     requestId: logEntry.id,
                     url: logEntry.url,
                     method: logEntry.method,
@@ -1127,7 +1278,9 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
                             const actions = rulesEngine.buildActions(matched);
                             handleRuleActions(actions, logEntry);
                         }
-                    } catch {}
+                    } catch (err) {
+                        safeCatch({ module: 'main', eventCode: 'rules.engine.failed', context: { tabId, url: logEntry.url || '' } }, err);
+                    }
                 }
             }
         } catch (e) {
@@ -1144,14 +1297,22 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
         }
         if (_logQueue.length) {
             _logQueueScheduled = true;
-            setImmediate(_processLogQueue);
+            setImmediate(() => {
+                _processLogQueue().catch((err) => {
+                    safeCatch({ module: 'main', eventCode: 'db.write.failed', context: { op: 'processLogQueue', tabId } }, err);
+                });
+            });
         }
     };
     const finalizeLog = (logEntry) => {
         _logQueue.push(logEntry);
         if (!_logQueueScheduled) {
             _logQueueScheduled = true;
-            setImmediate(_processLogQueue);
+            setImmediate(() => {
+                _processLogQueue().catch((err) => {
+                    safeCatch({ module: 'main', eventCode: 'db.write.failed', context: { op: 'processLogQueue.schedule', tabId } }, err);
+                });
+            });
         }
     };
 
@@ -1165,10 +1326,15 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
                 headers.push({ name: 'X-CupNet-TabId', value: String(tabId) });
                 headers.push({ name: 'X-CupNet-SessionId', value: String(sessionId) });
                 headers.push({ name: 'X-CupNet-RequestId', value: String(requestId) });
-                cdp.sendCommand('Fetch.continueRequest', { requestId, headers }).catch(() => {});
+                cdp.sendCommand('Fetch.continueRequest', { requestId, headers }).catch((err) => {
+                    safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Fetch.continueRequest.headers', tabId } }, err, 'info');
+                });
             } else {
-                cdp.sendCommand('Fetch.continueResponse', { requestId }).catch(() => {
-                    cdp.sendCommand('Fetch.continueRequest', { requestId }).catch(() => {});
+                cdp.sendCommand('Fetch.continueResponse', { requestId }).catch((err) => {
+                    safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Fetch.continueResponse', tabId } }, err, 'info');
+                    cdp.sendCommand('Fetch.continueRequest', { requestId }).catch((err2) => {
+                        safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Fetch.continueRequest.fallback', tabId } }, err2, 'info');
+                    });
                 });
             }
         }
@@ -1374,8 +1540,12 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
         ongoingRequests.clear();
         ongoingWebsockets.clear();
         extraInfoQueue.clear();
-        try { cdp.removeAllListeners('message'); } catch {}
-        try { if (cdp.isAttached()) cdp.detach(); } catch {}
+        try { cdp.removeAllListeners('message'); } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'cdp.detach.failed', context: { phase: 'destroy.remove-listeners', tabId } }, err, 'info');
+        }
+        try { if (cdp.isAttached()) cdp.detach(); } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'cdp.detach.failed', context: { phase: 'destroy.detach', tabId } }, err, 'info');
+        }
     });
 }
 
@@ -1390,7 +1560,9 @@ function handleRuleActions(actions, logEntry) {
                         body:  (logEntry.url || '').slice(0, 120),
                     }).show();
                 }
-            } catch {}
+            } catch (err) {
+                safeCatch({ module: 'main', eventCode: 'notification.send.failed', context: { ruleName: action.ruleName || 'unnamed' } }, err, 'info');
+            }
             // Always send an in-app toast regardless of system support
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('rule-notification', {
@@ -1407,7 +1579,9 @@ function handleRuleActions(actions, logEntry) {
             }
         }
         if (action.type === 'screenshot') {
-            requestScreenshot({ reason: 'rule', meta: { ruleName: action.ruleName || '' } }).catch(() => {});
+            requestScreenshot({ reason: 'rule', meta: { ruleName: action.ruleName || '' } }).catch((err) => {
+                safeCatch({ module: 'main', eventCode: 'screenshot.capture.failed', context: { reason: 'rule', ruleName: action.ruleName || '' } }, err, 'info');
+            });
         }
     }
 }
@@ -1443,7 +1617,9 @@ async function applyFingerprintToAllTabs(fp) {
     for (const tab of tabManager.getAllTabs()) {
         if (tab.direct) continue;
         if (tab?.view?.webContents && !tab.view.webContents.isDestroyed()) {
-            await applyFingerprintToWebContents(tab.view.webContents, fp).catch(() => {});
+            await applyFingerprintToWebContents(tab.view.webContents, fp).catch((err) => {
+                safeCatch({ module: 'main', eventCode: 'fingerprint.apply.failed', context: { tabId: tab.id } }, err, 'info');
+            });
         }
     }
 }
@@ -1550,7 +1726,7 @@ async function captureScreenshot(opts = {}) {
             screenshotMeta.pageUrl = currentUrl;
             screenshotMeta.virtualPath = virtualPath;
             const b64 = buffer.toString('base64');
-            const ssId = db.insertScreenshot(currentSessionId, activeTab.id, currentUrl, b64, screenshotMeta);
+            const ssId = await db.insertScreenshotAsync(currentSessionId, activeTab.id, currentUrl, b64, screenshotMeta);
             logEntryCount++;
             // Don't send base64 in the live IPC event — viewer fetches it on demand to avoid memory bloat
             const entry = {
@@ -1621,12 +1797,26 @@ async function testProxy(upstreamProxyUrl) {
     let testWin = null;
     const partition = `proxy-test-${Date.now()}`;
     try {
-        anonUrl = await ProxyChain.anonymizeProxy(upstreamProxyUrl);
+        anonUrl = await withTimeout(
+            ProxyChain.anonymizeProxy(upstreamProxyUrl),
+            networkPolicy.timeouts.proxyOperationMs,
+            'Proxy anonymize timeout'
+        );
         const testSession = session.fromPartition(partition, { cache: false });
         await testSession.setProxy({ proxyRules: anonUrl, proxyBypassRules: '<local>' });
         testWin = new BrowserWindow({ show: false, webPreferences: { session: testSession } });
-        await testWin.loadURL('https://ipinfo.io/json');
-        const text = await testWin.webContents.executeJavaScript('document.body.innerText');
+        const loadTimer = setTimeout(() => {
+            try { testWin?.destroy(); } catch (err) {
+                safeCatch({ module: 'main', eventCode: 'proxy.test.failed', context: { stage: 'timeout-destroy' } }, err, 'info');
+            }
+        }, networkPolicy.timeouts.proxyTestMs);
+        let text = '';
+        try {
+            await testWin.loadURL('https://ipinfo.io/json');
+            text = await testWin.webContents.executeJavaScript('document.body.innerText');
+        } finally {
+            clearTimeout(loadTimer);
+        }
         const data = JSON.parse(text);
         if (!data.ip || !data.country) throw new Error('Incomplete response');
         return { success: true, data };
@@ -1634,7 +1824,13 @@ async function testProxy(upstreamProxyUrl) {
         return { success: false, error: err.message };
     } finally {
         if (testWin) testWin.destroy();
-        if (anonUrl) await ProxyChain.closeAnonymizedProxy(anonUrl, true);
+        if (anonUrl) {
+            await withTimeout(
+                ProxyChain.closeAnonymizedProxy(anonUrl, true),
+                networkPolicy.timeouts.proxyOperationMs,
+                'Proxy close timeout'
+            );
+        }
         try { await session.fromPartition(partition).clearStorageData(); } catch (e) { sysLog('warn', 'proxy', 'clearStorageData after proxy test failed: ' + (e?.message || e)); }
     }
 }
@@ -1648,26 +1844,107 @@ async function quickChangeProxy(proxyUrl) {
         ? Number(new URL(persistentAnonymizedProxyUrl).port) : undefined;
     try {
         if (persistentAnonymizedProxyUrl) {
-            await ProxyChain.closeAnonymizedProxy(persistentAnonymizedProxyUrl, true);
+            await withTimeout(
+                ProxyChain.closeAnonymizedProxy(persistentAnonymizedProxyUrl, true),
+                networkPolicy.timeouts.proxyOperationMs,
+                'Proxy close timeout'
+            );
             await new Promise(r => setTimeout(r, 120));
         }
         actProxy = masked; // store masked version — never expose password in state
         persistentAnonymizedProxyUrl = oldPort
-            ? await ProxyChain.anonymizeProxy({ url: proxyUrl, port: oldPort })
-            : await ProxyChain.anonymizeProxy(proxyUrl);
+            ? await withTimeout(
+                ProxyChain.anonymizeProxy({ url: proxyUrl, port: oldPort }),
+                networkPolicy.timeouts.proxyOperationMs,
+                'Proxy anonymize timeout'
+            )
+            : await withTimeout(
+                ProxyChain.anonymizeProxy(proxyUrl),
+                networkPolicy.timeouts.proxyOperationMs,
+                'Proxy anonymize timeout'
+            );
         return persistentAnonymizedProxyUrl;
     } catch (err) {
         const isBusy = err.code === 'EADDRINUSE';
         try {
             persistentAnonymizedProxyUrl = isBusy && oldPort
-                ? await ProxyChain.anonymizeProxy({ url: proxyUrl, port: oldPort })
-                : await ProxyChain.anonymizeProxy(proxyUrl);
+                ? await withTimeout(
+                    ProxyChain.anonymizeProxy({ url: proxyUrl, port: oldPort }),
+                    networkPolicy.timeouts.proxyOperationMs,
+                    'Proxy anonymize timeout'
+                )
+                : await withTimeout(
+                    ProxyChain.anonymizeProxy(proxyUrl),
+                    networkPolicy.timeouts.proxyOperationMs,
+                    'Proxy anonymize timeout'
+                );
             return persistentAnonymizedProxyUrl;
         } catch (e2) {
             dialog.showErrorBox('Proxy Error', e2.message);
             throw e2;
         }
     }
+}
+
+function parseFallbackProxyList(raw) {
+    if (!raw) return [];
+    if (Array.isArray(raw)) {
+        return raw.map(v => String(v || '').trim()).filter(Boolean);
+    }
+    return String(raw)
+        .split(/[,\n;]/)
+        .map(v => v.trim())
+        .filter(Boolean);
+}
+
+async function connectProxyWithFailover(primaryUrl, fallbackUrls = []) {
+    const candidates = [primaryUrl, ...fallbackUrls].filter(Boolean);
+    const ordered = networkPolicy.featureFlags.proxyHealthWeighted
+        ? proxyResilience.orderCandidates(candidates)
+        : candidates;
+    let lastErr = null;
+    for (let i = 0; i < ordered.length; i++) {
+        const candidate = ordered[i];
+        if (networkPolicy.featureFlags.proxyBreaker && !proxyResilience.canAttempt(candidate)) {
+            emitStabilityEvent('warn', 'proxy.candidate_skipped', { candidate });
+            continue;
+        }
+        try {
+            const startedAt = Date.now();
+            const anonymized = await quickChangeProxy(candidate);
+            const latencyMs = Date.now() - startedAt;
+            proxyResilience.registerSuccess(candidate, latencyMs);
+            emitStabilityEvent('info', 'proxy.connect_success', { candidate, latencyMs, attempt: i + 1 });
+            return { anonymized, used: candidate, attempts: i + 1 };
+        } catch (e) {
+            lastErr = e;
+            stabilityMetrics.counters.proxyConnectFailed++;
+            const res = proxyResilience.registerFailure(candidate, e);
+            if (res?.event === 'quarantined') {
+                stabilityMetrics.counters.proxyQuarantined++;
+                emitStabilityEvent('warn', 'proxy.quarantined', {
+                    candidate,
+                    untilTs: res.quarantinedUntil,
+                    consecutiveFailures: res.consecutiveFailures,
+                });
+            }
+            if (res?.event === 'circuit_opened') {
+                stabilityMetrics.counters.proxyCircuitOpened++;
+                emitStabilityEvent('warn', 'proxy.circuit_opened', {
+                    candidate,
+                    openUntilTs: res.openUntil,
+                    errorRatePct: res.errorRatePct,
+                });
+            }
+            emitStabilityEvent('warn', 'proxy.connect_failed', {
+                candidate,
+                attempt: i + 1,
+                total: ordered.length,
+                error: e?.message || String(e),
+            });
+        }
+    }
+    throw (lastErr || new Error('All proxy candidates failed'));
 }
 
 // ─── Window creation ──────────────────────────────────────────────────────────
@@ -1683,8 +1960,12 @@ function createMainWindow() {
     mainWindow.loadFile(getAssetPath('browser.html'));
     mainWindow.once('ready-to-show', () => {
         applyRuntimeAppIcon();
-        try { mainWindow.maximize(); } catch {}
-        try { mainWindow.show(); } catch {}
+        try { mainWindow.maximize(); } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'window.lifecycle.failed', context: { op: 'maximize' } }, err, 'info');
+        }
+        try { mainWindow.show(); } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'window.lifecycle.failed', context: { op: 'show' } }, err, 'info');
+        }
     });
 
     mainWindow.webContents.once('did-finish-load', async () => {
@@ -1969,11 +2250,15 @@ function _broadcastCompareUpdated() {
         if (compareViewerWindow && !compareViewerWindow.isDestroyed()) {
             compareViewerWindow.webContents.send('compare-updated', payload);
         }
-    } catch {}
+    } catch (err) {
+        safeCatch({ module: 'main', eventCode: 'ipc.broadcast.failed', context: { channel: 'compare-updated.primary' } }, err, 'info');
+    }
     for (const w of logViewerWindows) {
         try {
             if (!w.isDestroyed()) w.webContents.send('compare-updated', payload);
-        } catch {}
+        } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'ipc.broadcast.failed', context: { channel: 'compare-updated.viewer' } }, err, 'info');
+        }
     }
 }
 
@@ -2088,7 +2373,9 @@ function getIvacScoutContext() {
 
 function stopIvacScoutProcess() {
     if (!ivacScoutProcess || ivacScoutProcess.killed) return false;
-    try { ivacScoutProcess.kill('SIGTERM'); } catch {}
+    try { ivacScoutProcess.kill('SIGTERM'); } catch (err) {
+        safeCatch({ module: 'main', eventCode: 'process.kill.failed', context: { process: 'ivac-scout', signal: 'SIGTERM' } }, err);
+    }
     return true;
 }
 
@@ -2609,7 +2896,9 @@ function reattachInterceptorToAllTabs() {
     if (!interceptor || !tabManager) return;
     for (const tab of tabManager.getAllTabs()) {
         if (tab.direct) continue;
-        try { interceptor.attachToSession(tab.tabSession, tab.id); } catch {}
+        try { interceptor.attachToSession(tab.tabSession, tab.id); } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'interceptor.attach.failed', context: { tabId: tab.id } }, err);
+        }
     }
 }
 
@@ -2801,7 +3090,14 @@ function buildMenu() {
                     const id = await tabManager.createTab(persistentAnonymizedProxyUrl || null, getNewTabUrl(), true, null);
                     tabManager.switchTab(id);
                     const tab = tabManager.getTab(id);
-                    if (tab) { setupNetworkLogging(tab.view.webContents, id, currentSessionId); if (interceptor) { try { interceptor.attachToSession(tab.tabSession, id); } catch(e) {} } }
+                    if (tab) {
+                        setupNetworkLogging(tab.view.webContents, id, currentSessionId);
+                        if (interceptor) {
+                            try { interceptor.attachToSession(tab.tabSession, id); } catch (e) {
+                                safeCatch({ module: 'main', eventCode: 'interceptor.attach.failed', context: { tabId: id, source: 'menu.new-isolated-tab' } }, e);
+                            }
+                        }
+                    }
                     notifyCookieManagerTabs();
                 }},
                 { label: 'New Direct Tab', accelerator: 'CmdOrCtrl+Shift+D', click: async () => {
@@ -2832,7 +3128,9 @@ function buildMenu() {
                 { label: 'Enable Logging', type: 'checkbox', checked: isLoggingEnabled,
                   click: (item) => { isLoggingEnabled = item.checked; sendLogStatus(); } },
                 { label: 'Take Screenshot', accelerator: 'F2', click: () => {
-                    requestScreenshot({ reason: 'click' }).catch(() => {});
+                    requestScreenshot({ reason: 'click' }).catch((err) => {
+                        safeCatch({ module: 'main', eventCode: 'screenshot.capture.failed', context: { reason: 'click', source: 'app-activate' } }, err, 'info');
+                    });
                 }},
                 { type: 'separator' },
                 { role: 'quit', label: 'Exit' }
@@ -2929,6 +3227,35 @@ app.whenReady().then(async () => {
         const statsBroadcast = setInterval(() => {
             if (!mitmProxy) return;
             const stats = mitmProxy.getStats();
+            stabilityMetrics.gauges.queueDepth = Number(stats.workerQueueDepth || 0);
+            stabilityMetrics.gauges.workerRestarts = Number(stats.workerRestarts || 0);
+            if (db?.getWriteQueueStats) {
+                const q = db.getWriteQueueStats();
+                stabilityMetrics.gauges.dbWriteQueueHighDepth = Number(q?.highPriorityDepth || 0);
+                stabilityMetrics.gauges.dbWriteQueueLowDepth = Number(q?.lowPriorityDepth || 0);
+                stabilityMetrics.gauges.dbWriteQueueDroppedLow = Number(q?.droppedLow || 0);
+                stabilityMetrics.gauges.dbWriteQueueDroppedHigh = Number(q?.droppedHigh || 0);
+            }
+            if (networkPolicy.slo.enabled) {
+                if (stabilityMetrics.gauges.queueDepth >= networkPolicy.slo.queueDepthWarn) {
+                    emitSloWarnOnce('slo.queue_depth_high', {
+                        queueDepth: stabilityMetrics.gauges.queueDepth,
+                        threshold: networkPolicy.slo.queueDepthWarn,
+                    });
+                }
+                if (stabilityMetrics.gauges.p95LatencyMs >= networkPolicy.slo.p95LatencyMsWarn) {
+                    emitSloWarnOnce('slo.p95_latency_high', {
+                        p95LatencyMs: stabilityMetrics.gauges.p95LatencyMs,
+                        threshold: networkPolicy.slo.p95LatencyMsWarn,
+                    });
+                }
+                if (stabilityMetrics.gauges.workerRestarts >= networkPolicy.slo.workerRestartsWarnPerHour) {
+                    emitSloWarnOnce('slo.worker_restarts_high', {
+                        restarts: stabilityMetrics.gauges.workerRestarts,
+                        threshold: networkPolicy.slo.workerRestartsWarnPerHour,
+                    });
+                }
+            }
             if (_lastPendingForTracking == null) {
                 _lastPendingForTracking = Number(stats.pending) || 0;
             } else {
@@ -2939,7 +3266,9 @@ app.whenReady().then(async () => {
                     requestScreenshot({
                         reason: 'network-pending',
                         meta: { pending: pendingNow, prevPending: _lastPendingForTracking, delta },
-                    }).catch(() => {});
+                    }).catch((err) => {
+                        safeCatch({ module: 'main', eventCode: 'screenshot.capture.failed', context: { reason: 'network-pending' } }, err, 'info');
+                    });
                 }
                 _lastPendingForTracking = pendingNow;
             }
@@ -2958,7 +3287,9 @@ app.whenReady().then(async () => {
             if (!tracking.onMouseActivity) return;
             if (!isWindowActive) return;
             if (Date.now() - lastMouseMoveTime > 6000) return;
-            requestScreenshot({ reason: 'mouse-activity' }).catch(() => {});
+            requestScreenshot({ reason: 'mouse-activity' }).catch((err) => {
+                safeCatch({ module: 'main', eventCode: 'screenshot.capture.failed', context: { reason: 'mouse-activity' } }, err, 'info');
+            });
         }, 5000);
         app.on('before-quit', () => clearInterval(mouseTrackingTimer));
 
@@ -2994,7 +3325,9 @@ app.whenReady().then(async () => {
                 yNorm: Math.max(0, Math.min(1, yNorm)),
                 ts: Number(payload.ts) || Date.now(),
             });
-        } catch {}
+        } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'tracking.payload.invalid', context: { event: 'report-tab-pointer' } }, err, 'info');
+        }
     });
     ipcMain.on('report-tab-click', (event, payload) => {
         try {
@@ -3018,8 +3351,12 @@ app.whenReady().then(async () => {
                     click,
                     button: Number.isFinite(Number(payload.button)) ? Number(payload.button) : 0,
                 },
-            }).catch(() => {});
-        } catch {}
+            }).catch((err) => {
+                safeCatch({ module: 'main', eventCode: 'screenshot.capture.failed', context: { reason: 'click', tabId } }, err, 'info');
+            });
+        } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'tracking.payload.invalid', context: { event: 'report-tab-click' } }, err, 'info');
+        }
     });
     ipcMain.on('report-tab-typing-end', (event, payload) => {
         try {
@@ -3038,8 +3375,12 @@ app.whenReady().then(async () => {
                 reason: 'typing-end',
                 skipRateLimit: true,
                 meta: { tabId, click },
-            }).catch(() => {});
-        } catch {}
+            }).catch((err) => {
+                safeCatch({ module: 'main', eventCode: 'screenshot.capture.failed', context: { reason: 'typing-end', tabId } }, err, 'info');
+            });
+        } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'tracking.payload.invalid', context: { event: 'report-tab-typing-end' } }, err, 'info');
+        }
     });
     ipcMain.on('report-tab-scroll-end', (event, payload) => {
         try {
@@ -3058,8 +3399,12 @@ app.whenReady().then(async () => {
                 reason: 'scroll-end',
                 skipRateLimit: true,
                 meta: { tabId, click },
-            }).catch(() => {});
-        } catch {}
+            }).catch((err) => {
+                safeCatch({ module: 'main', eventCode: 'screenshot.capture.failed', context: { reason: 'scroll-end', tabId } }, err, 'info');
+            });
+        } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'tracking.payload.invalid', context: { event: 'report-tab-scroll-end' } }, err, 'info');
+        }
     });
 
     // ── Tab management ───────────────────────────────────────────────────────
@@ -3148,7 +3493,9 @@ app.whenReady().then(async () => {
     ipcMain.on('nav-home', () => {
         const tab = tabManager.getActiveTab();
         if (tab && !tab.view.webContents.isDestroyed()) {
-            tab.view.webContents.loadURL(getNewTabUrl()).catch(() => {});
+            tab.view.webContents.loadURL(getNewTabUrl()).catch((err) => {
+                safeCatch({ module: 'main', eventCode: 'navigation.load.failed', context: { target: 'new-tab' } }, err, 'info');
+            });
         }
     });
 
@@ -3167,7 +3514,7 @@ app.whenReady().then(async () => {
 
     ipcMain.handle('set-request-annotation', async (_, id, data) => {
         if (!id) return { success: false, error: 'Invalid request id' };
-        db.setRequestAnnotation(id, data || {});
+        await db.setRequestAnnotationAsync(id, data || {});
         return { success: true };
     });
 
@@ -3188,7 +3535,7 @@ app.whenReady().then(async () => {
     });
 
     ipcMain.handle('rename-session', async (_, id, name) => {
-        db.renameSession(id, name);
+        await db.renameSessionAsync(id, name);
         return { success: true };
     });
 
@@ -3198,7 +3545,7 @@ app.whenReady().then(async () => {
 
         // No session yet (truly first run) — create one and enable silently
         if (!currentSessionId) {
-            const sess = db.createSession(actProxy || null, null);
+            const sess = await db.createSessionAsync(actProxy || null, null);
             currentSessionId = sess ? sess.id : null;
             logEntryCount = 0;
             for (const tab of tabManager.getAllTabs()) {
@@ -3244,9 +3591,9 @@ app.whenReady().then(async () => {
             return { success: true };
         }
         // mode === 'new'
-        if (renameOld && currentSessionId) db.renameSession(currentSessionId, renameOld);
-        if (currentSessionId) db.endSession(currentSessionId);
-        const sess = db.createSession(actProxy || null, null);
+        if (renameOld && currentSessionId) await db.renameSessionAsync(currentSessionId, renameOld);
+        if (currentSessionId) await db.endSessionAsync(currentSessionId);
+        const sess = await db.createSessionAsync(actProxy || null, null);
         currentSessionId = sess ? sess.id : null;
         logEntryCount = 0;
         hadLoggingBeenStopped = false;
@@ -3270,7 +3617,7 @@ app.whenReady().then(async () => {
     ipcMain.handle('delete-session', async (_, id) => {
         // Guard: cannot delete the currently active session
         if (id === currentSessionId) return { success: false, reason: 'active' };
-        db.deleteSession(id);
+        await db.deleteSessionAsync(id);
         return { success: true };
     });
 
@@ -3304,8 +3651,8 @@ app.whenReady().then(async () => {
     ipcMain.handle('clear-logs', async () => {
         // Start a new session; all open tabs will log into it
         try {
-            if (currentSessionId) db.endSession(currentSessionId);
-            const newSession = db.createSession(actProxy || null, null);
+            if (currentSessionId) await db.endSessionAsync(currentSessionId);
+            const newSession = await db.createSessionAsync(actProxy || null, null);
             currentSessionId = newSession ? newSession.id : null;
             logEntryCount = 0;
             // Re-attach logging for every open tab so they write to the new session
@@ -3435,11 +3782,11 @@ app.whenReady().then(async () => {
                 if (!FORBIDDEN.has(k.toLowerCase())) safeHeaders[k] = v;
             }
             const isBodyless = ['GET', 'HEAD', 'OPTIONS'].includes((req.method || 'GET').toUpperCase());
-            const resp = await net.fetch(req.url, {
+            const resp = await netFetchWithTimeout(req.url, {
                 method: req.method || 'GET',
                 headers: safeHeaders,
                 body: isBodyless ? undefined : (req.request_body || undefined)
-            });
+            }, networkPolicy.timeouts.replayMs);
             const text = await resp.text();
             return { success: true, status: resp.status, body: text, original: req.response_body };
         } catch (e) { return { success: false, error: e.message }; }
@@ -3447,14 +3794,14 @@ app.whenReady().then(async () => {
 
     // ── Rules ────────────────────────────────────────────────────────────────
     ipcMain.handle('get-rules', async () => db.getRules());
-    ipcMain.handle('save-rule', async (_, rule) => db.saveRule(rule));
-    ipcMain.handle('delete-rule', async (_, id) => { db.deleteRule(id); return true; });
-    ipcMain.handle('toggle-rule', async (_, id, enabled) => { db.toggleRule(id, enabled); return true; });
+    ipcMain.handle('save-rule', async (_, rule) => db.saveRuleAsync(rule));
+    ipcMain.handle('delete-rule', async (_, id) => { await db.deleteRuleAsync(id); return true; });
+    ipcMain.handle('toggle-rule', async (_, id, enabled) => { await db.toggleRuleAsync(id, enabled); return true; });
 
     // ── Intercept rules ──────────────────────────────────────────────────────
     ipcMain.handle('get-intercept-rules', async () => db.getAllInterceptRules());
     ipcMain.handle('save-intercept-rule', async (_, rule) => {
-        const id = db.saveInterceptRule(rule);
+        const id = await db.saveInterceptRuleAsync(rule);
         if (interceptor) {
             interceptor.invalidateRulesCache();
             reattachInterceptorToAllTabs();
@@ -3462,7 +3809,7 @@ app.whenReady().then(async () => {
         return id;
     });
     ipcMain.handle('delete-intercept-rule', async (_, id) => {
-        db.deleteInterceptRule(id);
+        await db.deleteInterceptRuleAsync(id);
         if (interceptor) {
             interceptor.invalidateRulesCache();
             reattachInterceptorToAllTabs();
@@ -3712,7 +4059,9 @@ app.whenReady().then(async () => {
         if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return fallbackPayload;
         const base = { ...(fallbackPayload || {}) };
         if (!base.pageUrl) {
-            try { base.pageUrl = tab.view.webContents.getURL() || tab.url || ''; } catch {}
+            try { base.pageUrl = tab.view.webContents.getURL() || tab.url || ''; } catch (err) {
+                safeCatch({ module: 'main', eventCode: 'captcha.context.discovery_failed', context: { field: 'pageUrl', tabId } }, err, 'info');
+            }
         }
         if (base.sitekey) return base;
         try {
@@ -3962,9 +4311,15 @@ app.whenReady().then(async () => {
         const mergedVars = { ...savedVars, ...(ephemeralVars || {}) };
         const resolvedVars = {};
         const resolvedUrl = parseProxyTemplate(template, mergedVars, resolvedVars);
+        const fallbackCandidates = parseFallbackProxyList(
+            mergedVars.FALLBACK_PROXIES || mergedVars.fallback_proxies || mergedVars.fallbackProxies
+        );
 
         try {
-            await quickChangeProxy(resolvedUrl);
+            const proxyConnect = await connectProxyWithFailover(resolvedUrl, fallbackCandidates);
+            if (proxyConnect?.used && proxyConnect.used !== resolvedUrl) {
+                resolvedVars.__usedFallbackProxy = proxyConnect.used;
+            }
             mitmProxy?.setUpstream(persistentAnonymizedProxyUrl);
             await tabManager.setProxyAll(persistentAnonymizedProxyUrl);
             try {
@@ -4016,12 +4371,43 @@ app.whenReady().then(async () => {
             notifyProxyStatus();
 
             checkCurrentIpGeo().then(geo => {
-                db.updateProxyProfileGeo(profileId, geo.ip, `${geo.city}, ${geo.country_name}`);
+                db.updateProxyProfileGeoAsync(profileId, geo.ip, `${geo.city}, ${geo.country_name}`).catch((err) => {
+                    safeCatch({ module: 'main', eventCode: 'db.write.failed', context: { op: 'updateProxyProfileGeo', profileId } }, err);
+                });
                 notifyProxyProfilesList();
             }).catch(e => sysLog('warn', 'proxy', 'geo check after proxy connect failed: ' + (e?.message || e)));
             return { success: true, resolvedUrl, resolvedVars };
         } catch (e) {
-            return { success: false, error: e.message };
+            sysLog('warn', 'proxy', 'connect-proxy-template failed, switching to direct mode: ' + (e?.message || e));
+            try {
+                if (persistentAnonymizedProxyUrl) {
+                    await withTimeout(
+                        ProxyChain.closeAnonymizedProxy(persistentAnonymizedProxyUrl, true),
+                        networkPolicy.timeouts.proxyOperationMs,
+                        'Proxy close timeout'
+                    );
+                    persistentAnonymizedProxyUrl = null;
+                }
+                actProxy = '';
+                connectedProfileId = null;
+                connectedProfileName = null;
+                connectedResolvedVars = {};
+                mitmProxy?.setUpstream(null);
+                await tabManager.setProxyAll(null);
+                try {
+                    await session.defaultSession.setProxy({
+                        proxyRules: 'http=127.0.0.1:8877;https=127.0.0.1:8877',
+                        proxyBypassRules: buildBypassList((cachedSettings || loadSettings()).bypassDomains),
+                    });
+                } catch (err) {
+                    safeCatch({ module: 'main', eventCode: 'proxy.connect.failed', context: { stage: 'fallback.set-default-proxy' } }, err);
+                }
+                buildMenu();
+                notifyProxyStatus();
+            } catch (fallbackErr) {
+                sysLog('warn', 'proxy', 'direct fallback after proxy failure also failed: ' + (fallbackErr?.message || fallbackErr));
+            }
+            return { success: false, error: e.message, fallback: 'direct' };
         }
     });
 
@@ -4046,7 +4432,11 @@ app.whenReady().then(async () => {
     ipcMain.handle('disconnect-proxy', async () => {
         try {
             if (persistentAnonymizedProxyUrl) {
-                await ProxyChain.closeAnonymizedProxy(persistentAnonymizedProxyUrl, true);
+                await withTimeout(
+                    ProxyChain.closeAnonymizedProxy(persistentAnonymizedProxyUrl, true),
+                    networkPolicy.timeouts.proxyOperationMs,
+                    'Proxy close timeout'
+                );
                 persistentAnonymizedProxyUrl = null;
             }
             actProxy = '';
@@ -4084,12 +4474,16 @@ app.whenReady().then(async () => {
                 try {
                     const u = new URL(profile.template.replace(/\{[^}]+\}/g, 'PLACEHOLDER'));
                     if (u.password) urlDisplay = profile.template.replace(u.password, '***');
-                } catch {}
+                } catch (err) {
+                    safeCatch({ module: 'main', eventCode: 'proxy.profile.parse.failed', context: { op: 'mask-password-template' } }, err, 'info');
+                }
             }
-        } catch {}
+        } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'proxy.profile.encrypt.failed', context: { op: 'save-proxy-profile-full' } }, err);
+        }
 
         if (profile.id) {
-            db.updateProxyProfileById(profile.id, {
+            await db.updateProxyProfileByIdAsync(profile.id, {
                 name:          profile.name,
                 url_encrypted: urlEncrypted,
                 url_display:   urlDisplay,
@@ -4105,7 +4499,7 @@ app.whenReady().then(async () => {
             return { success: true, id: profile.id };
         }
 
-        const id = db.saveProxyProfile(profile.name, urlEncrypted, urlDisplay, {
+        const id = await db.saveProxyProfileAsync(profile.name, urlEncrypted, urlDisplay, {
             isTemplate: 1,
             variables:  profile.variables || {},
             notes:      profile.notes || '',
@@ -4134,7 +4528,7 @@ app.whenReady().then(async () => {
         if (result.success && result.data) {
             const ip  = result.data.ip || '';
             const geo = [result.data.city, result.data.country].filter(Boolean).join(', ');
-            db.updateProxyProfileTest(profileId, latency, ip, geo);
+            await db.updateProxyProfileTestAsync(profileId, latency, ip, geo);
             notifyProxyProfilesList();
         }
         return { ...result, latency, resolvedUrl: resolved };
@@ -4154,10 +4548,14 @@ app.whenReady().then(async () => {
                     const u = new URL(url);
                     if (u.password) u.password = '***';
                     urlDisplay = u.toString();
-                } catch {}
+                } catch (err) {
+                    safeCatch({ module: 'main', eventCode: 'proxy.profile.parse.failed', context: { op: 'mask-password' } }, err, 'info');
+                }
             }
-        } catch {}
-        return db.saveProxyProfile(name, urlEncrypted, urlDisplay, country);
+        } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'proxy.profile.encrypt.failed', context: { op: 'save-proxy-profile' } }, err);
+        }
+        return db.saveProxyProfileAsync(name, urlEncrypted, urlDisplay, country);
     });
 
     ipcMain.handle('get-proxy-profile-url', async (_, id) => {
@@ -4169,7 +4567,7 @@ app.whenReady().then(async () => {
         return null;
     });
 
-    ipcMain.handle('delete-proxy-profile', async (_, id) => { db.deleteProxyProfile(id); return true; });
+    ipcMain.handle('delete-proxy-profile', async (_, id) => { await db.deleteProxyProfileAsync(id); return true; });
 
     ipcMain.handle('test-proxy-profile', async (_, id) => {
         const row = db.getProxyProfileEncrypted(id);
@@ -4182,7 +4580,7 @@ app.whenReady().then(async () => {
         const start = Date.now();
         const result = await testProxy(url);
         const latency = Date.now() - start;
-        if (result.success) db.updateProxyProfileTest(id, latency);
+        if (result.success) await db.updateProxyProfileTestAsync(id, latency);
         return { ...result, latency };
     });
 
@@ -4342,7 +4740,7 @@ app.whenReady().then(async () => {
         if (!isValidIpv4(ip)) return { success: false, error: 'Invalid IPv4 address' };
 
         try {
-            const savedId = db.saveDnsOverride({ id, host, ip, enabled });
+            const savedId = await db.saveDnsOverrideAsync({ id, host, ip, enabled });
             syncDnsOverridesToMitm();
             return { success: true, id: savedId };
         } catch (e) {
@@ -4352,7 +4750,7 @@ app.whenReady().then(async () => {
 
     ipcMain.handle('dns-overrides-delete', async (_, id) => {
         try {
-            db.deleteDnsOverride(Number(id));
+            await db.deleteDnsOverrideAsync(Number(id));
             syncDnsOverridesToMitm();
             return { success: true };
         } catch (e) {
@@ -4362,7 +4760,7 @@ app.whenReady().then(async () => {
 
     ipcMain.handle('dns-overrides-toggle', async (_, id, enabled) => {
         try {
-            db.toggleDnsOverride(Number(id), !!enabled);
+            await db.toggleDnsOverrideAsync(Number(id), !!enabled);
             syncDnsOverridesToMitm();
             return { success: true };
         } catch (e) {
@@ -4427,7 +4825,9 @@ app.whenReady().then(async () => {
     // ── Misc ─────────────────────────────────────────────────────────────────
     ipcMain.handle('open-log-directory', async (_, dirPath) => {
         const p = dirPath || app.getPath('logs');
-        try { fs.mkdirSync(p, { recursive: true }); } catch {}
+        try { fs.mkdirSync(p, { recursive: true }); } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'fs.mkdir.failed', context: { path: p } }, err);
+        }
         await shell.openPath(p);
     });
 
@@ -4645,7 +5045,9 @@ app.whenReady().then(async () => {
                         body:    req.request_body     || '',
                     };
                 }
-            } catch {}
+            } catch (err) {
+                safeCatch({ module: 'main', eventCode: 'request-editor.prefill.failed', context: { entryId } }, err, 'info');
+            }
         }
         createRequestEditorWindow(data);
         return true;
@@ -4665,7 +5067,7 @@ app.whenReady().then(async () => {
             if (!isLoggingEnabled || !currentSessionId) return;
             try {
                 // insertRequest returns the SQLite integer id — use it for detail lookup
-                const dbId = db.insertRequest(currentSessionId, null, {
+                db.insertRequestAsync(currentSessionId, null, {
                     requestId:       `re-${Date.now()}`,
                     url:             url || '',
                     method:          reqMethod,
@@ -4677,29 +5079,32 @@ app.whenReady().then(async () => {
                     requestBody:     body || null,
                     responseBody:    result.body || null,
                     error:           result.error || null,
-                });
-                logEntryCount++;
-                sendLogStatus();
+                }).then((dbId) => {
+                    logEntryCount++;
+                    sendLogStatus();
 
-                // Forward to all open log viewer windows (live update)
-                if (logViewerWindows.length > 0) {
-                    const entry = {
-                        // Use the real SQLite id so detail panel can call getRequestDetail(id)
-                        id:           dbId,
-                        type:         'request-editor',
-                        timestamp:    Date.now(),
-                        url:          url || '',
-                        method:       reqMethod,
-                        response:     result.status ? { statusCode: result.status, headers: result.headers || {} } : null,
-                        request:      { headers: headers || {}, body: body || null },
-                        responseBody: result.body || null,
-                        duration:     result.duration || 0,
-                        error:        result.error || null,
-                        tabId:        null,
-                        sessionId:    currentSessionId,
-                    };
-                    _broadcastLogEntryToViewers(entry);
-                }
+                    // Forward to all open log viewer windows (live update)
+                    if (logViewerWindows.length > 0) {
+                        const entry = {
+                            // Use the real SQLite id so detail panel can call getRequestDetail(id)
+                            id:           dbId,
+                            type:         'request-editor',
+                            timestamp:    Date.now(),
+                            url:          url || '',
+                            method:       reqMethod,
+                            response:     result.status ? { statusCode: result.status, headers: result.headers || {} } : null,
+                            request:      { headers: headers || {}, body: body || null },
+                            responseBody: result.body || null,
+                            duration:     result.duration || 0,
+                            error:        result.error || null,
+                            tabId:        null,
+                            sessionId:    currentSessionId,
+                        };
+                        _broadcastLogEntryToViewers(entry);
+                    }
+                }).catch((err) => {
+                    safeCatch({ module: 'main', eventCode: 'db.write.failed', context: { op: 'request-editor.maybeLog' } }, err, 'info');
+                });
             } catch (e) { /* non-fatal */ }
         }
 
@@ -4716,6 +5121,7 @@ app.whenReady().then(async () => {
                     proxy:            currentProxy,
                     browser:          profile,
                     disableRedirects: true,
+                    timeout:          networkPolicy.timeouts.requestEditorMs,
                 });
                 const duration = Date.now() - start;
                 if (res.error) {
@@ -4725,7 +5131,9 @@ app.whenReady().then(async () => {
                 }
                 let respBody = '';
                 if (res.bodyBase64) {
-                    try { respBody = Buffer.from(res.bodyBase64, 'base64').toString('utf8'); } catch {}
+                    try { respBody = Buffer.from(res.bodyBase64, 'base64').toString('utf8'); } catch (err) {
+                        safeCatch({ module: 'main', eventCode: 'request-editor.decode.failed', context: { encoding: 'base64' } }, err, 'info');
+                    }
                 } else if (typeof res.body === 'string') {
                     respBody = res.body;
                 }
@@ -4748,11 +5156,11 @@ app.whenReady().then(async () => {
                 if (!EXEC_FORBIDDEN.has(k.toLowerCase())) safe[k] = v;
             }
             const isBodyless = ['GET','HEAD','OPTIONS'].includes(reqMethod);
-            const resp = await net.fetch(url, {
+            const resp = await netFetchWithTimeout(url, {
                 method:  reqMethod,
                 headers: safe,
                 body:    isBodyless ? undefined : (body || undefined),
-            });
+            }, networkPolicy.timeouts.requestEditorMs);
             const duration = Date.now() - start;
             const respHeaders = {};
             resp.headers.forEach((v, k) => { respHeaders[k] = v; });
@@ -4861,7 +5269,11 @@ app.whenReady().then(async () => {
         try {
             if (!profileId) {
                 if (persistentAnonymizedProxyUrl) {
-                    await ProxyChain.closeAnonymizedProxy(persistentAnonymizedProxyUrl, true);
+                    await withTimeout(
+                        ProxyChain.closeAnonymizedProxy(persistentAnonymizedProxyUrl, true),
+                        networkPolicy.timeouts.proxyOperationMs,
+                        'Proxy close timeout'
+                    );
                     persistentAnonymizedProxyUrl = null;
                 }
                 actProxy = '';
@@ -4907,6 +5319,28 @@ app.whenReady().then(async () => {
     // ── MITM IPC handlers — registered immediately so they work even before proxy starts ──
     const EMPTY_STATS = { requests:0, errors:0, pending:0, avgMs:0, minMs:0, maxMs:0, reqPerSec:0, workerReady:false, browser:'chrome' };
     ipcMain.handle('mitm-get-stats',    ()         => mitmProxy ? mitmProxy.getStats() : EMPTY_STATS);
+    ipcMain.handle('stability-metrics-snapshot', () => ({
+        counters: { ...stabilityMetrics.counters },
+        gauges: { ...stabilityMetrics.gauges },
+        p95LatencyMs: stabilityMetrics.gauges.p95LatencyMs || 0,
+        proxyResilience: proxyResilience.snapshot(),
+        policy: networkPolicy,
+        ts: Date.now(),
+    }));
+    ipcMain.handle('stability-slo-status', () => ({
+        enabled: !!networkPolicy.slo.enabled,
+        thresholds: { ...networkPolicy.slo },
+        current: {
+            p95LatencyMs: stabilityMetrics.gauges.p95LatencyMs || 0,
+            queueDepth: stabilityMetrics.gauges.queueDepth || 0,
+            workerRestarts: stabilityMetrics.gauges.workerRestarts || 0,
+            dbWriteQueueHighDepth: stabilityMetrics.gauges.dbWriteQueueHighDepth || 0,
+            dbWriteQueueLowDepth: stabilityMetrics.gauges.dbWriteQueueLowDepth || 0,
+            dbWriteQueueDroppedLow: stabilityMetrics.gauges.dbWriteQueueDroppedLow || 0,
+            dbWriteQueueDroppedHigh: stabilityMetrics.gauges.dbWriteQueueDroppedHigh || 0,
+        },
+    }));
+    ipcMain.handle('proxy-resilience-state', () => proxyResilience.snapshot());
     ipcMain.handle('mitm-get-ca-cert',  ()         => mitmProxy?.getCACert() || '');
     ipcMain.handle('mitm-set-browser',  (_, prof)  => { mitmProxy?.setBrowser(prof); return { success: true }; });
     ipcMain.handle('mitm-set-upstream', (_, url)   => { mitmProxy?.setUpstream(url);  return { success: true }; });
@@ -4926,7 +5360,11 @@ app.whenReady().then(async () => {
     ipcMain.handle('connect-direct', async (_, tlsProfile) => {
         try {
             if (persistentAnonymizedProxyUrl) {
-                await ProxyChain.closeAnonymizedProxy(persistentAnonymizedProxyUrl, true).catch(e => sysLog('warn', 'proxy', 'closeAnonymizedProxy on connect-direct failed: ' + (e?.message || e)));
+                await withTimeout(
+                    ProxyChain.closeAnonymizedProxy(persistentAnonymizedProxyUrl, true),
+                    networkPolicy.timeouts.proxyOperationMs,
+                    'Proxy close timeout'
+                ).catch(e => sysLog('warn', 'proxy', 'closeAnonymizedProxy on connect-direct failed: ' + (e?.message || e)));
                 persistentAnonymizedProxyUrl = null;
             }
             actProxy = '';
@@ -4965,7 +5403,7 @@ app.whenReady().then(async () => {
 
     async function startExtPort(config) {
         if (activeExtPorts.has(config.port)) return activeExtPorts.get(config.port);
-        const sess = db.createExternalSession(`ext:${config.port}`, `ext_${config.port}`, config.port);
+        const sess = await db.createExternalSessionAsync(`ext:${config.port}`, `ext_${config.port}`, config.port);
         const instance = new ExternalProxyPort(mitmProxy, {
             port: config.port,
             login: config.login,
@@ -4991,7 +5429,7 @@ app.whenReady().then(async () => {
                         extPort: entry.extPort,
                         extName: entry.extName,
                     };
-                    const dbId = db.insertRequest(entry.sessionId, entry.tabId, {
+                    db.insertRequestAsync(entry.sessionId, entry.tabId, {
                         requestId: logEntry.id,
                         url: logEntry.url,
                         method: logEntry.method,
@@ -5002,9 +5440,12 @@ app.whenReady().then(async () => {
                         responseHeaders: logEntry.response?.headers,
                         requestBody: entry.requestBody || null,
                         responseBody: logEntry.responseBody,
+                    }).then((dbId) => {
+                        if (dbId) logEntry.id = dbId;
+                        _broadcastLogEntryToViewers({ ...logEntry, tabId: entry.tabId, sessionId: entry.sessionId });
+                    }).catch((err) => {
+                        sysLog('warn', 'ext-proxy', `Log insert failed for port ${config.port}: ${err?.message || err}`);
                     });
-                    if (dbId) logEntry.id = dbId;
-                    _broadcastLogEntryToViewers({ ...logEntry, tabId: entry.tabId, sessionId: entry.sessionId });
                 } catch (e) { sysLog('warn', 'ext-proxy', `Log insert failed for port ${config.port}: ${e?.message}`); }
             },
         });
@@ -5025,7 +5466,7 @@ app.whenReady().then(async () => {
         const entry = activeExtPorts.get(port);
         if (!entry) return;
         entry.instance.stop();
-        if (entry.sessionId) db.endSession(entry.sessionId);
+        if (entry.sessionId) await db.endSessionAsync(entry.sessionId);
         activeExtPorts.delete(port);
         extPortErrors.delete(port);
         sysLog('info', 'ext-proxy', `Stopped external proxy on port ${port}`);
@@ -5109,8 +5550,8 @@ app.whenReady().then(async () => {
         try {
             const entry = activeExtPorts.get(port);
             if (!entry) return { success: false, error: 'Port not active' };
-            if (entry.sessionId) db.endSession(entry.sessionId);
-            const sess = db.createExternalSession(`ext:${port}`, `ext_${port}`, port);
+            if (entry.sessionId) await db.endSessionAsync(entry.sessionId);
+            const sess = await db.createExternalSessionAsync(`ext:${port}`, `ext_${port}`, port);
             entry.sessionId = sess.id;
             entry.instance.sessionId = sess.id;
             entry.instance._reqCount = 0;
@@ -5193,18 +5634,36 @@ app.on('will-quit', () => {
     if (_saveSettingsTimer) { clearTimeout(_saveSettingsTimer); _saveSettingsTimer = null; }
     if (_consoleBatchTimer) { clearTimeout(_consoleBatchTimer); _consoleBatchTimer = null; }
     if (_notifyTabsTimer) { clearTimeout(_notifyTabsTimer); _notifyTabsTimer = null; }
-    if (mitmProxy) { try { mitmProxy.stop(); } catch {} }
+    if (mitmProxy) {
+        try { mitmProxy.stop(); } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'worker.shutdown.failed', context: { stage: 'will-quit' } }, err);
+        }
+    }
     if (persistentAnonymizedProxyUrl) {
         try { require('proxy-chain').closeAnonymizedProxy(persistentAnonymizedProxyUrl, true); } catch (e) { sysLog('warn', 'proxy', 'closeAnonymizedProxy on quit failed: ' + (e?.message || e)); }
     }
     for (const [port, entry] of activeExtPorts) {
-        try { entry.instance.stop(); } catch {}
-        try { if (entry.sessionId && db) db.endSession(entry.sessionId); } catch {}
+        try { entry.instance.stop(); } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'proxy.shutdown.failed', context: { port } }, err);
+        }
+        try {
+            if (entry.sessionId && db) {
+                db.endSessionAsync(entry.sessionId).catch((err) => {
+                    safeCatch({ module: 'main', eventCode: 'db.write.failed', context: { op: 'endSessionOnQuit', port } }, err);
+                });
+            }
+        } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'db.write.failed', context: { op: 'endSessionOnQuit', port } }, err);
+        }
     }
     activeExtPorts.clear();
     if (tabManager) tabManager.destroyAll();
     if (db) {
-        if (currentSessionId) db.endSession(currentSessionId);
+        if (currentSessionId) {
+            db.endSessionAsync(currentSessionId).catch((err) => {
+                safeCatch({ module: 'main', eventCode: 'db.write.failed', context: { op: 'endCurrentSessionOnQuit', sessionId: currentSessionId } }, err);
+            });
+        }
         db.close();
     }
     flushOnExit();
