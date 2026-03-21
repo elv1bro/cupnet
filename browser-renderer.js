@@ -29,6 +29,7 @@ const analyzerBtn    = document.getElementById('analyzer-btn');
 const pbStatusBtn    = document.getElementById('pb-status-btn');
 const pbDot          = document.getElementById('pb-dot');
 const pbName         = document.getElementById('pb-name');
+const pbModeBadge    = document.getElementById('pb-mode-badge');
 const settingsToggle = document.getElementById('settings-toggle-btn');
 
 const toastContainer  = document.getElementById('rule-toast-container');
@@ -522,6 +523,7 @@ function _renderPill() {
             pbDetail.textContent = 'checking…';
         }
         pbStatusBtn.title = 'Direct tab — no proxy, real IP';
+        if (pbModeBadge) pbModeBadge.style.display = 'none';
         return;
     }
 
@@ -554,6 +556,24 @@ function _renderPill() {
     pbStatusBtn.title = active
         ? `${label} — click to manage`
         : 'No proxy — click to set up';
+
+    _renderModeBadge(info);
+}
+
+function _renderModeBadge(info) {
+    if (!pbModeBadge) return;
+    const mode = info?.effectiveMode || info?.trafficMode || '';
+    if (mode === 'mitm') {
+        pbModeBadge.textContent = 'MITM';
+        pbModeBadge.className = 'pb-mode-badge mode-mitm';
+        pbModeBadge.style.display = '';
+    } else if (mode === 'browser_proxy' && info?.active) {
+        pbModeBadge.textContent = 'Proxy';
+        pbModeBadge.className = 'pb-mode-badge mode-browser';
+        pbModeBadge.style.display = '';
+    } else {
+        pbModeBadge.style.display = 'none';
+    }
 }
 
 function updateProxyStatus(info) {
