@@ -1303,6 +1303,7 @@ select:focus { border-color: var(--accent); }
     <button class="lv-btn active" id="auto-scroll-btn" title="Toggle auto-scroll to latest">↓ Live</button>
     <button class="lv-btn" id="export-har-btn" title="Export as HAR">⬇ HAR</button>
     <button class="lv-btn" id="export-bundle-btn" title="Export incident bundle with redaction level">⬇ Bundle</button>
+    <button class="lv-btn" id="export-site-zip-btn" title="Export site snapshot (HTML/CSS/JS/assets from logs) as ZIP">⬇ Site</button>
     <button class="lv-btn" id="import-bundle-btn" title="Import incident bundle">⬆ Bundle</button>
     <button class="lv-btn" id="trace-mode-btn" title="Trace: full req/res to DB. ⌘/Ctrl+click to open Trace window">📋 Trace</button>
     <button class="lv-btn" id="open-rules-btn" title="Rules & Interceptor">⚙ Rules</button>
@@ -1542,6 +1543,21 @@ select:focus { border-color: var(--accent); }
         <div class="lv-dialog-actions">
             <button class="lv-btn" id="protection-cancel-btn">Cancel</button>
             <button class="lv-btn active" id="protection-confirm-btn">Export</button>
+        </div>
+    </div>
+</div>
+
+<div id="site-export-modal" class="lv-overlay">
+    <div class="lv-dialog">
+        <div class="lv-dialog-title">Export site (ZIP)</div>
+        <div class="lv-dialog-note">GET responses with bodies from this session, one origin. Paths inside the archive follow URL pathnames (latest response wins if the same path was requested multiple times).</div>
+        <div style="padding:8px 0 14px">
+            <label for="site-export-origin" style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:6px">Origin</label>
+            <select id="site-export-origin" style="width:100%;padding:8px 10px;font-size:13px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></select>
+        </div>
+        <div class="lv-dialog-actions">
+            <button class="lv-btn" id="site-export-cancel-btn">Cancel</button>
+            <button class="lv-btn active" id="site-export-confirm-btn">Save ZIP…</button>
         </div>
     </div>
 </div>

@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+    <title>Compare</title>
+    <link rel="stylesheet" href="./node_modules/jsondiffpatch/lib/formatters/styles/html.css">
+    <style>
+        :root {
+            --bg: #1a1c24; --bg-dark: #13151e; --bg-mid: #1e2233; --border: #2d3142; --border2: #253149;
+            --text: #e2e8f0; --muted: #6b7280; --accent: #3b82f6; --red: #ef4444;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; overflow: hidden; color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+        body { background: radial-gradient(1200px 520px at 30% -10%, #1f2a44 0%, transparent 55%), radial-gradient(900px 480px at 100% 0%, #2b1f45 0%, transparent 48%), var(--bg); }
+        ::-webkit-scrollbar { width: 6px; height: 6px; } ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+        #app { display: flex; flex-direction: column; height: 100%; }
+        #toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: rgba(10, 14, 24, 0.9); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border2); flex-shrink: 0; }
+        .btn { height: 30px; border: 1px solid #2a3550; background: #111827; color: var(--text); border-radius: 6px; padding: 0 12px; cursor: pointer; font-size: 12px; white-space: nowrap; }
+        .btn:hover { border-color: var(--accent); color: #fff; } .btn:disabled { opacity: 0.35; cursor: default; }
+        .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 0 0 1px rgba(59,130,246,0.25) inset, 0 8px 24px rgba(37,99,235,0.22); }
+        .ctl { height: 30px; border: 1px solid #2a3550; background: #111827; color: var(--text); border-radius: 6px; padding: 0 10px; font-size: 12px; }
+        .toolbar-spacer { flex: 1; } #status { font-size: 11px; color: var(--muted); }
+        .chk { display: inline-flex; align-items: center; gap: 6px; color: #cbd5e1; font-size: 12px; }
+
+        #workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(360px, 48%) minmax(0, 1fr); }
+        #lists-pane { display: grid; grid-template-columns: 1fr 1fr; min-height: 0; min-width: 0; border-right: 1px solid var(--border2); position: relative; overflow: hidden; }
+        .req-col { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: rgba(10, 14, 24, 0.85); position: relative; z-index: 2; }
+        .req-col.left { border-right: 1px solid var(--border2); } .req-col.right { border-left: 1px solid var(--border2); }
+        .col-hd { display: flex; align-items: center; gap: 6px; padding: 10px; background: #0f1627; border-bottom: 1px solid var(--border2); font-size: 11px; color: #8aa0c7; text-transform: uppercase; letter-spacing: .45px; font-weight: 700; }
+        .req-list { flex: 1; overflow: auto; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+        .rq { border: 1px solid #2a3550; background: #111a2c; border-radius: 6px; padding: 6px 8px; cursor: pointer; display: flex; flex-direction: column; gap: 3px; }
+        .rq.active { border-color: #4f8dff; box-shadow: inset 0 0 0 1px rgba(79,141,255,.25); } .rq.anchor { border-left: 3px solid var(--accent); }
+        .rq.missing { border-left: 3px solid var(--red); opacity: .78; } .rq-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
+        .rq-method { font-size: 9px; font-weight: 700; border-radius: 8px; padding: 1px 6px; background: rgba(255,255,255,.08); color: #d1d5db; flex-shrink: 0; }
+        .rq-method.GET { color: #22c55e; } .rq-method.POST { color: #60a5fa; } .rq-method.PUT { color: #fb923c; } .rq-method.DELETE { color: #f87171; } .rq-method.PATCH { color: #fbbf24; } .rq-method.HEAD { color: #c084fc; }
+        .rq-status { font-size: 10px; font-weight: 600; padding: 0 5px; border-radius: 8px; flex-shrink: 0; }
+        .rq-status.s2 { background: #14532d; color: #86efac; } .rq-status.s3 { background: #1e3a5f; color: #93c5fd; } .rq-status.s4 { background: #451a03; color: #fdba74; } .rq-status.s5 { background: #450a0a; color: #fca5a5; }
+        .rq-path { font-size: 10px; color: #b0bfdb; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'SF Mono','Consolas',monospace; }
+        .pair-badge { margin-left: auto; font-size: 9px; color: #93c5fd; border: 1px solid #35538d; border-radius: 7px; padding: 0 5px; }
+        .col-empty { color: #6f809f; font-size: 12px; text-align: center; padding: 22px 12px; border: 1px dashed #2c3957; border-radius: 8px; margin: 8px; }
+
+        #pane-links {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 1;
+        }
+        .pane-link {
+            fill: none;
+            stroke: rgba(125, 160, 230, 0.28);
+            stroke-width: 1.2;
+            stroke-linecap: round;
+        }
+        .pane-link.active {
+            stroke: rgba(96, 165, 250, 0.75);
+            stroke-width: 2;
+        }
+
+        #detail-pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: rgba(15, 19, 30, 0.62); position: relative; z-index: 2; }
+        #detail-body { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
+        .metrics { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+        .metric { min-width: 120px; border: 1px solid #2a3550; background: #111a2c; border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 2px; }
+        .metric .m-label { font-size: 10px; color: #7a869e; text-transform: uppercase; letter-spacing: .45px; font-weight: 700; }
+        .metric .m-val { font-size: 13px; color: #d8e3f6; font-weight: 600; min-height: 18px; } .m-val.ok { color: #86efac; } .m-val.err { color: #fca5a5; } .m-val.warn { color: #fbbf24; }
+        .card { border: 1px solid #2a3550; border-radius: 8px; background: #111a2c; margin-bottom: 14px; overflow: hidden; }
+        .card-hd { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #0f1627; border-bottom: 1px solid var(--border2); font-size: 12px; font-weight: 600; color: #d8e3f6; }
+        .card-body { padding: 10px 12px; }
+        .hdr-table { width: 100%; border-collapse: collapse; font-size: 11px; } .hdr-table th { text-align: left; font-size: 10px; color: #6b7280; text-transform: uppercase; letter-spacing: .5px; padding: 4px 8px 6px; border-bottom: 1px solid var(--border); } .hdr-table td { padding: 3px 8px; font-family: 'SF Mono','Consolas',monospace; font-size: 11px; word-break: break-all; border-bottom: 1px solid rgba(45,49,66,0.4); }
+        .hdr-added td { background: rgba(34,197,94,0.08); } .hdr-removed td { background: rgba(239,68,68,0.08); } .hdr-changed td { background: rgba(245,158,11,0.08); }
+        .split { display: grid; grid-template-columns: 1fr 1fr; gap: 0; } .split-col { display: flex; flex-direction: column; min-width: 0; } .split-col:first-child { border-right: 1px solid var(--border); }
+        .split-label { font-size: 10px; font-weight: 700; color: #8aa0c7; text-transform: uppercase; letter-spacing: .4px; padding: 6px 10px; background: #0c1018; border-bottom: 1px solid var(--border); }
+        pre { margin: 0; padding: 8px 10px; border: none; background: transparent; max-height: 500px; overflow: auto; white-space: pre-wrap; word-break: break-all; font-size: 11px; font-family: 'SF Mono','Fira Code','Consolas',monospace; line-height: 1.6; }
+        .empty-msg { color: #6f809f; font-size: 12px; text-align: center; padding: 40px 16px; }
+        .jsondiffpatch-delta { background: #111a2c; border: 1px solid #2a3550; border-radius: 6px; padding: 10px; overflow: auto; max-height: 600px; }
+        .json-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+        .json-paths { margin: 8px 0 0; border: 1px solid #2a3550; border-radius: 6px; background: #0f1627; padding: 8px 10px; max-height: 160px; overflow: auto; font-family: 'SF Mono','Consolas',monospace; font-size: 11px; }
+        .json-paths .path { color: #93c5fd; margin: 2px 0; }
+        .json-wrap.focus-changes .jsondiffpatch-unchanged { display: none !important; }
+        .analysis-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .analysis-box { border: 1px solid #2a3550; border-radius: 6px; background: #0f1627; padding: 8px 10px; min-width: 0; }
+        .analysis-hd { font-size: 10px; color: #8aa0c7; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 6px; font-weight: 700; }
+        .analysis-row { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: #cbd5e1; margin: 3px 0; }
+        .analysis-row .k { color: #94a3b8; } .analysis-list { margin-top: 6px; max-height: 120px; overflow: auto; font-family: 'SF Mono','Consolas',monospace; font-size: 11px; color: #cbd5e1; word-break: break-all; }
+        .analysis-list div { margin: 2px 0; } .html-preview-frame { width: 100%; height: 260px; border: 1px solid #2a3550; border-radius: 6px; background: #fff; }
+    </style>
+</head>
+<body>
+<div id="app">
+    <div id="toolbar">
+        <button class="btn primary" id="compare-btn" disabled>▶ Compare</button>
+        <button class="btn" id="refresh-btn">↻ Refresh</button>
+        <select class="ctl" id="compare-level">
+            <option value="quick">Quick</option>
+            <option value="standard" selected>Standard</option>
+            <option value="deep">Deep</option>
+        </select>
+        <label class="chk"><input type="checkbox" id="noise-toggle"> Remove noise headers</label>
+        <select class="ctl" id="dimension-mode">
+            <option value="all" selected>All</option>
+            <option value="transport">Transport</option>
+            <option value="data">Data</option>
+            <option value="ui">UI / HTML</option>
+            <option value="security">Security</option>
+        </select>
+        <div class="toolbar-spacer"></div>
+        <span id="status"></span>
+    </div>
+    <div id="workspace">
+        <div id="lists-pane">
+            <svg id="pane-links" aria-hidden="true"></svg>
+            <div class="req-col left">
+                <div class="col-hd"><span>Left (A)</span> <span class="anchor-badge">anchor</span></div>
+                <div class="req-list" id="left-list"></div>
+            </div>
+            <div class="req-col right">
+                <div class="col-hd"><span>Right (B)</span> <span class="anchor-badge">anchor</span></div>
+                <div class="req-list" id="right-list"></div>
+            </div>
+        </div>
+        <section id="detail-pane">
+            <div id="detail-body"></div>
+        </section>
+    </div>
+</div>
+<script src="compare-viewer-renderer.js"></script>
+</body>
+</html>

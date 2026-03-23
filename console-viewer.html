@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+    <title>System Console</title>
+    <style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --bg0:      #0d1117;
+    --bg1:      #161b27;
+    --bg2:      #1c2236;
+    --bg3:      #222840;
+    --border:   #2a3350;
+    --text:     #c9d3e8;
+    --text-dim: #5c6b8a;
+    --text-hi:  #e8eef8;
+    --accent:   #3b7ef8;
+}
+
+html, body { height: 100%; overflow: hidden; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 12px;
+    background: var(--bg0);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+}
+
+/* ── Toolbar ── */
+#cv-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--bg1);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.cv-tab {
+    padding: 4px 14px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--bg2);
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    transition: all .15s;
+    position: relative;
+}
+.cv-tab:hover { border-color: var(--accent); color: var(--text); }
+.cv-tab.active { border-color: var(--accent); color: var(--accent); background: rgba(59,126,248,0.1); }
+
+.cv-tab .cv-badge {
+    display: inline-block;
+    min-width: 16px;
+    padding: 0 4px;
+    margin-left: 5px;
+    border-radius: 8px;
+    background: var(--bg3);
+    color: var(--text-dim);
+    font-size: 10px;
+    font-weight: 600;
+    text-align: center;
+    line-height: 16px;
+    vertical-align: middle;
+}
+.cv-tab.active .cv-badge { background: rgba(59,126,248,0.2); color: var(--accent); }
+
+.cv-tab .cv-new-dot {
+    display: none;
+    position: absolute;
+    top: 3px; right: 3px;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #ef4444;
+}
+.cv-tab.has-new .cv-new-dot { display: block; }
+
+.cv-sep { width: 1px; height: 20px; background: var(--border); flex-shrink: 0; }
+.cv-spacer { flex: 1; }
+
+.cv-search {
+    display: flex;
+    align-items: center;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 0 8px;
+    height: 26px;
+    gap: 4px;
+    min-width: 180px;
+}
+.cv-search-icon { color: var(--text-dim); font-size: 13px; }
+.cv-search input {
+    background: none; border: none; outline: none;
+    color: var(--text); font-size: 12px;
+    width: 100%;
+}
+.cv-search input::placeholder { color: var(--text-dim); }
+
+.cv-btn {
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--bg2);
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 11px;
+    transition: all .15s;
+}
+.cv-btn:hover { border-color: var(--accent); color: var(--text-hi); }
+.cv-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(59,126,248,0.1); }
+.cv-btn.danger { border-color: #ef4444; color: #ef4444; }
+.cv-btn.danger:hover { background: rgba(239,68,68,0.1); }
+
+#cv-count {
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
+/* ── Log area ── */
+#cv-log {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 4px 0;
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    font-size: 11.5px;
+    line-height: 1.55;
+}
+
+.cv-line {
+    padding: 0 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+.cv-line:hover { background: rgba(59,126,248,0.04); }
+
+/* Color coding */
+.cv-line.cv-err  { color: #ef4444; }
+.cv-line.cv-warn { color: #f59e0b; }
+.cv-line.cv-mitm-tcp  { color: var(--text-dim); }
+.cv-line.cv-mitm-conn { color: #60a5fa; }
+.cv-line.cv-mitm-req  { color: #22c55e; }
+.cv-line.cv-mitm-res  { color: #a78bfa; }
+.cv-line.cv-ffi  { color: var(--text-dim); }
+.cv-line.cv-worker { color: #6b7280; }
+.cv-line.cv-retry { color: #f59e0b; }
+.cv-line.cv-main { color: #60a5fa; }
+
+.cv-line .cv-ts {
+    color: var(--text-dim);
+    font-size: 10px;
+    margin-right: 6px;
+    user-select: none;
+}
+
+.cv-highlight { background: rgba(245,158,11,0.25); border-radius: 2px; }
+    </style>
+</head>
+<body>
+
+<div id="cv-toolbar">
+    <button class="cv-tab active" data-tab="all">All <span class="cv-badge" id="badge-all">0</span><span class="cv-new-dot"></span></button>
+    <button class="cv-tab" data-tab="mitm">MITM <span class="cv-badge" id="badge-mitm">0</span><span class="cv-new-dot"></span></button>
+    <button class="cv-tab" data-tab="system">System <span class="cv-badge" id="badge-system">0</span><span class="cv-new-dot"></span></button>
+
+    <div class="cv-sep"></div>
+
+    <div class="cv-search">
+        <span class="cv-search-icon">⌕</span>
+        <input type="text" id="cv-search" placeholder="Filter…" autocomplete="off" spellcheck="false">
+    </div>
+
+    <span id="cv-count"></span>
+
+    <div class="cv-spacer"></div>
+
+    <button class="cv-btn active" id="cv-autoscroll" title="Auto-scroll">↓ Live</button>
+    <button class="cv-btn" id="cv-pause" title="Pause/Resume capture">⏸ Pause</button>
+    <button class="cv-btn" id="cv-copy" title="Copy visible logs">⎘ Copy</button>
+    <button class="cv-btn" id="cv-save" title="Save logs to file">💾 Save .log</button>
+    <button class="cv-btn danger" id="cv-clear" title="Clear all">✕ Clear</button>
+</div>
+
+<div id="cv-log"></div>
+
+<script src="console-viewer-renderer.js"></script>
+</body>
+</html>

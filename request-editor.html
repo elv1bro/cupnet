@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+    <title>Request Editor</title>
+    <style>
+        :root {
+            --bg:       #1a1c24;
+            --bg-dark:  #13151e;
+            --bg-mid:   #1e2233;
+            --bg-light: #252838;
+            --border:   #2d3142;
+            --text:     #e2e8f0;
+            --dim:      #9ca3af;
+            --muted:    #6b7280;
+            --accent:   #3b82f6;
+            --green:    #22c55e;
+            --red:      #ef4444;
+            --orange:   #f59e0b;
+            --purple:   #a855f7;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; }
+        input, textarea, select, button { font-family: inherit; font-size: inherit; }
+
+        /* ── Layout ─────────────────────────────────────────────────────────── */
+        #app { display: flex; flex-direction: column; height: 100%; }
+
+        /* ── Top bar ─────────────────────────────────────────────────────────── */
+        #top-bar {
+            display: flex; align-items: center; gap: 8px;
+            padding: 10px 14px; background: var(--bg-dark);
+            border-bottom: 1px solid var(--border); flex-shrink: 0;
+        }
+        #method-select {
+            font-size: 13px; font-weight: 700;
+            padding: 6px 10px; border: 1px solid var(--border);
+            border-radius: 6px; background: var(--bg-mid);
+            color: var(--green); cursor: pointer; min-width: 96px;
+            appearance: none; text-align: center;
+        }
+        #method-select.POST   { color: #60a5fa; }
+        #method-select.PUT    { color: #fb923c; }
+        #method-select.DELETE { color: #f87171; }
+        #method-select.PATCH  { color: #fbbf24; }
+        #method-select.HEAD   { color: #c084fc; }
+        #method-select.OPTIONS{ color: var(--dim); }
+        #url-input {
+            flex: 1; padding: 7px 12px;
+            border: 1px solid var(--border); border-radius: 6px;
+            background: var(--bg-mid); color: var(--text);
+            font-family: 'SF Mono', 'Consolas', monospace; font-size: 13px;
+        }
+        #url-input:focus { outline: none; border-color: var(--accent); }
+        #send-btn {
+            padding: 7px 20px; border: none; border-radius: 6px;
+            background: var(--accent); color: #fff;
+            font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+            display: flex; align-items: center; gap: 6px;
+        }
+        #send-btn:hover { background: #2563eb; }
+        #send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        #copy-curl-btn {
+            padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px;
+            background: var(--bg-mid); color: var(--dim); cursor: pointer;
+            font-size: 12px; white-space: nowrap;
+        }
+        #copy-curl-btn:hover { color: var(--text); background: var(--bg-light); }
+        #history-toggle-btn {
+            padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px;
+            background: var(--bg-mid); color: var(--dim); cursor: pointer;
+            font-size: 12px; white-space: nowrap;
+        }
+        #history-toggle-btn:hover { color: var(--text); background: var(--bg-light); }
+        #proxy-info-wrap {
+            display: flex; align-items: center; gap: 5px;
+            padding: 0 10px; height: 32px;
+            border: 1px solid var(--border); border-radius: 6px;
+            background: var(--bg-mid); color: var(--dim);
+            font-size: 12px; white-space: nowrap; flex-shrink: 0;
+            cursor: default; user-select: none;
+        }
+        #proxy-info-wrap svg { flex-shrink: 0; stroke: #3b82f6; }
+        #proxy-info-label {
+            color: var(--muted); font-size: 11px;
+        }
+        #proxy-info-name {
+            color: var(--text); font-size: 12px; font-weight: 600;
+            max-width: 160px; overflow: hidden; text-overflow: ellipsis;
+        }
+        #proxy-info-name.direct { color: #22c55e; }
+        #proxy-info-name.active { color: #60a5fa; }
+        #resp-pill {
+            padding: 4px 11px; border-radius: 20px; font-size: 12px;
+            font-weight: 600; white-space: nowrap; display: none; align-items: center;
+        }
+        #resp-pill.s2 { background:#14532d; color:#86efac; display:flex; }
+        #resp-pill.s3 { background:#1e3a5f; color:#93c5fd; display:flex; }
+        #resp-pill.s4 { background:#451a03; color:#fdba74; display:flex; }
+        #resp-pill.s5 { background:#450a0a; color:#fca5a5; display:flex; }
+        #resp-pill.err { background:#1f1f1f; color:#9ca3af; display:flex; }
+
+        /* ── Split ───────────────────────────────────────────────────────────── */
+        #split { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        #req-pane { display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
+        #divider-h {
+            height: 5px; background: var(--border); cursor: ns-resize; flex-shrink: 0;
+        }
+        #divider-h:hover, #divider-h.dragging { background: var(--accent); }
+        #resp-pane { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 60px; }
+
+        /* ── Tab bar ─────────────────────────────────────────────────────────── */
+        .tab-bar {
+            display: flex; background: var(--bg-dark);
+            border-bottom: 1px solid var(--border); flex-shrink: 0; padding: 0 14px;
+        }
+        .tab-btn {
+            padding: 8px 14px; border: none;
+            border-bottom: 2px solid transparent;
+            background: transparent; color: var(--dim); cursor: pointer;
+            font-size: 12px; margin-bottom: -1px; transition: color .15s;
+        }
+        .tab-btn:hover { color: var(--text); }
+        .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+        .tc { display:inline-block; background:#374151; color:#9ca3af;
+            font-size:10px; border-radius:8px; padding:0 5px; margin-left:4px; }
+        .tc.on { background:#1e3a5f; color:#93c5fd; }
+
+        /* ── Tab content ─────────────────────────────────────────────────────── */
+        .tab-content { display: none; flex: 1; overflow: auto; padding: 10px 14px; flex-direction: column; }
+        .tab-content.active { display: flex; }
+
+        /* ── KV table ────────────────────────────────────────────────────────── */
+        .kv-table { width: 100%; border-collapse: collapse; }
+        .kv-table th {
+            text-align: left; font-size: 10px; font-weight: 700;
+            color: var(--muted); text-transform: uppercase;
+            letter-spacing: .5px; padding: 0 8px 6px;
+        }
+        .kv-row td { padding: 2px 4px; vertical-align: middle; }
+        .kv-row td:first-child { width: 28px; }
+        .kv-row td.kv-del { width: 28px; }
+        .kv-input {
+            width: 100%; padding: 5px 8px;
+            background: var(--bg-mid); border: 1px solid var(--border);
+            border-radius: 4px; color: var(--text);
+            font-size: 12px; font-family: 'SF Mono','Consolas',monospace;
+        }
+        .kv-input:focus { outline: none; border-color: var(--accent); }
+        .kv-input.restricted { border-color: #f59e0b55; background: #1c1500; }
+        .kv-row.disabled .kv-input { opacity: 0.35; }
+        .restrict-star {
+            color: #f59e0b; font-size: 11px; margin-left: 3px;
+            cursor: help; display: none; vertical-align: middle;
+        }
+        .restrict-star.show { display: inline; }
+        .body-missing-warn {
+            background: rgba(245, 158, 11, 0.12);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: 6px;
+            padding: 8px 12px;
+            margin: 8px 0;
+            font-size: 12px;
+            color: #f59e0b;
+            line-height: 1.5;
+        }
+        .body-missing-warn b { color: #fbbf24; }
+        .kv-del-btn {
+            width: 24px; height: 24px; border: none; border-radius: 4px;
+            background: transparent; color: var(--muted); cursor: pointer;
+            font-size: 15px; display: flex; align-items: center; justify-content: center;
+        }
+        .kv-del-btn:hover { background: #3a1515; color: #f87171; }
+        .add-row-btn {
+            margin-top: 8px; padding: 5px 10px;
+            background: transparent; border: 1px dashed var(--border);
+            border-radius: 5px; color: var(--muted); font-size: 12px;
+            cursor: pointer; width: 100%; text-align: left;
+        }
+        .add-row-btn:hover { border-color: var(--accent); color: var(--accent); }
+        input[type=checkbox] { cursor: pointer; accent-color: var(--accent); }
+
+        /* ── Body tab ────────────────────────────────────────────────────────── */
+        #body-type-bar {
+            display: flex; align-items: center; gap: 16px;
+            padding-bottom: 10px; margin-bottom: 10px;
+            border-bottom: 1px solid var(--border); flex-shrink: 0;
+        }
+        .bt-opt { display: flex; align-items: center; gap: 5px; cursor: pointer;
+            font-size: 12px; color: var(--dim); }
+        .bt-opt input { cursor: pointer; }
+        .bt-opt.sel { color: var(--accent); }
+        #body-ct-hint { margin-left: auto; font-size: 11px; color: var(--muted); }
+        #body-textarea {
+            flex: 1; background: var(--bg-mid); border: 1px solid var(--border);
+            border-radius: 6px; color: var(--text);
+            font-family: 'SF Mono','Consolas',monospace; font-size: 12px;
+            padding: 10px; resize: none; min-height: 80px; line-height: 1.5;
+        }
+        #body-textarea:focus { outline: none; border-color: var(--accent); }
+        #body-none-msg { color: var(--muted); font-size: 12px; text-align: center; padding: 20px; }
+
+        /* ── Response ────────────────────────────────────────────────────────── */
+        #resp-info-bar {
+            display: flex; align-items: center; gap: 14px;
+            padding: 7px 14px; background: var(--bg-dark);
+            border-bottom: 1px solid var(--border); flex-shrink: 0; font-size: 12px;
+        }
+        #resp-empty {
+            flex: 1; display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            color: var(--muted); font-size: 13px; gap: 10px;
+        }
+        #resp-empty svg { opacity: .3; }
+        .resp-pre {
+            flex: 1; overflow: auto; padding: 12px 14px;
+            font-family: 'SF Mono','Consolas',monospace;
+            font-size: 12px; white-space: pre-wrap; word-break: break-all;
+            line-height: 1.6; background: var(--bg);
+        }
+        .c2 { color: #22c55e; } .c3 { color: #60a5fa; }
+        .c4 { color: #fb923c; } .c5 { color: #f87171; }
+
+        /* ── Pretty JSON tree ─────────────────────────────────────────────────── */
+        #tab-pretty-resp {
+            flex: 1; overflow: auto; padding: 10px 14px;
+            background: var(--bg); font-family: 'SF Mono','Consolas',monospace;
+            font-size: 12px; line-height: 1.7;
+        }
+        .jt-node { display: flex; flex-direction: column; }
+        .jt-row  { display: flex; align-items: flex-start; gap: 0; white-space: nowrap; cursor: default; }
+        .jt-row:hover { background: rgba(255,255,255,0.03); border-radius: 3px; }
+        .jt-toggle {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 16px; height: 16px; flex-shrink: 0; border: none;
+            background: transparent; cursor: pointer; color: var(--muted);
+            font-size: 9px; padding: 0; margin-right: 2px;
+            border-radius: 3px; transition: background .1s;
+        }
+        .jt-toggle:hover { background: rgba(255,255,255,0.08); }
+        .jt-toggle.collapsed::before { content: '▶'; }
+        .jt-toggle:not(.collapsed)::before { content: '▼'; }
+        .jt-placeholder { display: inline-block; width: 16px; flex-shrink: 0; margin-right: 2px; }
+        .jt-children { padding-left: 18px; border-left: 1px solid rgba(255,255,255,0.06); margin-left: 7px; }
+        .jt-children.hidden { display: none; }
+        .jt-key   { color: #93c5fd; }
+        .jt-colon { color: var(--muted); margin: 0 4px 0 1px; }
+        .jt-str   { color: #86efac; cursor: pointer; }
+        .jt-str:hover { text-decoration: underline dotted; }
+        .jt-num   { color: #fb923c; }
+        .jt-bool  { color: #f472b6; font-weight: 600; }
+        .jt-null  { color: #94a3b8; font-style: italic; }
+        .jt-brace { color: var(--dim); }
+        .jt-summary { color: var(--muted); font-style: italic; font-size: 11px; margin-left: 4px; }
+        .jt-comma { color: var(--muted); }
+        .jt-not-json {
+            color: var(--muted); font-size: 12px; padding: 12px;
+            display: flex; align-items: center; gap: 8px;
+        }
+
+        /* ── HTML Preview iframe ──────────────────────────────────────────────── */
+        #tab-html-resp {
+            flex: 1; flex-direction: column; overflow: hidden; background: #fff;
+            /* display is controlled by .tab-content / .tab-content.active */
+        }
+        #html-preview-bar {
+            display: flex; align-items: center; gap: 8px; padding: 4px 12px;
+            background: var(--bg-dark); border-bottom: 1px solid var(--border);
+            flex-shrink: 0; font-size: 11px; color: var(--muted);
+        }
+        .html-preview-badge {
+            padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 600;
+            background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3);
+        }
+        #html-preview-iframe {
+            flex: 1; border: none; background: #fff;
+        }
+        #html-preview-empty {
+            flex: 1; display: flex; align-items: center; justify-content: center;
+            color: var(--muted); font-size: 12px; flex-direction: column; gap: 6px;
+            background: var(--bg);
+        }
+
+        /* ── Footnote ────────────────────────────────────────────────────────── */
+        #footnote {
+            padding: 5px 14px; font-size: 11px; color: var(--muted);
+            background: var(--bg-dark); border-top: 1px solid var(--border);
+            flex-shrink: 0; line-height: 1.5;
+        }
+        #footnote b { color: #f59e0b; }
+        #footnote code { background: #1e2233; padding: 0 4px; border-radius: 3px; font-size: 10px; }
+
+        /* ── Spinner ─────────────────────────────────────────────────────────── */
+        .spin { display:inline-block; width:13px; height:13px; border:2px solid #374151;
+            border-top-color: var(--accent); border-radius:50%; animation: rot .7s linear infinite; }
+        @keyframes rot { to { transform: rotate(360deg); } }
+
+        /* ── Misc ────────────────────────────────────────────────────────────── */
+        .sm-btn {
+            padding: 4px 10px; font-size: 11px; border: 1px solid var(--border);
+            border-radius: 4px; background: var(--bg-mid); color: var(--dim); cursor: pointer;
+        }
+        .sm-btn:hover { background: var(--bg-light); color: var(--text); }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+
+        /* ── v2 UI refresh ─────────────────────────────────────────────────── */
+        body {
+            background:
+                radial-gradient(1200px 520px at 30% -10%, #1f2a44 0%, transparent 55%),
+                radial-gradient(900px 480px at 100% 0%, #2b1f45 0%, transparent 48%),
+                var(--bg);
+        }
+        #top-bar {
+            background: rgba(10, 14, 24, 0.9);
+            backdrop-filter: blur(8px);
+            border-bottom-color: #27324a;
+            gap: 10px;
+            padding: 12px 14px;
+        }
+        #method-select, #url-input, #proxy-info-wrap, #copy-curl-btn {
+            border-color: #2a3550;
+            background: #111827;
+        }
+        #send-btn {
+            box-shadow: 0 0 0 1px rgba(59,130,246,0.25) inset, 0 8px 24px rgba(37,99,235,0.22);
+        }
+        #split {
+            flex-direction: row;
+            gap: 0;
+        }
+        #history-pane {
+            width: 10%;
+            min-width: 150px;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #253149;
+            background: rgba(10, 14, 24, 0.85);
+            transition: width .16s ease, min-width .16s ease;
+            overflow: hidden;
+        }
+        #history-pane.collapsed {
+            width: 0;
+            min-width: 0;
+            border-right: none;
+        }
+        #history-head {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 10px 10px;
+            border-bottom: 1px solid #263149;
+            font-size: 11px;
+            color: #8aa0c7;
+            text-transform: uppercase;
+            letter-spacing: .45px;
+            font-weight: 700;
+            background: #0f1627;
+        }
+        #history-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .h-item {
+            border: 1px solid #2a3550;
+            background: #111a2c;
+            border-radius: 8px;
+            padding: 7px 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            cursor: pointer;
+        }
+        .h-item:hover { border-color: #426aa7; background: #15213a; }
+        .h-item.active { border-color: #4f8dff; box-shadow: inset 0 0 0 1px rgba(79,141,255,.25); }
+        .h-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+        }
+        .h-method {
+            font-size: 10px;
+            font-weight: 700;
+            border-radius: 10px;
+            padding: 1px 7px;
+            background: rgba(255,255,255,.08);
+            color: #d1d5db;
+            flex-shrink: 0;
+        }
+        .h-method.GET { color:#22c55e; }
+        .h-method.POST { color:#60a5fa; }
+        .h-method.PUT { color:#fb923c; }
+        .h-method.DELETE { color:#f87171; }
+        .h-method.PATCH { color:#fbbf24; }
+        .h-method.HEAD { color:#c084fc; }
+        .h-url {
+            font-size: 11px;
+            color: #d8e3f6;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .h-meta {
+            font-size: 10px;
+            color: #7d8aa3;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .h-status.ok { color: #86efac; }
+        .h-status.err { color: #fca5a5; }
+        #history-empty {
+            color: #6f809f;
+            font-size: 12px;
+            text-align: center;
+            padding: 22px 12px;
+            border: 1px dashed #2c3957;
+            border-radius: 8px;
+            margin: 8px;
+        }
+        #req-pane {
+            width: 40%;
+            min-width: 360px;
+            border-right: 1px solid #253149;
+            background: rgba(15, 19, 30, 0.62);
+        }
+        #divider-h {
+            width: 5px;
+            height: auto;
+            cursor: col-resize;
+            background: #202a40;
+        }
+        #resp-pane {
+            min-width: 300px;
+            background: rgba(12, 16, 26, 0.74);
+        }
+        .tab-bar {
+            background: #0f1627;
+            border-bottom-color: #263149;
+        }
+        .tab-btn {
+            font-size: 12.5px;
+            padding: 9px 14px;
+        }
+        .tab-btn.active {
+            color: #7fb3ff;
+            border-bottom-color: #4f8dff;
+        }
+        #resp-info-bar {
+            gap: 10px;
+            padding: 10px 12px;
+            background: #0f1627;
+            border-bottom-color: #263149;
+        }
+        .resp-metric {
+            min-width: 130px;
+            border: 1px solid #2a3550;
+            background: #111a2c;
+            border-radius: 8px;
+            padding: 6px 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .resp-metric .m-label {
+            font-size: 10px;
+            color: #7a869e;
+            text-transform: uppercase;
+            letter-spacing: .45px;
+            font-weight: 700;
+        }
+        .resp-metric .m-val {
+            font-size: 12px;
+            color: #d8e3f6;
+            font-weight: 600;
+            min-height: 16px;
+        }
+        #resp-empty {
+            gap: 14px;
+            text-align: center;
+            padding: 24px;
+        }
+        #resp-empty .hint-list {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            font-size: 12px;
+            color: #7d8aa3;
+        }
+        #resp-empty .kbd {
+            border: 1px solid #334155;
+            border-bottom-width: 2px;
+            border-radius: 6px;
+            padding: 1px 6px;
+            color: #cbd5e1;
+            background: #111827;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+<div id="app">
+
+    <!-- ── Top bar ──────────────────────────────────────────────────────────── -->
+    <div id="top-bar">
+        <select id="method-select" class="GET">
+            <option>GET</option>
+            <option>POST</option>
+            <option>PUT</option>
+            <option>DELETE</option>
+            <option>PATCH</option>
+            <option>HEAD</option>
+            <option>OPTIONS</option>
+        </select>
+        <input type="text" id="url-input" placeholder="https://example.com/api/endpoint" spellcheck="false" autocomplete="off">
+        <button id="send-btn">▶ Send</button>
+        <div id="proxy-info-wrap" title="Proxy and fingerprint settings are taken from the current session">
+            <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" width="12" height="12">
+                <path d="M7 1L2 4v3c0 3 2.5 4.8 5 6 2.5-1.2 5-3 5-6V4L7 1z"/>
+            </svg>
+            <span id="proxy-info-label">Session proxy</span>
+            <span id="proxy-info-name">—</span>
+        </div>
+        <button id="history-toggle-btn" title="Toggle request history">History</button>
+        <button id="copy-curl-btn" title="Copy as cURL">cURL</button>
+        <div id="resp-pill"></div>
+    </div>
+
+    <!-- ── Main split ───────────────────────────────────────────────────────── -->
+    <div id="split">
+        <div id="history-pane">
+            <div id="history-head">
+                <span>Recent Requests</span>
+                <span style="margin-left:auto;color:#60769d;font-size:10px">click to restore</span>
+            </div>
+            <div id="history-list"></div>
+            <div id="history-empty">No requests yet</div>
+        </div>
+
+        <!-- Request pane -->
+        <div id="req-pane">
+            <div class="tab-bar" id="req-tabs">
+                <button class="tab-btn active" data-tab="params">Params <span class="tc" id="cnt-params">0</span></button>
+                <button class="tab-btn" data-tab="headers">Headers <span class="tc" id="cnt-headers">0</span></button>
+                <button class="tab-btn" data-tab="body">Body <span class="tc" id="cnt-body">—</span></button>
+                <button class="tab-btn" data-tab="auth" style="display:none">Auth</button>
+            </div>
+
+            <!-- Params -->
+            <div class="tab-content active" id="tab-params">
+                <table class="kv-table"><thead><tr>
+                    <th></th><th>Key</th><th>Value</th><th></th>
+                </tr></thead><tbody id="params-tbody"></tbody></table>
+                <button class="add-row-btn" id="add-param-btn">+ Add parameter</button>
+            </div>
+
+            <!-- Headers -->
+            <div class="tab-content" id="tab-headers">
+                <table class="kv-table"><thead><tr>
+                    <th></th>
+                    <th>Name
+                        <span style="color:#f59e0b;font-size:10px;margin-left:4px"
+                              title="★ — normally a Fetch API Forbidden Header. When AzureTLS/MITM is active these headers ARE sent as-is (Go-level connection bypasses browser restrictions). Only restricted in net.fetch fallback mode.">★</span>
+                    </th>
+                    <th>Value</th>
+                    <th></th>
+                </tr></thead><tbody id="headers-tbody"></tbody></table>
+                <button class="add-row-btn" id="add-header-btn">+ Add header</button>
+            </div>
+
+            <!-- Body -->
+            <div class="tab-content" id="tab-body">
+                <div id="body-type-bar">
+                    <label class="bt-opt"><input type="radio" name="btype" value="none" checked> none</label>
+                    <label class="bt-opt"><input type="radio" name="btype" value="raw"> raw</label>
+                    <label class="bt-opt"><input type="radio" name="btype" value="json"> JSON</label>
+                    <label class="bt-opt"><input type="radio" name="btype" value="form-urlencoded"> form-urlencoded</label>
+                    <span id="body-ct-hint"></span>
+                    <button class="sm-btn" id="format-json-btn" style="display:none">Format JSON</button>
+                </div>
+                <div id="body-none-msg">This request has no body.</div>
+                <textarea id="body-textarea" style="display:none" placeholder="Request body…" spellcheck="false"></textarea>
+                <div id="form-body" style="display:none; flex:1; overflow:auto; flex-direction:column">
+                    <table class="kv-table"><thead><tr>
+                        <th></th><th>Key</th><th>Value</th><th></th>
+                    </tr></thead><tbody id="form-tbody"></tbody></table>
+                    <button class="add-row-btn" id="add-form-btn">+ Add field</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Divider -->
+        <div id="divider-h"></div>
+
+        <!-- Response pane -->
+        <div id="resp-pane">
+            <div id="resp-info-bar">
+                <div class="resp-metric">
+                    <span class="m-label">Status</span>
+                    <span class="m-val" id="ri-status"></span>
+                </div>
+                <div class="resp-metric">
+                    <span class="m-label">Time</span>
+                    <span class="m-val" id="ri-time"></span>
+                </div>
+                <div class="resp-metric">
+                    <span class="m-label">Size / TLS</span>
+                    <span class="m-val" id="ri-size"></span>
+                </div>
+                <span style="flex:1"></span>
+                <div id="resp-actions"></div>
+            </div>
+
+            <div id="resp-empty">
+                <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                    <circle cx="24" cy="24" r="20" stroke="#374151" stroke-width="2"/>
+                    <path d="M16 24l6 6 10-12" stroke="#374151" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <span>Send request to inspect full response</span>
+                <div class="hint-list">
+                    <span>- Response status, timing and size appear above</span>
+                    <span>- Use <b>Pretty</b> for JSON and <b>HTML Preview</b> for markup</span>
+                    <span>- Quick send: press <span class="kbd">Enter</span> in URL field</span>
+                </div>
+            </div>
+
+            <div id="resp-content" style="display:none; flex:1; flex-direction:column; overflow:hidden">
+                <div class="tab-bar" id="resp-tabs">
+                    <button class="tab-btn active" data-rtab="body">Raw</button>
+                    <button class="tab-btn" data-rtab="pretty">Pretty</button>
+                    <button class="tab-btn" data-rtab="html">HTML Preview</button>
+                    <button class="tab-btn" data-rtab="headers">Headers <span class="tc" id="cnt-resp-headers">0</span></button>
+                </div>
+                <!-- Raw body -->
+                <div class="tab-content resp-pre active" id="tab-body-resp"></div>
+                <!-- Pretty JSON tree -->
+                <div class="tab-content" id="tab-pretty-resp"></div>
+                <!-- HTML preview -->
+                <div class="tab-content" id="tab-html-resp">
+                    <div id="html-preview-bar">
+                        <span class="html-preview-badge">🔒 sandboxed</span>
+                        <span>Scripts, forms and all external network requests are blocked</span>
+                        <button class="sm-btn" id="html-preview-refresh" style="margin-left:auto">↺ Reload</button>
+                    </div>
+                    <div id="html-preview-empty">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9l6 6M15 9l-6 6"/></svg>
+                        <span>No HTML response to preview</span>
+                    </div>
+                    <iframe id="html-preview-iframe" sandbox="allow-same-origin" style="display:none"></iframe>
+                </div>
+                <!-- Response headers -->
+                <div class="tab-content" id="tab-headers-resp" style="overflow:auto; padding:10px 14px">
+                    <table class="kv-table"><thead><tr><th>Name</th><th>Value</th></tr></thead>
+                    <tbody id="resp-headers-tbody"></tbody></table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Footnote ──────────────────────────────────────────────────────────── -->
+    <div id="footnote">
+        <b>★</b> Headers marked as "Fetch API forbidden" are sent as-is — AzureTLS builds the TCP/TLS connection directly at the Go level, bypassing all browser restrictions.
+        TLS fingerprint (JA3/H2) and proxy are taken from the current session (Proxy Manager).
+        <span style="color:#64748b"> · If AzureTLS is unavailable, <code>net.fetch</code> is used as fallback and these headers may be dropped.</span>
+        <br><span style="color:#475569;margin-top:3px;display:inline-block">
+        ⓘ Requests from Request Editor are logged to the session when recording is ON.
+        </span>
+    </div>
+
+</div>
+<script src="request-editor-renderer.js"></script>
+</body>
+</html>

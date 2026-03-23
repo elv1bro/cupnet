@@ -57,6 +57,7 @@ const lvCount        = document.getElementById('lv-count');
 const autoScrollBtn  = document.getElementById('auto-scroll-btn');
 const exportHarBtn   = document.getElementById('export-har-btn');
 const exportBundleBtn = document.getElementById('export-bundle-btn');
+const exportSiteZipBtn = document.getElementById('export-site-zip-btn');
 const importBundleBtn = document.getElementById('import-bundle-btn');
 const traceModeBtn  = document.getElementById('trace-mode-btn');
 const openRulesBtn   = document.getElementById('open-rules-btn');
@@ -84,6 +85,14 @@ const tabContents    = document.querySelectorAll('.lv-tab-content');
 const protectionModal = document.getElementById('protection-modal');
 const protectionConfirmBtn = document.getElementById('protection-confirm-btn');
 const protectionCancelBtn = document.getElementById('protection-cancel-btn');
+const siteExportModal = document.getElementById('site-export-modal');
+const siteExportSelect = document.getElementById('site-export-origin');
+const siteExportConfirmBtn = document.getElementById('site-export-confirm-btn');
+const siteExportCancelBtn = document.getElementById('site-export-cancel-btn');
+/** @type {number|null} */
+let _siteExportSessionId = null;
+/** @type {((e: KeyboardEvent) => void)|null} */
+let _siteExportEscHandler = null;
 const compareSideModal = document.getElementById('compare-side-modal');
 const compareSidePicker = document.getElementById('compare-side-picker');
 const compareSideCancelBtn = document.getElementById('compare-side-cancel-btn');
@@ -1961,6 +1970,96 @@ exportHarBtn?.addEventListener('click', async () => {
     exportHarBtn.disabled = true; exportHarBtn.textContent = '⟳ Exporting…';
     try { await api.exportHar(currentSessionId); }
     finally { exportHarBtn.disabled = false; exportHarBtn.textContent = '⬇ HAR'; }
+});
+
+async function resolveSessionIdForDbExport() {
+    if (currentSessionId != null) return Number(currentSessionId);
+    const sid = await api.getCurrentSessionId().catch(() => null);
+    return sid != null ? Number(sid) : null;
+}
+
+function closeSiteExportModal() {
+    if (_siteExportEscHandler) {
+        document.removeEventListener('keydown', _siteExportEscHandler);
+        _siteExportEscHandler = null;
+    }
+    siteExportModal?.classList.remove('visible');
+    _siteExportSessionId = null;
+}
+
+exportSiteZipBtn?.addEventListener('click', async () => {
+    const sid = await resolveSessionIdForDbExport();
+    if (!sid) {
+        alert('No logging session. Start recording or open a saved session from the sidebar.');
+        return;
+    }
+    _siteExportSessionId = sid;
+    exportSiteZipBtn.disabled = true;
+    const prevLabel = exportSiteZipBtn.textContent;
+    exportSiteZipBtn.textContent = '⟳ …';
+    try {
+        const origins = await api.listSessionOrigins(sid);
+        if (!origins.length) {
+            alert('No HTTP(S) origins in this session.');
+            _siteExportSessionId = null;
+            return;
+        }
+        if (siteExportSelect) {
+            siteExportSelect.innerHTML = '';
+            for (const o of origins) {
+                const opt = document.createElement('option');
+                opt.value = o;
+                opt.textContent = o;
+                siteExportSelect.appendChild(opt);
+            }
+        }
+        _siteExportEscHandler = (e) => {
+            if (e.key === 'Escape') closeSiteExportModal();
+        };
+        document.addEventListener('keydown', _siteExportEscHandler);
+        siteExportModal?.classList.add('visible');
+    } catch (e) {
+        console.error('[log-viewer] listSessionOrigins', e);
+        alert('Could not load origins for this session.');
+        _siteExportSessionId = null;
+    } finally {
+        exportSiteZipBtn.disabled = false;
+        exportSiteZipBtn.textContent = prevLabel;
+    }
+});
+
+siteExportCancelBtn?.addEventListener('click', () => closeSiteExportModal());
+siteExportModal?.addEventListener('click', (e) => {
+    if (e.target === siteExportModal) closeSiteExportModal();
+});
+
+siteExportConfirmBtn?.addEventListener('click', async () => {
+    const origin = siteExportSelect?.value;
+    const sessionId = _siteExportSessionId;
+    if (!origin || !sessionId) {
+        closeSiteExportModal();
+        return;
+    }
+    siteExportConfirmBtn.disabled = true;
+    const prev = siteExportConfirmBtn.textContent;
+    siteExportConfirmBtn.textContent = '⟳ …';
+    try {
+        const res = await api.exportSiteZip({ sessionId, origin });
+        closeSiteExportModal();
+        if (res?.success) {
+            const st = res.stats || {};
+            alert(`Site ZIP saved.\nFiles: ${st.files ?? 0}\nRows skipped (filtered): ${st.skipped ?? '—'}`);
+        } else if (!res?.canceled) {
+            alert(`Site ZIP export failed: ${res?.error || 'unknown error'}`);
+        }
+    } catch (e) {
+        console.error('[log-viewer] exportSiteZip', e);
+        closeSiteExportModal();
+        alert(`Site ZIP export failed: ${e.message || e}`);
+    } finally {
+        siteExportConfirmBtn.disabled = false;
+        siteExportConfirmBtn.textContent = prev;
+    }
 });
 
 exportBundleBtn?.addEventListener('click', async () => {

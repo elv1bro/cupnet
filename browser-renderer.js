@@ -627,6 +627,7 @@ if (pbStatusBtn) {
 
 // Live updates
 api.onProxyStatusChanged((info) => {
+    _proxyIpGeo = null;
     updateProxyStatus(info);
     if (info?.active) _fetchProxyIpGeo();
 });

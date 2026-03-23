@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Start Logging</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+    background: transparent;
+    color: #e2e8f0;
+    height: 100vh;
+    display: flex;
+    align-items: stretch;
+    justify-content: stretch;
+}
+
+.card {
+    flex: 1;
+    background: #1a1d2e;
+    border: 1px solid rgba(255,255,255,0.13);
+    border-radius: 12px;
+    padding: 16px 18px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.75), 0 2px 8px rgba(0,0,0,0.4);
+    -webkit-app-region: drag;
+    overflow: hidden;
+    position: relative;
+}
+.card > * { -webkit-app-region: no-drag; }
+
+/* Countdown progress bar — top edge, hidden once timer is cancelled */
+.progress-track {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 12px 12px 0 0;
+    overflow: hidden;
+    transition: opacity 0.3s;
+}
+.progress-track.hidden { opacity: 0; pointer-events: none; }
+.progress-fill {
+    height: 100%;
+    width: 100%;
+    background: linear-gradient(90deg, #3b82f6, #60a5fa);
+    transform-origin: left center;
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.modal-header-left { display: flex; align-items: center; gap: 7px; }
+.modal-icon  { font-size: 13px; line-height: 1; }
+.modal-title { font-size: 12.5px; font-weight: 600; color: #e2e8f0; }
+.modal-countdown {
+    font-size: 11px;
+    color: #475569;
+    font-variant-numeric: tabular-nums;
+    min-width: 28px;
+    text-align: right;
+    transition: opacity 0.3s;
+}
+.modal-countdown.hidden { opacity: 0; }
+
+.modal-desc {
+    font-size: 11.5px;
+    color: #64748b;
+    line-height: 1.45;
+}
+
+.modal-options { display: flex; flex-direction: column; gap: 5px; }
+
+.modal-option {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 10px;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 7px;
+    cursor: pointer;
+    color: #94a3b8;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+    user-select: none;
+}
+.modal-option:hover { background: rgba(255,255,255,0.05); }
+.modal-option.selected {
+    border-color: #3b82f6;
+    background: rgba(59,130,246,0.1);
+    color: #e2e8f0;
+}
+.opt-icon  { font-size: 13px; flex-shrink: 0; opacity: 0.75; }
+.opt-title { font-size: 11.5px; font-weight: 500; line-height: 1.3; }
+.opt-sub   { font-size: 10.5px; color: #64748b; margin-top: 1px; }
+.modal-option.selected .opt-sub { color: #94a3b8; }
+
+.rename-wrap  { display: flex; flex-direction: column; gap: 4px; }
+.rename-label { font-size: 10.5px; color: #64748b; }
+.rename-input {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px;
+    padding: 6px 9px;
+    font-size: 11.5px;
+    color: #e2e8f0;
+    outline: none;
+    transition: border-color 0.15s;
+    width: 100%;
+}
+.rename-input:focus        { border-color: #3b82f6; }
+.rename-input::placeholder { color: #334155; }
+
+.modal-btns {
+    display: flex;
+    gap: 7px;
+    justify-content: flex-end;
+    margin-top: 2px;
+}
+.btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    transition: opacity 0.13s;
+}
+.btn:hover:not(:disabled) { opacity: 0.82; }
+.btn:disabled { opacity: 0.35; cursor: default; }
+.btn-cancel  { background: rgba(255,255,255,0.07); color: #94a3b8; }
+.btn-confirm { background: #2563eb; color: #fff; }
+</style>
+</head>
+<body>
+<div class="card" id="card">
+
+    <div class="progress-track" id="progress-track">
+        <div class="progress-fill" id="progress-fill"></div>
+    </div>
+
+    <div class="modal-header">
+        <div class="modal-header-left">
+            <span class="modal-icon">⏺</span>
+            <span class="modal-title">Start Logging</span>
+        </div>
+        <span class="modal-countdown" id="countdown">5s</span>
+    </div>
+
+    <p class="modal-desc" id="modal-desc">Continue or start fresh?</p>
+
+    <div class="modal-options">
+        <div class="modal-option selected" id="opt-continue" data-mode="continue">
+            <span class="opt-icon">↩</span>
+            <div>
+                <div class="opt-title">Continue in session <span id="sess-label">#?</span></div>
+                <div class="opt-sub" id="sess-count"></div>
+            </div>
+        </div>
+        <div class="modal-option" id="opt-new" data-mode="new">
+            <span class="opt-icon">✦</span>
+            <div>
+                <div class="opt-title">Start new session</div>
+                <div class="opt-sub">Previous session will be kept in history</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="rename-wrap" id="rename-wrap" style="display:none">
+        <label class="rename-label" for="rename-input">Rename old session (optional)</label>
+        <input type="text" id="rename-input" class="rename-input"
+               placeholder="e.g. Test run 2026-03-04" autocomplete="off">
+    </div>
+
+    <div class="modal-btns">
+        <button class="btn btn-cancel"  id="btn-cancel">Cancel</button>
+        <button class="btn btn-confirm" id="btn-confirm">▶ Start</button>
+    </div>
+
+</div>
+<script>
+'use strict';
+
+const card          = document.getElementById('card');
+const progressTrack = document.getElementById('progress-track');
+const progressFill  = document.getElementById('progress-fill');
+const countdownEl   = document.getElementById('countdown');
+const descEl        = document.getElementById('modal-desc');
+const sessLabel     = document.getElementById('sess-label');
+const sessCount     = document.getElementById('sess-count');
+const renameWrap    = document.getElementById('rename-wrap');
+const renameInput   = document.getElementById('rename-input');
+const optContinue   = document.getElementById('opt-continue');
+const optNew        = document.getElementById('opt-new');
+const btnCancel     = document.getElementById('btn-cancel');
+const btnConfirm    = document.getElementById('btn-confirm');
+
+let selectedMode = 'continue';
+
+// ── Countdown (auto-confirm in 5s, cancelled forever on first mouseenter) ────
+const AUTO_SECS = 5;
+let secsLeft    = AUTO_SECS;
+let timer       = null;
+let cancelled   = false;
+
+function cancelTimer() {
+    if (cancelled) return;
+    cancelled = true;
+    if (timer) { clearInterval(timer); timer = null; }
+    // Hide countdown UI
+    progressTrack.classList.add('hidden');
+    countdownEl.classList.add('hidden');
+}
+
+function startCountdown() {
+    // Reset state on each init to prevent timer accumulation on re-use
+    if (timer) { clearInterval(timer); timer = null; }
+    cancelled = false;
+    secsLeft  = AUTO_SECS;
+
+    // Animate progress bar from full → empty over AUTO_SECS seconds
+    progressFill.style.transition = 'none';
+    progressFill.style.transform  = 'scaleX(1)';
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        progressFill.style.transition = `transform ${AUTO_SECS}s linear`;
+        progressFill.style.transform  = 'scaleX(0)';
+    }));
+
+    timer = setInterval(() => {
+        secsLeft--;
+        countdownEl.textContent = secsLeft > 0 ? `${secsLeft}s` : '…';
+        if (secsLeft <= 0) {
+            clearInterval(timer);
+            timer = null;
+            doConfirm();
+        }
+    }, 1000);
+}
+
+// First hover cancels timer forever — no resume
+card.addEventListener('mouseenter', cancelTimer, { once: true });
+
+// ── Receive init data ────────────────────────────────────────────────────────
+if (window.electronAPI?.onModalLoggingInit) {
+    window.electronAPI.onModalLoggingInit(({ sessionId, sessionName, count }) => {
+        const label = sessionName ? `"${sessionName}" (#${sessionId})` : `#${sessionId}`;
+        descEl.textContent    = `Session ${label} has ${count} entr${count === 1 ? 'y' : 'ies'}.`;
+        sessLabel.textContent = label;
+        sessCount.textContent = `${count} entr${count === 1 ? 'y' : 'ies'} recorded`;
+        startCountdown();
+    });
+}
+
+// ── Option selection ─────────────────────────────────────────────────────────
+[optContinue, optNew].forEach(opt => {
+    opt.addEventListener('click', () => {
+        cancelTimer();
+        selectedMode = opt.dataset.mode;
+        optContinue.classList.toggle('selected', selectedMode === 'continue');
+        optNew.classList.toggle('selected', selectedMode === 'new');
+        renameWrap.style.display = selectedMode === 'new' ? '' : 'none';
+    });
+});
+
+// ── Confirm / Cancel ─────────────────────────────────────────────────────────
+async function doConfirm() {
+    if (btnConfirm.disabled) return;
+    cancelTimer();
+    btnConfirm.disabled = true;
+    btnCancel.disabled  = true;
+    const renameOld = (selectedMode === 'new' && renameInput.value.trim())
+        ? renameInput.value.trim() : null;
+    try {
+        await window.electronAPI.confirmLoggingStart({ mode: selectedMode, renameOld });
+    } catch (e) {
+        console.error('[ModalLogging]', e);
+    }
+    window.close();
+}
+
+btnCancel.addEventListener('click', () => { cancelTimer(); window.close(); });
+btnConfirm.addEventListener('click', doConfirm);
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Enter'  && !btnConfirm.disabled) doConfirm();
+    if (e.key === 'Escape') { cancelTimer(); window.close(); }
+});
+</script>
+</body>
+</html>

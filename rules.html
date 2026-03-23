@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+    <title>Rules &amp; Interceptor</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:        #0f1117;
+            --bg2:       #151923;
+            --bg3:       #1c2235;
+            --bg4:       #222840;
+            --border:    rgba(255,255,255,0.08);
+            --border2:   rgba(255,255,255,0.14);
+            --text:      #e2e8f0;
+            --text-dim:  #8892a4;
+            --text-mute: #4b5568;
+            --accent:    #3b82f6;
+            --accent-bg: rgba(59,130,246,0.14);
+            --green:     #22c55e;
+            --green-bg:  rgba(34,197,94,0.12);
+            --red:       #ef4444;
+            --red-bg:    rgba(239,68,68,0.12);
+            --orange:    #f97316;
+            --orange-bg: rgba(249,115,22,0.12);
+            --purple:    #a855f7;
+            --purple-bg: rgba(168,85,247,0.12);
+            --radius:    8px;
+        }
+
+        html, body {
+            height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        body { display: flex; flex-direction: column; overflow: hidden; }
+
+        /* ── Header / tabs ──────────────────────────────────────────────────── */
+        .header {
+            display: flex; align-items: center; gap: 0;
+            background: var(--bg2);
+            border-bottom: 1px solid var(--border);
+            padding: 0 16px;
+            flex-shrink: 0;
+        }
+
+        .tab-btn {
+            padding: 12px 18px; background: none; border: none;
+            border-bottom: 2px solid transparent;
+            color: var(--text-dim); cursor: pointer; font-size: 13px;
+            font-weight: 500; white-space: nowrap;
+            transition: color 0.15s, border-color 0.15s;
+            margin-bottom: -1px;
+        }
+        .tab-btn:hover { color: var(--text); }
+        .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+        /* ── Content area ───────────────────────────────────────────────────── */
+        .tab-content { display: none; flex: 1; overflow-y: auto; padding: 18px 20px; }
+        .tab-content.active { display: flex; flex-direction: column; gap: 14px; }
+
+        /* ── Toolbar row ────────────────────────────────────────────────────── */
+        .toolbar-row {
+            display: flex; align-items: center; gap: 10px;
+        }
+        .toolbar-row h2 {
+            flex: 1; font-size: 15px; font-weight: 600; color: var(--text);
+        }
+
+        /* ── Buttons ────────────────────────────────────────────────────────── */
+        button { cursor: pointer; font-family: inherit; }
+
+        .btn-primary {
+            background: var(--accent); color: #fff; border: none;
+            padding: 7px 14px; border-radius: var(--radius);
+            font-size: 12.5px; font-weight: 600;
+            transition: opacity 0.15s;
+        }
+        .btn-primary:hover { opacity: 0.88; }
+
+        .btn-secondary {
+            background: var(--bg3); color: var(--text); border: 1px solid var(--border2);
+            padding: 6px 12px; border-radius: var(--radius); font-size: 12px;
+            transition: background 0.15s;
+        }
+        .btn-secondary:hover { background: var(--bg4); }
+
+        .btn-danger {
+            background: var(--red-bg); color: var(--red); border: 1px solid rgba(239,68,68,0.25);
+            padding: 4px 9px; border-radius: 6px; font-size: 11.5px;
+            transition: background 0.15s;
+        }
+        .btn-danger:hover { background: rgba(239,68,68,0.22); }
+
+        .btn-sm { padding: 4px 9px; font-size: 11.5px; }
+
+        /* ── Edit form ──────────────────────────────────────────────────────── */
+        .edit-form {
+            display: none;
+            background: var(--bg2); border: 1px solid var(--border2);
+            border-radius: 12px; padding: 18px 20px;
+        }
+        .edit-form.visible { display: block; }
+
+        .form-row { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+        .form-row label {
+            font-size: 11.5px; font-weight: 600; color: var(--text-dim);
+            text-transform: uppercase; letter-spacing: 0.4px;
+        }
+        .form-row input[type="text"],
+        .form-row input[type="number"],
+        .form-row select,
+        .form-row textarea {
+            background: var(--bg3); color: var(--text);
+            border: 1px solid var(--border2); border-radius: 6px;
+            padding: 7px 10px; font-size: 12.5px; font-family: inherit;
+            outline: none; transition: border-color 0.15s;
+        }
+        .form-row input:focus,
+        .form-row select:focus,
+        .form-row textarea:focus { border-color: var(--accent); }
+        .form-row select option { background: var(--bg3); color: var(--text); }
+        .form-row textarea {
+            min-height: 72px; resize: vertical;
+            font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+            font-size: 12px; line-height: 1.55;
+        }
+
+        /* ── Section title ──────────────────────────────────────────────────── */
+        .section-title {
+            font-size: 11px; font-weight: 700; color: var(--text-mute);
+            text-transform: uppercase; letter-spacing: 0.6px;
+            margin: 14px 0 8px;
+        }
+        .section-title small {
+            font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11px; color: var(--text-dim);
+        }
+
+        /* ── Condition / action rows ────────────────────────────────────────── */
+        .builder { display: flex; flex-direction: column; gap: 6px; }
+        .builder-row { display: flex; gap: 6px; align-items: center; }
+        .builder-row select,
+        .builder-row input { flex: 1; min-width: 0; }
+        .builder-row select {
+            background: var(--bg3); color: var(--text);
+            border: 1px solid var(--border2); border-radius: 6px;
+            padding: 6px 8px; font-size: 12px; outline: none;
+        }
+        .builder-row input[type="text"] {
+            background: var(--bg3); color: var(--text);
+            border: 1px solid var(--border2); border-radius: 6px;
+            padding: 6px 8px; font-size: 12px; outline: none;
+        }
+        .builder-row input[type="color"] {
+            width: 34px; height: 32px; padding: 2px; border-radius: 6px;
+            border: 1px solid var(--border2); background: var(--bg3);
+            cursor: pointer; flex-shrink: 0;
+        }
+
+        /* ── Rule items list ────────────────────────────────────────────────── */
+        .rule-list { display: flex; flex-direction: column; gap: 6px; }
+
+        .rule-item {
+            background: var(--bg2); border: 1px solid var(--border);
+            border-radius: 10px; padding: 11px 14px;
+            display: flex; align-items: center; gap: 10px;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .rule-item:hover { background: var(--bg3); border-color: var(--border2); }
+
+        .rule-name { flex: 1; font-weight: 600; font-size: 13px; color: var(--text); }
+        .rule-meta { font-size: 11px; color: var(--text-mute); white-space: nowrap; }
+        .rule-hits {
+            font-size: 11px; background: var(--bg4); color: var(--text-dim);
+            padding: 2px 7px; border-radius: 99px; white-space: nowrap;
+        }
+
+        /* Type badges */
+        .badge {
+            font-size: 11px; padding: 2px 8px; border-radius: 99px;
+            font-weight: 600; white-space: nowrap;
+        }
+        .badge-block    { background: var(--red-bg);    color: var(--red); }
+        .badge-mock     { background: var(--green-bg);  color: var(--green); }
+        .badge-modify   { background: var(--orange-bg); color: var(--orange); }
+        .badge-hl       { background: var(--purple-bg); color: var(--purple); }
+        .badge-default  { background: var(--accent-bg); color: var(--accent); }
+
+        /* ── Toggle switch ──────────────────────────────────────────────────── */
+        .toggle { position: relative; width: 34px; height: 18px; display: inline-block; flex-shrink: 0; }
+        .toggle input { display: none; }
+        .toggle-track {
+            position: absolute; inset: 0; background: var(--bg4);
+            border-radius: 99px; cursor: pointer; transition: 0.2s;
+            border: 1px solid var(--border2);
+        }
+        .toggle-track::before {
+            content: ''; position: absolute;
+            width: 12px; height: 12px; background: var(--text-dim);
+            border-radius: 50%; left: 2px; top: 2px; transition: 0.2s;
+        }
+        .toggle input:checked + .toggle-track { background: var(--accent); border-color: var(--accent); }
+        .toggle input:checked + .toggle-track::before { transform: translateX(16px); background: #fff; }
+
+        /* ── Form action row ────────────────────────────────────────────────── */
+        .form-actions { display: flex; gap: 8px; margin-top: 16px; }
+
+        /* ── Empty state ────────────────────────────────────────────────────── */
+        .empty-state {
+            text-align: center; padding: 48px 20px;
+            color: var(--text-mute); font-size: 13px;
+        }
+        .empty-state-icon { font-size: 36px; margin-bottom: 10px; opacity: 0.5; }
+
+        /* ── Description text ───────────────────────────────────────────────── */
+        .description {
+            font-size: 12px; color: var(--text-dim); line-height: 1.6;
+            background: var(--bg2); border: 1px solid var(--border);
+            border-radius: 8px; padding: 10px 14px;
+        }
+        .description code {
+            background: var(--bg3); color: #93c5fd;
+            padding: 1px 4px; border-radius: 4px; font-size: 11px;
+        }
+
+        /* ── Activity log ──────────────────────────────────────────────────── */
+        .act-group-header {
+            padding: 10px 14px 6px;
+            font-size: 11px; font-weight: 700;
+            color: var(--text-mute); text-transform: uppercase;
+            letter-spacing: 0.4px;
+            border-top: 1px solid var(--border);
+            margin-top: 8px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .act-group-header:first-child { border-top: none; margin-top: 0; }
+        .act-group-url {
+            font-weight: 400; text-transform: none; letter-spacing: 0;
+            color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap; flex: 1; min-width: 0;
+        }
+        .act-entry {
+            display: flex; align-items: center; gap: 8px;
+            flex-wrap: wrap;
+            padding: 5px 14px 5px 28px;
+            font-size: 12px; color: var(--text);
+            transition: background 0.1s;
+        }
+        .act-entry:hover { background: var(--bg3); }
+        .act-time { font-size: 10px; color: var(--text-mute); flex-shrink: 0; width: 55px; }
+        .act-icon { font-size: 13px; flex-shrink: 0; }
+        .act-rule { font-weight: 600; flex-shrink: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .act-url { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+        .act-type-mock { color: #f59e0b; }
+        .act-type-block { color: #ef4444; }
+        .act-type-modify { color: #3b82f6; }
+        .act-detail {
+            font-size: 10px; color: #64748b;
+            background: rgba(255,255,255,0.04);
+            padding: 1px 6px; border-radius: 4px;
+            flex-shrink: 0; white-space: nowrap;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+        .act-body {
+            grid-column: 1 / -1;
+            font-size: 10px; color: #6b7280;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            background: rgba(0,0,0,0.2);
+            padding: 4px 8px; border-radius: 4px;
+            margin-top: 2px;
+            white-space: pre-wrap; word-break: break-all;
+            max-height: 60px; overflow: hidden;
+        }
+        .act-links {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-left: auto;
+        }
+        .act-link {
+            border: 1px solid var(--border2);
+            background: var(--bg2);
+            color: var(--text-dim);
+            border-radius: 4px;
+            padding: 1px 6px;
+            font-size: 10px;
+            cursor: pointer;
+        }
+        .act-link:hover {
+            color: var(--text);
+            border-color: var(--accent);
+        }
+        .rule-item.flash {
+            animation: flashRule .9s ease;
+        }
+        @keyframes flashRule {
+            0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.35); border-color: rgba(59,130,246,0.8); }
+            100% { box-shadow: 0 0 0 9px rgba(59,130,246,0); border-color: var(--border); }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ── Header / tabs ──────────────────────────────────────────────────────── -->
+<div class="header">
+    <button class="tab-btn" data-tab="rules">Highlight &amp; Action Rules</button>
+    <button class="tab-btn active" data-tab="intercept">Intercept Rules</button>
+    <button class="tab-btn" data-tab="activity">Activity <span id="activity-count" style="font-size:10px;background:rgba(239,68,68,0.2);color:#f87171;padding:1px 6px;border-radius:99px;margin-left:4px;font-weight:700">0</span></button>
+</div>
+
+<!-- ══════════════════════ HIGHLIGHT RULES ══════════════════════════════════ -->
+<div id="tab-rules" class="tab-content">
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;text-align:center;gap:12px;color:var(--text-dim)">
+        <div style="font-size:48px;opacity:0.5">🚧</div>
+        <div style="font-size:16px;font-weight:700;color:var(--text)">In Development</div>
+        <div style="font-size:12px;max-width:320px;line-height:1.5;color:var(--text-mute)">
+            Highlight &amp; Action Rules are being redesigned.<br>
+            Use <b>Intercept Rules</b> tab for mock, block, and header modification.
+        </div>
+    </div>
+
+    <!-- hidden: preserved for future use -->
+    <div id="rule-edit-form" class="edit-form" style="display:none!important">
+        <input type="hidden" id="edit-rule-id">
+        <div class="form-row"><label>Rule name</label><input type="text" id="edit-rule-name"></div>
+        <div class="builder" id="conditions-builder"></div>
+        <div class="builder" id="actions-builder"></div>
+        <div class="form-actions">
+            <button class="btn-primary" id="btn-save-rule">Save</button>
+            <button class="btn-secondary" id="btn-cancel-rule">Cancel</button>
+        </div>
+    </div>
+    <div id="rules-list" class="rule-list" style="display:none"></div>
+</div>
+
+<!-- ══════════════════════ INTERCEPT RULES ══════════════════════════════════ -->
+<div id="tab-intercept" class="tab-content active">
+
+    <div class="toolbar-row">
+        <h2>Request Interceptor</h2>
+        <button class="btn-secondary btn-sm" id="btn-test-notification" title="Send a test notification to all windows">🔔 Test Notification</button>
+        <button class="btn-primary" id="btn-add-intercept">+ New Rule</button>
+    </div>
+
+    <div class="description">
+        Intercept rules modify or block requests <b>before</b> they reach the server.
+        По умолчанию: glob с <code>*</code>, напр. <code>*example.com/api*</code>.
+        Если задано <code>CUPNET_INTERCEPT_STRICT_URLS=1</code> — только префикс URL без <code>*</code>, напр. <code>https://api.example.com/v1/</code>.
+    </div>
+
+    <!-- Edit form -->
+    <div id="intercept-edit-form" class="edit-form">
+        <input type="hidden" id="edit-intercept-id">
+
+        <div class="form-row">
+            <label>Rule name</label>
+            <input type="text" id="edit-intercept-name" placeholder="e.g. Block ads">
+        </div>
+
+        <div class="form-row">
+            <label>URL pattern (glob или строгий префикс — см. подсказку выше)</label>
+            <input type="text" id="edit-intercept-pattern" placeholder="https://example.com/api/ или *example.com/ads*">
+        </div>
+
+        <div class="form-row">
+            <label>Action type</label>
+            <select id="edit-intercept-type">
+                <option value="block">Block request</option>
+                <option value="modifyHeaders">Modify headers</option>
+                <option value="mock">Mock response</option>
+            </select>
+        </div>
+
+        <!-- block info -->
+        <div id="intercept-params-block" style="display:none">
+            <div class="description">Request will be cancelled before it is sent. No additional parameters needed.</div>
+        </div>
+
+        <!-- modifyHeaders params -->
+        <div id="intercept-params-headers" style="display:none">
+            <div class="form-row" style="margin-top:10px">
+                <label>Request headers to set (JSON object)</label>
+                <textarea id="edit-req-headers" placeholder='{"X-Custom": "value"}'></textarea>
+            </div>
+            <div class="form-row">
+                <label>Response headers to set (JSON object)</label>
+                <textarea id="edit-resp-headers" placeholder='{"Access-Control-Allow-Origin": "*"}'></textarea>
+            </div>
+        </div>
+
+        <!-- mock params -->
+        <div id="intercept-params-mock" style="display:none">
+            <div class="form-row" style="margin-top:10px">
+                <label>Status code</label>
+                <input type="number" id="edit-mock-status" value="200" min="100" max="599" style="max-width:120px">
+            </div>
+            <div class="form-row">
+                <label>MIME type</label>
+                <input type="text" id="edit-mock-mime" value="application/json">
+            </div>
+            <div class="form-row">
+                <label>Response body</label>
+                <textarea id="edit-mock-body" placeholder='{"ok":true}'></textarea>
+            </div>
+        </div>
+
+        <div class="form-actions">
+            <button class="btn-primary" id="btn-save-intercept">Save Rule</button>
+            <button class="btn-secondary" id="btn-cancel-intercept">Cancel</button>
+        </div>
+    </div>
+
+    <div id="intercept-list" class="rule-list"></div>
+</div>
+
+<!-- ══════════════════════ ACTIVITY LOG ══════════════════════════════════════ -->
+<div id="tab-activity" class="tab-content">
+    <div class="toolbar-row">
+        <h2>Intercept Activity</h2>
+        <button class="btn-secondary btn-sm" id="btn-clear-activity">✕ Clear</button>
+    </div>
+    <div class="description">
+        Live log of intercept rule matches. Grouped by page navigation. Counter resets on clear.
+    </div>
+    <div id="activity-log" class="rule-list" style="gap:0"></div>
+</div>
+
+<script src="rules.js"></script>
+</body>
+</html>

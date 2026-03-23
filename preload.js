@@ -107,6 +107,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     exportHar:               (sid)     => ipcRenderer.invoke('export-har', sid),
     exportBundle:            (payload) => ipcRenderer.invoke('export-bundle', payload),
     importBundle:            ()        => ipcRenderer.invoke('import-bundle'),
+    listSessionOrigins:      (sid)     => ipcRenderer.invoke('list-session-origins', sid),
+    exportSiteZip:           (payload) => ipcRenderer.invoke('export-site-zip', payload),
     diffRequests:            (a, b)    => ipcRenderer.invoke('diff-requests', a, b),
     openCompareViewer:       ()        => ipcRenderer.invoke('open-compare-viewer'),
     getCompare:              ()        => ipcRenderer.invoke('compare-get'),

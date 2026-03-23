@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+    <title>Page Analyzer</title>
+    <style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --bg:       #0d1117;
+    --bg1:      #161b27;
+    --bg2:      #1c2236;
+    --bg3:      #222840;
+    --border:   #2a3350;
+    --text:     #c9d3e8;
+    --dim:      #5c6b8a;
+    --hi:       #e8eef8;
+    --accent:   #3b82f6;
+    --green:    #22c55e;
+    --amber:    #f59e0b;
+    --red:      #ef4444;
+    --purple:   #a855f7;
+}
+
+html, body { height: 100%; overflow: hidden; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+}
+
+/* ── Top bar ── */
+.topbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--bg1);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.topbar-title { font-weight: 700; font-size: 14px; margin-right: 6px; }
+
+.tab-selector {
+    display: flex; align-items: center; gap: 4px;
+}
+
+select {
+    background: var(--bg2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 6px; padding: 5px 9px;
+    font-size: 12px; outline: none; cursor: pointer;
+}
+select:focus { border-color: var(--accent); }
+
+.toggle-wrap {
+    display: inline-flex; align-items: center; gap: 6px;
+    cursor: pointer; user-select: none; font-size: 12px; color: var(--dim);
+}
+.toggle-wrap input { display: none; }
+.toggle-track {
+    position: relative; width: 32px; height: 18px; border-radius: 9px;
+    background: var(--border); transition: background .18s;
+}
+.toggle-track::after {
+    content: ''; position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--dim); transition: transform .18s, background .18s;
+}
+.toggle-wrap input:checked + .toggle-track { background: var(--accent); }
+.toggle-wrap input:checked + .toggle-track::after { transform: translateX(14px); background: #fff; }
+
+.spacer { flex: 1; }
+
+.btn {
+    padding: 5px 11px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--bg2); color: var(--dim); font-size: 12px;
+    cursor: pointer; transition: all .15s; white-space: nowrap;
+}
+.btn:hover { border-color: var(--accent); color: var(--hi); }
+.btn.active { border-color: var(--accent); color: var(--accent); background: rgba(59,126,248,0.1); }
+.btn-primary {
+    background: rgba(59,130,246,0.22);
+    border-color: rgba(59,130,246,0.55);
+    color: #bfdbfe;
+}
+.btn-primary:hover {
+    background: rgba(59,130,246,0.32);
+    border-color: rgba(59,130,246,0.75);
+    color: #e0edff;
+}
+.btn-sm { padding: 3px 8px; font-size: 11px; }
+
+/* ── Analysis tabs ── */
+.analysis-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 6px 12px;
+    background: var(--bg1);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.atab {
+    padding: 6px 16px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--dim);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    transition: all .15s;
+    display: flex; align-items: center; gap: 6px;
+}
+.atab:hover { color: var(--text); background: var(--bg2); }
+.atab.active { color: var(--accent); background: rgba(59,126,248,0.08); border-color: rgba(59,126,248,0.3); }
+.atab-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 18px; height: 18px; padding: 0 5px;
+    border-radius: 9px; font-size: 10px; font-weight: 700;
+    background: var(--bg3); color: var(--dim);
+}
+.atab.active .atab-badge { background: rgba(59,126,248,0.2); color: var(--accent); }
+.atab-badge.has-items { background: rgba(34,197,94,0.15); color: var(--green); }
+.atab.active .atab-badge.has-items { background: rgba(59,126,248,0.2); color: var(--accent); }
+
+/* ── Content area ── */
+.content { flex: 1; overflow-y: auto; padding: 12px; }
+
+.panel { display: none; }
+.panel.active { display: block; }
+
+/* ── Forms panel ── */
+.form-card {
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    overflow: hidden;
+}
+.form-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+}
+.form-header:hover { background: var(--bg3); }
+.form-num {
+    width: 24px; height: 24px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(59,126,248,0.12); color: var(--accent);
+    font-size: 11px; font-weight: 700; flex-shrink: 0;
+}
+.form-info { flex: 1; min-width: 0; }
+.form-name { font-weight: 600; color: var(--hi); font-size: 13px; }
+.form-meta { font-size: 11px; color: var(--dim); margin-top: 1px; }
+.form-badges { display: flex; gap: 4px; flex-shrink: 0; }
+.fbadge {
+    padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 600;
+}
+.fbadge-method { background: rgba(59,126,248,0.12); color: var(--accent); }
+.fbadge-hidden { background: rgba(245,158,11,0.12); color: var(--amber); }
+.fbadge-readonly { background: rgba(168,85,247,0.12); color: var(--purple); }
+.form-actions { display: flex; gap: 4px; }
+
+.form-body { padding: 0; }
+
+/* Fields table */
+.fields-table {
+    width: 100%; border-collapse: collapse; font-size: 12px;
+}
+.fields-table th {
+    text-align: left; padding: 6px 10px; font-weight: 600;
+    color: var(--dim); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.5px; background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0;
+}
+.fields-table td {
+    padding: 5px 10px; border-bottom: 1px solid rgba(42,51,80,0.5);
+    vertical-align: top;
+}
+.fields-table tr:hover { background: rgba(59,126,248,0.03); }
+.fields-table tr.field-hidden { background: rgba(245,158,11,0.04); }
+.fields-table tr.field-readonly { background: rgba(168,85,247,0.04); }
+.fields-table tr.field-disabled { opacity: 0.5; }
+
+.field-name { font-family: 'SF Mono','Menlo','Consolas',monospace; font-size: 11px; color: var(--hi); }
+.field-type {
+    font-size: 10px; padding: 1px 5px; border-radius: 3px;
+    background: var(--bg3); color: var(--dim); display: inline-block;
+}
+.field-type.type-hidden { background: rgba(245,158,11,0.12); color: var(--amber); }
+.field-type.type-password { background: rgba(239,68,68,0.12); color: var(--red); }
+.field-type.type-submit { background: rgba(34,197,94,0.12); color: var(--green); }
+.field-type.type-select { background: rgba(168,85,247,0.12); color: var(--purple); }
+
+.field-value-wrap {
+    max-width: 280px; min-width: 80px; position: relative;
+}
+.field-value {
+    font-family: 'SF Mono','Menlo','Consolas',monospace; font-size: 11px;
+    color: var(--text); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+}
+.field-value-wrap.expanded .field-value {
+    white-space: pre-wrap; word-break: break-all; overflow: visible;
+    text-overflow: unset;
+}
+.fv-btns {
+    display: inline-flex; gap: 2px; margin-left: 4px; vertical-align: middle;
+}
+.fv-btn {
+    padding: 0 4px; border: none; background: none;
+    color: var(--dim); font-size: 10px; cursor: pointer;
+    border-radius: 2px; transition: color .12s;
+}
+.fv-btn:hover { color: var(--accent); }
+.field-tags { display: flex; gap: 3px; flex-wrap: wrap; }
+.ftag {
+    font-size: 9px; padding: 1px 4px; border-radius: 3px; font-weight: 600;
+}
+.ftag-hidden { background: rgba(245,158,11,0.12); color: var(--amber); }
+.ftag-readonly { background: rgba(168,85,247,0.12); color: var(--purple); }
+.ftag-disabled { background: rgba(107,114,128,0.2); color: #6b7280; }
+.ftag-required { background: rgba(239,68,68,0.12); color: var(--red); }
+.ftag-invisible { background: rgba(107,114,128,0.15); color: #6b7280; }
+
+.field-actions {
+    display: flex; gap: 3px;
+}
+.field-action-btn {
+    padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border);
+    background: var(--bg2); color: var(--dim); font-size: 10px;
+    cursor: pointer; transition: all .12s;
+}
+.field-action-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ── Captcha panel ── */
+.captcha-section {
+    background: var(--bg1); border: 1px solid var(--border);
+    border-radius: 8px; margin-bottom: 12px; overflow: hidden;
+}
+.captcha-section-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px; background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+}
+.captcha-section-icon { font-size: 16px; }
+.captcha-section-title { font-weight: 700; font-size: 13px; color: var(--hi); }
+.captcha-section-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px;
+    font-size: 11px; font-weight: 700;
+}
+.captcha-section-badge.found { background: rgba(34,197,94,0.15); color: var(--green); }
+.captcha-section-badge.empty { background: var(--bg3); color: var(--dim); }
+.captcha-section-note {
+    margin-left: auto; font-size: 11px; color: var(--dim); font-style: italic;
+}
+
+.captcha-item {
+    padding: 10px 14px; border-bottom: 1px solid rgba(42,51,80,0.4);
+}
+.captcha-item:last-child { border-bottom: none; }
+.captcha-item-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.captcha-item-type { font-weight: 600; font-size: 12px; color: var(--hi); }
+.captcha-via {
+    font-size: 10px; padding: 1px 5px; border-radius: 3px;
+    background: var(--bg3); color: var(--dim);
+}
+.captcha-params {
+    display: grid; grid-template-columns: auto 1fr; gap: 2px 12px;
+    font-size: 12px; padding-left: 4px;
+}
+.captcha-param-key {
+    color: var(--dim); font-size: 11px; white-space: nowrap; padding: 2px 0;
+}
+.captcha-param-val {
+    font-family: 'SF Mono','Menlo','Consolas',monospace; font-size: 11px;
+    color: var(--text); word-break: break-all; padding: 2px 0;
+    cursor: pointer; user-select: all;
+}
+.captcha-param-val:hover { color: var(--accent); }
+.captcha-copy-row {
+    display: flex; gap: 6px; margin-top: 6px; padding-top: 6px;
+    border-top: 1px solid rgba(42,51,80,0.3);
+}
+.captcha-no-items {
+    padding: 12px 14px; color: var(--dim); font-size: 12px; text-align: center;
+}
+.captcha-solver-card {
+    background: var(--bg1); border: 1px solid var(--border);
+    border-radius: 8px; margin-bottom: 12px; padding: 10px 12px;
+}
+.captcha-solver-row {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.captcha-solver-row + .captcha-solver-row { margin-top: 8px; }
+.captcha-solver-label { font-size: 11px; color: var(--dim); min-width: 86px; }
+.captcha-solver-key {
+    flex: 1; min-width: 220px; height: 30px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg2); color: var(--text);
+    padding: 0 10px; font-size: 12px; font-family: 'SF Mono','Menlo','Consolas',monospace;
+}
+.captcha-solver-status {
+    font-size: 11px; color: var(--dim);
+    border: 1px dashed var(--border); border-radius: 6px; padding: 6px 8px;
+    width: 100%;
+}
+.captcha-solver-status.ok { color: var(--green); border-color: rgba(34,197,94,0.45); }
+.captcha-solver-status.err { color: var(--red); border-color: rgba(239,68,68,0.45); }
+.captcha-solver-toggle { font-size: 11px; color: var(--dim); display: inline-flex; align-items: center; gap: 6px; }
+
+/* ── Meta panel ── */
+.meta-section {
+    background: var(--bg1); border: 1px solid var(--border);
+    border-radius: 8px; margin-bottom: 12px; overflow: hidden;
+}
+.meta-section-title {
+    padding: 8px 14px; font-weight: 600; font-size: 12px;
+    color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px;
+    background: var(--bg2); border-bottom: 1px solid var(--border);
+}
+.meta-row {
+    display: flex; padding: 5px 14px; border-bottom: 1px solid rgba(42,51,80,0.3);
+    font-size: 12px; gap: 12px;
+}
+.meta-row:last-child { border-bottom: none; }
+.meta-key { color: var(--dim); min-width: 120px; flex-shrink: 0; }
+.meta-val { color: var(--text); word-break: break-all; font-family: 'SF Mono',monospace; font-size: 11px; }
+
+/* ── Endpoint Scout panel ── */
+.scout-top {
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+.scout-metric {
+    font-size: 11px; color: var(--dim);
+    padding: 3px 8px; border: 1px solid var(--border);
+    border-radius: 10px; background: var(--bg2);
+}
+.scout-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin: 0 0 10px 0;
+}
+.scout-main-btn {
+    min-width: 130px;
+    font-weight: 700;
+    letter-spacing: .2px;
+}
+.ep-table { width: 100%; border-collapse: collapse; }
+.ep-table th, .ep-table td {
+    padding: 6px 10px; border-bottom: 1px solid rgba(42,51,80,0.5);
+}
+.ep-table th {
+    background: var(--bg2); color: var(--dim); font-size: 11px; text-transform: uppercase;
+    letter-spacing: .5px; text-align: left; position: sticky; top: 0;
+}
+.ep-path {
+    font-family: 'SF Mono','Menlo','Consolas',monospace;
+    color: #93c5fd; font-size: 11px;
+}
+.ep-cat {
+    font-size: 10px; padding: 1px 6px; border-radius: 9px;
+    border: 1px solid var(--border); background: var(--bg3); color: var(--text);
+    text-transform: uppercase;
+}
+
+/* ── Empty state ── */
+.empty-state {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 60px 20px; color: var(--dim);
+    text-align: center;
+}
+.empty-state-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.5; }
+.empty-state-text { font-size: 14px; }
+.empty-state-hint { font-size: 12px; margin-top: 6px; color: rgba(92,107,138,0.7); }
+
+/* ── Status bar ── */
+.statusbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 12px; background: var(--bg1);
+    border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--dim); flex-shrink: 0;
+}
+    </style>
+</head>
+<body>
+
+<div class="topbar">
+    <span class="topbar-title">Page Analyzer</span>
+
+    <div class="tab-selector">
+        <select id="pa-tab-select">
+            <option value="">— select tab —</option>
+        </select>
+    </div>
+
+    <label class="toggle-wrap" title="Auto-analyze on page change">
+        <input type="checkbox" id="pa-auto" checked>
+        <span class="toggle-track"></span>
+        <span>Auto</span>
+    </label>
+
+    <div class="spacer"></div>
+
+    <button class="btn" id="pa-refresh" title="Re-analyze page">↻ Refresh</button>
+</div>
+
+<div class="analysis-tabs" id="pa-tabs-bar">
+    <button class="atab active" data-panel="forms">
+        📝 Forms <span class="atab-badge" id="badge-forms">0</span>
+    </button>
+    <button class="atab" data-panel="captcha">
+        🛡 Captcha <span class="atab-badge" id="badge-captcha">0</span>
+    </button>
+    <button class="atab" data-panel="meta">
+        📄 Page Info <span class="atab-badge" id="badge-meta">—</span>
+    </button>
+    <button class="atab" data-panel="scout">
+        🎯 Endpoint Scout <span class="atab-badge" id="badge-scout">0</span>
+    </button>
+</div>
+
+<div class="content" id="pa-content">
+    <div class="panel active" id="panel-forms">
+        <div class="empty-state" id="forms-empty">
+            <div class="empty-state-icon">📝</div>
+            <div class="empty-state-text">No forms found</div>
+            <div class="empty-state-hint">Select a tab and click Refresh to analyze</div>
+        </div>
+        <div id="forms-list"></div>
+    </div>
+
+    <div class="panel" id="panel-captcha">
+        <div class="captcha-solver-card">
+            <div class="captcha-solver-row">
+                <span class="captcha-solver-label">CapMonster key</span>
+                <input id="captcha-api-key" class="captcha-solver-key" type="password" autocomplete="off" placeholder="API key">
+                <button class="btn btn-sm" id="captcha-save-key">Save</button>
+            </div>
+            <div class="captcha-solver-row">
+                <span class="captcha-solver-label">Sitekey override</span>
+                <input id="captcha-sitekey-override" class="captcha-solver-key" type="text" autocomplete="off" placeholder="0x4AAAA... (optional)">
+            </div>
+            <div class="captcha-solver-row">
+                <label class="captcha-solver-toggle"><input type="checkbox" id="captcha-auto-inject" checked>Auto inject</label>
+                <label class="captcha-solver-toggle"><input type="checkbox" id="captcha-auto-submit">Auto submit form</label>
+                <button class="btn btn-sm btn-primary" id="captcha-solve-turnstile">Solve Turnstile</button>
+                <button class="btn btn-sm" id="captcha-retry-last" disabled>Retry</button>
+            </div>
+            <div id="captcha-solver-status" class="captcha-solver-status">Idle</div>
+        </div>
+        <div id="captcha-sections"></div>
+    </div>
+
+    <div class="panel" id="panel-meta">
+        <div id="meta-content"></div>
+    </div>
+
+    <div class="panel" id="panel-scout">
+        <div class="scout-top">
+            <span class="scout-metric" id="scout-home">status: -</span>
+            <span class="scout-metric" id="scout-scripts">scripts: -</span>
+            <span class="scout-metric" id="scout-endpoints">endpoints: -</span>
+            <span class="scout-metric" id="scout-duration">duration: -</span>
+            <button class="btn btn-sm" id="scout-copy">Copy endpoints</button>
+        </div>
+        <div class="scout-actions">
+            <button class="btn btn-sm btn-primary scout-main-btn" id="scout-run">⚡ Explore</button>
+        </div>
+        <div id="scout-empty" class="empty-state">
+            <div class="empty-state-icon">🎯</div>
+            <div class="empty-state-text">No endpoints yet</div>
+            <div class="empty-state-hint">Click Explore to scan the current tab</div>
+        </div>
+        <table class="ep-table" id="scout-table" style="display:none">
+            <thead><tr><th>Endpoint</th><th>Category</th><th>Method</th><th>Data Shape</th><th>Found In</th><th>Line</th><th>Preview</th></tr></thead>
+            <tbody id="scout-tbody"></tbody>
+        </table>
+    </div>
+</div>
+
+<div class="statusbar">
+    <span id="pa-status">Ready</span>
+    <div class="spacer"></div>
+    <span id="pa-url" style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+</div>
+
+<script src="page-analyzer-renderer.js"></script>
+</body>
+</html>

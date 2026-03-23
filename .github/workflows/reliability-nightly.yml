@@ -1,0 +1,33 @@
+name: Reliability Nightly
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  reliability:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Capture stability baseline
+        run: npm run baseline:stability
+
+      - name: Run reliability test suite
+        run: npm test
+
+      - name: Upload baseline artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stability-baseline
+          path: _debug/stability-baseline.json
+          if-no-files-found: warn

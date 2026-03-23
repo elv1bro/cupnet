@@ -1,0 +1,203 @@
+'use strict';
+/**
+ * Персистентные настройки приложения (settings.json), CapMonster (M7), кэш в памяти.
+ * Синхронизация effectiveTrafficMode → main-процесс через configure({ onEffectiveTrafficModeLoaded }).
+ */
+const path = require('path');
+const fs = require('fs');
+const { app, safeStorage } = require('electron');
+const { normalizeTrafficMode } = require('../../traffic-mode-router');
+const { sysLog } = require('../../sys-log');
+
+const SETTINGS_DEFAULTS = {
+    lastLogPath: null,
+    filterPatterns: ['*google.com*', '*cloudflare.com*', '*analytics*', '*tracking*'],
+    homepage: '',
+    pasteUnlock: true,
+    traceMode: false,
+    currentProxy: '',
+    effectiveTrafficMode: 'browser_proxy',
+    tracking: {
+        onUserClick: true,
+        onPageLoadComplete: true,
+        onNetworkPendingChange: true,
+        onMouseActivity: false,
+        onScrollEnd: false,
+        onRuleMatchScreenshot: true,
+        pendingDeltaThreshold: 3,
+        cooldownMs: 2000,
+        maxPerMinute: 12,
+    },
+    bypassDomains: ['challenges.cloudflare.com'],
+    trafficOpts: {
+        trafficEnabled: false,
+        blockImages: false,
+        blockCSS: false,
+        blockFonts: false,
+        blockMedia: false,
+        blockWebSocket: false,
+        tlsPassthroughDomains: ['challenges.cloudflare.com'],
+        captchaWhitelist: [
+            '*.google.com', '*.gstatic.com', '*.recaptcha.net',
+            'challenges.cloudflare.com', '*.hcaptcha.com',
+        ],
+    },
+    capmonster: {
+        apiKey: '',
+        autoInject: true,
+        autoSubmit: false,
+        pollTimeoutMs: 90000,
+        pollIntervalMs: 3000,
+    },
+};
+
+let _cached = null;
+let _saveSettingsTimer = null;
+let _onEffectiveTrafficModeLoaded = null;
+
+function configure(opts = {}) {
+    if (typeof opts.onEffectiveTrafficModeLoaded === 'function') {
+        _onEffectiveTrafficModeLoaded = opts.onEffectiveTrafficModeLoaded;
+    }
+}
+
+function getSettingsFilePath() {
+    return path.join(app.getPath('userData'), 'settings.json');
+}
+
+function getCached() {
+    return _cached;
+}
+
+function normalizeTrackingSettings(raw) {
+    const base = SETTINGS_DEFAULTS.tracking;
+    const src = raw && typeof raw === 'object' ? raw : {};
+    return {
+        onUserClick: src.onUserClick !== false,
+        onPageLoadComplete: src.onPageLoadComplete !== false,
+        onNetworkPendingChange: src.onNetworkPendingChange !== false,
+        onMouseActivity: src.onMouseActivity === true,
+        onScrollEnd: src.onScrollEnd === true,
+        onRuleMatchScreenshot: src.onRuleMatchScreenshot !== false,
+        pendingDeltaThreshold: Math.max(1, Math.min(50, Number(src.pendingDeltaThreshold) || base.pendingDeltaThreshold)),
+        cooldownMs: Math.max(200, Math.min(30000, Number(src.cooldownMs) || base.cooldownMs)),
+        maxPerMinute: Math.max(1, Math.min(120, Number(src.maxPerMinute) || base.maxPerMinute)),
+    };
+}
+
+function normalizeCapmonsterSettings(raw) {
+    const base = SETTINGS_DEFAULTS.capmonster;
+    const src = raw && typeof raw === 'object' ? raw : {};
+    return {
+        apiKey: String(src.apiKey || '').trim(),
+        autoInject: src.autoInject !== false,
+        autoSubmit: src.autoSubmit === true,
+        pollTimeoutMs: Math.max(30000, Math.min(180000, Number(src.pollTimeoutMs) || base.pollTimeoutMs)),
+        pollIntervalMs: Math.max(1000, Math.min(10000, Number(src.pollIntervalMs) || base.pollIntervalMs)),
+    };
+}
+
+/** Serialize settings for disk; encrypt CapMonster API key when safeStorage is available (M7). */
+function settingsForDisk(s) {
+    let out;
+    try {
+        out = JSON.parse(JSON.stringify(s));
+    } catch {
+        return s;
+    }
+    if (out.capmonster && typeof out.capmonster === 'object' && safeStorage.isEncryptionAvailable()) {
+        const key = String(out.capmonster.apiKey || '').trim();
+        if (key) {
+            try {
+                out.capmonster = {
+                    ...out.capmonster,
+                    apiKeyEnc: safeStorage.encryptString(key).toString('base64'),
+                    apiKey: '',
+                };
+            } catch (e) {
+                sysLog('warn', 'settings', 'capmonster encrypt failed: ' + (e?.message || e));
+            }
+        } else {
+            delete out.capmonster.apiKeyEnc;
+        }
+    }
+    return out;
+}
+
+function hydrateCapmonsterFromDisk(rawCm) {
+    const base = normalizeCapmonsterSettings(rawCm);
+    if (rawCm && typeof rawCm === 'object' && rawCm.apiKeyEnc && typeof rawCm.apiKeyEnc === 'string'
+        && safeStorage.isEncryptionAvailable()) {
+        try {
+            const plain = safeStorage.decryptString(Buffer.from(rawCm.apiKeyEnc, 'base64'));
+            base.apiKey = String(plain || '').trim();
+        } catch (e) {
+            sysLog('warn', 'settings', 'capmonster decrypt failed: ' + (e?.message || e));
+        }
+    }
+    return base;
+}
+
+function _syncTrafficModeFromSettings() {
+    if (_cached && _onEffectiveTrafficModeLoaded) {
+        _onEffectiveTrafficModeLoaded(normalizeTrafficMode(_cached.effectiveTrafficMode));
+    }
+}
+
+function loadSettings() {
+    if (_cached) return _cached;
+    const settingsFilePath = getSettingsFilePath();
+    try {
+        if (fs.existsSync(settingsFilePath)) {
+            const raw = JSON.parse(fs.readFileSync(settingsFilePath, 'utf8'));
+            _cached = {
+                ...SETTINGS_DEFAULTS,
+                ...raw,
+                trafficOpts: { ...SETTINGS_DEFAULTS.trafficOpts, ...(raw.trafficOpts || {}) },
+                tracking: normalizeTrackingSettings(raw.tracking),
+                capmonster: hydrateCapmonsterFromDisk(raw.capmonster),
+            };
+            _syncTrafficModeFromSettings();
+            return _cached;
+        }
+    } catch (e) {
+        sysLog('warn', 'settings', 'Failed to load settings: ' + e.message);
+    }
+    _cached = {
+        ...SETTINGS_DEFAULTS,
+        tracking: normalizeTrackingSettings(),
+        capmonster: normalizeCapmonsterSettings(),
+    };
+    _syncTrafficModeFromSettings();
+    return _cached;
+}
+
+function saveSettings(s) {
+    _cached = s;
+    if (_saveSettingsTimer) clearTimeout(_saveSettingsTimer);
+    _saveSettingsTimer = setTimeout(() => {
+        _saveSettingsTimer = null;
+        fs.writeFile(getSettingsFilePath(), JSON.stringify(settingsForDisk(s), null, 2), (err) => {
+            if (err) sysLog('warn', 'settings', 'Failed to save: ' + err.message);
+        });
+    }, 300);
+}
+
+function cancelPendingSave() {
+    if (_saveSettingsTimer) {
+        clearTimeout(_saveSettingsTimer);
+        _saveSettingsTimer = null;
+    }
+}
+
+module.exports = {
+    SETTINGS_DEFAULTS,
+    configure,
+    getCached,
+    getSettingsFilePath,
+    loadSettings,
+    saveSettings,
+    cancelPendingSave,
+    normalizeTrackingSettings,
+    normalizeCapmonsterSettings,
+};

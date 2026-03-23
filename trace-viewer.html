@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+    <title>Trace</title>
+    <style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+    --bg0: #0d1117; --bg1: #161b27; --bg2: #1c2236; --bg3: #222840;
+    --border: #2a3350; --border2: #1f2a40;
+    --text: #c9d3e8; --text-dim: #5c6b8a; --text-hi: #e8eef8;
+    --accent: #3b7ef8; --row-h: 28px;
+    --c-2xx: #22c55e; --c-3xx: #60a5fa; --c-4xx: #f59e0b; --c-5xx: #ef4444;
+    --m-get: #22c55e; --m-post: #3b7ef8; --m-put: #f59e0b; --m-delete: #ef4444; --m-other: #6b7280;
+}
+html, body { height: 100%; overflow: hidden; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 12px;
+    background: var(--bg0); color: var(--text);
+    display: flex; flex-direction: column;
+}
+
+#tv-toolbar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 7px 10px;
+    background: var(--bg1); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+#tv-count {
+    font-size: 11px; color: var(--text-dim);
+    background: var(--bg3); border: 1px solid var(--border);
+    padding: 2px 8px; border-radius: 10px;
+    font-variant-numeric: tabular-nums;
+}
+.tv-spacer { flex: 1; }
+.tv-btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    height: 26px; padding: 0 10px;
+    border-radius: 5px; border: 1px solid var(--border);
+    background: var(--bg2); color: var(--text);
+    cursor: pointer; font-size: 11px; font-weight: 500;
+    transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.tv-btn:hover { border-color: var(--accent); color: var(--text-hi); }
+.tv-btn.danger { border-color: #ef4444; color: #ef4444; }
+.tv-btn.danger:hover { background: rgba(239,68,68,0.1); }
+
+#tv-body { display: flex; flex: 1; overflow: hidden; }
+#tv-list-pane {
+    width: 52%; min-width: 300px;
+    display: flex; flex-direction: column;
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+}
+#tv-list-header {
+    display: flex; align-items: center; height: 28px;
+    background: var(--bg1); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.tv-th {
+    padding: 0 6px; font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--text-dim);
+    border-right: 1px solid var(--border2);
+}
+.col-idx { width: 36px; } .col-method { width: 54px; }
+.col-status { width: 48px; } .col-dur { width: 58px; }
+.col-path { flex: 1; border-right: none; }
+
+#tv-scroll {
+    flex: 1; overflow-y: auto; overflow-x: hidden;
+    scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+}
+.tv-row {
+    display: flex; align-items: center; height: var(--row-h);
+    border-bottom: 1px solid rgba(255,255,255,0.035);
+    cursor: pointer; transition: background 0.06s;
+    position: relative;
+}
+.tv-row:hover { background: rgba(255,255,255,0.04); }
+.tv-row.selected { background: rgba(59,126,248,0.18) !important; }
+.tv-row.selected::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+    width: 2px; background: var(--accent);
+}
+.tv-td {
+    display: flex; align-items: center; padding: 0 6px;
+    overflow: hidden; white-space: nowrap;
+    height: 100%; font-size: 11.5px;
+}
+.tv-td.col-idx { color: var(--text-dim); font-size: 10px; justify-content: flex-end; }
+.tv-td.col-path { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.method-badge {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.4px;
+    padding: 1px 5px; border-radius: 3px;
+}
+.m-get { color: var(--m-get); background: rgba(34,197,94,0.12); }
+.m-post { color: var(--m-post); background: rgba(59,126,248,0.14); }
+.m-put { color: var(--m-put); background: rgba(245,158,11,0.14); }
+.m-delete { color: var(--m-delete); background: rgba(239,68,68,0.14); }
+.m-other { color: var(--m-other); background: rgba(107,114,128,0.14); }
+.s-2xx { color: var(--c-2xx); } .s-3xx { color: var(--c-3xx); }
+.s-4xx { color: var(--c-4xx); } .s-5xx { color: var(--c-5xx); }
+.s-nil { color: var(--text-dim); }
+
+#tv-resizer { width: 4px; background: transparent; cursor: col-resize; flex-shrink: 0; }
+#tv-resizer:hover { background: var(--accent); }
+
+#tv-detail-pane {
+    flex: 1; display: flex; flex-direction: column;
+    overflow: hidden; min-width: 280px;
+}
+#tv-detail-empty {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 10px; color: var(--text-dim);
+}
+#tv-detail { display: none; flex-direction: column; height: 100%; overflow: hidden; }
+#tv-detail.visible { display: flex; }
+#tv-detail-url-bar {
+    padding: 10px 14px 8px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg1);
+}
+#tv-detail-url {
+    font-size: 12.5px; font-family: 'SF Mono','Fira Code',monospace;
+    color: var(--text-hi); word-break: break-all; line-height: 1.5;
+}
+#tv-tabs {
+    display: flex; border-bottom: 1px solid var(--border);
+    background: var(--bg1); flex-shrink: 0;
+}
+.tv-tab-btn {
+    padding: 7px 14px; background: none; border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-dim); cursor: pointer; font-size: 12px;
+}
+.tv-tab-btn:hover { color: var(--text); }
+.tv-tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+#tv-tab-body {
+    flex: 1; overflow-y: auto;
+    scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+    background: var(--bg0);
+}
+.tv-tab-content { display: none; padding: 10px 14px; }
+.tv-tab-content.active { display: block; }
+.hdr-section { padding: 10px 0 0; }
+.hdr-section-title {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    color: var(--text-dim); padding: 8px 0 4px;
+    border-bottom: 1px solid var(--border2); margin-bottom: 2px;
+}
+.hdr-row {
+    display: grid; grid-template-columns: 200px 1fr;
+    gap: 0; border-bottom: 1px solid rgba(255,255,255,0.035);
+    padding: 4px 0; align-items: baseline;
+}
+.hdr-name { font-size: 11.5px; color: #7dd3fc; font-family: monospace; }
+.hdr-val { font-size: 11.5px; color: var(--text); word-break: break-all; font-family: monospace; }
+.body-content {
+    padding: 10px 0; font-family: monospace; font-size: 11.5px;
+    line-height: 1.65; color: #d1d9f0; white-space: pre-wrap; word-break: break-all;
+}
+.body-empty { color: var(--text-dim); font-style: italic; }
+    </style>
+</head>
+<body>
+<div id="tv-toolbar">
+    <span id="tv-count">0 entries</span>
+    <div class="tv-spacer"></div>
+    <button class="tv-btn danger" id="tv-clear-btn">✕ Clear</button>
+</div>
+<div id="tv-body">
+    <div id="tv-list-pane">
+        <div id="tv-list-header">
+            <div class="tv-th col-idx">#</div>
+            <div class="tv-th col-method">Method</div>
+            <div class="tv-th col-status">Status</div>
+            <div class="tv-th col-dur">Time</div>
+            <div class="tv-th col-path">Path</div>
+        </div>
+        <div id="tv-scroll">
+            <div id="tv-rows"></div>
+        </div>
+    </div>
+    <div id="tv-resizer"></div>
+    <div id="tv-detail-pane">
+        <div id="tv-detail-empty">
+            <div class="empty-icon">↖</div>
+            <p>Select a trace entry to inspect</p>
+        </div>
+        <div id="tv-detail">
+            <div id="tv-detail-url-bar"><div id="tv-detail-url"></div></div>
+            <div id="tv-tabs">
+                <button class="tv-tab-btn active" data-tab="headers">Headers</button>
+                <button class="tv-tab-btn" data-tab="request">Request</button>
+                <button class="tv-tab-btn" data-tab="response">Response</button>
+            </div>
+            <div id="tv-tab-body">
+                <div class="tv-tab-content active" id="tab-headers">
+                    <div class="hdr-section">
+                        <div class="hdr-section-title">Request Headers</div>
+                        <div id="tv-req-headers"></div>
+                    </div>
+                    <div class="hdr-section">
+                        <div class="hdr-section-title">Response Headers</div>
+                        <div id="tv-res-headers"></div>
+                    </div>
+                </div>
+                <div class="tv-tab-content" id="tab-request">
+                    <div id="tv-req-body" class="body-content"></div>
+                </div>
+                <div class="tv-tab-content" id="tab-response">
+                    <div id="tv-res-body" class="body-content"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<script src="trace-viewer-renderer.js"></script>
+</body>
+</html>

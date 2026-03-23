@@ -239,7 +239,7 @@ quick-proxy-change.html  — быстрая смена прокси
 | Фавиконки всегда показывали 🌐 | `page-favicon-updated` → реальная `<img>` с fallback |
 | Перехватчик (`request-interceptor`) не работал | `attachToSession` не вызывался нигде — добавлен во все точки создания вкладок |
 | `interceptStreamProtocol` не работал на macOS в Electron 28 | Заменён на `session.protocol.handle()` (API Electron 25+) |
-| Бесконечная рекурсия при pass-through в перехватчике | `net.fetch(request)` внутри `protocol.handle` не рекурсивен |
+| Бесконечная рекурсия при pass-through в перехватчике | `bypassCustomProtocolHandlers: true`; pass-through/modifyHeaders идут через **`session.fetch` той же партиции** (не `net.fetch` — иначе `ERR_CERT_INVALID` при MITM) |
 | Только `http` перехватывался, не `https` | Зарегистрированы обработчики для обоих протоколов |
 | `ELECTRON_RUN_AS_NODE=1` от Cursor IDE ломал запуск | `package.json start` явно сбрасывает переменную |
 | `better-sqlite3` скомпилирован под x86_64 на Apple Silicon | `rebuild:arm64` через `arch -arm64` + universal Node.js от Cursor |
@@ -281,6 +281,12 @@ requests_fts      виртуальная FTS5 таблица (url + response_bod
 - Все demo-конфиги прокси/токенов вынесены в `/.env.example`.
 - Не храните реальные значения (`proxy`, `bearer token`, API-ключи) в runtime-коде и коммитах.
 - Для локального запуска скопируйте `.env.example` в `.env` и заполните только нужные переменные.
+
+### MITM, intercept и check-ip-geo
+
+- **`CUPNET_INTERCEPT_USE_NET_FETCH=1`** — в `request-interceptor` принудительно использовать `net.fetch` вместо `session.fetch` внутри `protocol.handle` (только отладка: при MITM без доверия к CA на `net` снова возможен **`net::ERR_CERT_INVALID` / -207**).
+- **check-ip-geo** (`proxy-service.js`): сначала **`persist:cupnet-shared` + `session.fetch(..., { bypassCustomProtocolHandlers: true })`**, затем скрытое окно, затем резервные URL; при старте в режиме MITM ожидается готовность прокси (`mitmStartPromise`).
+- Ответ ошибки pass-through от перехватчика: JSON с полем **`error: "cupnet_pass_through"`** (не парсить как успешный ipinfo).
 
 ### TODO (следующий этап)
 

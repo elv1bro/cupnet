@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>[CupNet] Settings</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --panel: #171a24;
+            --panel-soft: #1c2030;
+            --border: #2d3447;
+            --text: #e5e7eb;
+            --text-dim: #9ca3af;
+            --accent: #3b82f6;
+            --ok: #22c55e;
+        }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; margin: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            overflow: hidden;
+            position: relative;
+        }
+        body::before {
+            content: "";
+            position: fixed;
+            right: 56px;
+            bottom: 64px;
+            width: 340px;
+            height: 340px;
+            border-radius: 50%;
+            pointer-events: none;
+            background-image: url("icons/icon.png");
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: 86% 86%;
+            opacity: 0.06;
+            filter: saturate(0.9) brightness(0.95);
+            z-index: 0;
+        }
+        .settings-watermark-label {
+            position: fixed;
+            right: 56px;
+            bottom: 26px;
+            width: 340px;
+            z-index: 0;
+            pointer-events: none;
+            font-size: 14px;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.32);
+            letter-spacing: 0.12em;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            gap: 4px;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.28);
+        }
+        .settings-watermark-version {
+            color: rgba(148,163,184,0.86);
+            font-weight: 600;
+            font-size: 12px;
+            letter-spacing: 0.08em;
+            text-transform: none;
+        }
+        .settings-shell {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            z-index: 1;
+        }
+        .settings-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 13px 18px;
+            border-bottom: 1px solid var(--border);
+            background: #121521;
+        }
+        .settings-title {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+        }
+        .settings-subtitle {
+            margin: 4px 0 0;
+            color: var(--text-dim);
+            font-size: 12.5px;
+        }
+        .settings-main {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+        }
+        .settings-sidebar {
+            width: 250px;
+            flex: 0 0 250px;
+            border-right: 1px solid var(--border);
+            background: #131827;
+            padding: 10px;
+            overflow-y: auto;
+        }
+        .settings-sidebar-title {
+            margin: 0 0 10px;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-dim);
+            font-weight: 700;
+            padding: 0 6px;
+        }
+        .sp-tab-bar {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .sp-tab-btn {
+            border: 1px solid transparent;
+            border-radius: 7px;
+            background: transparent;
+            color: var(--text-dim);
+            font-size: 12.5px;
+            font-weight: 500;
+            padding: 8px 10px;
+            min-height: 32px;
+            cursor: pointer;
+            text-align: left;
+            width: 100%;
+        }
+        .sp-tab-btn:hover {
+            background: rgba(255,255,255,0.04);
+            color: var(--text);
+        }
+        .sp-tab-btn.active {
+            color: #dbeafe;
+            border-color: #274989;
+            background: rgba(59, 130, 246, 0.2);
+            font-weight: 600;
+        }
+        .settings-content {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        .settings-body {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+            padding: 18px 24px 22px;
+        }
+        .sp-tab-body { display: none; }
+        .sp-tab-body.active { display: block; }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 14px;
+            align-items: start;
+            width: min(1100px, 100%);
+            margin: 0 auto;
+        }
+        .card {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--panel);
+            padding: 14px;
+        }
+        .card-title {
+            margin: 0 0 10px;
+            font-size: 12.5px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-dim);
+            font-weight: 700;
+        }
+        .row { display: flex; align-items: center; gap: 12px; }
+        .row.space { justify-content: space-between; }
+        .hint { color: var(--text-dim); font-size: 11.5px; margin-top: 8px; line-height: 1.4; }
+        .sp-btn {
+            border: 1px solid #3b445e;
+            background: var(--panel-soft);
+            color: var(--text);
+            border-radius: 7px;
+            min-height: 32px;
+            padding: 8px 14px;
+            font-size: 11.5px;
+            cursor: pointer;
+            line-height: 1;
+            letter-spacing: 0.1px;
+        }
+        .sp-btn:hover { background: #252c40; }
+        .sp-input, .sp-textarea {
+            width: 100%;
+            border: 1px solid #3b445e;
+            border-radius: 7px;
+            background: #131827;
+            color: var(--text);
+            padding: 8px 9px;
+            font-size: 12.5px;
+        }
+        .sp-textarea { min-height: 104px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.35; }
+        .tracking-table {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            background: var(--panel);
+        }
+        .tracking-row {
+            padding: 10px 11px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            cursor: pointer;
+        }
+        .tracking-row:last-child { border-bottom: 0; }
+        .tracking-row-main { display: flex; align-items: center; gap: 9px; min-height: 20px; }
+        .tracking-row-main input { width: 12px; height: 12px; margin: 0; }
+        .tracking-row-label { font-size: 12.5px; text-align: left; }
+        .tracking-row-hint { margin-left: 21px; color: var(--text-dim); font-size: 11.5px; line-height: 1.4; text-align: left; }
+        .tracking-row:has(input:checked) { background: rgba(59, 130, 246, 0.14); }
+        .limit-grid { display: grid; gap: 10px; }
+        .limit-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; min-height: 30px; }
+        .limit-label { color: var(--text-dim); font-size: 11.5px; }
+        .limit-input { width: 86px; text-align: center; }
+        .perf-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12.5px;
+        }
+        .perf-table th, .perf-table td {
+            border-bottom: 1px solid var(--border);
+            padding: 8px 9px;
+            text-align: left;
+        }
+        .perf-table th { color: var(--text-dim); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.3px; }
+        .perf-table td.num, .perf-table th.num { text-align: right; }
+        .status-inline { font-size: 11.5px; color: var(--text-dim); margin-left: 8px; }
+    </style>
+</head>
+<body>
+<div class="settings-shell">
+    <header class="settings-head">
+        <div>
+            <h1 class="settings-title">[CupNet] Settings</h1>
+            <p class="settings-subtitle">General, Tracking and Performance configuration</p>
+        </div>
+        <span id="settings-saved-status" class="status-inline"></span>
+    </header>
+
+    <div class="settings-main">
+        <aside class="settings-sidebar">
+            <h3 class="settings-sidebar-title">Settings</h3>
+            <div class="sp-tab-bar">
+                <button class="sp-tab-btn active" data-sp-tab="general">General</button>
+                <button class="sp-tab-btn" data-sp-tab="tracking">Tracking</button>
+                <button class="sp-tab-btn" data-sp-tab="performance">Performance</button>
+            </div>
+        </aside>
+
+        <section class="settings-content">
+            <main class="settings-body">
+                <section id="sp-tab-general" class="sp-tab-body active">
+            <div class="grid-2">
+                <div class="card">
+                    <div class="row space">
+                        <h3 class="card-title">Behavior</h3>
+                    </div>
+                    <label class="row" style="margin-top:4px">
+                        <input type="checkbox" id="sp-paste-unlock">
+                        <span>Unblock copy / paste</span>
+                    </label>
+                    <div class="hint">Prevents sites from blocking Ctrl+C / Ctrl+V / right-click paste.</div>
+                </div>
+
+                <div class="card">
+                    <div class="row space">
+                        <h3 class="card-title">MITM bypass domains</h3>
+                        <button class="sp-btn" id="sp-save-bypass">Save</button>
+                    </div>
+                    <textarea id="sp-bypass-domains" class="sp-textarea" placeholder="challenges.cloudflare.com&#10;*.recaptcha.net&#10;*.gstatic.com"></textarea>
+                    <div class="hint">Domains here go direct (no MITM). One domain per line, supports <code>*.example.com</code>.</div>
+                </div>
+
+                <div class="card">
+                    <div class="row space">
+                        <h3 class="card-title">URL filter patterns</h3>
+                        <button class="sp-btn" id="sp-save-filters">Save filters</button>
+                    </div>
+                    <textarea id="sp-filter-patterns" class="sp-textarea" placeholder="*google.com*&#10;*analytics*&#10;*tracking*"></textarea>
+                </div>
+            </div>
+                </section>
+
+                <section id="sp-tab-tracking" class="sp-tab-body">
+            <div class="grid-2">
+                <div class="card">
+                    <div class="row space">
+                        <h3 class="card-title">Tracking triggers</h3>
+                        <div class="row">
+                            <button class="sp-btn" id="sp-track-enable-all">Enable all</button>
+                            <button class="sp-btn" id="sp-track-disable-all">Disable all</button>
+                        </div>
+                    </div>
+                    <div class="tracking-table">
+                        <label class="tracking-row" for="sp-track-click">
+                            <span class="tracking-row-main"><input type="checkbox" id="sp-track-click"><span class="tracking-row-label">On user click (toolbar / F2)</span></span>
+                            <span class="tracking-row-hint">Captures when screenshot is triggered manually.</span>
+                        </label>
+                        <label class="tracking-row" for="sp-track-page-load">
+                            <span class="tracking-row-main"><input type="checkbox" id="sp-track-page-load"><span class="tracking-row-label">On page load complete</span></span>
+                            <span class="tracking-row-hint">Captures after active page finishes loading.</span>
+                        </label>
+                        <label class="tracking-row" for="sp-track-network-pending">
+                            <span class="tracking-row-main"><input type="checkbox" id="sp-track-network-pending"><span class="tracking-row-label">On network pending change</span></span>
+                            <span class="tracking-row-hint">Captures when pending requests change above threshold.</span>
+                        </label>
+                        <label class="tracking-row" for="sp-track-mouse">
+                            <span class="tracking-row-main"><input type="checkbox" id="sp-track-mouse"><span class="tracking-row-label">On mouse activity (every 5 s)</span></span>
+                            <span class="tracking-row-hint">Captures during active mouse use; dedup keeps changed content only.</span>
+                        </label>
+                        <label class="tracking-row" for="sp-track-scroll-end">
+                            <span class="tracking-row-main"><input type="checkbox" id="sp-track-scroll-end"><span class="tracking-row-label">On scroll end (2 s)</span></span>
+                            <span class="tracking-row-hint">Captures 2 seconds after scrolling stops on the active page.</span>
+                        </label>
+                        <label class="tracking-row" for="sp-track-rule">
+                            <span class="tracking-row-main"><input type="checkbox" id="sp-track-rule"><span class="tracking-row-label">On rule screenshot action</span></span>
+                            <span class="tracking-row-hint">Captures when a matching rule triggers screenshot action.</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3 class="card-title">Thresholds and limits</h3>
+                    <div class="limit-grid">
+                        <div class="limit-row">
+                            <label class="limit-label" for="sp-track-pending-threshold">Pending delta threshold</label>
+                            <input id="sp-track-pending-threshold" class="sp-input limit-input" type="number" min="1" max="50" step="1">
+                        </div>
+                        <div class="limit-row">
+                            <label class="limit-label" for="sp-track-cooldown-ms">Cooldown (ms)</label>
+                            <input id="sp-track-cooldown-ms" class="sp-input limit-input" type="number" min="200" max="30000" step="100">
+                        </div>
+                        <div class="limit-row">
+                            <label class="limit-label" for="sp-track-max-per-minute">Max per minute</label>
+                            <input id="sp-track-max-per-minute" class="sp-input limit-input" type="number" min="1" max="120" step="1">
+                        </div>
+                    </div>
+                    <div class="hint">Dedup is always on. Background, home/new-tab and direct tabs are skipped.</div>
+                </div>
+            </div>
+                </section>
+
+                <section id="sp-tab-performance" class="sp-tab-body">
+            <div class="card">
+                <div class="row space" style="margin-bottom:8px">
+                    <h3 class="card-title">Process metrics</h3>
+                    <span id="sp-perf-updated" class="status-inline"></span>
+                </div>
+                <table class="perf-table">
+                    <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>PID</th>
+                        <th class="num">CPU %</th>
+                        <th class="num">RAM MB</th>
+                        <th class="num">Private MB</th>
+                        <th>Sandbox</th>
+                    </tr>
+                    </thead>
+                    <tbody id="sp-perf-tbody">
+                    <tr><td colspan="6" style="color:var(--text-dim);text-align:center;padding:14px">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+                </section>
+            </main>
+        </section>
+    </div>
+</div>
+<div class="settings-watermark-label">[CupNet] <span id="settings-app-version" class="settings-watermark-version">v…</span></div>
+
+<script src="settings-renderer.js"></script>
+</body>
+</html>

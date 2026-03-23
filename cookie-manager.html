@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+    <title>Cookie Manager</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:       #0f1117;
+            --bg2:      #161920;
+            --bg3:      #1e2233;
+            --border:   #2d3142;
+            --text:     #e2e8f0;
+            --muted:    #64748b;
+            --accent:   #3b82f6;
+            --danger:   #ef4444;
+            --success:  #22c55e;
+            --amber:    #f59e0b;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            font-size: 13px;
+        }
+
+        /* ── Top bar ── */
+        .topbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            background: var(--bg2);
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .topbar-title { font-weight: 600; font-size: 14px; margin-right: 4px; }
+
+        select, input[type="text"], textarea {
+            background: var(--bg3);
+            border: 1px solid var(--border);
+            color: var(--text);
+            border-radius: 6px;
+            padding: 5px 9px;
+            font-size: 12px;
+            outline: none;
+        }
+        select:focus, input[type="text"]:focus, textarea:focus {
+            border-color: var(--accent);
+        }
+        select { cursor: pointer; }
+
+        .btn {
+            display: inline-flex; align-items: center; gap: 5px;
+            padding: 5px 11px; border-radius: 6px; border: none;
+            font-size: 12px; font-weight: 500; cursor: pointer;
+            transition: opacity 0.12s, filter 0.12s;
+            white-space: nowrap; flex-grow: 0;
+        }
+        .btn:hover { filter: brightness(1.15); }
+        .btn:active { filter: brightness(0.9); }
+        .btn-primary  { background: var(--accent);   color: #fff; }
+        .btn-danger   { background: var(--danger);   color: #fff; }
+        .btn-success  { background: var(--success);  color: #fff; }
+        .btn-amber    { background: var(--amber);     color: #000; }
+        .btn-ghost    { background: var(--bg3); border: 1px solid var(--border); color: var(--text); }
+        .btn-sm       { padding: 3px 8px; font-size: 11px; }
+
+        .sep { width: 1px; height: 22px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
+        .spacer { flex: 1; }
+
+        /* ── Filter bar ── */
+        .filterbar {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            background: var(--bg2);
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .filterbar input { flex: 1; min-width: 120px; }
+        .count-badge {
+            font-size: 11px; color: var(--muted);
+            background: var(--bg3); border: 1px solid var(--border);
+            padding: 2px 8px; border-radius: 10px; white-space: nowrap;
+        }
+
+        /* ── Table ── */
+        .table-wrap {
+            flex: 1;
+            overflow: auto;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border) transparent;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        thead { position: sticky; top: 0; z-index: 2; }
+        th {
+            background: var(--bg2);
+            border-bottom: 1px solid var(--border);
+            padding: 7px 10px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 11px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+            cursor: pointer;
+            user-select: none;
+        }
+        th:hover { color: var(--text); }
+        th.sorted { color: var(--accent); }
+
+        td {
+            padding: 6px 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            vertical-align: middle;
+            max-width: 240px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        tr:hover td { background: rgba(255,255,255,0.03); }
+        tr.selected td { background: rgba(59,130,246,0.12); }
+        tr.highlighted td { background: rgba(59,130,246,0.06); }
+
+        .cell-name  { font-weight: 500; color: #93c5fd; max-width: 160px; }
+        .cell-value { font-family: 'SF Mono','Fira Code',monospace; color: #86efac; max-width: 220px; }
+        .cell-domain { color: #fcd34d; }
+        .cell-flags  { display: flex; gap: 4px; }
+        .flag {
+            font-size: 10px; padding: 1px 5px; border-radius: 3px;
+            font-weight: 600; white-space: nowrap;
+        }
+        .flag.http  { background: rgba(239,68,68,0.2);  color: #fca5a5; }
+        .flag.sec   { background: rgba(34,197,94,0.2);  color: #86efac; }
+        .flag.same  { background: rgba(245,158,11,0.2); color: #fcd34d; }
+        .flag.sess  { background: rgba(96,165,250,0.2); color: #93c5fd; }
+
+        .actions-cell { display: flex; gap: 4px; white-space: nowrap; }
+
+        /* ── Edit panel ── */
+        .edit-panel {
+            display: none;
+            border-top: 2px solid var(--accent);
+            background: var(--bg2);
+            flex-shrink: 0;
+            max-height: 280px;
+            overflow-y: auto;
+        }
+        .edit-panel.open { display: block; }
+        .edit-header {
+            display: flex; align-items: center; gap: 8px;
+            padding: 10px 14px 6px;
+            font-size: 12px; font-weight: 600; color: var(--accent);
+        }
+        .edit-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px 12px;
+            padding: 0 14px 12px;
+        }
+        .edit-field { display: flex; flex-direction: column; gap: 3px; }
+        .edit-field.wide { grid-column: 1 / -1; }
+        .edit-field label { font-size: 11px; color: var(--muted); font-weight: 500; }
+        .edit-field input { width: 100%; }
+        .edit-field textarea { width: 100%; min-height: 56px; resize: vertical; font-family: monospace; font-size: 11px; }
+        .edit-flags { display: flex; gap: 14px; align-items: center; }
+        .edit-flags label { display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 12px; }
+        .edit-actions { display: flex; gap: 8px; padding: 0 14px 12px; }
+
+        /* ── Share modal ── */
+        .modal-bg {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.6);
+            z-index: 100;
+            align-items: center; justify-content: center;
+        }
+        .modal-bg.open { display: flex; }
+        .modal {
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            width: 400px;
+            display: flex; flex-direction: column; gap: 14px;
+        }
+        .modal h3 { font-size: 15px; font-weight: 600; }
+        .modal p  { font-size: 12px; color: var(--muted); line-height: 1.5; }
+        .modal-row { display: flex; flex-direction: column; gap: 4px; }
+        .modal-row label { font-size: 11px; color: var(--muted); }
+        .modal-row select { width: 100%; }
+        .modal-footer { display: flex; gap: 8px; justify-content: flex-end; }
+
+        /* ── Status bar ── */
+        .statusbar {
+            height: 26px; padding: 0 14px;
+            display: flex; align-items: center; gap: 10px;
+            background: var(--bg2); border-top: 1px solid var(--border);
+            flex-shrink: 0; font-size: 11px; color: var(--muted);
+        }
+        .status-msg { transition: color 0.3s; }
+        .status-msg.ok     { color: var(--success); }
+        .status-msg.err    { color: var(--danger); }
+        .status-msg.info   { color: var(--accent); }
+
+        .empty-row td { text-align: center; padding: 40px; color: var(--muted); }
+
+        input[type="checkbox"] { width: 14px; height: 14px; cursor: pointer; accent-color: var(--accent); }
+
+        /* ── Current-tab toggle switch ── */
+        .cur-tab-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            cursor: pointer;
+            user-select: none;
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+        /* Hide native checkbox */
+        .cur-tab-toggle input[type="checkbox"] {
+            position: absolute;
+            opacity: 0;
+            width: 0; height: 0;
+            pointer-events: none;
+        }
+        /* Track */
+        .cur-tab-track {
+            position: relative;
+            width: 32px;
+            height: 18px;
+            border-radius: 9px;
+            background: var(--border);
+            border: 1px solid rgba(255,255,255,0.08);
+            transition: background 0.18s, border-color 0.18s;
+            flex-shrink: 0;
+        }
+        /* Thumb */
+        .cur-tab-track::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #64748b;
+            transition: transform 0.18s, background 0.18s;
+        }
+        /* Checked state */
+        .cur-tab-toggle input:checked + .cur-tab-track {
+            background: var(--accent);
+            border-color: rgba(59,130,246,0.5);
+        }
+        .cur-tab-toggle input:checked + .cur-tab-track::after {
+            transform: translateX(14px);
+            background: #fff;
+        }
+        .cur-tab-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--muted);
+            transition: color 0.15s;
+        }
+        .cur-tab-toggle:has(input:checked) .cur-tab-label {
+            color: #93c5fd;
+        }
+        /* Domain input — readonly when current-tab is ON */
+        #filter-domain[readonly] {
+            color: var(--muted);
+            border-style: dashed;
+            cursor: default;
+            opacity: 0.7;
+        }
+    </style>
+</head>
+<body>
+
+<!-- ── Top bar ─────────────────────────────────────────────────────────────── -->
+<div class="topbar">
+    <span class="topbar-title">🍪 Cookie Manager</span>
+
+    <label style="font-size:11px;color:var(--muted)">Tab:</label>
+    <select id="tab-select" style="min-width:180px"></select>
+
+    <div class="sep"></div>
+
+    <button class="btn btn-ghost btn-sm" id="btn-export-json"     title="Export as JSON">↓ JSON</button>
+    <button class="btn btn-ghost btn-sm" id="btn-export-netscape" title="Export as Netscape (cookies.txt)">↓ Netscape</button>
+    <button class="btn btn-ghost btn-sm" id="btn-import"         title="Import from JSON or Netscape">↑ Import</button>
+
+    <div class="sep"></div>
+
+    <button class="btn btn-amber btn-sm"  id="btn-share"         title="Share cookies to another tab">⇄ Share to tab</button>
+    <button class="btn btn-danger btn-sm" id="btn-clear-all"     title="Delete all cookies for this tab">✕ Clear All</button>
+
+    <div class="spacer"></div>
+
+    <button class="btn btn-primary btn-sm" id="btn-add-new">+ New Cookie</button>
+</div>
+
+<!-- ── Filter bar ──────────────────────────────────────────────────────────── -->
+<div class="filterbar">
+
+    <!-- Current-tab toggle -->
+    <label class="cur-tab-toggle" id="filter-cur-domain-wrap"
+           title="Filter by current tab's domain">
+        <input type="checkbox" id="filter-current-domain" checked>
+        <span class="cur-tab-track"></span>
+        <span class="cur-tab-label" id="filter-cur-domain-text">Current tab</span>
+    </label>
+
+    <div class="sep" style="height:18px"></div>
+
+    <input type="text" id="filter-domain" placeholder="domain…" style="max-width:160px">
+    <input type="text" id="filter-name"   placeholder="name…"   style="max-width:130px">
+    <input type="text" id="filter-value"  placeholder="value…"  style="max-width:150px">
+    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);cursor:pointer">
+        <input type="checkbox" id="filter-httponly"> HttpOnly
+    </label>
+    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);cursor:pointer">
+        <input type="checkbox" id="filter-secure"> Secure
+    </label>
+    <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);cursor:pointer">
+        <input type="checkbox" id="filter-session"> Session only
+    </label>
+    <div class="spacer"></div>
+    <span class="count-badge" id="count-label">0 cookies</span>
+</div>
+
+<!-- ── Table ───────────────────────────────────────────────────────────────── -->
+<div class="table-wrap">
+    <table>
+        <thead>
+            <tr>
+                <th data-col="name">Name</th>
+                <th data-col="value">Value</th>
+                <th data-col="domain">Domain</th>
+                <th data-col="path">Path</th>
+                <th data-col="expires">Expires</th>
+                <th>Flags</th>
+                <th style="width:90px">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="cookie-tbody"></tbody>
+    </table>
+</div>
+
+<!-- ── Edit panel ──────────────────────────────────────────────────────────── -->
+<div class="edit-panel" id="edit-panel">
+    <div class="edit-header">
+        <span id="edit-panel-title">Edit Cookie</span>
+        <div class="spacer"></div>
+        <button class="btn btn-ghost btn-sm" id="btn-close-edit">✕ Close</button>
+    </div>
+    <div class="edit-grid">
+        <div class="edit-field">
+            <label>Name</label>
+            <input type="text" id="e-name" placeholder="cookie_name">
+        </div>
+        <div class="edit-field">
+            <label>Domain</label>
+            <input type="text" id="e-domain" placeholder=".example.com">
+        </div>
+        <div class="edit-field">
+            <label>Path</label>
+            <input type="text" id="e-path" placeholder="/">
+        </div>
+        <div class="edit-field wide">
+            <label>Value</label>
+            <textarea id="e-value" placeholder="cookie value…"></textarea>
+        </div>
+        <div class="edit-field">
+            <label>Expires (Unix timestamp, blank = session)</label>
+            <input type="text" id="e-expires" placeholder="leave blank for session">
+        </div>
+        <div class="edit-field">
+            <label>SameSite</label>
+            <select id="e-samesite">
+                <option value="">— unset —</option>
+                <option value="no_restriction">no_restriction (None)</option>
+                <option value="lax">lax</option>
+                <option value="strict">strict</option>
+            </select>
+        </div>
+        <div class="edit-field">
+            <label>Flags</label>
+            <div class="edit-flags">
+                <label><input type="checkbox" id="e-httponly"> HttpOnly</label>
+                <label><input type="checkbox" id="e-secure"> Secure</label>
+            </div>
+        </div>
+    </div>
+    <div class="edit-actions">
+        <button class="btn btn-primary" id="btn-save-cookie">✓ Save</button>
+        <button class="btn btn-ghost"   id="btn-cancel-edit">Cancel</button>
+        <button class="btn btn-danger"  id="btn-delete-from-edit" style="margin-left:auto">✕ Delete Cookie</button>
+    </div>
+</div>
+
+<!-- ── Share modal ─────────────────────────────────────────────────────────── -->
+<div class="modal-bg" id="share-modal">
+    <div class="modal">
+        <h3>⇄ Share Cookies to Tab</h3>
+        <p>All cookies from the current tab will be copied to the selected target tab. Existing cookies in the target tab are kept (new ones added/overwritten).</p>
+        <div class="modal-row">
+            <label>Source tab</label>
+            <div id="share-source-label" style="font-size:12px;color:var(--text);padding:4px 0"></div>
+        </div>
+        <div class="modal-row">
+            <label>Target tab</label>
+            <select id="share-target-select"></select>
+        </div>
+        <div class="modal-row">
+            <label>Filter by domain (optional, leave blank to copy all)</label>
+            <input type="text" id="share-domain-filter" placeholder=".example.com">
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-ghost"   id="btn-share-cancel">Cancel</button>
+            <button class="btn btn-amber"   id="btn-share-confirm">⇄ Copy Cookies</button>
+        </div>
+    </div>
+</div>
+
+<!-- ── Status bar ──────────────────────────────────────────────────────────── -->
+<div class="statusbar">
+    <span class="status-msg" id="status-msg">Ready</span>
+</div>
+
+<input type="file" id="import-file-input" accept=".json,.txt" style="display:none">
+
+<script src="cookie-manager-renderer.js"></script>
+</body>
+</html>

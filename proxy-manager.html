@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+    <title>Proxy Manager</title>
+    <style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+    --bg0:    #0d1117;  --bg1:    #141923;  --bg2:    #1c2236;  --bg3:    #222840;
+    --border: #2a3350;  --b2:     #1e2a40;
+    --text:   #c9d3e8;  --dim:    #5c6b8a;  --hi:     #e8eef8;
+    --accent: #3b7ef8;  --green:  #22c55e;  --red:    #ef4444;
+    --amber:  #f59e0b;  --purple: #a78bfa;
+}
+
+html, body { height: 100%; overflow: hidden; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; background: var(--bg0); color: var(--text); display: flex; flex-direction: column; }
+
+/* ── Topbar ── */
+.topbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 14px; background: var(--bg1); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.topbar-title { font-size: 15px; font-weight: 700; color: var(--hi); }
+.spacer { flex: 1; }
+.proxy-status-pill {
+    display: flex; align-items: center; gap: 7px;
+    padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 500;
+    border: 1px solid var(--border); background: var(--bg2);
+}
+.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.status-dot.active   { background: var(--green); box-shadow: 0 0 6px rgba(34,197,94,0.5); }
+.status-dot.direct   { background: #60a5fa; box-shadow: 0 0 6px rgba(96,165,250,0.4); }
+.status-dot.inactive { background: var(--dim); }
+.status-ip { font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; color: var(--dim); }
+
+/* ── AzureTLS live stats ── */
+.mitm-stats {
+    display: flex; align-items: center; gap: 5px;
+    padding: 4px 10px; border-radius: 20px; font-size: 11px;
+    border: 1px solid var(--border); background: var(--bg2);
+    font-family: 'SF Mono','Fira Code',monospace;
+    flex-shrink: 0;
+}
+.mitm-stat-dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--dim);
+    flex-shrink: 0; transition: background 0.3s;
+}
+.mitm-stat-dot.ready  { background: var(--green); box-shadow: 0 0 5px rgba(34,197,94,0.5); }
+.mitm-stat-dot.busy   { background: var(--amber); box-shadow: 0 0 5px rgba(245,158,11,0.5); }
+.mitm-stat-dot.error  { background: var(--red);   box-shadow: 0 0 5px rgba(239,68,68,0.5); }
+.mitm-stat-item { display: flex; align-items: baseline; gap: 2px; }
+.mitm-stat-val  { font-weight: 700; color: var(--hi); font-size: 11px; }
+.mitm-stat-lbl  { color: var(--dim); font-size: 10px; font-weight: 400; }
+.mitm-stat-sep  { color: var(--border); font-size: 10px; }
+
+/* ── Layout ── */
+.layout { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Left: profile list ── */
+.left-pane {
+    width: 300px; flex-shrink: 0; display: flex; flex-direction: column;
+    border-right: 1px solid var(--border); background: var(--bg1); overflow: hidden;
+}
+.left-header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.left-search {
+    flex: 1; display: flex; align-items: center;
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+    height: 28px; overflow: hidden;
+}
+.left-search:focus-within { border-color: var(--accent); }
+.left-search input { flex: 1; background: transparent; border: none; outline: none; color: var(--hi); padding: 0 8px; font-size: 12px; }
+.left-search input::placeholder { color: var(--dim); }
+
+.btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg2); color: var(--text); cursor: pointer; font-size: 12px; font-weight: 500; white-space: nowrap; transition: border-color 0.1s, background 0.1s; }
+.btn:hover { border-color: var(--accent); color: var(--hi); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover { filter: brightness(1.12); }
+.btn.danger  { background: var(--red);    border-color: var(--red);    color: #fff; }
+.btn.danger:hover  { filter: brightness(1.12); }
+.btn.success { background: var(--green);  border-color: var(--green);  color: #000; }
+.btn.success:hover { filter: brightness(1.12); }
+.btn.sm { padding: 3px 8px; font-size: 11px; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
+
+.profile-list { flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.profile-item {
+    padding: 10px 12px; border-bottom: 1px solid var(--b2); cursor: pointer;
+    transition: background 0.08s; position: relative;
+}
+.profile-item:hover { background: rgba(255,255,255,0.03); }
+.profile-item.active-profile { background: rgba(59,126,248,0.12); border-left: 2px solid var(--accent); }
+.profile-item.connected { background: rgba(34,197,94,0.08); border-left: 2px solid var(--green); }
+.profile-item-direct {
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 4px;
+}
+.profile-item-direct .pi-name { color: #86efac; }
+.pi-name { font-size: 13px; font-weight: 600; color: var(--hi); margin-bottom: 3px; }
+.pi-host { font-size: 11px; color: var(--dim); font-family: 'SF Mono','Fira Code',monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pi-meta { display: flex; align-items: center; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.pi-badge { font-size: 10px; padding: 1px 6px; border-radius: 10px; font-weight: 600; }
+.pi-badge.tmpl  { background: rgba(167,139,250,0.15); color: #c4b5fd; border: 1px solid rgba(167,139,250,0.3); }
+.pi-badge.geo   { background: rgba(59,126,248,0.12);  color: #93c5fd; border: 1px solid rgba(59,126,248,0.2); }
+.pi-badge.lat   { background: rgba(34,197,94,0.1);   color: #86efac; border: 1px solid rgba(34,197,94,0.2); }
+.pi-badge.err   { background: rgba(239,68,68,0.1);   color: #fca5a5; border: 1px solid rgba(239,68,68,0.2); }
+.pi-connected-label { font-size: 10px; font-weight: 700; color: var(--green); }
+
+.empty-list { padding: 32px; text-align: center; color: var(--dim); font-size: 12px; }
+
+/* ── Fingerprint section ── */
+.fp-section {
+    border: 1px solid var(--border); border-radius: 8px;
+    background: rgba(168,85,247,0.04); overflow: hidden;
+}
+.fp-section summary {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; cursor: pointer; user-select: none;
+    list-style: none; font-size: 12px; font-weight: 600; color: var(--text);
+    transition: background 0.15s;
+}
+.fp-section summary::-webkit-details-marker { display: none; }
+.fp-section summary:hover { background: rgba(255,255,255,0.03); }
+.fp-section[open] summary { border-bottom: 1px solid var(--border); }
+.fp-summary-title { font-size: 13px; }
+.fp-active-badge {
+    display: inline-flex; align-items: center;
+    padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 700;
+    background: rgba(168,85,247,0.18); color: #c084fc; border: 1px solid rgba(168,85,247,0.3);
+    letter-spacing: 0.4px; text-transform: uppercase;
+}
+.fp-hint-inline { font-size: 10.5px; color: var(--dim); margin-left: auto; }
+.fp-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.fp-sublabel { font-size: 10px; font-weight: 400; color: var(--dim); text-transform: none; letter-spacing: 0; }
+.ua-presets { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 5px; }
+.fp-preset { font-size: 10.5px !important; padding: 2px 7px !important; }
+.fp-preset-clear { color: var(--dim) !important; }
+.fp-preset:hover { border-color: var(--purple) !important; color: #c084fc !important; }
+.fp-preset-clear:hover { border-color: var(--red) !important; color: var(--red) !important; }
+.fp-row-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fp-row-grid .form-row { margin: 0; }
+.fp-section select {
+    width: 100%; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--bg2); color: var(--text); font-size: 12px; outline: none;
+}
+.fp-section select:focus { border-color: var(--purple); }
+.fp-section textarea {
+    width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--bg2); color: var(--text); font-size: 11px; font-family: 'SF Mono','Fira Code',monospace;
+    resize: none; outline: none; box-sizing: border-box;
+}
+.fp-section textarea:focus { border-color: var(--purple); }
+
+/* ── TLS Fingerprint styles ── */
+.fp-sub-title {
+    font-size: 11px; font-weight: 700; color: var(--dim); text-transform: uppercase;
+    letter-spacing: 0.6px; padding-bottom: 6px; border-bottom: 1px solid var(--b2);
+    display: flex; align-items: center; gap: 8px;
+}
+.fp-tls-badge {
+    font-size: 9px; font-weight: 700; padding: 1px 6px; border-radius: 8px;
+    background: rgba(59,126,248,0.18); color: #60a5fa; border: 1px solid rgba(59,126,248,0.3);
+    text-transform: uppercase; letter-spacing: 0.3px;
+}
+.tls-mode-row {
+    display: flex; gap: 14px; align-items: center; margin-bottom: 10px;
+}
+.tls-radio-label {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 12px; color: var(--text); cursor: pointer; user-select: none;
+}
+.tls-radio-label input[type=radio] { cursor: pointer; accent-color: var(--accent); }
+
+/* Template grid */
+.tls-template-grid {
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-bottom: 8px;
+}
+.tls-tpl-btn {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 8px 4px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--bg2); cursor: pointer; transition: border-color 0.12s, background 0.12s;
+    font-size: 10px; color: var(--text);
+}
+.tls-tpl-btn:hover { border-color: var(--accent); background: rgba(59,126,248,0.08); }
+.tls-tpl-btn.active { border-color: var(--accent); background: rgba(59,126,248,0.15); }
+.tls-tpl-icon { font-size: 16px; line-height: 1; }
+.tls-tpl-name { font-size: 10px; font-weight: 600; color: var(--hi); }
+.tls-tpl-ver { font-size: 9px; color: var(--dim); }
+.tls-tpl-desc {
+    font-size: 11px; color: var(--dim); padding: 6px 8px;
+    background: var(--bg2); border-radius: 6px; border: 1px solid var(--border);
+    line-height: 1.6; white-space: pre-line; min-height: 28px;
+}
+
+.deep-custom-section {
+    margin-top: 10px; border: 1px dashed var(--border);
+    border-radius: 6px; padding: 0; opacity: 0.6;
+}
+.deep-custom-section[disabled] { pointer-events: none; }
+.deep-custom-summary {
+    padding: 7px 10px; cursor: default; font-size: 12px;
+    display: flex; align-items: center; justify-content: space-between;
+    list-style: none; user-select: none;
+}
+.deep-custom-summary::-webkit-details-marker { display: none; }
+.coming-soon-badge {
+    font-size: 10px; padding: 2px 7px; border-radius: 10px;
+    background: rgba(59,126,248,0.15); color: #93c5fd;
+    border: 1px solid rgba(59,126,248,0.3); font-weight: 600; letter-spacing: 0.3px;
+}
+.deep-custom-body {
+    padding: 8px 12px 10px; font-size: 11px; color: var(--dim); line-height: 1.6;
+}
+.deep-custom-body p { margin: 0 0 5px; }
+
+.ja3-field-help {
+    font-size: 11px; color: var(--dim); line-height: 1.6;
+    padding: 7px 9px; border-radius: 6px; margin-bottom: 8px;
+    background: rgba(59,126,248,0.05); border: 1px solid rgba(59,126,248,0.15);
+}
+.ja3-field-help b { color: #93c5fd; }
+.ja3-field-help code { font-family: 'SF Mono','Fira Code',monospace; font-size: 10px; color: #93c5fd; }
+.tls-ja3-full-input {
+    flex: 1; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--bg2); color: var(--hi); font-size: 11px;
+    font-family: 'SF Mono','Fira Code',monospace; outline: none;
+}
+.tls-ja3-full-input:focus { border-color: var(--accent); }
+.ja3-prefills {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 4px;
+}
+.ja3-prefill-label { font-size: 10.5px; color: var(--dim); }
+.ja3-prefill { font-size: 10px !important; padding: 2px 7px !important; }
+.ja3-prefill:hover { border-color: var(--accent) !important; color: #93c5fd !important; }
+
+/* ── Right: editor ── */
+.right-pane { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg0); }
+
+.editor-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--dim); }
+.editor-empty .icon { font-size: 36px; opacity: 0.3; }
+
+.editor-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+.editor-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    background: var(--bg1);
+}
+.editor-title { font-size: 15px; font-weight: 700; color: var(--hi); flex: 1; }
+
+.editor-body { flex: 1; overflow-y: auto; padding: 16px; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+/* Form fields */
+.form-row { margin-bottom: 14px; }
+.form-row label { display: block; font-size: 11px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 5px; }
+.form-row input, .form-row textarea, .form-row select {
+    width: 100%; background: var(--bg2); border: 1px solid var(--border); border-radius: 7px;
+    color: var(--hi); padding: 7px 10px; font-size: 13px; outline: none;
+    font-family: inherit; transition: border-color 0.12s;
+}
+.form-row input:focus, .form-row textarea:focus { border-color: var(--accent); }
+.form-row textarea { font-family: 'SF Mono','Fira Code',monospace; font-size: 12px; resize: vertical; min-height: 58px; line-height: 1.55; }
+.form-row.mono input { font-family: 'SF Mono','Fira Code',monospace; font-size: 12px; }
+.form-hint { font-size: 11px; color: var(--dim); margin-top: 4px; line-height: 1.5; }
+
+/* Template preview */
+.tpl-preview {
+    margin-top: 6px; padding: 8px 10px; border-radius: 6px;
+    background: var(--bg3); border: 1px solid var(--b2);
+    font-family: 'SF Mono','Fira Code',monospace; font-size: 11.5px;
+    color: #a5f3fc; line-height: 1.6; word-break: break-all;
+}
+.tpl-preview .var-placeholder { color: #fcd34d; }
+.tpl-preview .var-rand        { color: #86efac; }
+.tpl-preview .var-sid         { color: #f9a8d4; }
+
+/* Variables table */
+.vars-table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+.vars-table th { font-size: 10px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.4px; padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+.vars-table td { padding: 5px 6px; border-bottom: 1px solid var(--b2); vertical-align: middle; font-size: 12px; }
+.vars-table tr:last-child td { border-bottom: none; }
+.var-name-cell { font-family: 'SF Mono','Fira Code',monospace; font-weight: 600; padding: 0 8px 0 8px; }
+.var-input { width: 100%; background: var(--bg2); border: 1px solid var(--border); color: var(--hi); padding: 4px 8px; border-radius: 5px; font-family: 'SF Mono','Fira Code',monospace; font-size: 12px; outline: none; }
+.var-input:focus { border-color: var(--accent); }
+.var-badge-sid  { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: rgba(249,168,212,0.15); color: #f9a8d4; border: 1px solid rgba(249,168,212,0.3); font-weight: 700; }
+.var-badge-rand { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: rgba(134,239,172,0.12); color: #86efac; border: 1px solid rgba(134,239,172,0.25); font-weight: 700; }
+.var-badge-saved{ font-size: 10px; padding: 1px 6px; border-radius: 8px; background: rgba(59,126,248,0.12); color: #93c5fd; border: 1px solid rgba(59,126,248,0.25); font-weight: 700; }
+.var-rand-range { font-size: 11px; color: var(--dim); font-family: 'SF Mono','Fira Code',monospace; }
+.var-current-val { font-size: 11px; color: #a5f3fc; font-family: 'SF Mono','Fira Code',monospace; margin-top: 3px; padding: 2px 6px; background: rgba(165,243,252,0.08); border-radius: 4px; display: inline-block; }
+.var-current-hint { font-size: 10px; color: var(--dim); font-style: italic; margin-left: 8px; }
+
+/* Template syntax guide */
+.tpl-guide {
+    margin-top: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg3);
+    overflow: hidden;
+}
+.tpl-guide summary {
+    cursor: pointer; padding: 7px 12px;
+    font-size: 11.5px; font-weight: 600; color: var(--dim);
+    user-select: none; outline: none;
+    list-style: none;
+    transition: color 0.15s, background 0.15s;
+}
+.tpl-guide summary::-webkit-details-marker { display: none; }
+.tpl-guide summary:hover { color: var(--hi); background: rgba(255,255,255,0.03); }
+.tpl-guide[open] summary { color: var(--hi); border-bottom: 1px solid var(--border); }
+.tpl-guide-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.tg-row { display: flex; align-items: flex-start; gap: 10px; }
+.tg-tag {
+    font-family: 'SF Mono','Fira Code',monospace;
+    font-size: 11px; font-weight: 700;
+    padding: 3px 8px; border-radius: 6px;
+    white-space: nowrap; flex-shrink: 0;
+}
+.tg-rand { background: rgba(134,239,172,0.12); color: #86efac; border: 1px solid rgba(134,239,172,0.25); }
+.tg-sid  { background: rgba(249,168,212,0.12); color: #f9a8d4; border: 1px solid rgba(249,168,212,0.25); }
+.tg-var  { background: rgba(59,130,246,0.12);  color: #93c5fd; border: 1px solid rgba(59,130,246,0.25); }
+.tg-desc {
+    font-size: 11.5px; color: var(--dim); line-height: 1.55;
+}
+.tg-desc code {
+    background: var(--bg2); color: #a5f3fc;
+    padding: 1px 4px; border-radius: 4px;
+    font-family: 'SF Mono','Fira Code',monospace; font-size: 10.5px;
+}
+.tg-example {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 9px 12px;
+}
+.tg-example-label { font-size: 10px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 6px; }
+.tg-example code {
+    font-family: 'SF Mono','Fira Code',monospace; font-size: 11px;
+    color: #a5f3fc; word-break: break-all; line-height: 1.6;
+}
+
+/* Traffic optimization — master toggle */
+.traffic-master-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; border-radius: 6px; cursor: pointer;
+    transition: background 0.12s;
+}
+.traffic-master-row:hover { background: rgba(255,255,255,0.04); }
+.traffic-master-label { font-size: 13px; font-weight: 700; color: var(--hi); white-space: nowrap; }
+
+/* Traffic optimization toggles */
+.traffic-toggles { display: flex; flex-direction: column; gap: 8px; transition: opacity 0.2s; }
+.traffic-toggles.disabled { opacity: 0.35; pointer-events: none; }
+.traffic-toggle-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 10px; border-radius: 6px; cursor: pointer;
+    transition: background 0.12s;
+}
+.traffic-toggle-row:hover { background: rgba(255,255,255,0.04); }
+.traffic-label { font-size: 12px; font-weight: 600; color: var(--hi); white-space: nowrap; }
+.traffic-hint { font-size: 10.5px; color: var(--dim); margin-left: auto; }
+
+/* Toggle switch (shared for master + individual toggles) */
+.traffic-master-row .sp-toggle-wrap,
+.traffic-toggle-row .sp-toggle-wrap {
+    position: relative; display: inline-block;
+    width: 32px; height: 18px; flex-shrink: 0;
+}
+.traffic-master-row .sp-toggle-input,
+.traffic-toggle-row .sp-toggle-input {
+    opacity: 0; width: 0; height: 0; position: absolute;
+}
+.traffic-master-row .sp-toggle-slider,
+.traffic-toggle-row .sp-toggle-slider {
+    position: absolute; inset: 0;
+    background: var(--bg3); border-radius: 999px;
+    cursor: pointer; transition: background 0.2s;
+    border: 1px solid var(--border);
+}
+.traffic-master-row .sp-toggle-slider::before,
+.traffic-toggle-row .sp-toggle-slider::before {
+    content: '';
+    position: absolute;
+    width: 12px; height: 12px;
+    left: 2px; bottom: 2px;
+    background: var(--dim); border-radius: 50%;
+    transition: transform 0.2s, background 0.2s;
+}
+.traffic-master-row .sp-toggle-input:checked + .sp-toggle-slider,
+.traffic-toggle-row .sp-toggle-input:checked + .sp-toggle-slider { background: var(--accent); border-color: var(--accent); }
+.traffic-master-row .sp-toggle-input:checked + .sp-toggle-slider::before,
+.traffic-toggle-row .sp-toggle-input:checked + .sp-toggle-slider::before { transform: translateX(14px); background: #fff; }
+
+/* Divider */
+.section-divider { height: 1px; background: var(--border); margin: 14px 0; }
+
+/* Test result */
+.test-result {
+    display: none; margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg2); font-size: 12px;
+}
+.test-result.visible { display: block; }
+.test-result.ok  { border-color: rgba(34,197,94,0.4); background: rgba(34,197,94,0.07); }
+.test-result.err { border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.07); }
+.test-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.test-row:last-child { margin-bottom: 0; }
+.test-label { font-size: 10px; font-weight: 700; color: var(--dim); text-transform: uppercase; min-width: 64px; }
+.test-val { font-family: 'SF Mono','Fira Code',monospace; color: var(--hi); font-size: 12px; }
+.flag-emoji { font-size: 16px; }
+
+/* Action bar */
+.action-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 16px; border-top: 1px solid var(--border); background: var(--bg1); flex-shrink: 0;
+}
+
+/* Recent list */
+.recents-section { margin-top: 14px; }
+.recents-title { font-size: 11px; font-weight: 700; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.recent-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 9px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg2);
+    font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; color: var(--dim);
+    cursor: pointer; margin: 0 4px 4px 0; transition: border-color 0.1s;
+}
+.recent-chip:hover { border-color: var(--accent); color: var(--text); }
+    </style>
+</head>
+<body>
+
+<!-- ── Top bar ── -->
+<div class="topbar">
+    <span class="topbar-title">🛡 Proxy Manager</span>
+    <div class="proxy-status-pill" id="status-pill">
+        <div class="status-dot inactive" id="status-dot"></div>
+        <span id="status-label">No proxy</span>
+        <span class="status-ip" id="status-ip"></span>
+    </div>
+    <div class="spacer"></div>
+
+    <!-- AzureTLS live stats -->
+    <div class="mitm-stats" id="mitm-stats" title="AzureTLS MITM proxy statistics">
+        <span class="mitm-stat-dot" id="mitm-dot" title="Worker status"></span>
+        <span class="mitm-stat-item" title="Requests per second">
+            <span class="mitm-stat-val" id="ms-rps">—</span>
+            <span class="mitm-stat-lbl">req/s</span>
+        </span>
+        <span class="mitm-stat-sep">·</span>
+        <span class="mitm-stat-item" title="Average response time">
+            <span class="mitm-stat-val" id="ms-avg">—</span>
+            <span class="mitm-stat-lbl">avg</span>
+        </span>
+        <span class="mitm-stat-sep">·</span>
+        <span class="mitm-stat-item" title="In-flight requests">
+            <span class="mitm-stat-val" id="ms-pend">0</span>
+            <span class="mitm-stat-lbl">pending</span>
+        </span>
+        <span class="mitm-stat-sep">·</span>
+        <span class="mitm-stat-item" title="Total / errors">
+            <span class="mitm-stat-val" id="ms-total">0</span>
+            <span class="mitm-stat-lbl">total</span>
+        </span>
+        <span class="mitm-stat-sep">·</span>
+        <span class="mitm-stat-item" title="Error count">
+            <span class="mitm-stat-val" id="ms-err" style="color:var(--red)">0</span>
+            <span class="mitm-stat-lbl">err</span>
+        </span>
+        <span class="mitm-stat-sep">·</span>
+        <span class="mitm-stat-item" title="TLS profile">
+            <span class="mitm-stat-val" id="ms-browser" style="color:var(--accent)">chrome</span>
+        </span>
+    </div>
+
+    <button class="btn" id="btn-check-ip" title="Check current IP / geo">⟳ Check IP</button>
+    <button class="btn" id="btn-disconnect" title="Disconnect proxy" style="display:none">✕ Disconnect</button>
+</div>
+
+<!-- ── Layout ── -->
+<div class="layout">
+
+    <!-- ── Left: list ── -->
+    <div class="left-pane">
+        <div class="left-header">
+            <div class="left-search">
+                <input type="text" id="search-profiles" placeholder="Search profiles…">
+            </div>
+            <button class="btn primary sm" id="btn-add-profile">+ New</button>
+        </div>
+        <div class="profile-list" id="profile-list">
+            <div class="empty-list">No profiles yet.<br>Click "+ New" to add one.</div>
+        </div>
+    </div>
+
+    <!-- ── Right: editor ── -->
+    <div class="right-pane">
+
+        <!-- Empty state -->
+        <div class="editor-empty" id="editor-empty">
+            <div class="icon">🛡</div>
+            <p>Select a profile to edit,<br>or create a new one.</p>
+        </div>
+
+        <!-- Editor -->
+        <div class="editor-wrap" id="editor-wrap" style="display:none">
+
+            <div class="editor-header">
+                <span class="editor-title" id="editor-title">New Profile</span>
+                <button class="btn sm" id="btn-test">⚡ Test</button>
+                <button class="btn sm" id="btn-duplicate" style="display:none" title="Duplicate this profile">⧉ Copy</button>
+                <button class="btn success" id="btn-connect">▶ Connect</button>
+                <button class="btn danger sm" id="btn-delete" style="display:none">✕ Delete</button>
+            </div>
+
+            <div class="editor-body">
+
+                <!-- Name -->
+                <div class="form-row">
+                    <label>Profile Name</label>
+                    <input type="text" id="f-name" placeholder="e.g. SmartProxy RU Session">
+                </div>
+
+                <!-- Template -->
+                <div class="form-row mono">
+                    <label>Proxy URL / Template</label>
+                    <textarea id="f-template" rows="2"
+                        placeholder="http://user-{SID}-dur-30:pass@host.com:{RAND:40001-49999}"></textarea>
+                    <div class="form-hint">
+                        Supports variables: <code style="font-size:10px">{VARNAME}</code> saved with profile •
+                        <code style="font-size:10px">{SID}</code> ephemeral (not saved) •
+                        <code style="font-size:10px">{RAND:min-max}</code> auto-generated on connect
+                    </div>
+
+                    <!-- Template syntax guide -->
+                    <details class="tpl-guide">
+                        <summary>▸ Template syntax guide</summary>
+                        <div class="tpl-guide-body">
+
+                            <div class="tg-row">
+                                <span class="tg-tag tg-rand">{RAND:min-max}</span>
+                                <span class="tg-desc">Random integer in range, generated fresh on every <b>Connect</b>.<br>
+                                    <code>Example: {RAND:40001-49999}</code> → <code>43217</code></span>
+                            </div>
+
+                            <div class="tg-row">
+                                <span class="tg-tag tg-sid">{SID}</span>
+                                <span class="tg-desc"><b>Ephemeral session ID</b> — shown in the Variables table, never stored in the profile.<br>
+                                    Leave blank → auto-generates <code>cupnet</code> + 10 random digits.<br>
+                                    Change it at any time without saving a new profile.<br>
+                                    <code>Example: {SID}</code> → <code>cupnet3849201745</code></span>
+                            </div>
+
+                            <div class="tg-row">
+                                <span class="tg-tag tg-var">{VARNAME}</span>
+                                <span class="tg-desc"><b>Saved variable</b> — stored with the profile (e.g. country code, username suffix).<br>
+                                    Name must start with a letter, can contain letters, digits, underscore.<br>
+                                    <code>Example: {COUNTRY}</code> → <code>ru</code></span>
+                            </div>
+
+                            <div class="tg-example">
+                                <div class="tg-example-label">Full example (rotating residential proxy)</div>
+                                <code>http://user-{SID}:p@ssw0rd@{COUNTRY}.proxy-provider.com:{RAND:10000-19999}</code>
+                            </div>
+
+                        </div>
+                    </details>
+                </div>
+
+                <!-- Parsed preview -->
+                <div class="form-row">
+                    <label>Preview (with current values)</label>
+                    <div class="tpl-preview" id="tpl-preview">—</div>
+                </div>
+
+                <!-- Variables extracted from template -->
+                <div class="form-row" id="vars-section" style="display:none">
+                    <label>Template Variables</label>
+                    <table class="vars-table">
+                        <thead><tr><th>Variable</th><th>Value</th><th>Type</th></tr></thead>
+                        <tbody id="vars-tbody"></tbody>
+                    </table>
+                </div>
+
+                <div class="section-divider"></div>
+
+                <!-- Notes -->
+                <div class="form-row">
+                    <label>Notes (optional)</label>
+                    <input type="text" id="f-notes" placeholder="e.g. SmartProxy rotating — Russia">
+                </div>
+
+                <div class="form-row">
+                    <label>Traffic Mode</label>
+                    <select id="f-traffic-mode">
+                        <option value="mitm">MITM Proxy</option>
+                        <option value="browser_proxy" disabled>Browser proxy (in dev)</option>
+                    </select>
+                    <div class="form-hint">
+                        Only <b>MITM</b> is available here: local TLS interception, logging, rules, and AzureTLS fingerprinting.
+                        Browser-only proxy (no MITM) is disabled until the in-dev mode is finished.
+                    </div>
+                </div>
+
+                <div class="section-divider"></div>
+
+                <!-- Fingerprint / Identity -->
+                <details class="fp-section" id="fp-section">
+                    <summary>
+                        <span class="fp-summary-title">🎭 Fingerprint / Identity</span>
+                        <span class="fp-active-badge" id="fp-active-badge" style="display:none">custom</span>
+                        <span class="fp-hint-inline">applied on Connect</span>
+                    </summary>
+                    <div class="fp-body">
+
+                        <!-- ── User-Agent ── -->
+                        <div class="fp-sub-title">HTTP / Browser Identity</div>
+                        <div class="form-row">
+                            <label>User-Agent <span class="fp-sublabel">— also spoofs navigator.userAgent in JavaScript</span></label>
+                            <div class="ua-presets">
+                                <button class="btn sm fp-preset" data-ua="chrome-win">Chrome Win</button>
+                                <button class="btn sm fp-preset" data-ua="chrome-mac">Chrome Mac</button>
+                                <button class="btn sm fp-preset" data-ua="firefox">Firefox</button>
+                                <button class="btn sm fp-preset" data-ua="safari">Safari Mac</button>
+                                <button class="btn sm fp-preset" data-ua="mobile">Mobile</button>
+                                <button class="btn sm fp-preset fp-preset-clear" data-ua="">✕ System default</button>
+                            </div>
+                            <textarea id="f-ua" rows="2" placeholder="Leave empty to use system default (no spoofing)"></textarea>
+                        </div>
+                        <div class="fp-row-grid">
+                            <div class="form-row">
+                                <label>Timezone</label>
+                                <select id="f-timezone">
+                                    <option value="">System default</option>
+                                    <option value="UTC">UTC</option>
+                                    <option value="Europe/London">London (GMT/BST)</option>
+                                    <option value="Europe/Paris">Paris (CET/CEST)</option>
+                                    <option value="Europe/Berlin">Berlin (CET/CEST)</option>
+                                    <option value="Europe/Moscow">Moscow (MSK)</option>
+                                    <option value="Europe/Istanbul">Istanbul (TRT)</option>
+                                    <option value="Asia/Dubai">Dubai (GST)</option>
+                                    <option value="Asia/Kolkata">Mumbai/Delhi (IST)</option>
+                                    <option value="Asia/Singapore">Singapore (SGT)</option>
+                                    <option value="Asia/Tokyo">Tokyo (JST)</option>
+                                    <option value="Asia/Shanghai">Shanghai (CST)</option>
+                                    <option value="Australia/Sydney">Sydney (AEST/AEDT)</option>
+                                    <option value="America/New_York">New York (ET)</option>
+                                    <option value="America/Chicago">Chicago (CT)</option>
+                                    <option value="America/Denver">Denver (MT)</option>
+                                    <option value="America/Los_Angeles">Los Angeles (PT)</option>
+                                    <option value="America/Sao_Paulo">São Paulo (BRT)</option>
+                                    <option value="America/Mexico_City">Mexico City (CST)</option>
+                                    <option value="Pacific/Auckland">Auckland (NZST/NZDT)</option>
+                                </select>
+                            </div>
+                            <div class="form-row">
+                                <label>Language (Accept-Language)</label>
+                                <select id="f-language">
+                                    <option value="">System default</option>
+                                    <option value="en-US,en;q=0.9">English (US)</option>
+                                    <option value="en-GB,en;q=0.9">English (UK)</option>
+                                    <option value="ru-RU,ru;q=0.9,en;q=0.8">Russian</option>
+                                    <option value="de-DE,de;q=0.9,en;q=0.8">German</option>
+                                    <option value="fr-FR,fr;q=0.9,en;q=0.8">French</option>
+                                    <option value="es-ES,es;q=0.9,en;q=0.8">Spanish (Spain)</option>
+                                    <option value="es-MX,es;q=0.9,en;q=0.8">Spanish (Mexico)</option>
+                                    <option value="tr-TR,tr;q=0.9,en;q=0.8">Turkish</option>
+                                    <option value="ar-SA,ar;q=0.9,en;q=0.8">Arabic (SA)</option>
+                                    <option value="zh-CN,zh;q=0.9,en;q=0.8">Chinese (Simplified)</option>
+                                    <option value="zh-TW,zh;q=0.9,en;q=0.8">Chinese (Traditional)</option>
+                                    <option value="ja-JP,ja;q=0.9,en;q=0.8">Japanese</option>
+                                    <option value="ko-KR,ko;q=0.9,en;q=0.8">Korean</option>
+                                    <option value="pt-BR,pt;q=0.9,en;q=0.8">Portuguese (Brazil)</option>
+                                    <option value="pt-PT,pt;q=0.9,en;q=0.8">Portuguese (Portugal)</option>
+                                    <option value="pl-PL,pl;q=0.9,en;q=0.8">Polish</option>
+                                    <option value="it-IT,it;q=0.9,en;q=0.8">Italian</option>
+                                    <option value="nl-NL,nl;q=0.9,en;q=0.8">Dutch</option>
+                                    <option value="uk-UA,uk;q=0.9,en;q=0.8">Ukrainian</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- ── TLS Fingerprint ── -->
+                        <div class="fp-sub-title" style="margin-top:14px">
+                            🛡 TLS Fingerprint
+                            <span class="fp-tls-badge" id="fp-tls-badge" style="display:none">custom JA3</span>
+                        </div>
+                        <div class="form-hint" style="margin-bottom:8px">
+                            Controls how the TLS handshake looks to servers — the JA3 fingerprint. Cloudflare and anti-bot systems use this to detect non-browser clients.
+                        </div>
+
+                        <!-- Mode toggle -->
+                        <div class="tls-mode-row">
+                            <label class="tls-radio-label">
+                                <input type="radio" name="tls-mode" value="template" id="tls-mode-template" checked>
+                                Template
+                            </label>
+                            <label class="tls-radio-label">
+                                <input type="radio" name="tls-mode" value="custom" id="tls-mode-custom">
+                                Custom JA3
+                            </label>
+                        </div>
+
+                        <!-- Template mode -->
+                        <div id="tls-template-block">
+                            <div class="tls-template-grid">
+                                <button class="tls-tpl-btn active" data-tls="chrome" title="Chrome 133 — latest desktop Chrome (default)">
+                                    <span class="tls-tpl-icon">🌐</span>
+                                    <span class="tls-tpl-name">Chrome</span>
+                                    <span class="tls-tpl-ver">133</span>
+                                </button>
+                                <button class="tls-tpl-btn" data-tls="firefox" title="Firefox 138 — unique cipher order, no GREASE">
+                                    <span class="tls-tpl-icon">🦊</span>
+                                    <span class="tls-tpl-name">Firefox</span>
+                                    <span class="tls-tpl-ver">138</span>
+                                </button>
+                                <button class="tls-tpl-btn" data-tls="safari" title="Safari 18 — Apple TLS stack, macOS">
+                                    <span class="tls-tpl-icon">🧭</span>
+                                    <span class="tls-tpl-name">Safari</span>
+                                    <span class="tls-tpl-ver">18</span>
+                                </button>
+                                <button class="tls-tpl-btn" data-tls="ios" title="Mobile Safari — iOS 18, iPhone fingerprint">
+                                    <span class="tls-tpl-icon">📱</span>
+                                    <span class="tls-tpl-name">iOS</span>
+                                    <span class="tls-tpl-ver">18</span>
+                                </button>
+                                <button class="tls-tpl-btn" data-tls="edge" title="Edge 133 (Chromium) — Chrome TLS + Edge UA">
+                                    <span class="tls-tpl-icon">🔷</span>
+                                    <span class="tls-tpl-name">Edge</span>
+                                    <span class="tls-tpl-ver">133</span>
+                                </button>
+                                <button class="tls-tpl-btn" data-tls="opera" title="Opera 119 (Chromium) — Chrome TLS + Opera UA">
+                                    <span class="tls-tpl-icon">🎭</span>
+                                    <span class="tls-tpl-name">Opera</span>
+                                    <span class="tls-tpl-ver">119</span>
+                                </button>
+                            </div>
+                            <div class="tls-tpl-desc" id="tls-tpl-desc"></div>
+                        </div>
+
+                        <!-- Custom JA3 mode -->
+                        <div id="tls-custom-block" style="display:none">
+                            <div class="form-row" style="margin-bottom:6px">
+                                <label>JA3 string
+                                    <span class="fp-sublabel"> — format: <code>TLSVer,Ciphers,Extensions,Curves,ECPointFmt</code></span>
+                                </label>
+                                <div style="display:flex;gap:6px;align-items:stretch">
+                                    <input type="text" id="tls-ja3-full" class="tls-ja3-full-input"
+                                        placeholder="771,4865-4866-4867-49195-...,0-23-65281-...,29-23-24,0"
+                                        spellcheck="false" autocomplete="off">
+                                    <button class="btn sm" id="tls-ja3-copy" title="Copy JA3 string">Copy</button>
+                                </div>
+                            </div>
+                            <div class="ja3-field-help">
+                                <b>Format:</b> <code>TLSVersion, CipherSuites, Extensions, EllipticCurves, ECPointFormats</code><br>
+                                <b>4865</b>=AES_128_GCM &nbsp; <b>4866</b>=AES_256_GCM &nbsp; <b>4867</b>=CHACHA20 &nbsp; <b>29</b>=x25519 &nbsp; <b>0</b>=SNI &nbsp; <b>35</b>=session_ticket
+                            </div>
+                            <div class="ja3-prefills">
+                                <span class="ja3-prefill-label">Fill from real browser:</span>
+                                <button class="btn sm ja3-prefill" data-ja3="chrome">Chrome 133</button>
+                                <button class="btn sm ja3-prefill" data-ja3="firefox">Firefox 138</button>
+                                <button class="btn sm ja3-prefill" data-ja3="safari">Safari 18</button>
+                                <button class="btn sm ja3-prefill" data-ja3="ios">iOS 18</button>
+                                <button class="btn sm ja3-prefill" data-ja3="edge">Edge 133</button>
+                            </div>
+                        </div><!-- /tls-custom-block -->
+
+                        <div class="form-hint" style="margin-top:8px">
+                            Each profile sets <b>TLS fingerprint + HTTP/2 settings + User-Agent</b> together.
+                            Applied to all outbound connections via AzureTLS MITM proxy.
+                        </div>
+
+                        <!-- Deep Customization — Coming Soon -->
+                        <details class="deep-custom-section" disabled>
+                            <summary class="deep-custom-summary">
+                                <span>🔬 Deep Customization</span>
+                                <span class="coming-soon-badge">Coming Soon</span>
+                            </summary>
+                            <div class="deep-custom-body">
+                                <p>Per-field control over cipher suites, TLS extensions order, elliptic curves, HTTP/2 SETTINGS frames, and ALPN will be available in a future update.</p>
+                                <p>For now, use the profiles above or paste a custom JA3 string.</p>
+                            </div>
+                        </details>
+                    </div>
+                </details>
+
+                <div class="section-divider"></div>
+
+                <!-- Traffic Optimization -->
+                <details class="fp-section" id="traffic-section">
+                    <summary>
+                        <span class="fp-summary-title">⚡ Traffic Optimization</span>
+                        <span class="fp-active-badge" id="traffic-active-badge" style="display:none">active</span>
+                        <span class="fp-hint-inline">block resource types to speed up browsing</span>
+                    </summary>
+                    <div class="fp-body">
+
+                        <label class="traffic-master-row">
+                            <span class="sp-toggle-wrap sp-toggle-wrap--master">
+                                <input type="checkbox" class="sp-toggle-input" id="traffic-master-toggle">
+                                <span class="sp-toggle-slider"></span>
+                            </span>
+                            <span class="traffic-master-label">Enable Traffic Optimization</span>
+                            <span class="traffic-hint">Master switch — turns all filters on / off</span>
+                        </label>
+
+                        <div class="section-divider" style="margin:8px 0"></div>
+
+                        <div class="traffic-toggles" id="traffic-toggles-group">
+                            <label class="traffic-toggle-row">
+                                <span class="sp-toggle-wrap">
+                                    <input type="checkbox" class="sp-toggle-input traffic-opt" data-opt="blockImages">
+                                    <span class="sp-toggle-slider"></span>
+                                </span>
+                                <span class="traffic-label">🖼 Block images</span>
+                                <span class="traffic-hint">Speeds up page loading significantly</span>
+                            </label>
+
+                            <label class="traffic-toggle-row">
+                                <span class="sp-toggle-wrap">
+                                    <input type="checkbox" class="sp-toggle-input traffic-opt" data-opt="blockCSS">
+                                    <span class="sp-toggle-slider"></span>
+                                </span>
+                                <span class="traffic-label">🎨 Block CSS stylesheets</span>
+                                <span class="traffic-hint">Raw HTML view, minimal bandwidth</span>
+                            </label>
+
+                            <label class="traffic-toggle-row">
+                                <span class="sp-toggle-wrap">
+                                    <input type="checkbox" class="sp-toggle-input traffic-opt" data-opt="blockFonts">
+                                    <span class="sp-toggle-slider"></span>
+                                </span>
+                                <span class="traffic-label">🔤 Block web fonts</span>
+                                <span class="traffic-hint">Uses system fonts, saves 200–500 KB per page</span>
+                            </label>
+
+                            <label class="traffic-toggle-row">
+                                <span class="sp-toggle-wrap">
+                                    <input type="checkbox" class="sp-toggle-input traffic-opt" data-opt="blockMedia">
+                                    <span class="sp-toggle-slider"></span>
+                                </span>
+                                <span class="traffic-label">🔊 Block media (audio/video)</span>
+                                <span class="traffic-hint">No autoplay, no streaming, less bandwidth</span>
+                            </label>
+
+                            <label class="traffic-toggle-row">
+                                <span class="sp-toggle-wrap">
+                                    <input type="checkbox" class="sp-toggle-input traffic-opt" data-opt="blockWebSocket">
+                                    <span class="sp-toggle-slider"></span>
+                                </span>
+                                <span class="traffic-label">🔌 Block WebSocket connections</span>
+                                <span class="traffic-hint">Prevents real-time tracking and chat widgets</span>
+                            </label>
+                        </div>
+
+                        <div class="section-divider" style="margin:10px 0"></div>
+
+                        <div class="form-row" style="margin-bottom:0">
+                            <label>Captcha whitelist <span class="fp-sublabel">— these domains are NEVER blocked (even if images/CSS off)</span></label>
+                            <textarea id="f-captcha-whitelist" rows="3" style="font-size:11px;font-family:'SF Mono','Fira Code',monospace"
+                                placeholder="*.google.com&#10;*.gstatic.com&#10;*.recaptcha.net&#10;challenges.cloudflare.com&#10;*.hcaptcha.com"></textarea>
+                            <div class="form-hint" style="margin-top:4px">
+                                One domain per line. <code style="font-size:10px">*.example.com</code> matches all subdomains.
+                                Google reCAPTCHA and Cloudflare are pre-filled by default.
+                            </div>
+                        </div>
+
+                    </div>
+                </details>
+
+                <!-- Test result -->
+                <div class="test-result" id="test-result">
+                    <div class="test-row"><span class="test-label">IP</span><span class="test-val" id="tr-ip">—</span></div>
+                    <div class="test-row"><span class="test-label">Location</span><span class="test-val" id="tr-geo">—</span></div>
+                    <div class="test-row"><span class="test-label">Org</span><span class="test-val" id="tr-org">—</span></div>
+                    <div class="test-row"><span class="test-label">Latency</span><span class="test-val" id="tr-lat">—</span></div>
+                    <div class="test-row"><span class="test-label">URL used</span><span class="test-val" id="tr-url" style="word-break:break-all;font-size:10.5px">—</span></div>
+                </div>
+
+            </div>
+
+            <!-- Action bar -->
+            <div class="action-bar">
+                <button class="btn primary" id="btn-save">💾 Save Profile</button>
+                <button class="btn" id="btn-cancel">Cancel</button>
+                <div class="spacer"></div>
+                <span id="save-status" style="font-size:11px;color:var(--dim)"></span>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<script src="proxy-manager-renderer.js"></script>
+</body>
+</html>
