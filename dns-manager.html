@@ -351,7 +351,7 @@
     </div>
 
     <div class="note-bar">
-        <span>Applies only to MITM traffic. Direct tabs and bypass domains are not affected. Per-host <b>MITM CORS</b> adds Access-Control-* only for that hostname when the request includes <code>Origin</code> (enabled rule only).</span>
+        <span>Applies only to MITM traffic. Direct tabs and bypass domains are not affected. <b>Rewrite Host</b> (optional) replaces the HTTP <code>Host</code> header when redirecting to IPv4 (use <code>name:port</code> if the origin port is not 443/80). Per-host <b>MITM CORS</b> adds Access-Control-* only for that hostname when the request includes <code>Origin</code> (enabled rule only).</span>
     </div>
 
     <div class="table-wrap">
@@ -361,6 +361,7 @@
                     <th style="width:30px"></th>
                     <th>Host</th>
                     <th>IP</th>
+                    <th>Rewrite Host</th>
                     <th style="width:92px">CORS</th>
                     <th style="width:95px">State</th>
                     <th style="width:210px">Updated</th>
@@ -400,6 +401,10 @@
         <div class="edit-field">
             <label title="Можно оставить пустым, если нужен только MITM CORS без подмены IP">IPv4</label>
             <input type="text" id="e-ip" placeholder="1.2.3.4 или пусто при MITM CORS only">
+        </div>
+        <div class="edit-field">
+            <label title="Если задано — именно это значение уйдёт в заголовок Host (нужен IPv4). Порт укажите вручную, например internal.local:8080">Rewrite Host</label>
+            <input type="text" id="e-rewrite-host" placeholder="пусто = исходный домен">
         </div>
         <div class="edit-field">
             <label style="display:flex;align-items:center;gap:6px">

@@ -443,6 +443,22 @@ function createSubWindowsApi(d) {
         }, 150);
     }
 
+    /** Toolbar + Cookie Manager: refresh cookie group dropdowns after CRUD */
+    function notifyCookieGroupsListsUpdated() {
+        const send = (wc) => {
+            try {
+                if (wc && !wc.isDestroyed()) wc.send('cookie-groups-updated');
+            } catch (_) { /* ignore */ }
+        };
+        if (d.mainWindow && !d.mainWindow.isDestroyed()) send(d.mainWindow.webContents);
+        if (d.cookieManagerWindow && !d.cookieManagerWindow.isDestroyed()) send(d.cookieManagerWindow.webContents);
+        try {
+            for (const tab of d.tabManager.getAllTabs()) {
+                send(tab?.view?.webContents);
+            }
+        } catch (_) { /* ignore */ }
+    }
+
     function isValidPlainDnsHost(value) {
         const parts = value.split('.');
         if (!parts.length || parts.some(p => !p || p.length > 63)) return false;
@@ -505,7 +521,7 @@ function createSubWindowsApi(d) {
             return;
         }
         d.dnsManagerWindow = new d.BrowserWindow({
-            width: 920, height: 660, minWidth: 720, minHeight: 480,
+            width: 980, height: 660, minWidth: 760, minHeight: 480,
             title: 'DNS Manager', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false }
         });
@@ -638,6 +654,7 @@ function createSubWindowsApi(d) {
         runIvacScoutProcess,
         _sendAnalyzerTabs,
         notifyCookieManagerTabs,
+        notifyCookieGroupsListsUpdated,
         isValidDnsHost,
         isValidIpv4,
         syncDnsOverridesToMitm,

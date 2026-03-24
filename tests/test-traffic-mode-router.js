@@ -34,7 +34,8 @@ test('resolveSessionProxyConfig: mitm mode uses local mitm endpoint', () => {
         bypassRules: '<local>',
     });
     const p = networkPolicy.mitmPort;
-    assert.equal(opts.proxyRules, `http=127.0.0.1:${p};https=127.0.0.1:${p}`);
+    const hp = `127.0.0.1:${p}`;
+    assert.equal(opts.proxyRules, `http=${hp};https=${hp}`);
     assert.equal(opts.proxyBypassRules, '<local>');
 });
 

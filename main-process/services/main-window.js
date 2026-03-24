@@ -197,7 +197,22 @@ function createMainWindowApi(d) {
                     { label: 'API Scout', click: () => sub.createIvacScoutWindow() },
                     { type: 'separator' },
                     { label: 'Enable Logging', type: 'checkbox', checked: d.isLoggingEnabled,
-                      click: (item) => { d.isLoggingEnabled = item.checked; d.sendLogStatus(); } },
+                      click: (item) => {
+                          d.isLoggingEnabled = item.checked;
+                          if (item.checked && d.tabManager && d.setupNetworkLogging) {
+                              const sid = d.currentSessionId;
+                              for (const tab of d.tabManager.getAllTabs()) {
+                                  if (tab.direct) continue;
+                                  const wc = tab.view?.webContents;
+                                  if (!wc || wc.isDestroyed()) continue;
+                                  const effectiveSid = sid ?? tab.sessionId;
+                                  if (effectiveSid == null) continue;
+                                  tab.sessionId = effectiveSid;
+                                  d.setupNetworkLogging(wc, tab.id, effectiveSid);
+                              }
+                          }
+                          d.sendLogStatus();
+                      } },
                     { label: 'Take Screenshot', accelerator: 'F2', click: () => {
                         d.requestScreenshot({ reason: 'click' }).catch((err) => {
                             d.safeCatch({ module: 'main', eventCode: 'screenshot.capture.failed', context: { reason: 'click', source: 'app-activate' } }, err, 'info');

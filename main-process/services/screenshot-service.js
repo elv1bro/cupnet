@@ -26,6 +26,7 @@ function createScreenshotService({
             case 'page-load': return !!tracking.onPageLoadComplete;
             case 'network-pending': return !!tracking.onNetworkPendingChange;
             case 'mouse-activity': return !!tracking.onMouseActivity;
+            case 'typing-end': return tracking.onTypingEnd !== false;
             case 'scroll-end': return !!tracking.onScrollEnd;
             case 'rule': return !!tracking.onRuleMatchScreenshot;
             default: return true;

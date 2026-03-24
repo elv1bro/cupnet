@@ -44,6 +44,8 @@ const networkPolicy = {
         workerMaxInflight: envInt('CUPNET_WORKER_MAX_INFLIGHT', 200),
         workerStdinQueueMax: envInt('CUPNET_WORKER_STDIN_QUEUE_MAX', 2000),
         workerClientCacheMax: envInt('CUPNET_WORKER_CLIENT_CACHE_MAX', 20),
+        /** Параллельных FFI-запросов на пару (browser, proxy) в azure-tls-worker. 1 = старый режим «всё по очереди». */
+        workerFfiConcurrency: envInt('CUPNET_WORKER_FFI_CONCURRENCY', 4, 1, 32),
     },
     breaker: {
         enabled: envBool('CUPNET_BREAKER_ENABLED', true),
@@ -56,6 +58,11 @@ const networkPolicy = {
         ewmaAlphaPct: envInt('CUPNET_PROXY_EWMA_ALPHA_PCT', 30, 1, 100),
     },
     mitmPort: envInt('CUPNET_MITM_PORT', 8877, 1024, 65535),
+    /** Локальный MITM: если клиент шлёт Basic — username=tabId (или _cupnet_global), пароль=password; без заголовка CONNECT всё равно принимаем. */
+    mitmClientProxyAuth: {
+        globalUsername: '_cupnet_global',
+        password:       'cupnet',
+    },
     db: {
         busyRetries: envInt('CUPNET_DB_BUSY_RETRIES', 3, 0, 10),
         busyBaseDelayMs: envInt('CUPNET_DB_BUSY_BASE_DELAY_MS', 15, 1, 500),

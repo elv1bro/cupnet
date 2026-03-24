@@ -331,6 +331,24 @@ async function closeAllExcept(electronApp, keepPage) {
     }
 }
 
+/**
+ * Новая вкладка с пустой cookie-группой и включённым CupNet (аналог старого newIsolatedTab).
+ */
+async function openNewTabWithFreshCookieGroupAndCupnet(mainWindowPage) {
+    await mainWindowPage.evaluate(async () => {
+        const cg = await window.electronAPI.createCookieGroup('e2e-iso-' + Date.now());
+        if (!cg?.success) throw new Error(cg?.error || 'createCookieGroup failed');
+        await window.electronAPI.newTab(null);
+        const tabList = await window.electronAPI.getTabs();
+        const active = tabList.find((t) => t.isActive);
+        if (!active) throw new Error('no active tab');
+        await window.electronAPI.setTabCookieGroup(active.id, cg.group.id);
+        const cup = await window.electronAPI.setTabCupNet(active.id, true);
+        if (cup && cup.success === false) throw new Error(cup.error || 'setTabCupNet failed');
+    });
+    await new Promise((r) => setTimeout(r, 750));
+}
+
 module.exports = {
     PROJECT_ROOT,
     getElectronExecutablePath,

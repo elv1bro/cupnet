@@ -48,7 +48,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     closeTab:                (id)      => ipcRenderer.invoke('close-tab', id),
     switchTab:               (id)      => ipcRenderer.invoke('switch-tab', id),
     getTabs:                 ()        => ipcRenderer.invoke('get-tabs'),
+    // Per-tab controls
+    setTabCupNet:            (id, on)  => ipcRenderer.invoke('set-tab-cupnet', id, on),
+    setTabProxy:             (id, pid, ephemeralVars) => ipcRenderer.invoke('set-tab-proxy', id, pid, ephemeralVars),
+    setTabCookieGroup:       (id, gid) => ipcRenderer.invoke('set-tab-cookie-group', id, gid),
+    // Cookie groups
+    getCookieGroups:         ()        => ipcRenderer.invoke('get-cookie-groups'),
+    createCookieGroup:       (name)    => ipcRenderer.invoke('create-cookie-group', name),
+    copyCookieGroup:         (fid, n)  => ipcRenderer.invoke('copy-cookie-group', fid, n),
+    renameCookieGroup:       (id, n)   => ipcRenderer.invoke('rename-cookie-group', id, n),
+    deleteCookieGroup:       (id)      => ipcRenderer.invoke('delete-cookie-group', id),
     onTabListUpdated:        (cb)      => sub('tab-list-updated', cb),
+    onCookieGroupsUpdated:   (cb)      => sub('cookie-groups-updated', cb),
     onTabUrlChanged:         (cb)      => sub('tab-url-changed', cb),
     onTabTitleChanged:       (cb)      => sub('tab-title-changed', cb),
     onFocusUrlBar:           (cb)      => sub('focus-url-bar', cb),
@@ -256,7 +267,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Proxy Manager ──────────────────────────────────────────────────────────
     openProxyManager:        ()        => ipcRenderer.invoke('open-proxy-manager'),
-    checkIpGeo:              ()        => ipcRenderer.invoke('check-ip-geo'),
+    checkIpGeo:              (tabId)   => ipcRenderer.invoke('check-ip-geo', tabId),
     getCurrentProxy:         ()        => ipcRenderer.invoke('get-current-proxy'),
     connectProxyTemplate:    (id, ev)  => ipcRenderer.invoke('connect-proxy-template', id, ev),
     disconnectProxy:         ()        => ipcRenderer.invoke('disconnect-proxy'),

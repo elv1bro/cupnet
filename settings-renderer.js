@@ -17,6 +17,7 @@ const spTrackClick = document.getElementById('sp-track-click');
 const spTrackPageLoad = document.getElementById('sp-track-page-load');
 const spTrackPending = document.getElementById('sp-track-network-pending');
 const spTrackMouse = document.getElementById('sp-track-mouse');
+const spTrackTypingEnd = document.getElementById('sp-track-typing-end');
 const spTrackScrollEnd = document.getElementById('sp-track-scroll-end');
 const spTrackRule = document.getElementById('sp-track-rule');
 const spTrackPendingThreshold = document.getElementById('sp-track-pending-threshold');
@@ -73,6 +74,7 @@ function collectTrackingSettings() {
         onPageLoadComplete: spTrackPageLoad?.checked !== false,
         onNetworkPendingChange: spTrackPending?.checked !== false,
         onMouseActivity: !!spTrackMouse?.checked,
+        onTypingEnd: spTrackTypingEnd?.checked !== false,
         onScrollEnd: !!spTrackScrollEnd?.checked,
         onRuleMatchScreenshot: spTrackRule?.checked !== false,
         pendingDeltaThreshold: Math.max(1, Math.min(50, Number(spTrackPendingThreshold?.value) || 3)),
@@ -87,6 +89,7 @@ function setAllTracking(enabled) {
     if (spTrackPageLoad) spTrackPageLoad.checked = v;
     if (spTrackPending) spTrackPending.checked = v;
     if (spTrackMouse) spTrackMouse.checked = v;
+    if (spTrackTypingEnd) spTrackTypingEnd.checked = v;
     if (spTrackScrollEnd) spTrackScrollEnd.checked = v;
     if (spTrackRule) spTrackRule.checked = v;
 }
@@ -179,7 +182,7 @@ spSaveBypass?.addEventListener('click', async () => {
 });
 
 [
-    spTrackClick, spTrackPageLoad, spTrackPending, spTrackMouse, spTrackScrollEnd, spTrackRule,
+    spTrackClick, spTrackPageLoad, spTrackPending, spTrackMouse, spTrackTypingEnd, spTrackScrollEnd, spTrackRule,
     spTrackPendingThreshold, spTrackCooldownMs, spTrackMaxPerMinute,
 ].forEach((el) => el?.addEventListener('change', scheduleTrackingSave));
 

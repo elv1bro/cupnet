@@ -45,7 +45,12 @@ test.afterAll(async () => {
 
 test.beforeEach(async () => {
     await deleteAllInterceptRules(mainWindow);
-    await mainWindow.evaluate(() => window.electronAPI.newTab());
+    await mainWindow.evaluate(async () => {
+        await window.electronAPI.newTab(null);
+        const tabList = await window.electronAPI.getTabs();
+        const active = tabList.find((t) => t.isActive);
+        if (active) await window.electronAPI.setTabCupNet(active.id, true);
+    });
     await new Promise((r) => setTimeout(r, 500));
 });
 

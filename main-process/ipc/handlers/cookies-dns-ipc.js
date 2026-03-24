@@ -5,6 +5,41 @@
  * @param {object} ctx
  */
 function registerCookiesDnsIpc(ctx) {
+    function getResolvedProxyUpstreamFromProfile(profile, ephemeralVars) {
+        if (!profile) return null;
+        let template = null;
+        if (profile.url_encrypted && ctx.safeStorage?.isEncryptionAvailable()) {
+            try { template = ctx.safeStorage.decryptString(profile.url_encrypted); } catch {}
+        }
+        if (!template) return null;
+        let savedVars = {};
+        try { savedVars = profile.variables ? JSON.parse(profile.variables) : {}; } catch {}
+        const mergedVars = { ...savedVars, ...(ephemeralVars && typeof ephemeralVars === 'object' ? ephemeralVars : {}) };
+        return ctx.parseProxyTemplate(template, mergedVars);
+    }
+
+    async function applyMitmAndFingerprintForTabProxy(tid, proxyProfileId, ephemeralVars) {
+        const tab = ctx.tabManager.getTab(tid);
+        if (!tab) return;
+        if (!proxyProfileId || !ctx.mitmProxy) {
+            if (ctx.mitmProxy) ctx.mitmProxy.removeTabUpstream(tid);
+            if (ctx.resetFingerprintOnWebContents && tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
+                await ctx.resetFingerprintOnWebContents(tab.view.webContents);
+            }
+            return;
+        }
+        const profile = ctx.db.getProxyProfileEncrypted(proxyProfileId);
+        if (!profile) return;
+        const resolvedUrl = getResolvedProxyUpstreamFromProfile(profile, ephemeralVars);
+        ctx.mitmProxy.setTabUpstream(tid, {
+            upstream: resolvedUrl,
+            browser:  profile.tls_profile || null,
+            ja3:      profile.tls_ja3_mode === 'custom' ? profile.tls_ja3_custom : null,
+        });
+        if (ctx.applyFingerprintFromProfile && tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
+            await ctx.applyFingerprintFromProfile(tab.view.webContents, proxyProfileId);
+        }
+    }
     ctx.ipcMain.handle('get-cookies', async (_, tabId, filter) => {
         const tab = tabId ? ctx.tabManager.getTab(tabId) : ctx.tabManager.getActiveTab();
         if (!tab) return [];
@@ -87,8 +122,9 @@ function registerCookiesDnsIpc(ctx) {
         } else {
             if (!ctx.isValidIpv4(ip)) return { success: false, error: 'Invalid IPv4 address' };
         }
+        const rewrite_host = String(payload?.rewrite_host ?? '').trim();
         try {
-            const savedId = await ctx.db.saveDnsOverrideAsync({ id, host, ip, enabled, mitm_inject_cors });
+            const savedId = await ctx.db.saveDnsOverrideAsync({ id, host, ip, enabled, mitm_inject_cors, rewrite_host });
             ctx.syncDnsOverridesToMitm();
             return { success: true, id: savedId };
         } catch (e) {
@@ -119,12 +155,22 @@ function registerCookiesDnsIpc(ctx) {
     ctx.ipcMain.handle('isolate-tab', async (_, tabId) => {
         const tid = tabId || ctx.tabManager.getActiveTabId();
         const result = await ctx.tabManager.isolateTab(tid);
-        // Attach interceptor to the new isolated session so request rules apply
-        if (result?.success && ctx.interceptor) {
+        // Mirror set-tab-cookie-group: new BrowserView/session loses MITM upstream + logging unless re-applied.
+        if (result?.success) {
             const tab = ctx.tabManager.getTab(tid);
-            if (tab) {
-                try { ctx.interceptor.attachToSession(tab.tabSession, tid); } catch (e) { ctx.sysLog('warn', 'tabs', 'interceptor attach on isolate-tab failed: ' + (e?.message || e)); }
+            if (tab && tab.cupnetEnabled) {
+                ctx.setupNetworkLogging(tab.view.webContents, tab.id, ctx.currentSessionId);
+                if (ctx.interceptor) {
+                    try { ctx.interceptor.attachToSession(tab.tabSession, tab.id); } catch (e) {
+                        ctx.sysLog('warn', 'tabs', 'interceptor attach on isolate-tab failed: ' + (e?.message || e));
+                    }
+                }
+                if (tab.proxyProfileId) {
+                    await applyMitmAndFingerprintForTabProxy(tid, tab.proxyProfileId);
+                }
             }
+            ctx.notifyCookieManagerTabs();
+            if (typeof ctx.notifyProxyStatus === 'function') ctx.notifyProxyStatus();
         }
         return result;
     });
@@ -158,6 +204,134 @@ function registerCookiesDnsIpc(ctx) {
     ctx.ipcMain.handle('open-cookie-manager', async (_, tabId) => {
         ctx.createCookieManagerWindow(tabId || ctx.tabManager.getActiveTabId());
         return true;
+    });
+
+    // ── Per-tab controls ────────────────────────────────────────────────────
+
+    ctx.ipcMain.handle('set-tab-cupnet', async (_, tabId, enabled) => {
+        const tid = tabId || ctx.tabManager.getActiveTabId();
+        const result = await ctx.tabManager.setTabCupNet(tabId, enabled);
+        if (result?.success) {
+            const tab = ctx.tabManager.getTab(tid);
+            if (!enabled) {
+                await applyMitmAndFingerprintForTabProxy(tid, null);
+            } else if (tab) {
+                ctx.setupNetworkLogging(tab.view.webContents, tab.id, ctx.currentSessionId);
+                if (ctx.interceptor) {
+                    try { ctx.interceptor.attachToSession(tab.tabSession, tab.id); } catch {}
+                }
+                if (tab.proxyProfileId) {
+                    await applyMitmAndFingerprintForTabProxy(tid, tab.proxyProfileId);
+                }
+            }
+            ctx.notifyCookieManagerTabs();
+        }
+        return result;
+    });
+
+    ctx.ipcMain.handle('set-tab-proxy', async (_, tabId, proxyProfileId, ephemeralVars) => {
+        const tid = tabId || ctx.tabManager.getActiveTabId();
+        const result = await ctx.tabManager.setTabProxy(tid, proxyProfileId);
+        if (!result?.success) return result;
+
+        await applyMitmAndFingerprintForTabProxy(tid, proxyProfileId || null, ephemeralVars);
+        const tab = ctx.tabManager.getTab(tid);
+        if (tab?.view?.webContents && ctx.setupNetworkLogging) {
+            try {
+                await ctx.setupNetworkLogging(tab.view.webContents, tab.id, tab.sessionId ?? ctx.currentSessionId);
+            } catch (_) { /* ignore */ }
+        }
+        if (typeof ctx.notifyProxyStatus === 'function') ctx.notifyProxyStatus();
+        return result;
+    });
+
+    ctx.ipcMain.handle('set-tab-cookie-group', async (_, tabId, cookieGroupId) => {
+        const tid = tabId || ctx.tabManager.getActiveTabId();
+        const result = await ctx.tabManager.setTabCookieGroup(tid, cookieGroupId);
+        if (result?.success) {
+            const tab = ctx.tabManager.getTab(tid);
+            if (tab && tab.cupnetEnabled) {
+                ctx.setupNetworkLogging(tab.view.webContents, tab.id, ctx.currentSessionId);
+                if (ctx.interceptor) {
+                    try { ctx.interceptor.attachToSession(tab.tabSession, tab.id); } catch {}
+                }
+                if (tab.proxyProfileId) {
+                    await applyMitmAndFingerprintForTabProxy(tid, tab.proxyProfileId);
+                }
+            }
+            ctx.notifyCookieManagerTabs();
+        }
+        return result;
+    });
+
+    // ── Cookie Groups ───────────────────────────────────────────────────────
+
+    ctx.ipcMain.handle('get-cookie-groups', async () => {
+        return ctx.db ? ctx.db.getCookieGroups() : [];
+    });
+
+    ctx.ipcMain.handle('create-cookie-group', async (_, name) => {
+        try {
+            const group = await ctx.db.createCookieGroupAsync(name);
+            ctx.notifyCookieGroupsListsUpdated?.();
+            return { success: true, group };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    ctx.ipcMain.handle('copy-cookie-group', async (_, fromGroupId, newName) => {
+        try {
+            const newGroup = await ctx.db.createCookieGroupAsync(newName);
+            if (!newGroup) return { success: false, error: 'Failed to create group' };
+
+            const { session: electronSession } = require('electron');
+            const srcPartition = ctx.tabManager.partitionForGroup(fromGroupId);
+            const dstPartition = ctx.tabManager.partitionForGroup(newGroup.id);
+            const srcSession = electronSession.fromPartition(srcPartition);
+            const dstSession = electronSession.fromPartition(dstPartition);
+
+            const cookies = await srcSession.cookies.get({});
+            for (const c of cookies) {
+                const url = `${c.secure ? 'https' : 'http'}://${c.domain.replace(/^\./, '')}${c.path || '/'}`;
+                try { await dstSession.cookies.set({ ...c, url }); } catch {}
+            }
+            await dstSession.cookies.flushStore();
+            ctx.notifyCookieGroupsListsUpdated?.();
+            return { success: true, group: newGroup, copiedCount: cookies.length };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    ctx.ipcMain.handle('rename-cookie-group', async (_, groupId, newName) => {
+        try {
+            await ctx.db.renameCookieGroupAsync(groupId, newName);
+            ctx.notifyCookieGroupsListsUpdated?.();
+            return { success: true };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    ctx.ipcMain.handle('delete-cookie-group', async (_, groupId) => {
+        try {
+            const gid = Number(groupId);
+            for (const tab of ctx.tabManager.getAllTabs()) {
+                if ((tab.cookieGroupId ?? 1) === gid) {
+                    return { success: false, error: 'A tab is still using this cookie group' };
+                }
+            }
+            await ctx.db.deleteCookieGroupAsync(gid);
+            const { session: electronSession } = require('electron');
+            const part = ctx.tabManager.partitionForGroup(gid);
+            const s = electronSession.fromPartition(part);
+            await s.clearStorageData();
+            ctx.notifyCookieGroupsListsUpdated?.();
+            return { success: true };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
     });
 
     // ── DevTools for active tab ──────────────────────────────────────────────

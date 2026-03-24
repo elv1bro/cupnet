@@ -212,14 +212,80 @@
            HERO — logo section, starts ~30% from top
         ══════════════════════════════════════════ */
         .lc-hero {
-            margin-top: 15vh;
+            margin-top: 8vh;
             flex: 0 0 auto;
             display: flex;
             align-items: center;
-            justify-content: space-between;
+            gap: 14px;
             padding: 0 40px;
             position: relative;
-            transition: margin-top 0.45s ease, justify-content 0.45s ease;
+            transition: margin-top 0.45s ease;
+        }
+        .lc-hero-brand {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            min-width: 0;
+            flex-shrink: 1;
+        }
+        /* ── Hero mode toggle (MITM / Direct) — bare inline style ───── */
+        .hero-mode-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0;
+            border: none;
+            background: none;
+            cursor: pointer;
+            text-align: left;
+            font: inherit;
+            color: inherit;
+            flex-shrink: 0;
+        }
+        .hero-mode-toggle:focus-visible {
+            outline: 2px solid rgba(96,165,250,0.5);
+            outline-offset: 4px;
+            border-radius: 6px;
+        }
+        .hero-mode-toggle__track {
+            position: relative;
+            width: 30px; height: 16px;
+            flex-shrink: 0;
+            border-radius: 999px;
+            background: rgba(71,85,105,0.7);
+            transition: background 0.28s cubic-bezier(0.22,1,0.36,1);
+        }
+        .hero-mode-toggle__thumb {
+            position: absolute;
+            top: 2px; left: 2px;
+            width: 12px; height: 12px;
+            border-radius: 50%;
+            background: #e2e8f0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+            transition: transform 0.28s cubic-bezier(0.22,1,0.36,1);
+        }
+        .hero-mode-toggle.nt-on .hero-mode-toggle__track {
+            background: linear-gradient(135deg,#22c55e,#16a34a);
+        }
+        .hero-mode-toggle.nt-on .hero-mode-toggle__thumb {
+            transform: translateX(14px);
+        }
+        .hero-mode-toggle__label {
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: rgba(148,163,184,0.85);
+            line-height: 1;
+            white-space: nowrap;
+            transition: color 0.2s;
+        }
+        .hero-mode-toggle.nt-on .hero-mode-toggle__label {
+            color: rgba(134,239,172,0.8);
+        }
+        .hero-mode-toggle:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
         }
         .lc-hero::before {
             content: '';
@@ -722,12 +788,67 @@
         .sb-cookies {
             width: 100%; flex-shrink: 0;
             padding: 10px 14px;
-            display: flex; flex-direction: row;
-            align-items: center; justify-content: flex-start;
-            gap: 8px;
+            display: flex; flex-direction: column;
+            align-items: stretch;
+            justify-content: flex-start;
+            gap: 6px;
             transition: background 0.15s;
         }
         .sb-cookies:hover { background: rgba(255,255,255,0.03); }
+        .cookie-bar-row1 {
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 8px;
+            width: 100%;
+            flex-wrap: wrap;
+        }
+        .cookie-iso-seg {
+            display: flex;
+            flex-shrink: 0;
+            border-radius: 6px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .cookie-iso-seg.cupnet-off {
+            opacity: 0.5;
+        }
+        .cookie-iso-btn {
+            padding: 4px 8px;
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            border: none;
+            background: rgba(255,255,255,0.04);
+            color: #64748b;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+        .cookie-iso-btn:hover:not(:disabled) {
+            background: rgba(255,255,255,0.08);
+            color: #94a3b8;
+        }
+        .cookie-iso-btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+        .cookie-iso-btn.active {
+            background: rgba(96, 165, 250, 0.16);
+            color: #7dd3fc;
+        }
+        .cookie-iso-seg.state-isolated .cookie-iso-btn.active {
+            background: rgba(236, 72, 153, 0.2);
+            color: #f9a8d4;
+        }
+        .cookie-in-dev-hint {
+            font-size: 9px;
+            color: #475569;
+            line-height: 1.35;
+            margin: 0;
+            padding: 0 1px;
+        }
 
         .pw-top { display: flex; align-items: center; gap: 8px; }
         .pw-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
@@ -747,6 +868,30 @@
             background: rgba(34,197,94,0.1); color: #22c55e; border: 1px solid rgba(34,197,94,0.2);
         }
         .pw-manage { margin-left: auto; font-size: 10px; color: #475569; opacity: 0.7; }
+        .pw-scope-badge {
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.35px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            flex-shrink: 0;
+            line-height: 1.35;
+            max-width: 112px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .pw-scope-badge.pw-scope-global {
+            background: rgba(168, 85, 247, 0.14);
+            color: #c4b5fd;
+            border: 1px solid rgba(168, 85, 247, 0.35);
+        }
+        .pw-scope-badge.pw-scope-tab {
+            background: rgba(236, 72, 153, 0.12);
+            color: #f9a8d4;
+            border: 1px solid rgba(236, 72, 153, 0.35);
+        }
         .pw-ip {
             font-family: 'SF Mono','Fira Code',monospace;
             font-size: 16px; font-weight: 600; color: #f1f5f9; letter-spacing: 0.5px;
@@ -937,7 +1082,7 @@
 
         /* 380px — extreme: hide clock entirely */
         @media (max-height: 380px) {
-            .lc-hero { margin-top: 0; padding: 4px 20px 0; }
+            .lc-hero { margin-top: 0; padding: 4px 20px 0; flex-wrap: wrap; }
             .lc-logo-name { display: none; }
             .lc-clock-inline { display: none; }
             .lc-main { padding: 4px 20px 8px; }
@@ -947,117 +1092,265 @@
         /* ── External Proxy widget ──────────────────────────────── */
         .ext-proxy-widget {
             width: 100%;
-            border-radius: 14px;
-            padding: 12px 16px;
-            transition: all 0.25s;
+            border-radius: 16px;
+            padding: 14px 16px 16px;
+            transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
         }
-        /* OFF: subtle neutral */
         .ext-proxy-widget.state-off {
-            background: rgba(255,255,255,0.025);
-            border: 1px solid rgba(255,255,255,0.06);
+            background: linear-gradient(165deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015));
+            border: 1px solid rgba(255,255,255,0.08);
+            box-shadow: 0 4px 24px rgba(0,0,0,0.12);
         }
-        .ext-proxy-widget.state-off:hover { border-color: rgba(124,58,237,0.25); }
-        /* ON: active green accent */
+        .ext-proxy-widget.state-off:hover {
+            border-color: rgba(124,58,237,0.35);
+            box-shadow: 0 6px 28px rgba(124,58,237,0.08);
+        }
         .ext-proxy-widget.state-on {
-            background: rgba(34,197,94,0.05);
-            border: 1px solid rgba(34,197,94,0.25);
+            background: linear-gradient(165deg, rgba(34,197,94,0.08), rgba(34,197,94,0.02));
+            border: 1px solid rgba(34,197,94,0.35);
+            box-shadow: 0 4px 28px rgba(34,197,94,0.06), inset 0 1px 0 rgba(255,255,255,0.04);
         }
-        /* Error */
         .ext-proxy-widget.state-err {
-            background: rgba(239,68,68,0.04);
-            border: 1px solid rgba(239,68,68,0.25);
+            background: rgba(239,68,68,0.06);
+            border: 1px solid rgba(239,68,68,0.3);
         }
 
-        /* ── OFF state ── */
-        .epw-off-state {
-            display: flex; flex-direction: column; gap: 10px;
+        /* OFF */
+        .epw-off-state { display: flex; flex-direction: column; gap: 14px; }
+        .epw-off-brand {
+            display: flex; align-items: flex-start; gap: 12px; min-width: 0;
         }
-        .epw-off-left { display: flex; align-items: flex-start; gap: 10px; flex: 1; min-width: 0; }
         .epw-off-icon {
-            font-size: 16px; width: 32px; height: 32px;
+            font-size: 18px; width: 40px; height: 40px; flex-shrink: 0;
             display: flex; align-items: center; justify-content: center;
-            background: rgba(124,58,237,0.1); border-radius: 8px;
-            color: #a78bfa; flex-shrink: 0;
+            border-radius: 12px;
+            background: linear-gradient(145deg, rgba(124,58,237,0.22), rgba(124,58,237,0.08));
+            border: 1px solid rgba(167,139,250,0.25);
+            color: #c4b5fd;
         }
         .epw-off-title {
-            font-size: 12px; font-weight: 600; color: #e2e8f0;
-            margin-bottom: 2px;
+            font-size: 13px; font-weight: 700; color: #f1f5f9;
+            letter-spacing: -0.02em;
+            margin-bottom: 4px;
         }
         .epw-off-desc {
-            font-size: 10.5px; color: #64748b; line-height: 1.4;
+            font-size: 11px; color: #94a3b8; line-height: 1.45; max-width: 42ch;
         }
-        .epw-off-right {
-            display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+        .epw-off-actions {
+            display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px;
+            padding-top: 2px;
+            border-top: 1px solid rgba(255,255,255,0.06);
         }
+        .epw-off-field { display: flex; flex-direction: column; gap: 5px; }
+        .epw-field-label {
+            font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
+            text-transform: uppercase; color: #64748b;
+        }
+        .epw-off-controls { display: flex; align-items: center; gap: 8px; }
         .epw-port-select {
             font-family: 'SF Mono','Fira Code',monospace;
-            font-size: 11px; font-weight: 600;
-            background: rgba(255,255,255,0.06); color: #94a3b8;
-            border: 1px solid rgba(255,255,255,0.1); border-radius: 6px;
-            padding: 4px 6px; cursor: pointer;
+            font-size: 12px; font-weight: 600;
+            min-width: 88px;
+            background: rgba(0,0,0,0.25); color: #e2e8f0;
+            border: 1px solid rgba(255,255,255,0.12); border-radius: 10px;
+            padding: 8px 10px; cursor: pointer;
             outline: none; appearance: auto;
         }
-        .epw-port-select:focus { border-color: #7c3aed; }
-        .epw-port-select:disabled { opacity: 0.4; cursor: default; }
+        .epw-port-select:focus {
+            border-color: #a78bfa;
+            box-shadow: 0 0 0 2px rgba(124,58,237,0.25);
+        }
+        .epw-port-select:disabled { opacity: 0.45; cursor: not-allowed; }
         .epw-start-btn {
-            font-size: 11px; font-weight: 600; letter-spacing: 0.3px;
-            padding: 6px 18px; border-radius: 8px; border: none;
-            background: rgba(124,58,237,0.2); color: #c4b5fd;
-            cursor: pointer; transition: all 0.18s;
+            font-size: 12px; font-weight: 600;
+            padding: 8px 20px; border-radius: 10px; border: none;
+            background: linear-gradient(180deg, rgba(124,58,237,0.45), rgba(124,58,237,0.28));
+            color: #f5f3ff;
+            border: 1px solid rgba(167,139,250,0.35);
+            cursor: pointer; transition: transform 0.12s, filter 0.15s;
         }
-        .epw-start-btn:hover { background: rgba(124,58,237,0.35); color: #e9d5ff; }
-        .epw-start-btn:disabled { opacity: 0.5; cursor: wait; }
+        .epw-start-btn:hover {
+            filter: brightness(1.08);
+            transform: translateY(-1px);
+        }
+        .epw-start-btn:active { transform: translateY(0); }
+        .epw-start-btn:disabled { opacity: 0.5; cursor: wait; transform: none; filter: none; }
 
-        /* ── ON state ── */
-        .epw-on-state { display: flex; flex-direction: column; gap: 8px; }
-        .epw-on-header {
-            display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+        /* ON — status */
+        .epw-on-state { display: flex; flex-direction: column; gap: 12px; }
+        .epw-status-bar {
+            display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
         }
-        .epw-dot {
-            width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-            background: #22c55e; box-shadow: 0 0 6px rgba(34,197,94,0.5);
+        .epw-status-primary {
+            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
         }
-        .epw-on-addr {
+        .epw-live-badge {
+            display: inline-flex; align-items: center; gap: 8px;
+            font-size: 11px; font-weight: 600; color: #bbf7d0;
+            padding: 5px 10px 5px 8px;
+            border-radius: 999px;
+            background: rgba(34,197,94,0.15);
+            border: 1px solid rgba(34,197,94,0.28);
+        }
+        .epw-status-dot {
+            width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+            background: #4ade80;
+            box-shadow: 0 0 0 3px rgba(74,222,128,0.25);
+            animation: epw-dot-pulse 2.2s ease-in-out infinite;
+        }
+        @keyframes epw-dot-pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.75; transform: scale(0.92); }
+        }
+        .epw-port-pill {
             font-family: 'SF Mono','Fira Code',monospace;
-            font-size: 13px; font-weight: 600; color: #e2e8f0;
+            font-size: 11px; font-weight: 700; color: #e2e8f0;
+            padding: 4px 11px; border-radius: 8px;
+            background: rgba(0,0,0,0.28);
+            border: 1px solid rgba(255,255,255,0.1);
         }
-        .epw-chain-arrow { color: #475569; font-size: 12px; }
-        .epw-chain-upstream {
-            font-size: 12px; color: #a78bfa; font-weight: 500;
-        }
-        .epw-chain-upstream.direct { color: #64748b; font-style: italic; }
-        .epw-on-meta {
-            margin-left: auto; font-size: 10px; color: #6b7280;
-        }
-        .epw-stop-btn {
-            font-size: 10px; font-weight: 600;
-            padding: 4px 12px; border-radius: 6px; border: none;
-            background: rgba(239,68,68,0.12); color: #f87171;
-            cursor: pointer; transition: all 0.18s;
-        }
-        .epw-stop-btn:hover { background: rgba(239,68,68,0.25); }
-        .epw-stop-btn:disabled { opacity: 0.5; cursor: wait; }
-
-        .epw-error { font-size: 11px; color: #ef4444; margin-top: 4px; }
-
-        .epw-curl-block {
-            display: flex; align-items: center; gap: 8px;
+        .epw-chain-box {
+            display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+            padding: 5px 10px; border-radius: 8px;
             background: rgba(0,0,0,0.18);
-            border-radius: 8px; padding: 7px 10px;
+            border: 1px solid rgba(255,255,255,0.06);
         }
-        .epw-curl-code {
-            font-family: 'SF Mono','Fira Code',monospace;
-            font-size: 10.5px; color: #94a3b8;
+        .epw-chain-label {
+            font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+            text-transform: uppercase; color: #64748b;
+        }
+        .epw-chain-upstream {
+            font-size: 12px; color: #c4b5fd; font-weight: 600; max-width: 140px;
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-            flex: 1; min-width: 0;
+        }
+        .epw-chain-upstream.direct { color: #94a3b8; font-weight: 500; font-style: italic; }
+        .epw-stop-btn {
+            margin-left: auto;
+            font-size: 11px; font-weight: 600;
+            padding: 7px 14px; border-radius: 9px; border: none;
+            background: rgba(239,68,68,0.14); color: #fca5a5;
+            border: 1px solid rgba(239,68,68,0.28);
+            cursor: pointer; transition: background 0.15s, color 0.15s;
+        }
+        .epw-stop-btn:hover {
+            background: rgba(239,68,68,0.28); color: #fecaca;
+        }
+        .epw-stop-btn:disabled { opacity: 0.5; cursor: wait; }
+        .epw-session-meta {
+            margin: -4px 0 0; font-size: 10px; color: #64748b;
+        }
+
+        .epw-section-label {
+            font-size: 9px; font-weight: 700; letter-spacing: 0.09em;
+            text-transform: uppercase; color: #64748b;
+            margin-bottom: -4px;
+        }
+
+        .epw-cards { display: flex; flex-direction: column; gap: 8px; }
+        .epw-card {
+            border-radius: 12px;
+            padding: 10px 12px;
+            background: rgba(0,0,0,0.22);
+            border: 1px solid rgba(255,255,255,0.08);
+            transition: border-color 0.15s;
+        }
+        .epw-card:hover { border-color: rgba(255,255,255,0.12); }
+        .epw-card-lan { border-color: rgba(251,191,36,0.15); }
+        .epw-card-lan:hover { border-color: rgba(251,191,36,0.28); }
+        .epw-card-top {
+            display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+            margin-bottom: 8px;
+        }
+        .epw-card-titles { min-width: 0; }
+        .epw-card-title {
+            display: block; font-size: 12px; font-weight: 700; color: #f1f5f9;
+        }
+        .epw-card-sub {
+            display: block; font-size: 10px; color: #64748b; margin-top: 2px;
+            font-family: 'SF Mono','Fira Code',monospace;
+        }
+        .epw-btn-copy {
+            flex-shrink: 0;
+            font-size: 10px; font-weight: 600;
+            padding: 5px 11px; border-radius: 7px; border: none;
+            cursor: pointer;
+            background: rgba(34,197,94,0.14); color: #86efac;
+            border: 1px solid rgba(34,197,94,0.28);
+            transition: background 0.15s, color 0.15s;
+        }
+        .epw-btn-copy:hover {
+            background: rgba(34,197,94,0.26); color: #bbf7d0;
+        }
+        .epw-card-url {
+            display: block; margin: 0;
+            font-family: 'SF Mono','Fira Code',monospace;
+            font-size: 10px; line-height: 1.5; color: #cbd5e1;
+            word-break: break-all; white-space: pre-wrap;
+            max-height: 52px; overflow-y: auto;
+            padding: 8px 10px; border-radius: 8px;
+            background: rgba(0,0,0,0.35);
+            border: 1px solid rgba(255,255,255,0.05);
             user-select: all; cursor: text;
         }
-        .epw-copy-btn {
-            font-size: 9px; padding: 3px 8px; border-radius: 4px;
-            background: rgba(34,197,94,0.12); color: #4ade80; border: none;
-            cursor: pointer; flex-shrink: 0; transition: background 0.15s;
+        .epw-card-url::-webkit-scrollbar { width: 4px; }
+        .epw-card-url::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.12); border-radius: 3px;
         }
-        .epw-copy-btn:hover { background: rgba(34,197,94,0.25); }
+
+        .epw-callout {
+            display: flex; align-items: flex-start; gap: 10px;
+            padding: 10px 12px; border-radius: 10px;
+            font-size: 11px; line-height: 1.45; color: #fde68a;
+            background: rgba(245,158,11,0.1);
+            border: 1px solid rgba(245,158,11,0.28);
+        }
+        .epw-callout-icon {
+            flex-shrink: 0; font-size: 14px; line-height: 1.2; opacity: 0.9;
+        }
+        .epw-callout strong { color: #fcd34d; font-weight: 700; }
+
+        .epw-curl-shell {
+            display: flex; gap: 10px; align-items: stretch;
+            background: rgba(0,0,0,0.28);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px; overflow: hidden;
+        }
+        .epw-curl-code {
+            flex: 1; min-width: 0; margin: 0;
+            font-family: 'SF Mono','Fira Code',monospace;
+            font-size: 10px; line-height: 1.5; color: #94a3b8;
+            padding: 10px 12px;
+            max-height: 112px; overflow: auto;
+            white-space: pre-wrap; word-break: break-all;
+            user-select: all; cursor: text;
+        }
+        .epw-curl-code.epw-curl-single {
+            white-space: nowrap; overflow-x: auto; overflow-y: hidden;
+            word-break: normal; text-overflow: unset;
+        }
+        .epw-curl-copy {
+            flex-shrink: 0;
+            align-self: stretch;
+            min-width: 64px;
+            font-size: 10px; font-weight: 700;
+            padding: 0 12px;
+            border: none; border-left: 1px solid rgba(255,255,255,0.08);
+            background: rgba(34,197,94,0.1); color: #86efac;
+            cursor: pointer; transition: background 0.15s;
+        }
+        .epw-curl-copy:hover { background: rgba(34,197,94,0.22); color: #bbf7d0; }
+
+        .epw-error {
+            font-size: 11px; line-height: 1.4; color: #fca5a5;
+            margin-top: 8px; padding: 8px 10px;
+            border-radius: 8px; background: rgba(239,68,68,0.1);
+            border: 1px solid rgba(239,68,68,0.2);
+        }
+
+        @media (max-width: 420px) {
+            .epw-stop-btn { margin-left: 0; width: 100%; }
+            .epw-status-bar { flex-direction: column; align-items: stretch; }
+        }
 
         /* ═══════════════════════════════════════════════════════════
            RIGHT — Guide (styled like index.html)
@@ -1255,14 +1548,18 @@
 
     <div class="left-content">
 
-        <!-- ── Hero: compact logo + clock row ── -->
+        <!-- ── Hero: brand left, mode toggle right, clock far right ── -->
         <div class="lc-hero">
-            <div style="display:flex;align-items:center;gap:0;">
-                <div class="lc-logo-wrap">
-                    <img class="lc-logo-img" src="img.png" alt="[CupNet]">
-                </div>
+            <div class="lc-hero-brand">
+                <div class="lc-logo-wrap"><img class="lc-logo-img" src="img.png" alt="[CupNet]"></div>
                 <span class="lc-logo-name">[CupNet] <span class="lc-version" id="lc-version"></span></span>
             </div>
+            <button type="button" class="hero-mode-toggle nt-on" id="hero-cupnet-toggle"
+                    aria-pressed="true"
+                    title="MITM mode: proxy, logging, and rules. Toggle off for direct browsing — reload tab after switching.">
+                <span class="hero-mode-toggle__track" aria-hidden="true"><span class="hero-mode-toggle__thumb"></span></span>
+                <span class="hero-mode-toggle__label" id="hero-mode-label">MITM</span>
+            </button>
             <div class="lc-clock-inline">
                 <span id="clock">00<span class="colon">:</span>00</span>
                 <span id="date">loading…</span>
@@ -1318,19 +1615,27 @@
                             <div class="pw-dot off" id="pw-dot"></div>
                             <span class="pw-status off" id="pw-status">No Proxy</span>
                             <span class="pw-mode-badge" id="pw-mode-badge" style="display:none"></span>
+                            <span class="pw-scope-badge pw-scope-global" id="pw-scope-badge" title="Proxy profile scope for this tab">Global</span>
                             <span class="pw-manage" id="pw-manage">Manage →</span>
                         </div>
                         <div class="pw-ip" id="pw-ip">—</div>
                         <div class="pw-geo" id="pw-geo">—</div>
                     </div>
                     <div class="sb-sep"></div>
-                    <div class="sb-cookies" id="cookie-bar" title="Session cookies">
-                        <span class="cookie-bar-icon">🍪</span>
-                        <span class="cookie-bar-label" id="cookie-bar-label">…</span>
-                        <div class="cookie-bar-actions">
-                            <button class="cookie-bar-btn cookie-bar-open" id="cookie-bar-open" title="Open Cookie Manager">Open</button>
-                            <button class="cookie-bar-btn cookie-bar-clear" id="cookie-bar-clear" disabled title="Clear all cookies">Clear</button>
+                    <div class="sb-cookies" id="cookie-bar" title="Session cookies for this tab">
+                        <div class="cookie-bar-row1">
+                            <div class="cookie-iso-seg" id="cookie-iso-seg" role="group" aria-label="Cookie session scope">
+                                <button type="button" class="cookie-iso-btn" id="cookie-iso-shared" title="Shared session — same cookies as other shared tabs">Shared</button>
+                                <button type="button" class="cookie-iso-btn" id="cookie-iso-isolated" title="Isolated session — private cookies for this tab">Isolated</button>
+                            </div>
+                            <span class="cookie-bar-icon">🍪</span>
+                            <span class="cookie-bar-label" id="cookie-bar-label">…</span>
+                            <div class="cookie-bar-actions">
+                                <button class="cookie-bar-btn cookie-bar-open" id="cookie-bar-open" title="Open Cookie Manager">Open</button>
+                                <button class="cookie-bar-btn cookie-bar-clear" id="cookie-bar-clear" disabled title="Clear all cookies">Clear</button>
+                            </div>
                         </div>
+                        <p class="cookie-in-dev-hint" id="cookie-in-dev-hint">Advanced cookie groups: Cookie Manager <span class="cookie-in-dev-tag">(in development)</span>.</p>
                     </div>
                 </div>
             </div>
@@ -1353,43 +1658,86 @@
                 <div class="ext-proxy-widget state-off" id="ext-proxy-widget">
                     <!-- OFF state: compact invite -->
                     <div class="epw-off-state" id="epw-off-state">
-                        <div class="epw-off-left">
-                            <div class="epw-off-icon">⇄</div>
+                        <div class="epw-off-brand">
+                            <div class="epw-off-icon" aria-hidden="true">⇄</div>
                             <div class="epw-off-text">
-                                <div class="epw-off-title">External Proxy</div>
-                                <div class="epw-off-desc">Route traffic from any script through CupNet — logged with TLS fingerprinting</div>
+                                <div class="epw-off-title">External proxy</div>
+                                <div class="epw-off-desc">Point curl, scripts, or other apps here — traffic goes through CupNet (TLS profile + logs), same as tabs.</div>
                             </div>
                         </div>
-                        <div class="epw-off-right">
-                            <select class="epw-port-select" id="epw-port-select" title="Port">
-                                <option value="7777">:7777</option>
-                                <option value="8888">:8888</option>
-                                <option value="9001">:9001</option>
-                                <option value="9090">:9090</option>
-                                <option value="5555">:5555</option>
-                                <option value="4242">:4242</option>
-                                <option value="1337">:1337</option>
-                                <option value="3128">:3128</option>
-                                <option value="8118">:8118</option>
-                                <option value="9999">:9999</option>
-                            </select>
-                            <button class="epw-start-btn" id="epw-toggle">Start</button>
+                        <div class="epw-off-actions">
+                            <div class="epw-off-field">
+                                <label class="epw-field-label" for="epw-port-select">Listen port</label>
+                                <div class="epw-off-controls">
+                                    <select class="epw-port-select" id="epw-port-select" title="TCP port" aria-label="Listen port">
+                                        <option value="7777">7777</option>
+                                        <option value="8888">8888</option>
+                                        <option value="9001">9001</option>
+                                        <option value="9090">9090</option>
+                                        <option value="5555">5555</option>
+                                        <option value="4242">4242</option>
+                                        <option value="1337">1337</option>
+                                        <option value="3128">3128</option>
+                                        <option value="8118">8118</option>
+                                        <option value="9999">9999</option>
+                                    </select>
+                                    <button type="button" class="epw-start-btn" id="epw-toggle">Start listening</button>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
-                    <!-- ON state: full info -->
+                    <!-- ON state -->
                     <div class="epw-on-state" id="epw-on-state" style="display:none">
-                        <div class="epw-on-header">
-                            <div class="epw-dot on" id="epw-dot"></div>
-                            <span class="epw-on-addr" id="epw-chain-addr">192.168.0.177:7777</span>
-                            <span class="epw-chain-arrow">→</span>
-                            <span class="epw-chain-upstream" id="epw-chain-upstream">direct</span>
-                            <span class="epw-on-meta" id="epw-meta"></span>
-                            <button class="epw-stop-btn" id="epw-stop-btn">Stop</button>
+                        <div class="epw-status-bar">
+                            <div class="epw-status-primary">
+                                <span class="epw-live-badge">
+                                    <span class="epw-status-dot" aria-hidden="true"></span>
+                                    Listening
+                                </span>
+                                <span class="epw-port-pill" id="epw-active-port" title="TCP port">—</span>
+                                <div class="epw-chain-box">
+                                    <span class="epw-chain-label">Upstream</span>
+                                    <span class="epw-chain-upstream direct" id="epw-chain-upstream">direct</span>
+                                </div>
+                            </div>
+                            <button type="button" class="epw-stop-btn" id="epw-stop-btn">Stop</button>
                         </div>
-                        <div class="epw-curl-block">
-                            <code class="epw-curl-code" id="epw-curl">—</code>
-                            <button class="epw-copy-btn" id="epw-copy-curl">copy</button>
+                        <p class="epw-session-meta" id="epw-meta"></p>
+
+                        <div class="epw-section-label">HTTP proxy URL</div>
+                        <div class="epw-cards">
+                            <div class="epw-card">
+                                <div class="epw-card-top">
+                                    <div class="epw-card-titles">
+                                        <span class="epw-card-title">This computer</span>
+                                        <span class="epw-card-sub">127.0.0.1 — scripts &amp; terminals on this machine</span>
+                                    </div>
+                                    <button type="button" class="epw-btn-copy" id="epw-copy-local-url" title="Copy proxy URL">Copy</button>
+                                </div>
+                                <code class="epw-card-url" id="epw-endpoint-local">—</code>
+                            </div>
+                            <div class="epw-card epw-card-lan" id="epw-endpoint-lan-wrap" style="display:none">
+                                <div class="epw-card-top">
+                                    <div class="epw-card-titles">
+                                        <span class="epw-card-title">LAN / other devices</span>
+                                        <span class="epw-card-sub"><span id="epw-lan-host-label">—</span> — phones, VMs, teammates on Wi-Fi</span>
+                                    </div>
+                                    <button type="button" class="epw-btn-copy" id="epw-copy-lan-url" title="Copy proxy URL">Copy</button>
+                                </div>
+                                <code class="epw-card-url" id="epw-endpoint-lan">—</code>
+                            </div>
+                        </div>
+
+                        <div class="epw-callout" id="epw-lan-firewall-hint" style="display:none" role="note">
+                            <span class="epw-callout-icon" aria-hidden="true">⚠</span>
+                            <span>Allow inbound <strong>TCP <span id="epw-lan-hint-port"></span></strong> in the firewall on <strong>this</strong> computer, otherwise LAN clients cannot connect.</span>
+                        </div>
+
+                        <div class="epw-section-label">Example · curl</div>
+                        <div class="epw-curl-shell">
+                            <pre class="epw-curl-code epw-curl-single" id="epw-curl">—</pre>
+                            <button type="button" class="epw-curl-copy" id="epw-copy-curl">Copy</button>
                         </div>
                     </div>
 
@@ -3156,6 +3504,7 @@ const pwGeo       = document.getElementById('pw-geo');
 const pwModeBadge = document.getElementById('pw-mode-badge');
 const widget      = document.getElementById('proxy-widget');
 let _isDirectTab = false;
+let _isIsolatedTab = false;
 
 function _updateModeBadge(info) {
     if (!pwModeBadge) return;
@@ -3202,7 +3551,12 @@ async function refreshIpWidget() {
         if (_isDirectTab && window.electronAPI.getDirectIp) {
             geo = await window.electronAPI.getDirectIp();
         } else {
-            geo = await window.electronAPI.checkIpGeo();
+            let tid;
+            try {
+                const tl = await window.electronAPI.getTabs?.();
+                tid = Array.isArray(tl) ? tl.find(x => x.isActive)?.id : undefined;
+            } catch (_) { /* ignore */ }
+            geo = await window.electronAPI.checkIpGeo(tid);
         }
         if (geo && geo.ip && geo.ip !== 'unknown') {
             pwIp.textContent = geo.ip;
@@ -3231,6 +3585,7 @@ async function refreshIpWidget() {
 let _lastProxyActive = false;
 function _resolveGlowMode() {
     if (_isDirectTab) return 'direct';
+    if (_isIsolatedTab) return 'isolated';
     if (_lastProxyActive) return 'proxy';
     return 'home';
 }
@@ -3249,7 +3604,7 @@ if (window.electronAPI) {
     window.electronAPI.getCurrentProxy().then(async (info) => {
         _effectiveTrafficMode = info?.effectiveMode || info?.trafficMode || '';
         window.electronAPI.getMitmReady?.().then(s => setMitmBanner(!!s?.ready)).catch(() => {});
-        setProxyWidgetStatus(info?.active, info?.proxyName, info);
+        setProxyWidgetStatus(info?.active, info?.displayProxyName || info?.proxyName, info);
         _lastProxyActive = !!info?.active;
         let delay = 0;
         try {
@@ -3268,7 +3623,7 @@ if (window.electronAPI) {
         _effectiveTrafficMode = info?.effectiveMode || info?.trafficMode || '';
         window.electronAPI.getMitmReady?.().then(s => setMitmBanner(!!s?.ready)).catch(() => {});
         if (!_isDirectTab) {
-            setProxyWidgetStatus(info?.active, info?.proxyName, info);
+            setProxyWidgetStatus(info?.active, info?.displayProxyName || info?.proxyName, info);
             pwIp.textContent  = '…';
             pwGeo.textContent = 'Checking…';
             _ipRetryCount = 0;
@@ -3276,6 +3631,8 @@ if (window.electronAPI) {
             setTimeout(refreshIpWidget, 1200);
         }
         applyGlow(_resolveGlowMode());
+        window.dispatchEvent(new CustomEvent('cupnet-refresh-cookie-bar'));
+        window.dispatchEvent(new CustomEvent('cupnet-resync-nt-from-tabs'));
     });
 
     setTimeout(() => {
@@ -3304,11 +3661,90 @@ if (window.electronAPI) {
     }
 }
 
-// ── Isolated / Direct session banners ─────────────────────────────────────────
+// ── Isolated / Direct banners + hero CupNet toggle, proxy scope pill, cookie Shared/Isolated ──
 (function () {
     const isoBanner = document.getElementById('iso-banner');
     const directBanner = document.getElementById('direct-banner');
+    const heroCupnet = document.getElementById('hero-cupnet-toggle');
+    const heroModeLabel = document.getElementById('hero-mode-label');
+    const pwScopeBadge = document.getElementById('pw-scope-badge');
+    const cookieIsoSeg = document.getElementById('cookie-iso-seg');
+    const cookieIsoShared = document.getElementById('cookie-iso-shared');
+    const cookieIsoIsolated = document.getElementById('cookie-iso-isolated');
+
     if (!window.electronAPI) return;
+
+    let _ntProxyProfiles = [];
+    /** Смена вкладки / профиля прокси / CupNet / cookie group — нижний виджет и IP. */
+    let _lastNtTabSig = '';
+
+    function loadNtProxyProfiles() {
+        return window.electronAPI.getProxyProfiles?.().then((profiles) => {
+            _ntProxyProfiles = Array.isArray(profiles) ? profiles : [];
+        }).catch(() => { _ntProxyProfiles = []; });
+    }
+
+    function syncHeroMode(active) {
+        if (!heroCupnet) return;
+        const cupnetOn = !!(active?.cupnetEnabled);
+        heroCupnet.classList.toggle('nt-on', cupnetOn);
+        heroCupnet.setAttribute('aria-pressed', cupnetOn ? 'true' : 'false');
+        if (heroModeLabel) heroModeLabel.textContent = cupnetOn ? 'MITM' : 'Direct';
+        heroCupnet.title = cupnetOn
+            ? 'MITM mode: proxy, logging, and rules active. Toggle off for direct browsing.'
+            : 'Direct mode: no interception. Toggle on to enable MITM — reload tab after switching.';
+    }
+
+    function syncProxyScope(active) {
+        if (!pwScopeBadge) return;
+        if (!active || !active.cupnetEnabled) {
+            pwScopeBadge.style.display = 'none';
+            return;
+        }
+        pwScopeBadge.style.display = '';
+        if (active.proxyProfileId) {
+            const pf = _ntProxyProfiles.find(p => p.id === active.proxyProfileId);
+            const name = String(pf?.name || ('#' + active.proxyProfileId)).trim();
+            const short = name.length > 16 ? name.slice(0, 14) + '…' : name;
+            pwScopeBadge.textContent = short;
+            pwScopeBadge.className = 'pw-scope-badge pw-scope-tab';
+            pwScopeBadge.title = 'Per-tab proxy profile: ' + name;
+        } else {
+            pwScopeBadge.textContent = 'Global';
+            pwScopeBadge.className = 'pw-scope-badge pw-scope-global';
+            pwScopeBadge.title = 'Global proxy profile (no per-tab override)';
+        }
+    }
+
+    function syncCookieIso(active) {
+        if (!cookieIsoSeg || !cookieIsoShared || !cookieIsoIsolated) return;
+        const cupnetOn = !!(active?.cupnetEnabled);
+        const gid = active?.cookieGroupId ?? 1;
+        const shared = gid === 1;
+
+        cookieIsoSeg.classList.toggle('cupnet-off', !cupnetOn);
+        cookieIsoSeg.classList.toggle('state-isolated', !shared);
+        cookieIsoShared.classList.toggle('active', shared);
+        cookieIsoIsolated.classList.toggle('active', !shared);
+
+        cookieIsoShared.disabled = !cupnetOn || shared;
+        cookieIsoIsolated.disabled = !cupnetOn || !shared;
+
+        const offTitle = 'Enable CupNet for this tab to change cookie session';
+        if (!cupnetOn) {
+            cookieIsoShared.title = offTitle;
+            cookieIsoIsolated.title = offTitle;
+        } else {
+            cookieIsoShared.title = 'Shared session — same cookies as other shared tabs';
+            cookieIsoIsolated.title = 'Isolated session — private cookies for this tab';
+        }
+    }
+
+    function applyChromeFromActive(active) {
+        syncHeroMode(active);
+        syncProxyScope(active);
+        syncCookieIso(active);
+    }
 
     function applyTabList(tabs) {
         const active = tabs.find(t => t.isActive);
@@ -3317,27 +3753,103 @@ if (window.electronAPI) {
 
         const wasDirect = _isDirectTab;
         _isDirectTab = !!(active?.direct);
-        if (_isDirectTab !== wasDirect) {
+        _isIsolatedTab = !!(active?.isolated);
+        const directFlipped = wasDirect !== _isDirectTab;
+
+        const tabSig = `${active?.id || ''}|${active?.proxyProfileId ?? ''}|${active?.cupnetEnabled ? 1 : 0}|${active?.direct ? 1 : 0}|${active?.cookieGroupId ?? ''}`;
+        const tabSigChanged = tabSig !== _lastNtTabSig;
+        if (tabSigChanged) _lastNtTabSig = tabSig;
+
+        loadNtProxyProfiles().then(() => {
+            window.electronAPI.getTabs().then((tNow) => {
+                const a = tNow.find(x => x.isActive);
+                applyChromeFromActive(a);
+                window.dispatchEvent(new CustomEvent('cupnet-refresh-cookie-bar'));
+            }).catch(() => {
+                applyChromeFromActive(active);
+                window.dispatchEvent(new CustomEvent('cupnet-refresh-cookie-bar'));
+            });
+        });
+
+        if (tabSigChanged || directFlipped) {
             window.electronAPI?.getCurrentProxy().then(info => {
                 _lastProxyActive = !!info?.active;
-                setProxyWidgetStatus(info?.active, info?.proxyName, info);
+                setProxyWidgetStatus(info?.active, info?.displayProxyName || info?.proxyName, info);
                 applyGlow(_resolveGlowMode());
             }).catch(() => {});
-            pwIp.textContent  = '…';
-            pwGeo.textContent = 'Checking…';
-            _ipRetryCount = 0;
-            clearTimeout(_ipRetryTimer);
-            setTimeout(refreshIpWidget, 300);
+            if (!_isDirectTab) {
+                pwIp.textContent  = '…';
+                pwGeo.textContent = 'Checking…';
+                _ipRetryCount = 0;
+                clearTimeout(_ipRetryTimer);
+                setTimeout(refreshIpWidget, 300);
+            }
         }
     }
 
-    if (window.electronAPI.getTabs) {
-        window.electronAPI.getTabs().then(applyTabList).catch(() => {});
+    if (heroCupnet && window.electronAPI.setTabCupNet) {
+        heroCupnet.addEventListener('click', (e) => {
+            e.stopPropagation();
+            window.electronAPI.getTabs().then((tabs) => {
+                const active = tabs.find(t => t.isActive);
+                if (!active) return;
+                window.electronAPI.setTabCupNet(active.id, !active.cupnetEnabled);
+            }).catch(() => {});
+        });
+    }
+
+    if (cookieIsoShared) {
+        cookieIsoShared.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (!window.electronAPI.setTabCookieGroup) return;
+            window.electronAPI.getTabs().then((tabs) => {
+                const active = tabs.find(t => t.isActive);
+                if (!active || !active.cupnetEnabled) return;
+                if ((active.cookieGroupId ?? 1) === 1) return;
+                window.electronAPI.setTabCookieGroup(active.id, 1);
+            }).catch(() => {});
+        });
+    }
+    if (cookieIsoIsolated) {
+        cookieIsoIsolated.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (!window.electronAPI.isolateTab) return;
+            window.electronAPI.getTabs().then((tabs) => {
+                const active = tabs.find(t => t.isActive);
+                if (!active || !active.cupnetEnabled) return;
+                if ((active.cookieGroupId ?? 1) !== 1) return;
+                window.electronAPI.isolateTab(active.id);
+            }).catch(() => {});
+        });
+    }
+
+    loadNtProxyProfiles()
+        .then(() => window.electronAPI.getTabs().then(applyTabList))
+        .catch(() => {});
+
+    if (window.electronAPI.onCookieGroupsUpdated) {
+        window.electronAPI.onCookieGroupsUpdated(() => {
+            window.electronAPI.getTabs?.().then(applyTabList).catch(() => {});
+        });
     }
 
     if (window.electronAPI.onTabListUpdated) {
         window.electronAPI.onTabListUpdated(applyTabList);
     }
+
+    window.addEventListener('cupnet-resync-nt-from-tabs', () => {
+        loadNtProxyProfiles()
+            .then(() => window.electronAPI.getTabs().then(applyTabList))
+            .catch(() => {});
+    });
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') return;
+        window.dispatchEvent(new CustomEvent('cupnet-refresh-cookie-bar'));
+        loadNtProxyProfiles()
+            .then(() => window.electronAPI.getTabs().then(applyTabList))
+            .catch(() => {});
+    });
 })();
 
 // ── Cookie status bar ─────────────────────────────────────────────────────────
@@ -3355,7 +3867,12 @@ if (window.electronAPI) {
 
     async function refreshCookieBar() {
         try {
-            const cookies = await window.electronAPI.getCookies(null, {});
+            let tid = null;
+            try {
+                const tl = await window.electronAPI.getTabs?.();
+                tid = Array.isArray(tl) ? tl.find(x => x.isActive)?.id : null;
+            } catch (_) { /* ignore */ }
+            const cookies = await window.electronAPI.getCookies(tid, {});
             _cookieCount = Array.isArray(cookies) ? cookies.length : 0;
             if (_cookieCount === 0) {
                 barLabel.textContent = 'No cookies';
@@ -3412,6 +3929,8 @@ if (window.electronAPI) {
         });
     }
 
+    window.addEventListener('cupnet-refresh-cookie-bar', () => { void refreshCookieBar(); });
+
     refreshCookieBar();
 })();
 
@@ -3437,30 +3956,72 @@ if (window.electronAPI) {
 
 // ── External Proxy widget ─────────────────────────────────────────────────────
 (function () {
-    const W         = document.getElementById('ext-proxy-widget');
-    const offState  = document.getElementById('epw-off-state');
-    const onState   = document.getElementById('epw-on-state');
-    const dot       = document.getElementById('epw-dot');
-    const addrEl    = document.getElementById('epw-chain-addr');
-    const upEl      = document.getElementById('epw-chain-upstream');
-    const metaEl    = document.getElementById('epw-meta');
-    const errEl     = document.getElementById('epw-error');
-    const curlEl    = document.getElementById('epw-curl');
-    const startBtn  = document.getElementById('epw-toggle');
-    const stopBtn   = document.getElementById('epw-stop-btn');
-    const sel       = document.getElementById('epw-port-select');
-    const copyBtn   = document.getElementById('epw-copy-curl');
+    const W              = document.getElementById('ext-proxy-widget');
+    const offState       = document.getElementById('epw-off-state');
+    const onState        = document.getElementById('epw-on-state');
+    const upEl           = document.getElementById('epw-chain-upstream');
+    const metaEl         = document.getElementById('epw-meta');
+    const errEl          = document.getElementById('epw-error');
+    const curlEl         = document.getElementById('epw-curl');
+    const startBtn       = document.getElementById('epw-toggle');
+    const stopBtn        = document.getElementById('epw-stop-btn');
+    const sel            = document.getElementById('epw-port-select');
+    const copyBtn        = document.getElementById('epw-copy-curl');
+    const activePortEl   = document.getElementById('epw-active-port');
+    const epLocalUrlEl   = document.getElementById('epw-endpoint-local');
+    const epLanUrlEl     = document.getElementById('epw-endpoint-lan');
+    const epLanWrap      = document.getElementById('epw-endpoint-lan-wrap');
+    const epLanHint      = document.getElementById('epw-lan-firewall-hint');
+    const epLanHintPort  = document.getElementById('epw-lan-hint-port');
+    const epLanHostLbl   = document.getElementById('epw-lan-host-label');
+    const copyLocalBtn   = document.getElementById('epw-copy-local-url');
+    const copyLanBtn     = document.getElementById('epw-copy-lan-url');
+
+    const EPW_START_LABEL = 'Start listening';
 
     if (!W || !startBtn || !sel || !window.electronAPI?.extProxyList) return;
 
     let curlText = '';
     let busy = false;
 
+    function flashCopyBtn(btn) {
+        if (!btn) return;
+        const prev = btn.textContent;
+        btn.textContent = 'Copied';
+        setTimeout(() => { btn.textContent = prev; }, 1400);
+    }
+
+    function proxyHttpUrl(host, port, login, password) {
+        const u = encodeURIComponent(login);
+        const p = encodeURIComponent(password);
+        return `http://${u}:${p}@${host}:${port}`;
+    }
+
+    /** Proxy URL is percent-encoded; safe to paste unquoted in typical shells. */
+    function curlThroughProxy(proxyUrl) {
+        return `curl -k -x ${proxyUrl} https://httpbin.org/ip`;
+    }
+
     copyBtn?.addEventListener('click', () => {
         if (!curlText) return;
         navigator.clipboard.writeText(curlText).catch(() => {});
-        copyBtn.textContent = 'ok!';
-        setTimeout(() => copyBtn.textContent = 'copy', 1200);
+        const prev = copyBtn.textContent;
+        copyBtn.textContent = 'Copied';
+        setTimeout(() => { copyBtn.textContent = prev; }, 1400);
+    });
+
+    copyLocalBtn?.addEventListener('click', () => {
+        const t = epLocalUrlEl?.textContent?.trim();
+        if (!t || t === '—') return;
+        navigator.clipboard.writeText(t).catch(() => {});
+        flashCopyBtn(copyLocalBtn);
+    });
+
+    copyLanBtn?.addEventListener('click', () => {
+        const t = epLanUrlEl?.textContent?.trim();
+        if (!t || t === '—') return;
+        navigator.clipboard.writeText(t).catch(() => {});
+        flashCopyBtn(copyLanBtn);
     });
 
     async function doStart() {
@@ -3484,7 +4045,7 @@ if (window.electronAPI) {
         } catch (e) { console.error('[ext-proxy] start error:', e); }
         busy = false;
         startBtn.disabled = false;
-        startBtn.textContent = 'Start';
+        startBtn.textContent = EPW_START_LABEL;
         await refresh();
     }
 
@@ -3536,16 +4097,44 @@ if (window.electronAPI) {
         }
     }
 
-    function showOn(addr, auth, upstream, meta) {
+    function showOn(port, login, password, lanHost, upstream, meta) {
         W.className = 'ext-proxy-widget state-on';
         offState.style.display = 'none';
         onState.style.display = '';
         errEl.style.display = 'none';
-        addrEl.textContent = addr;
+        if (activePortEl) activePortEl.textContent = `:${port}`;
         if (upstream) { upEl.textContent = upstream; upEl.className = 'epw-chain-upstream'; }
         else          { upEl.textContent = 'direct'; upEl.className = 'epw-chain-upstream direct'; }
-        metaEl.textContent = meta;
-        curlText = `curl -k -x ${auth}@${addr} https://httpbin.org/ip`;
+        metaEl.textContent = meta || '';
+        metaEl.style.display = meta ? '' : 'none';
+
+        const localUrl = proxyHttpUrl('127.0.0.1', port, login, password);
+        epLocalUrlEl.textContent = localUrl;
+
+        const hasLan = lanHost && lanHost !== '127.0.0.1';
+        const lanUrl = hasLan ? proxyHttpUrl(lanHost, port, login, password) : '';
+        if (hasLan) {
+            epLanUrlEl.textContent = lanUrl;
+            if (epLanHostLbl) epLanHostLbl.textContent = lanHost;
+            epLanWrap.style.display = '';
+            epLanHint.style.display = '';
+            if (epLanHintPort) epLanHintPort.textContent = String(port);
+        } else {
+            epLanUrlEl.textContent = '—';
+            if (epLanHostLbl) epLanHostLbl.textContent = '—';
+            epLanWrap.style.display = 'none';
+            epLanHint.style.display = 'none';
+        }
+
+        const curlLocal = curlThroughProxy(localUrl);
+        if (hasLan) {
+            const curlLan = curlThroughProxy(lanUrl);
+            curlText = `# Local (this machine)\n${curlLocal}\n\n# LAN — open TCP ${port} in firewall on this host\n${curlLan}`;
+            curlEl.classList.remove('epw-curl-single');
+        } else {
+            curlText = curlLocal;
+            curlEl.classList.add('epw-curl-single');
+        }
         curlEl.textContent = curlText;
     }
 
@@ -3576,10 +4165,8 @@ if (window.electronAPI) {
             if (p.error) {
                 showErr(p.port, p.error);
             } else if (p.active) {
-                const addr = `${p.localIp}:${p.port}`;
-                const auth = `${p.login}:${p.password}`;
                 const meta = p.sessionId ? `session #${p.sessionId} · ${p.requestCount} req` : '';
-                showOn(addr, auth, upName, meta);
+                showOn(p.port, p.login, p.password, p.localIp, upName, meta);
             } else {
                 showOff();
             }

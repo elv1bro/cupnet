@@ -7,9 +7,25 @@
 function registerProxyIpc(ctx) {
     ctx.ipcMain.handle('get-current-proxy', async () => {
         const isDirect = !ctx.persistentAnonymizedProxyUrl && ctx.actProxy === '';
+        const globalName = ctx.connectedProfileName || ctx.actProxy || '';
+        const at = ctx.tabManager?.getActiveTab?.();
+        let tabProxyProfileId = null;
+        let tabProxyName = '';
+        if (at?.cupnetEnabled && at?.proxyProfileId && ctx.db?.getProxyProfileEncrypted) {
+            tabProxyProfileId = at.proxyProfileId;
+            try {
+                const row = ctx.db.getProxyProfileEncrypted(at.proxyProfileId);
+                if (row?.name) tabProxyName = String(row.name);
+            } catch (_) { /* ignore */ }
+            if (!tabProxyName) tabProxyName = `#${at.proxyProfileId}`;
+        }
+        const displayProxyName = tabProxyName || globalName;
         return {
             active:    !!ctx.persistentAnonymizedProxyUrl,
-            proxyName: ctx.connectedProfileName || ctx.actProxy || '',
+            proxyName: globalName,
+            tabProxyProfileId,
+            tabProxyName,
+            displayProxyName,
             mode:      isDirect ? 'direct' : (ctx.persistentAnonymizedProxyUrl ? 'proxy' : 'none'),
             trafficMode: ctx.getCurrentTrafficMode(),
             effectiveMode: ctx.getCurrentTrafficMode(),
@@ -58,10 +74,17 @@ function registerProxyIpc(ctx) {
                 language:   row.language   || null,
             };
             if (ctx.activeFingerprint.user_agent) {
-                // Apply session-level UA for all tab sessions
+                // Apply session-level UA for each tab session (same as electron-app/app.js)
                 for (const tab of ctx.tabManager.getAllTabs()) {
                     if (tab?.view?.webContents && !tab.view.webContents.isDestroyed()) {
-                        try { tab.view.webContents.ctx.session.setUserAgent(ctx.activeFingerprint.user_agent, ctx.activeFingerprint.language || ''); } catch (e) { ctx.sysLog('warn', 'fingerprint', 'setUserAgent for tab failed: ' + (e?.message || e)); }
+                        try {
+                            tab.view.webContents.session.setUserAgent(
+                                ctx.activeFingerprint.user_agent,
+                                ctx.activeFingerprint.language || ''
+                            );
+                        } catch (e) {
+                            ctx.sysLog('warn', 'fingerprint', 'setUserAgent for tab failed: ' + (e?.message || e));
+                        }
                     }
                 }
             }

@@ -20,37 +20,88 @@ function createProxyNotifyBroadcast({
 }) {
     let _lastProxyStatusSig = '';
 
-    function notifyProxyStatus() {
+    function _buildBaseProxyStatus() {
         const persistentAnonymizedProxyUrl = typeof getPersistentAnonymizedProxyUrl === 'function'
             ? getPersistentAnonymizedProxyUrl()
             : null;
         const actProxy = typeof getActProxy === 'function' ? getActProxy() : '';
         const isDirect = !persistentAnonymizedProxyUrl && actProxy === '';
         const trafficMode = typeof getCurrentTrafficMode === 'function' ? getCurrentTrafficMode() : 'browser_proxy';
-        const info = {
+        const globalName = (typeof getConnectedProfileName === 'function' ? getConnectedProfileName() : null) || actProxy || '';
+        return {
             active: !!persistentAnonymizedProxyUrl,
-            proxyName: (typeof getConnectedProfileName === 'function' ? getConnectedProfileName() : null) || actProxy || '',
+            proxyName: globalName,
             mode: isDirect ? 'direct' : (persistentAnonymizedProxyUrl ? 'proxy' : 'none'),
             trafficMode,
             effectiveMode: trafficMode,
             profileId: typeof getConnectedProfileId === 'function' ? getConnectedProfileId() : null,
             resolvedVars: (typeof getConnectedResolvedVars === 'function' ? getConnectedResolvedVars() : null) || {},
         };
-        const sig = JSON.stringify(info);
+    }
+
+    /** Имя профиля для конкретной вкладки (per-tab proxy) или глобальное — для пилюли и виджета new-tab. */
+    function _augmentProxyStatusForTab(base, tab) {
+        const db = typeof getDb === 'function' ? getDb() : null;
+        if (!tab || !tab.cupnetEnabled || !tab.proxyProfileId) {
+            return {
+                ...base,
+                tabProxyProfileId: null,
+                tabProxyName: '',
+                displayProxyName: base.proxyName,
+            };
+        }
+        let tabProxyName = '';
+        try {
+            const row = db?.getProxyProfileEncrypted?.(tab.proxyProfileId);
+            if (row?.name) tabProxyName = String(row.name);
+        } catch (_) { /* ignore */ }
+        if (!tabProxyName) tabProxyName = `#${tab.proxyProfileId}`;
+        return {
+            ...base,
+            tabProxyProfileId: tab.proxyProfileId,
+            tabProxyName,
+            displayProxyName: tabProxyName,
+        };
+    }
+
+    function notifyProxyStatus() {
+        const base = _buildBaseProxyStatus();
+        const tabManager = typeof getTabManager === 'function' ? getTabManager() : null;
+        const activeTab = tabManager?.getActiveTab?.() || null;
+        const tabList = tabManager?.getAllTabs?.();
+        const tabsArr = Array.isArray(tabList) ? tabList : Array.from(tabList || []);
+        const sig = JSON.stringify({
+            ...base,
+            tabs: tabsArr.map((t) => `${t.id}:${t.proxyProfileId ?? ''}:${t.cupnetEnabled ? 1 : 0}`).join('|'),
+        });
         if (sig === _lastProxyStatusSig) return;
         _lastProxyStatusSig = sig;
+
+        const mainInfo = _augmentProxyStatusForTab(base, activeTab);
+        const pmw = typeof getProxyManagerWindow === 'function' ? getProxyManagerWindow() : null;
+        const managerInfo = {
+            ...base,
+            tabProxyProfileId: null,
+            tabProxyName: '',
+            displayProxyName: base.proxyName,
+        };
+
         for (const win of BrowserWindow.getAllWindows()) {
             try {
-                if (!win.isDestroyed()) win.webContents.send('proxy-status-changed', info);
+                if (!win.isDestroyed()) {
+                    const useManagerPayload = pmw && !pmw.isDestroyed() && win.id === pmw.id;
+                    win.webContents.send('proxy-status-changed', useManagerPayload ? managerInfo : mainInfo);
+                }
             } catch (err) {
                 safeCatch({ module: 'main', eventCode: 'ipc.broadcast.failed', context: { channel: 'proxy-status-changed.window' } }, err, 'info');
             }
         }
-        const tabManager = typeof getTabManager === 'function' ? getTabManager() : null;
         if (tabManager) {
-            for (const tab of tabManager.getAllTabs()) {
+            const tabsForSend = Array.isArray(tabList) ? tabList : Array.from(tabList || []);
+            for (const tab of tabsForSend) {
                 try {
                     if (tab.view && !tab.view.webContents.isDestroyed()) {
+                        const info = _augmentProxyStatusForTab(base, tab);
                         tab.view.webContents.send('proxy-status-changed', info);
                     }
                 } catch (err) {

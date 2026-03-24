@@ -26,8 +26,9 @@ function resolveSessionProxyConfig({ mode, upstreamProxyUrl, bypassRules }) {
     const normalized = normalizeTrafficMode(mode);
     if (normalized === TRAFFIC_MODE_MITM) {
         const p = networkPolicy.mitmPort;
+        const hp = `127.0.0.1:${p}`;
         return {
-            proxyRules: `http=127.0.0.1:${p};https=127.0.0.1:${p}`,
+            proxyRules: `http=${hp};https=${hp}`,
             proxyBypassRules: bypassRules || '',
         };
     }

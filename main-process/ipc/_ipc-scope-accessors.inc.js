@@ -25,6 +25,7 @@ function ipcScopeGet(k) {
         case 'app': return app;
         case 'applyBypassDomains': return applyBypassDomains;
         case 'applyEffectiveTrafficMode': return applyEffectiveTrafficMode;
+        case 'applyFingerprintFromProfile': return applyFingerprintFromProfile;
         case 'applyFingerprintToAllTabs': return applyFingerprintToAllTabs;
         case 'applyTrafficFilters': return applyTrafficFilters;
         case 'broadcastInterceptRuleMatched': return broadcastInterceptRuleMatched;
@@ -94,6 +95,7 @@ function ipcScopeGet(k) {
         case 'normalizeTrackingSettings': return normalizeTrackingSettings;
         case 'normalizeTrafficMode': return normalizeTrafficMode;
         case 'notifyCookieManagerTabs': return notifyCookieManagerTabs;
+        case 'notifyCookieGroupsListsUpdated': return notifyCookieGroupsListsUpdated;
         case 'notifyProxyProfilesList': return notifyProxyProfilesList;
         case 'notifyProxyStatus': return notifyProxyStatus;
         case 'parseFallbackProxyList': return parseFallbackProxyList;

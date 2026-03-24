@@ -294,7 +294,16 @@
 
 <!-- ── Top bar ─────────────────────────────────────────────────────────────── -->
 <div class="topbar">
-    <span class="topbar-title">🍪 Cookie Manager</span>
+    <span class="topbar-title">Cookie Manager</span>
+
+    <label style="font-size:11px;color:var(--muted)">Group:</label>
+    <select id="cookie-group-select" style="min-width:120px"></select>
+    <button class="btn btn-ghost btn-sm" id="btn-new-group" title="Create new empty cookie group">+ New</button>
+    <button class="btn btn-ghost btn-sm" id="btn-copy-group" title="Copy cookies to a new group">Copy</button>
+    <button class="btn btn-ghost btn-sm" id="btn-rename-group" title="Rename selected group">Rename</button>
+    <button class="btn btn-danger btn-sm" id="btn-delete-group" title="Delete selected group" style="font-size:10px">Del</button>
+
+    <div class="sep"></div>
 
     <label style="font-size:11px;color:var(--muted)">Tab:</label>
     <select id="tab-select" style="min-width:180px"></select>

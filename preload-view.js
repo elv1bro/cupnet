@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getAppVersion:   ()     => ipcRenderer.invoke('get-app-version'),
 
     // Proxy & IP — needed by new-tab.html widget
-    checkIpGeo:      ()     => ipcRenderer.invoke('check-ip-geo'),
+    checkIpGeo:      (tabId) => ipcRenderer.invoke('check-ip-geo', tabId),
     getDirectIp:     ()     => ipcRenderer.invoke('get-direct-ip'),
     getCurrentProxy: ()     => ipcRenderer.invoke('get-current-proxy'),
     getMitmReady:    ()     => ipcRenderer.invoke('mitm-ready-state'),
@@ -40,7 +40,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setUiPref: (key, value)  => ipcRenderer.invoke('set-ui-pref', key, value),
 
     // Cookie isolation: convert current tab to isolated session
-    isolateTab: () => ipcRenderer.invoke('isolate-tab'),
+    isolateTab: (tabId) => ipcRenderer.invoke('isolate-tab', tabId),
 
     // Notify when tab list changes (to detect isolation state from new-tab.html)
     onTabListUpdated: (cb) => {
@@ -48,6 +48,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('tab-list-updated', (_, tabs) => cb(tabs));
     },
     getTabs: () => ipcRenderer.invoke('get-tabs'),
+
+    setTabCupNet:       (id, on)  => ipcRenderer.invoke('set-tab-cupnet', id, on),
+    setTabProxy:        (id, pid, ephemeralVars) => ipcRenderer.invoke('set-tab-proxy', id, pid, ephemeralVars),
+    setTabCookieGroup:  (id, gid) => ipcRenderer.invoke('set-tab-cookie-group', id, gid),
+    getCookieGroups:    ()        => ipcRenderer.invoke('get-cookie-groups'),
+    createCookieGroup:  (name)    => ipcRenderer.invoke('create-cookie-group', name),
+    onCookieGroupsUpdated: (cb) => {
+        ipcRenderer.removeAllListeners('cookie-groups-updated');
+        ipcRenderer.on('cookie-groups-updated', () => cb());
+    },
 
     // Cookie status bar on new-tab.html
     getCookies:        (tid, f)  => ipcRenderer.invoke('get-cookies', tid, f),

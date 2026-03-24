@@ -96,54 +96,156 @@ const BROWSER_PROFILES = {
     },
 };
 
-// One client per (browser+proxy) key (cached)
-const clients = new Map();
-const clientLru = [];
+/** Пул AzureTLSClient на ключ (browser+proxy): одна нативная сессия не выдерживает параллельных request(). */
+const BORROW_ABORT = Symbol('cupnet.worker.borrow_abort');
+const pools = new Map();
+const poolLru = [];
 
-function touchClientKey(key) {
-    const idx = clientLru.indexOf(key);
-    if (idx !== -1) clientLru.splice(idx, 1);
-    clientLru.push(key);
+function touchPoolKey(key) {
+    const idx = poolLru.indexOf(key);
+    if (idx !== -1) poolLru.splice(idx, 1);
+    poolLru.push(key);
 }
 
-function evictClientsIfNeeded() {
-    while (clientLru.length > networkPolicy.concurrency.workerClientCacheMax) {
-        const evictKey = clientLru.shift();
-        const client = clients.get(evictKey);
-        if (client) {
-            try { client.close(); } catch (err) {
-                safeCatch({ module: 'azure-tls-worker', eventCode: 'worker.client.close_failed', context: { key: evictKey } }, err);
+function createAzureClient(profileName, proxy) {
+    const c = new AzureTLSClient({
+        browser: profileName,
+        proxy:   proxy || null,
+        debug:   false,
+    });
+    const profile = BROWSER_PROFILES[profileName];
+    if (profile && profile.http2) {
+        try { c.applyHTTP2Fingerprint(profile.http2); } catch (e) {
+            process.stderr.write(`[worker] HTTP/2 apply error for ${profileName}: ${e.message}\n`);
+        }
+    }
+    return c;
+}
+
+function evictPoolsIfNeeded() {
+    while (poolLru.length > networkPolicy.concurrency.workerClientCacheMax) {
+        const evictKey = poolLru[0];
+        const pool = pools.get(evictKey);
+        if (pool && pool.inUse === 0 && pool.waiters.length === 0) {
+            for (const c of pool.idle) {
+                try { c.close(); } catch (err) {
+                    safeCatch({ module: 'azure-tls-worker', eventCode: 'worker.client.close_failed', context: { key: evictKey } }, err);
+                }
             }
-            clients.delete(evictKey);
+            pool.idle.length = 0;
+            pools.delete(evictKey);
+            poolLru.shift();
+        } else {
+            break;
         }
     }
 }
 
-function getClient(browser, proxy) {
+async function borrowClient(browser, proxy) {
     const profileName = browser || 'chrome';
     const key = `${profileName}::${proxy || ''}`;
-    if (!clients.has(key)) {
-        const c = new AzureTLSClient({
-            browser: profileName,
-            proxy:   proxy || null,
-            debug:   false,
-        });
-        // Apply HTTP/2 fingerprint for this profile
-        const profile = BROWSER_PROFILES[profileName];
-        if (profile && profile.http2) {
-            try { c.applyHTTP2Fingerprint(profile.http2); } catch (e) {
-                process.stderr.write(`[worker] HTTP/2 apply error for ${profileName}: ${e.message}\n`);
+    const max = networkPolicy.concurrency.workerFfiConcurrency;
+    touchPoolKey(key);
+    let pool = pools.get(key);
+    if (!pool) {
+        pool = { idle: [], waiters: [], inUse: 0 };
+        pools.set(key, pool);
+    }
+    evictPoolsIfNeeded();
+
+    for (;;) {
+        if (pool.idle.length) {
+            const c = pool.idle.pop();
+            pool.inUse++;
+            return { client: c, key };
+        }
+        if (pool.inUse < max) {
+            pool.inUse++;
+            return { client: createAzureClient(profileName, proxy), key };
+        }
+        const c = await new Promise((resolve) => pool.waiters.push(resolve));
+        if (c === BORROW_ABORT) throw new Error('worker clearing');
+        return { client: c, key };
+    }
+}
+
+function releaseClient(key, client) {
+    const pool = pools.get(key);
+    if (!pool) {
+        try { client.close(); } catch (err) {
+            safeCatch({ module: 'azure-tls-worker', eventCode: 'worker.client.close_failed', context: { key } }, err);
+        }
+        return;
+    }
+    if (pool.waiters.length) {
+        const resolve = pool.waiters.shift();
+        resolve(client);
+    } else {
+        pool.inUse--;
+        pool.idle.push(client);
+    }
+}
+
+function closeAllPoolClients() {
+    for (const pool of pools.values()) {
+        for (const resolve of pool.waiters.splice(0)) {
+            try { resolve(BORROW_ABORT); } catch (err) {
+                safeCatch({ module: 'azure-tls-worker', eventCode: 'worker.pool.waiter_failed', context: { op: 'closeAllPoolClients' } }, err);
             }
         }
-        clients.set(key, c);
+        for (const c of pool.idle) {
+            try { c.close(); } catch (err) {
+                safeCatch({ module: 'azure-tls-worker', eventCode: 'worker.client.close_failed', context: { op: 'closeAllPoolClients' } }, err);
+            }
+        }
+        pool.idle.length = 0;
+        pool.inUse = 0;
     }
-    touchClientKey(key);
-    evictClientsIfNeeded();
-    return clients.get(key);
+    pools.clear();
+    poolLru.length = 0;
+}
+
+let awaitClear = false;
+const clearDoneWaiters = [];
+let httpInflight = 0;
+const zeroInflightWaiters = [];
+
+async function waitIfClearing() {
+    if (!awaitClear) return;
+    await new Promise((r) => clearDoneWaiters.push(r));
+}
+
+function finishClearing() {
+    awaitClear = false;
+    for (const r of clearDoneWaiters.splice(0)) r();
+}
+
+async function waitZeroInflight() {
+    if (httpInflight === 0) return;
+    await new Promise((r) => zeroInflightWaiters.push(r));
+}
+
+function decHttpInflight() {
+    httpInflight--;
+    if (httpInflight === 0) {
+        for (const r of zeroInflightWaiters.splice(0)) r();
+    }
 }
 
 process.stdin.setEncoding('utf8');
 let buf = '';
+
+function enqueueLine(line) {
+    handleLine(line).catch((err) => {
+        safeCatch({ module: 'azure-tls-worker', eventCode: 'worker.queue.failed', context: { op: 'enqueueLine' } }, err);
+        let req;
+        try { req = JSON.parse(line); } catch { return; }
+        const rid = req?.id;
+        if (rid != null && rid !== '__clear_sessions__' && rid !== '__get_profiles__') {
+            send({ id: rid, statusCode: 0, bodyBase64: '', headers: {}, error: err?.message || String(err) });
+        }
+    });
+}
 
 process.stdin.on('data', chunk => {
     buf += chunk;
@@ -151,17 +253,15 @@ process.stdin.on('data', chunk => {
     buf = lines.pop(); // keep incomplete last line
     for (const line of lines) {
         if (!line.trim()) continue;
-        handleLine(line);
+        enqueueLine(line);
     }
 });
 
-process.stdin.on('end', () => {
-    for (const c of clients.values()) {
-        try { c.close(); } catch (err) {
-            safeCatch({ module: 'azure-tls-worker', eventCode: 'worker.client.close_failed', context: { op: 'stdin_end' } }, err);
-        }
-    }
-    clientLru.length = 0;
+process.stdin.on('end', async () => {
+    awaitClear = true;
+    await waitZeroInflight();
+    closeAllPoolClients();
+    finishClearing();
     process.exit(0);
 });
 
@@ -176,13 +276,10 @@ async function handleLine(line) {
 
     // Control commands
     if (id === '__clear_sessions__') {
-        for (const c of clients.values()) {
-            try { c.close(); } catch (err) {
-                safeCatch({ module: 'azure-tls-worker', eventCode: 'worker.client.close_failed', context: { op: 'clear_sessions' } }, err);
-            }
-        }
-        clients.clear();
-        clientLru.length = 0;
+        awaitClear = true;
+        await waitZeroInflight();
+        closeAllPoolClients();
+        finishClearing();
         send({ id: '__clear_sessions__', status: 'ok', cleared: true });
         return;
     }
@@ -192,8 +289,12 @@ async function handleLine(line) {
         return;
     }
 
+    await waitIfClearing();
+    let poolKey;
+    let client;
     try {
-        const client = getClient(browser, proxy);
+        ({ client, key: poolKey } = await borrowClient(browser, proxy));
+        httpInflight++;
 
         if (ja3) {
             try { client.applyJA3(ja3); } catch (err) {
@@ -234,6 +335,9 @@ async function handleLine(line) {
         send({ id, statusCode: result.statusCode, bodyBase64: result.bodyBase64 || '', headers: result.headers, error: result.error || null });
     } catch (e) {
         send({ id, statusCode: 0, body: null, headers: {}, error: e.message });
+    } finally {
+        if (client && poolKey) releaseClient(poolKey, client);
+        decHttpInflight();
     }
 }
 

@@ -210,7 +210,7 @@ function screenshotTriggerLabel(trigger) {
         'network-pending': 'Pending',
         'mouse-activity': 'Mouse',
         'scroll-end': 'Scroll',
-        'typing-end': 'Typing',
+        'typing-end': 'Tapping',
         rule: 'Rule',
         manual: 'Manual',
     };

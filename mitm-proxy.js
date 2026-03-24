@@ -5,7 +5,7 @@
  *
  * Architecture:
  *   Chromium (--proxy-server=127.0.0.1:PORT)
- *     ↓  HTTP  → forward via AzureTLS worker
+ *     ↓  HTTP  → AzureTLS (in-process в Electron или дочерний azure-tls-worker.js)
  *     ↓  HTTPS CONNECT → MITM:
  *         1. Accept CONNECT, reply 200
  *         2. Terminate Chromium's TLS with fake domain cert (Electron trusts it)
@@ -315,8 +315,55 @@ function _buildDomainCert(hostname, pubKey, privKey) {
 
 const { spawn } = require('child_process');
 const path = require('path');
-const DEBUG_MITM = process.env.CUPNET_DEBUG_MITM === '1';
-function dbg(msg) { if (DEBUG_MITM) process.stderr.write(msg); }
+
+/** В Electron — FFI в main; в обычном node (тесты) — отдельный процесс. */
+function mitmUseChildAzureTlsWorker() {
+    if (process.env.CUPNET_AZURETLS_CHILD_PROCESS === '1') return true;
+    if (process.env.CUPNET_AZURETLS_IN_PROCESS === '1') return false;
+    return !process.versions?.electron;
+}
+
+function createMitmAzureBackend(workerPath) {
+    if (mitmUseChildAzureTlsWorker()) return new AzureTLSWorker(workerPath);
+    try {
+        const { AzureTLSInProcess } = require('./azure-tls-inprocess');
+        return new AzureTLSInProcess();
+    } catch (err) {
+        const msg = err?.message || String(err);
+        const archHint = /incompatible architecture|wrong ELF class|invalid ELF header/i.test(msg);
+        console.error(
+            '[mitm] AzureTLS in-process: не удалось загрузить нативный модуль (ref-napi / ffi-napi).\n' +
+            '  Отдельный worker грузит те же binding.node — fallback не поможет.\n' +
+            (archHint
+                ? '  Скорее всего *.node собран под другую архитектуру (например x86_64, а нужен arm64 для Apple Silicon).\n' +
+                  '  Из корня репозитория: npm run rebuild:azuretls (на darwin+AS по умолчанию --arch arm64).\n' +
+                  '  Явно: npm run rebuild:azuretls:arm64 или rebuild:azuretls:x64\n'
+                : '') +
+            '  Детали:',
+            msg
+        );
+        throw err;
+    }
+}
+
+const DEBUG_MITM = parseInt(process.env.CUPNET_DEBUG_MITM, 10) || 0;
+function dbg(msg) { if (DEBUG_MITM >= 1) process.stderr.write(msg); }
+
+function _fmtHeaders(h) {
+    if (!h || typeof h !== 'object') return '';
+    const lines = [];
+    for (const [k, v] of Object.entries(h)) lines.push(`  ${k}: ${v}`);
+    return lines.join('\n') + '\n';
+}
+function _fmtBody(body, bodyBase64, label, maxLen = 4096) {
+    let text = body || null;
+    if (!text && bodyBase64) {
+        try { text = Buffer.from(bodyBase64, 'base64').toString('utf8'); } catch { text = `<base64 ${bodyBase64.length} chars>`; }
+    }
+    if (!text) return '';
+    if (text.length > maxLen) text = text.slice(0, maxLen) + `\n  … (truncated, ${text.length} total)`;
+    return `  [${label}]\n${text}\n`;
+}
 
 class AzureTLSWorker extends EventEmitter {
     constructor(workerPath) {
@@ -563,6 +610,46 @@ function _headerVal(headers, name) {
     return '';
 }
 
+/**
+ * Chromium resourceType в MITM недоступен; CDP-строки с типом отбрасываются (см. cdp-network-logging shadow).
+ * Подбираем тип под фильтры log-viewer (Document, Script, XHR, Fetch, …).
+ */
+function inferMitmResourceType(url, method, reqHeaders, resHeaders) {
+    const m = String(method || 'GET').toUpperCase();
+    if (m === 'OPTIONS') return 'Ping';
+
+    let pathname = '';
+    try {
+        pathname = new URL(String(url || '')).pathname.toLowerCase();
+    } catch { /* ignore */ }
+
+    const ct = String(_headerVal(resHeaders, 'content-type') || '').toLowerCase().split(';')[0].trim();
+    const accept = String(_headerVal(reqHeaders, 'accept') || '').toLowerCase();
+
+    if (/\.(png|jpe?g|gif|webp|avif|bmp|ico)(\?|$)/i.test(pathname)) return 'Image';
+    if (/\.svg(\?|$)/i.test(pathname)) return 'Image';
+    if (/\.(woff2?|ttf|otf|eot)(\?|$)/i.test(pathname)) return 'Font';
+    if (/\.css(\?|$)/i.test(pathname)) return 'Stylesheet';
+    if (/\.(js|mjs|cjs)(\.map)?(\?|$)/i.test(pathname)) return 'Script';
+
+    if (ct.includes('text/html')) return 'Document';
+    if (ct.includes('text/css')) return 'Stylesheet';
+    if (ct.includes('javascript') || ct.includes('ecmascript')) return 'Script';
+    if (ct.startsWith('image/')) return 'Image';
+    if (ct.startsWith('video/') || ct.startsWith('audio/')) return 'Image';
+    if (ct.includes('font') || ct.includes('woff')) return 'Font';
+    if (ct.includes('application/json') || ct.endsWith('+json')) {
+        return (m === 'GET' || m === 'HEAD') ? 'Fetch' : 'XHR';
+    }
+
+    if (accept.includes('text/html')) return 'Document';
+    if (accept.includes('application/json')) return 'Fetch';
+
+    if (m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE') return 'XHR';
+
+    return 'Fetch';
+}
+
 const _TEXT_CT = [
     'text/', 'application/json', 'application/javascript', 'application/ecmascript',
     'application/xml', 'application/xhtml', 'application/x-javascript',
@@ -581,7 +668,6 @@ function _isBinaryContentType(ct) {
 
 // ── MITM Proxy Server ─────────────────────────────────────────────────────────
 
-const CUPNET_HEADERS = ['x-cupnet-tabid', 'x-cupnet-sessionid', 'x-cupnet-requestid'];
 // AzureTLS/Go sets these from actual body — passing browser values can cause Content-Length mismatch → 400
 const SKIP_WHEN_BODY = ['content-length', 'transfer-encoding'];
 const DEFAULT_TLS_PASSTHROUGH = ['challenges.cloudflare.com'];
@@ -611,13 +697,16 @@ class MitmProxy {
         this.upstream   = opts.upstream || null;
         this.workerPath = opts.workerPath;
         this.onRequestLogged = opts.onRequestLogged || null;
-        this.worker     = new AzureTLSWorker(this.workerPath);
+        this.worker = createMitmAzureBackend(this.workerPath);
         this._server    = null;
         this._activeJa3 = null;
         this._dnsOverrides = new Map();
         /** @type {string[]} паттерны хоста из DNS rules с mitm_inject_cors (exact или *.suffix, см. _matchHostPattern). */
         this._dnsCorsPatterns = [];
         this._tlsPassthroughDomains = [...DEFAULT_TLS_PASSTHROUGH];
+
+        // Per-tab upstream proxy overrides: tabId → { upstream, browser?, ja3? }
+        this._tabProxyMap = new Map();
 
         // Detailed stats
         this.stats = {
@@ -647,6 +736,35 @@ class MitmProxy {
     }
 
     setUpstream(proxyUrl) { this.upstream = proxyUrl || null; }
+
+    /**
+     * Set per-tab upstream proxy override.
+     * @param {string} tabId
+     * @param {{ upstream: string|null, browser?: string, ja3?: string }} config
+     */
+    setTabUpstream(tabId, config) {
+        if (!tabId) return;
+        this._tabProxyMap.set(tabId, {
+            upstream: config.upstream || null,
+            browser:  config.browser  || null,
+            ja3:      config.ja3      || null,
+        });
+    }
+
+    removeTabUpstream(tabId) {
+        this._tabProxyMap.delete(tabId);
+    }
+
+    _resolveUpstreamForTab(tabId) {
+        if (!tabId) return { proxy: this.upstream, browser: this.browser, ja3: this._activeJa3 };
+        const override = this._tabProxyMap.get(tabId);
+        if (!override) return { proxy: this.upstream, browser: this.browser, ja3: this._activeJa3 };
+        return {
+            proxy:   override.upstream ?? this.upstream,
+            browser: override.browser  || this.browser,
+            ja3:     override.ja3      || this._activeJa3,
+        };
+    }
 
     setTlsPassthroughDomains(domains = []) {
         const cleaned = Array.isArray(domains)
@@ -680,7 +798,10 @@ class MitmProxy {
             const host = String(r.host || '').trim().toLowerCase();
             const ip = String(r.ip || '').trim();
             if (!host) continue;
-            if (ip && !host.startsWith('*.')) next.set(host, ip);
+            if (ip && !host.startsWith('*.')) {
+                const rw = String(r.rewrite_host || '').trim();
+                next.set(host, { ip, rewriteHost: rw || null });
+            }
             if (r.mitm_inject_cors === true) corsPatterns.push(host);
         }
         this._dnsOverrides = next;
@@ -692,6 +813,7 @@ class MitmProxy {
     }
 
     _mitmCorsEnabledForUrl(urlStr) {
+        if (shouldSkipMitmCorsForUrl(urlStr)) return false;
         let u;
         try { u = new URL(urlStr); } catch { return false; }
         const h = (u.hostname || '').toLowerCase();
@@ -736,6 +858,7 @@ class MitmProxy {
 
     // ── HTTPS CONNECT ──────────────────────────────────────────────────────────
     _handleConnect(socket, head) {
+        const connectTabId = _mitmTabIdFromProxyAuthHead(head);
         const line     = head.split('\r\n')[0];
         const hostport = line.split(' ')[1] || '';
         const [hostname, portStr] = hostport.split(':');
@@ -785,51 +908,30 @@ class MitmProxy {
 
         const dispatchRequest = (req) => {
             const url = `https://${hostname}${port !== 443 ? ':' + port : ''}${req.path}`;
-            const tabId = req.headers['x-cupnet-tabid'] || null;
-            const sessionId = req.headers['x-cupnet-sessionid'] || null;
-            const requestId = req.headers['x-cupnet-requestid'] || `mitm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const tabId = connectTabId;
+            const sessionId = null;
+            const requestId = `mitm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
             const headers = { ...req.headers };
-            for (const k of CUPNET_HEADERS) delete headers[k];
+            delete headers['proxy-authorization'];
             const hasBody = !!(req.body || req.bodyBase64);
             const orderedHeaders = (req.orderedHeaders || []).filter(([k]) => {
                 const kl = k.toLowerCase();
-                if (CUPNET_HEADERS.includes(kl)) return false;
+                if (kl === 'proxy-authorization') return false;
                 if (hasBody && SKIP_WHEN_BODY.includes(kl)) return false;
                 return true;
             });
             dbg(`[mitm] → ${req.method} ${url}\n`);
-
-            // CORS preflight: отвечаем 204 локально — upstream может отклонить OPTIONS (SNI/Host),
-            // а браузер требует 2xx на preflight, иначе считает CORS-ошибкой.
-            if (req.method === 'OPTIONS' && this._mitmCorsEnabledForUrl(url)) {
-                const origin = _resolveCorsAllowOrigin(headers);
-                if (origin) {
-                    const reqM = _reqHeader(headers, 'Access-Control-Request-Method');
-                    const reqH = _reqHeader(headers, 'Access-Control-Request-Headers');
-                    const preflightRes = {
-                        statusCode: 204, bodyBase64: '',
-                        headers: {
-                            'Access-Control-Allow-Origin': origin,
-                            'Access-Control-Allow-Credentials': 'true',
-                            'Access-Control-Allow-Methods': reqM || 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD',
-                            'Access-Control-Allow-Headers': reqH || '*',
-                            'Access-Control-Max-Age': '86400',
-                        },
-                    };
-                    dbg(`[mitm-cors] PREFLIGHT 204 origin=${origin} ${url}\n`);
-                    const entry = { done: true, data: buildHttpResponse(preflightRes) };
-                    pipeline.push(entry);
-                    flushPipeline();
-                    return;
-                }
-            }
+            if (DEBUG_MITM >= 2) dbg(_fmtHeaders(headers));
+            if (DEBUG_MITM >= 3) dbg(_fmtBody(req.body, req.bodyBase64, 'req body'));
 
             const entry = { done: false, data: null };
             pipeline.push(entry);
             const t0 = Date.now();
-            this._doRequest({ method: req.method, url, headers, orderedHeaders, body: req.body, bodyBase64: req.bodyBase64, requestId })
+            this._doRequest({ method: req.method, url, headers, orderedHeaders, body: req.body, bodyBase64: req.bodyBase64, requestId, tabId })
                 .then(res  => {
                     dbg(`[mitm] ← ${url} status=${res.statusCode}\n`);
+                    if (DEBUG_MITM >= 2) dbg(_fmtHeaders(res.headers));
+                    if (DEBUG_MITM >= 4) dbg(_fmtBody(null, res.bodyBase64, 'res body'));
                     const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, res);
                     entry.data = buildHttpResponse(resOut);
                     if (this.onRequestLogged) {
@@ -847,7 +949,8 @@ class MitmProxy {
                             url, method: req.method, tabId, sessionId, requestId,
                             status: resOut.statusCode, requestHeaders: headers,
                             responseHeaders: resOut.headers, requestBody: reqBodyForLog,
-                            responseBody: logBody, duration: Date.now() - t0, type: 'Document',
+                            responseBody: logBody, duration: Date.now() - t0,
+                            type: inferMitmResourceType(url, req.method, headers, resOut.headers),
                         });
                     }
                 })
@@ -987,49 +1090,38 @@ class MitmProxy {
         const req = parseHttpRequest(head);
         if (!req) { socket.destroy(); return; }
 
-        // Reconstruct absolute URL
+        const tabId = _mitmTabIdFromProxyAuthHead(head);
         const hostHeader = (req.headers['host'] || req.headers['Host'] || '');
         const url = req.path.startsWith('http') ? req.path : `http://${hostHeader}${req.path}`;
+        const headers = { ...req.headers };
+        delete headers['proxy-authorization'];
         const hasBody = !!(req.body || req.bodyBase64);
         const orderedHeaders = (req.orderedHeaders || []).filter(([k]) => {
             const kl = k.toLowerCase();
-            if (CUPNET_HEADERS.includes(kl)) return false;
+            if (kl === 'proxy-authorization') return false;
             if (hasBody && SKIP_WHEN_BODY.includes(kl)) return false;
             return true;
         });
 
-        if (req.method === 'OPTIONS' && this._mitmCorsEnabledForUrl(url)) {
-            const origin = _resolveCorsAllowOrigin(req.headers);
-            if (origin) {
-                const reqM = _reqHeader(req.headers, 'Access-Control-Request-Method');
-                const reqH = _reqHeader(req.headers, 'Access-Control-Request-Headers');
-                dbg(`[mitm-cors] PREFLIGHT 204 origin=${origin} ${url}\n`);
-                socket.write(buildHttpResponse({
-                    statusCode: 204, bodyBase64: '',
-                    headers: {
-                        'Access-Control-Allow-Origin': origin,
-                        'Access-Control-Allow-Credentials': 'true',
-                        'Access-Control-Allow-Methods': reqM || 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD',
-                        'Access-Control-Allow-Headers': reqH || '*',
-                        'Access-Control-Max-Age': '86400',
-                    },
-                }));
-                socket.end();
-                return;
-            }
-        }
+        dbg(`[mitm] → ${req.method} ${url}\n`);
+        if (DEBUG_MITM >= 2) dbg(_fmtHeaders(headers));
+        if (DEBUG_MITM >= 3) dbg(_fmtBody(req.body, req.bodyBase64, 'req body'));
 
         this._doRequest({
             method: req.method,
             url,
-            headers: req.headers,
+            headers,
             orderedHeaders,
             body: req.body,
             bodyBase64: req.bodyBase64,
-            requestId: req.headers['x-cupnet-requestid'] || `mitm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            requestId: `mitm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            tabId,
         })
             .then(res => {
-                const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, req.headers, req.method, res);
+                dbg(`[mitm] ← ${url} status=${res.statusCode}\n`);
+                if (DEBUG_MITM >= 2) dbg(_fmtHeaders(res.headers));
+                if (DEBUG_MITM >= 4) dbg(_fmtBody(null, res.bodyBase64, 'res body'));
+                const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, res);
                 const resp = buildHttpResponse(resOut);
                 socket.write(resp);
                 socket.end();
@@ -1037,7 +1129,7 @@ class MitmProxy {
             .catch((e) => {
                 dbg(`[mitm] ✗ ${url} ${e.message}\n`);
                 const errRes = { statusCode: 502, headers: {}, bodyBase64: '' };
-                const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, req.headers, req.method, errRes);
+                const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
                 socket.write(buildHttpResponse(resOut));
                 socket.end();
             });
@@ -1073,6 +1165,7 @@ class MitmProxy {
         const retryCount = /^(GET|HEAD|OPTIONS)$/i.test(opts.method || '')
             ? networkPolicy.retry.maxRetries
             : 0;
+        const tabUpstream = this._resolveUpstreamForTab(opts.tabId);
         try {
             const res = await this.worker.request({
                 method:            dnsAdjusted.method,
@@ -1081,9 +1174,9 @@ class MitmProxy {
                 orderedHeaders:    dnsAdjusted.orderedHeaders || undefined,
                 body:              noBody ? undefined : (dnsAdjusted.bodyBase64 ? undefined : (dnsAdjusted.body || null)),
                 bodyBase64:        noBody ? undefined : (dnsAdjusted.bodyBase64 || undefined),
-                proxy:             this.upstream || null,
-                browser:           this.browser,
-                ja3:               this._activeJa3 || undefined,
+                proxy:             tabUpstream.proxy || null,
+                browser:           tabUpstream.browser,
+                ja3:               tabUpstream.ja3 || undefined,
                 requestId:         opts.requestId || undefined,
                 maxRetries:        retryCount,
                 timeout:           networkPolicy.timeouts.upstreamRequestMs,
@@ -1117,8 +1210,11 @@ class MitmProxy {
         const host = (u.hostname || '').toLowerCase();
         if (!host) return { ...opts };
 
-        const overrideIp = this._dnsOverrides.get(host);
-        if (!overrideIp) return { ...opts };
+        const entry = this._dnsOverrides.get(host);
+        if (!entry?.ip) return { ...opts };
+
+        const overrideIp = entry.ip;
+        const rewriteHost = entry.rewriteHost || null;
 
         const overriddenUrl = new URL(sourceUrl);
         overriddenUrl.hostname = overrideIp;
@@ -1127,7 +1223,9 @@ class MitmProxy {
         const includePort =
             (u.protocol === 'https:' && explicitPort !== '443') ||
             (u.protocol === 'http:' && explicitPort !== '80');
-        const logicalHostHeader = includePort ? `${host}:${explicitPort}` : host;
+        const logicalHostHeader = rewriteHost
+            ? rewriteHost
+            : (includePort ? `${host}:${explicitPort}` : host);
 
         const nextHeaders = { ...(opts.headers || {}) };
         nextHeaders.host = logicalHostHeader;
@@ -1150,7 +1248,7 @@ class MitmProxy {
             url: overriddenUrl.toString(),
             headers: nextHeaders,
             orderedHeaders: nextOrdered,
-            dnsOverride: { host, ip: overrideIp },
+            dnsOverride: { host, ip: overrideIp, rewriteHost: rewriteHost || undefined },
         };
     }
 
@@ -1205,6 +1303,39 @@ function parseHttpRequest(raw) {
         }
         return { method, path, headers, orderedHeaders, body: body || null };
     } catch { return null; }
+}
+
+/**
+ * TabId из Proxy-Authorization (Basic), если есть и пароль верный.
+ * Без заголовка или при неверном пароле — null (CONNECT разрешаем всегда: session.fetch и др. не шлют 407-login).
+ */
+function _mitmTabIdFromProxyAuthHead(rawHead) {
+    const { globalUsername, password } = networkPolicy.mitmClientProxyAuth;
+    if (!rawHead || typeof rawHead !== 'string') return null;
+    const sep = rawHead.indexOf('\r\n\r\n');
+    const blob = sep >= 0 ? rawHead.slice(0, sep + 4) : `${rawHead.replace(/\s+$/, '')}\r\n\r\n`;
+    const req = parseHttpRequest(blob);
+    if (!req?.headers) return null;
+    const auth = req.headers['proxy-authorization'] || '';
+    const m = String(auth).trim().match(/^Basic\s+(\S+)/i);
+    if (!m) return null;
+    let decoded;
+    try {
+        decoded = Buffer.from(m[1], 'base64').toString('utf8');
+    } catch {
+        return null;
+    }
+    const colon = decoded.indexOf(':');
+    let username = colon >= 0 ? decoded.slice(0, colon) : decoded;
+    const pass = colon >= 0 ? decoded.slice(colon + 1) : '';
+    if (pass !== password) return null;
+    try {
+        username = decodeURIComponent(username);
+    } catch {
+        return null;
+    }
+    if (!username || username === globalUsername) return null;
+    return username;
 }
 
 // ── MITM CORS injection (optional; не трогать challenge/captcha хосты) ─────────
@@ -1442,41 +1573,19 @@ class ExternalProxyPort {
 
             const dispatchRequest = (r) => {
                 const url = `https://${hostname}${port !== 443 ? ':' + port : ''}${r.path}`;
+                const tabId = null;
                 const headers = { ...r.headers };
                 delete headers['proxy-authorization'];
-                for (const k of CUPNET_HEADERS) delete headers[k];
                 const hasBody = !!(r.body || r.bodyBase64);
                 const orderedHeaders = (r.orderedHeaders || []).filter(([k]) => {
                     const kl = k.toLowerCase();
-                    return kl !== 'proxy-authorization' && !CUPNET_HEADERS.includes(kl) && !(hasBody && SKIP_WHEN_BODY.includes(kl));
+                    return kl !== 'proxy-authorization' && !(hasBody && SKIP_WHEN_BODY.includes(kl));
                 });
-
-                if (r.method === 'OPTIONS' && this.parent._mitmCorsEnabledForUrl(url)) {
-                    const origin = _resolveCorsAllowOrigin(headers);
-                    if (origin) {
-                        const reqM = _reqHeader(headers, 'Access-Control-Request-Method');
-                        const reqH = _reqHeader(headers, 'Access-Control-Request-Headers');
-                        dbg(`[mitm-cors] PREFLIGHT 204 origin=${origin} ${url}\n`);
-                        const entry = { done: true, data: buildHttpResponse({
-                            statusCode: 204, bodyBase64: '',
-                            headers: {
-                                'Access-Control-Allow-Origin': origin,
-                                'Access-Control-Allow-Credentials': 'true',
-                                'Access-Control-Allow-Methods': reqM || 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD',
-                                'Access-Control-Allow-Headers': reqH || '*',
-                                'Access-Control-Max-Age': '86400',
-                            },
-                        }) };
-                        pipeline.push(entry);
-                        flushPipeline();
-                        return;
-                    }
-                }
 
                 const entry = { done: false, data: null };
                 pipeline.push(entry);
                 const t0 = Date.now();
-                this.parent._doRequest({ method: r.method, url, headers, orderedHeaders, body: r.body, bodyBase64: r.bodyBase64, disableRedirects: !this.followRedirects })
+                this.parent._doRequest({ method: r.method, url, headers, orderedHeaders, body: r.body, bodyBase64: r.bodyBase64, disableRedirects: !this.followRedirects, tabId })
                     .then(res => {
                         const resOut = applyMitmCorsToResponse(this.parent._mitmCorsEnabledForUrl(url), url, headers, r.method, res);
                         entry.data = buildHttpResponse(resOut);
@@ -1491,7 +1600,8 @@ class ExternalProxyPort {
                             url, method: r.method, status: resOut.statusCode,
                             requestHeaders: headers, responseHeaders: resOut.headers,
                             requestBody: reqBody, responseBody: logBody,
-                            duration: Date.now() - t0, type: 'Document',
+                            duration: Date.now() - t0,
+                            type: inferMitmResourceType(url, r.method, headers, resOut.headers),
                         });
                     })
                     .catch((e) => {
@@ -1546,6 +1656,7 @@ class ExternalProxyPort {
         if (!req) { socket.destroy(); return; }
         if (!this._checkAuth(req.headers)) { this._rejectAuth(socket); return; }
 
+        const tabId = null;
         const hostHeader = (req.headers['host'] || req.headers['Host'] || '');
         const url = req.path.startsWith('http') ? req.path : `http://${hostHeader}${req.path}`;
         const headers = { ...req.headers };
@@ -1553,32 +1664,11 @@ class ExternalProxyPort {
         const hasBody = !!(req.body || req.bodyBase64);
         const orderedHeaders = (req.orderedHeaders || []).filter(([k]) => {
             const kl = k.toLowerCase();
-            return kl !== 'proxy-authorization' && !CUPNET_HEADERS.includes(kl) && !(hasBody && SKIP_WHEN_BODY.includes(kl));
+            return kl !== 'proxy-authorization' && !(hasBody && SKIP_WHEN_BODY.includes(kl));
         });
 
-        if (req.method === 'OPTIONS' && this.parent._mitmCorsEnabledForUrl(url)) {
-            const origin = _resolveCorsAllowOrigin(headers);
-            if (origin) {
-                const reqM = _reqHeader(headers, 'Access-Control-Request-Method');
-                const reqH = _reqHeader(headers, 'Access-Control-Request-Headers');
-                dbg(`[mitm-cors] PREFLIGHT 204 origin=${origin} ${url}\n`);
-                socket.write(buildHttpResponse({
-                    statusCode: 204, bodyBase64: '',
-                    headers: {
-                        'Access-Control-Allow-Origin': origin,
-                        'Access-Control-Allow-Credentials': 'true',
-                        'Access-Control-Allow-Methods': reqM || 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD',
-                        'Access-Control-Allow-Headers': reqH || '*',
-                        'Access-Control-Max-Age': '86400',
-                    },
-                }));
-                socket.end();
-                return;
-            }
-        }
-
         const t0 = Date.now();
-        this.parent._doRequest({ method: req.method, url, headers, orderedHeaders, body: req.body, bodyBase64: req.bodyBase64, disableRedirects: !this.followRedirects })
+        this.parent._doRequest({ method: req.method, url, headers, orderedHeaders, body: req.body, bodyBase64: req.bodyBase64, disableRedirects: !this.followRedirects, tabId })
             .then(res => {
                 const resOut = applyMitmCorsToResponse(this.parent._mitmCorsEnabledForUrl(url), url, headers, req.method, res);
                 socket.write(buildHttpResponse(resOut));
@@ -1593,7 +1683,8 @@ class ExternalProxyPort {
                     url, method: req.method, status: resOut.statusCode,
                     requestHeaders: headers, responseHeaders: resOut.headers,
                     requestBody: req.body || null, responseBody: logBody,
-                    duration: Date.now() - t0, type: 'Document',
+                    duration: Date.now() - t0,
+                    type: inferMitmResourceType(url, req.method, headers, resOut.headers),
                 });
             })
             .catch((e) => {

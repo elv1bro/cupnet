@@ -204,7 +204,8 @@ const btnCancel     = document.getElementById('btn-cancel');
 const btnDelete     = document.getElementById('btn-delete');
 const btnDuplicate  = document.getElementById('btn-duplicate');
 const btnTest       = document.getElementById('btn-test');
-const btnConnect    = document.getElementById('btn-connect');
+const btnApplyTab   = document.getElementById('btn-apply-tab');
+const btnApplyGlobal = document.getElementById('btn-apply-global');
 const btnDisconnect = document.getElementById('btn-disconnect');
 const btnCheckIp    = document.getElementById('btn-check-ip');
 
@@ -266,6 +267,7 @@ function resolvePreview(template, savedVars) {
 /** Get current saved vars from vars table inputs */
 function collectVarsFromForm() {
     const vars = {};
+    if (!varsTbody) return vars;
     varsTbody.querySelectorAll('[data-varname]').forEach(inp => {
         const name = inp.dataset.varname;
         if (inp.dataset.vartype !== 'sid' && inp.dataset.vartype !== 'rand') {
@@ -388,7 +390,7 @@ function openDirectEditor() {
     btnDuplicate.style.display = 'none';
     testResult.classList.remove('visible', 'ok', 'err');
     setSaveStatus('');
-    updateConnectBtn();
+    updateEditorActionButtons();
 
     if (fUa)       fUa.value       = profile.user_agent || '';
     if (fTimezone) fTimezone.value = profile.timezone   || '';
@@ -424,7 +426,7 @@ function openEditor(id) {
     }
     btnDelete.style.display    = '';
     btnDuplicate.style.display = '';
-    updateConnectBtn();
+    updateEditorActionButtons();
 
     // Fingerprint fields
     if (fUa)       fUa.value       = profile.user_agent || '';
@@ -472,7 +474,7 @@ function openNewEditor() {
     btnDuplicate.style.display = 'none';
     testResult.classList.remove('visible', 'ok', 'err');
     setSaveStatus('');
-    updateConnectBtn();
+    updateEditorActionButtons();
     // Clear fingerprint fields
     if (fUa)       fUa.value       = '';
     if (fTimezone) fTimezone.value = '';
@@ -598,6 +600,7 @@ btnSave.addEventListener('click', async () => {
         isNew      = false;
         btnDelete.style.display = '';
         editorTitle.textContent = name;
+        updateEditorActionButtons();
     } else {
         setSaveStatus(`Error: ${result.error}`, 'err');
     }
@@ -641,7 +644,7 @@ btnDuplicate?.addEventListener('click', async () => {
     btnDuplicate.style.display = 'none';
     testResult.classList.remove('visible', 'ok', 'err');
     setSaveStatus('');
-    updateConnectBtn();
+    updateEditorActionButtons();
 
     if (fUa)       fUa.value       = src.user_agent || '';
     if (fTimezone) fTimezone.value = src.timezone    || '';
@@ -657,38 +660,85 @@ btnDuplicate?.addEventListener('click', async () => {
     renderProfileList();
 });
 
-// ─── Connect button label helper ─────────────────────────────────────────────
-function updateConnectBtn() {
-    if (!selectedId) return;
+// ─── Apply globally / to active tab ───────────────────────────────────────────
+function updateApplyGlobalBtn() {
+    if (!btnApplyGlobal) return;
+    if (!selectedId || isNew) {
+        btnApplyGlobal.disabled = true;
+        btnApplyGlobal.textContent = 'Apply globally';
+        return;
+    }
 
     if (selectedId === DIRECT_ID) {
         if (connectedId === DIRECT_ID) {
-            // Direct already active — button is "Save changes" (re-apply profile settings)
-            btnConnect.textContent = '↺ Apply settings';
-            btnConnect.disabled   = false;
+            btnApplyGlobal.textContent = '↺ Apply globally (Direct)';
+            btnApplyGlobal.disabled   = false;
         } else {
-            // A proxy is connected — switching to Direct means disconnecting it
-            btnConnect.textContent = '▶ Switch to Direct';
-            btnConnect.disabled   = false;
+            btnApplyGlobal.textContent = 'Apply globally: Direct';
+            btnApplyGlobal.disabled   = false;
         }
     } else {
-        // Regular proxy profile
         if (selectedId === connectedId) {
-            btnConnect.textContent = '✕ Disconnect';
+            btnApplyGlobal.textContent = '✕ Disconnect global';
         } else {
-            btnConnect.textContent = '▶ Connect';
+            btnApplyGlobal.textContent = 'Apply globally';
         }
-        btnConnect.disabled = false;
+        btnApplyGlobal.disabled = false;
     }
 }
 
-// ─── Connect / Disconnect ─────────────────────────────────────────────────────
-btnConnect.addEventListener('click', async () => {
+function updateApplyTabBtn() {
+    if (!btnApplyTab) return;
+    btnApplyTab.disabled = !selectedId || isNew;
+}
+
+function updateEditorActionButtons() {
+    updateApplyGlobalBtn();
+    updateApplyTabBtn();
+}
+
+btnApplyTab.addEventListener('click', async () => {
+    if (!selectedId || isNew || !api.setTabProxy || !api.getTabs) return;
+    collectVarsFromForm();
+    const tabs = await api.getTabs();
+    const active = tabs.find(t => t.isActive);
+    if (!active) {
+        setSaveStatus('No active tab in main window', 'err');
+        return;
+    }
+    btnApplyTab.disabled = true;
+    try {
+        if (selectedId === DIRECT_ID) {
+            const res = await api.setTabProxy(active.id, null);
+            if (res?.success) {
+                setSaveStatus('Active tab: use global / Direct upstream ✓', 'ok');
+            } else {
+                setSaveStatus(res?.error || 'Failed', 'err');
+            }
+            return;
+        }
+        const ev = Object.keys(ephemeralVars).length ? { ...ephemeralVars } : undefined;
+        const res = await api.setTabProxy(active.id, selectedId, ev);
+        if (res?.success) {
+            setSaveStatus('Profile applied to active tab ✓', 'ok');
+        } else {
+            setSaveStatus(res?.error || 'Failed', 'err');
+        }
+    } catch (e) {
+        setSaveStatus(String(e?.message || e), 'err');
+    } finally {
+        updateApplyTabBtn();
+    }
+});
+
+// ─── Connect / Disconnect (global) ─────────────────────────────────────────
+btnApplyGlobal.addEventListener('click', async () => {
     if (!selectedId) return;
+    collectVarsFromForm();
 
     // ── Direct profile ──
     if (selectedId === DIRECT_ID) {
-        btnConnect.disabled = true; btnConnect.textContent = '⟳ Applying…';
+        btnApplyGlobal.disabled = true; btnApplyGlobal.textContent = '⟳ Applying…';
         const directData = {
             user_agent: fUa?.value.trim() || null,
             timezone:   fTimezone?.value  || null,
@@ -702,8 +752,8 @@ btnConnect.addEventListener('click', async () => {
             : api.disconnectProxy());
 
         connectedId = DIRECT_ID;
-        btnConnect.disabled = false;
-        updateConnectBtn();
+        btnApplyGlobal.disabled = false;
+        updateEditorActionButtons();
         setSaveStatus(result?.success !== false ? 'Direct + MITM active ✓' : `Error: ${result?.error}`, result?.success !== false ? 'ok' : 'err');
         renderProfileList();
         return;
@@ -711,28 +761,28 @@ btnConnect.addEventListener('click', async () => {
 
     // ── Disconnect currently active proxy ──
     if (selectedId === connectedId) {
-        btnConnect.disabled = true; btnConnect.textContent = '⟳ Disconnecting…';
+        btnApplyGlobal.disabled = true; btnApplyGlobal.textContent = '⟳ Disconnecting…';
         await api.disconnectProxy();
         // State will be updated via onProxyStatusChanged event
-        btnConnect.disabled = false;
+        btnApplyGlobal.disabled = false;
         return;
     }
 
     // ── Connect proxy profile ──
-    btnConnect.disabled = true; btnConnect.textContent = '⟳ Connecting…';
+    btnApplyGlobal.disabled = true; btnApplyGlobal.textContent = '⟳ Connecting…';
     const result = await api.connectProxyTemplate(selectedId, ephemeralVars);
-    btnConnect.disabled = false;
+    btnApplyGlobal.disabled = false;
     if (result.success) {
         connectedId = selectedId;
         _storedResolvedVars = result.resolvedVars || {};
         lastResolvedVars = { ..._storedResolvedVars };
-        updateConnectBtn();
+        updateEditorActionButtons();
         setSaveStatus('Connected ✓', 'ok');
         // Rebuild vars table to show current resolved values
         const profile = profiles.find(p => p.id === selectedId);
         if (profile) buildVarsTable(fTemplate.value, profile.variables || {});
     } else {
-        updateConnectBtn();
+        updateEditorActionButtons();
         setSaveStatus(`Connect failed: ${result.error}`, 'err');
     }
     renderProfileList();
@@ -833,7 +883,7 @@ api.onProxyStatusChanged((info) => {
     }
 
     // Refresh connect button text for the currently open editor
-    updateConnectBtn();
+    updateEditorActionButtons();
 
     // Re-check IP automatically after proxy change
     statusIp.textContent = 'Checking…';

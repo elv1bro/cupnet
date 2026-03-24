@@ -4,8 +4,10 @@ const ProxyChain = require('proxy-chain');
 const { networkPolicy } = require('../../network-policy');
 const { withTimeout, sanitizeProxyUrl } = require('./network-helpers');
 
-/** Та же partition, что у обычных вкладок (`tab-manager.js` → SHARED_PARTITION). */
+/** Legacy partition; вкладки по умолчанию сейчас в `persist:cg_*` (см. tab-manager `partitionForGroup`). */
 const CUPNET_SHARED_PARTITION = 'persist:cupnet-shared';
+/** Дефолтная группа cookies = partition `persist:cg_1` — совпадает с tab-manager. */
+const DEFAULT_TAB_PARTITION = 'persist:cg_1';
 
 /**
  * MITM startup, proxy-chain helpers, IP/geo checks.
@@ -14,8 +16,8 @@ const CUPNET_SHARED_PARTITION = 'persist:cupnet-shared';
 function createProxyMitmService(d) {
     let _proxySwitchChain = Promise.resolve();
     let _lastIpGeoError = '';
-    /** Один полёт: несколько параллельных check-ip-geo не плодят hidden-window / fetch → меньше шума в stderr (BoringSSL). */
-    let _checkIpGeoInFlight = null;
+    /** Полёт по ключу вкладки/профиля — разные вкладки не ждут чужой check-ip-geo. */
+    let _checkIpGeoInFlight = new Map();
     /** UI (toolbar + new-tab) часто дергает check-ip-geo подряд — кэш снимает дубли TLS/логов. */
     let _ipGeoCache = { key: '', at: 0, value: null };
     const IP_GEO_CACHE_MS = 4000;
@@ -80,6 +82,23 @@ function createProxyMitmService(d) {
         }
     }
 
+    /**
+     * fetch из контекста вкладки — трафик идёт через Chromium proxy; tabId для MITM — Proxy-Authorization на CONNECT.
+     * session.fetch из main без вкладочного прокси; выход по IP см. check-ip-geo.
+     */
+    async function _fetchIpinfoJsonViaWebContents(wc, timeoutMs = networkPolicy.timeouts.ipGeoMs) {
+        if (!wc || wc.isDestroyed()) throw new Error('webContents gone');
+        const code = '(async () => {\n'
+            + '  const r = await fetch(\'https://ipinfo.io/json\', { credentials: \'omit\', cache: \'no-store\' });\n'
+            + '  if (!r.ok) throw new Error(\'HTTP \' + r.status);\n'
+            + '  return await r.json();\n'
+            + '})()';
+        return await Promise.race([
+            wc.executeJavaScript(code, true),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('ipinfo webContents timeout')), timeoutMs)),
+        ]);
+    }
+
     async function startMitmProxy() {
         if (d.getMitmProxy()) return d.getMitmProxy();
         const s = d.settingsStore.getCached() || d.loadSettings();
@@ -96,10 +115,12 @@ function createProxyMitmService(d) {
                 const sessionId = entry.sessionId != null ? entry.sessionId : d.getCurrentSessionId();
                 d.recordLatencySample(entry.duration);
                 if (entry?.dnsOverride?.host && entry?.dnsOverride?.ip) {
+                    const dOv = entry.dnsOverride;
+                    const rw = dOv.rewriteHost ? ` Host:${dOv.rewriteHost}` : '';
                     d.broadcastDnsRuleMatched({
-                        ruleName: `${entry.dnsOverride.host} -> ${entry.dnsOverride.ip}`,
-                        host: entry.dnsOverride.host,
-                        ip: entry.dnsOverride.ip,
+                        ruleName: `${dOv.host} -> ${dOv.ip}${rw}`,
+                        host: dOv.host,
+                        ip: dOv.ip,
                         url: entry.url || '',
                         method: entry.method || 'GET',
                         tabId: tabId || null,
@@ -142,6 +163,8 @@ function createProxyMitmService(d) {
                 }
 
                 if (!d.getIsLoggingEnabled() || !db) return;
+                // В MITM CDP иногда не даёт loadingFinished/getResponseBody — строка терялась. Пишем из MITM;
+                // дубликат от CDP отсекается в cdp-network-logging (mitm-cdp-dedup).
                 if (!tabId || sessionId == null) return;
                 const reqId = entry.requestId;
                 const seenIds = d.getSeenRequestIds();
@@ -198,6 +221,10 @@ function createProxyMitmService(d) {
                     }).then((dbId) => {
                         if (dbId) logEntry.id = dbId;
                         d.incrementLogEntryCount();
+                        try {
+                            const { markMitmLogged } = require('./mitm-cdp-dedup');
+                            markMitmLogged(tabId, logEntry.url, logEntry.method, logEntry.status);
+                        } catch (_) { /* ignore */ }
                         d.broadcastLogEntryToViewers({ ...logEntry, tabId, sessionId: sessId });
                     }).catch((err) => {
                         console.error('[main] MITM log insert failed:', err?.message || err);
@@ -256,31 +283,105 @@ function createProxyMitmService(d) {
         return d.session.fromPartition(CUPNET_SHARED_PARTITION);
     }
 
+    /**
+     * Сессия, в которой реально настроен прокси для браузера.
+     * Вкладки используют persist:cg_*; setProxyAll не трогает persist:cupnet-shared — из‑за этого
+     * старый check-ip-geo всегда видел DIRECT и «домашний» IP.
+     */
+    function _pickSessionForIpGeo() {
+        const tm = d.getTabManager?.();
+        if (tm) {
+            const tryTab = (tab) => {
+                if (!tab || !tab.cupnetEnabled) return null;
+                try {
+                    if (tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
+                        return tab.view.webContents.session;
+                    }
+                } catch (_) { /* ignore */ }
+                return tab.tabSession || null;
+            };
+            const active = tm.getActiveTab?.();
+            let s = tryTab(active);
+            if (s) return s;
+            for (const tab of tm.getAllTabs?.() || []) {
+                s = tryTab(tab);
+                if (s) return s;
+            }
+        }
+        try {
+            return d.session.fromPartition(DEFAULT_TAB_PARTITION);
+        } catch (_) { /* ignore */ }
+        return _getSharedBrowserSession();
+    }
+
+    function _resolveTabForIpGeo(tabIdHint) {
+        const tm = d.getTabManager?.();
+        if (!tm) return null;
+        if (tabIdHint) {
+            const t = tm.getTab(tabIdHint);
+            if (t?.cupnetEnabled) return t;
+        }
+        const active = tm.getActiveTab?.();
+        if (active?.cupnetEnabled) return active;
+        for (const t of tm.getAllTabs?.() || []) {
+            if (t.cupnetEnabled) return t;
+        }
+        return null;
+    }
+
+    function _resolveContextForIpGeo(tabIdHint) {
+        const tab = _resolveTabForIpGeo(tabIdHint);
+        if (tab) {
+            let targetSess = null;
+            try {
+                if (tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
+                    targetSess = tab.view.webContents.session;
+                }
+            } catch (_) { /* ignore */ }
+            if (!targetSess) targetSess = tab.tabSession;
+            const targetPath = targetSess?.getStoragePath?.() ?? targetSess?.storagePath ?? '';
+            return { tab, targetSess, targetPath };
+        }
+        const targetSess = _pickSessionForIpGeo();
+        const targetPath = targetSess?.getStoragePath?.() ?? targetSess?.storagePath ?? '';
+        return { tab: null, targetSess, targetPath };
+    }
+
+    function _checkIpGeoFlightKey(tabIdHint) {
+        const { tab, targetPath } = _resolveContextForIpGeo(tabIdHint);
+        const anon = d.getPersistentAnonymizedProxyUrl?.() || '';
+        const mode = typeof d.getCurrentTrafficMode === 'function' ? d.getCurrentTrafficMode() : '';
+        const tid = tab?.id || 'none';
+        const pid = tab?.proxyProfileId ?? 'global';
+        return `${anon}|${mode}|${targetPath}|${tid}|${pid}`;
+    }
+
     async function getRealIp() {
         try {
-            const shared = _getSharedBrowserSession();
-            const j = await _fetchIpinfoJsonViaSession(shared);
+            const sess = _pickSessionForIpGeo();
+            const j = await _fetchIpinfoJsonViaSession(sess);
             return j.ip || 'unknown';
         } catch {
             try {
-                const shared = _getSharedBrowserSession();
-                const j = await _loadJsonUrlThroughHiddenWindow(shared, 'https://ipinfo.io/json');
+                const sess = _pickSessionForIpGeo();
+                const j = await _loadJsonUrlThroughHiddenWindow(sess, 'https://ipinfo.io/json');
                 return j.ip || 'unknown';
             } catch { return 'unknown'; }
         }
     }
 
-    async function checkCurrentIpGeo() {
-        if (_checkIpGeoInFlight) return _checkIpGeoInFlight;
-        const p = checkCurrentIpGeoInternal();
-        _checkIpGeoInFlight = p;
-        p.finally(() => {
-            if (_checkIpGeoInFlight === p) _checkIpGeoInFlight = null;
+    async function checkCurrentIpGeo(tabIdHint) {
+        const fk = _checkIpGeoFlightKey(tabIdHint);
+        const existing = _checkIpGeoInFlight.get(fk);
+        if (existing) return existing;
+        const p = checkCurrentIpGeoInternal(tabIdHint).finally(() => {
+            if (_checkIpGeoInFlight.get(fk) === p) _checkIpGeoInFlight.delete(fk);
         });
+        _checkIpGeoInFlight.set(fk, p);
         return p;
     }
 
-    async function checkCurrentIpGeoInternal() {
+    async function checkCurrentIpGeoInternal(tabIdHint) {
         const empty = { ip: 'unknown', city: '', region: '', country: '', country_name: '', org: '', timezone: '' };
         /** sysLog('info'|'warn') не пишет в stdout — дублируем в консоль для npm start */
         function ipGeoOut(level, msg) {
@@ -290,15 +391,12 @@ function createProxyMitmService(d) {
             d.sysLog(level === 'warn' ? 'warn' : 'info', 'check-ip-geo', msg);
         }
 
-        const sharedSess = _getSharedBrowserSession();
+        const { tab: geoTab, targetSess, targetPath } = _resolveContextForIpGeo(tabIdHint);
         const anon = d.getPersistentAnonymizedProxyUrl?.() || null;
         const mode = typeof d.getCurrentTrafficMode === 'function' ? d.getCurrentTrafficMode() : '(n/a)';
-        const activeTab = d.getTabManager?.()?.getActiveTab?.();
-        const tabSess = activeTab?.view?.webContents?.session || null;
-        const sharedPath = sharedSess.storagePath ?? sharedSess.getStoragePath?.() ?? '';
-        const tabPath = tabSess ? (tabSess.storagePath ?? tabSess.getStoragePath?.() ?? '') : '(no-tab)';
+        const pathStr = targetPath || (targetSess?.storagePath ?? targetSess?.getStoragePath?.() ?? '');
 
-        const cacheKey = `${anon || ''}|${mode}`;
+        const cacheKey = `${anon || ''}|${mode}|${pathStr}|${geoTab?.id || 'none'}|${geoTab?.proxyProfileId ?? 'global'}`;
         const nowMs = Date.now();
         const cached = _ipGeoCache.value;
         if (
@@ -312,22 +410,21 @@ function createProxyMitmService(d) {
         }
 
         ipGeoOut('info', [
-            `partition=${CUPNET_SHARED_PARTITION}`,
             `trafficMode=${mode}`,
             `anonLocal=${_maskUrlForLog(anon)}`,
-            `sharedStoragePath=${sharedPath}`,
-            `activeTabStoragePath=${tabPath}`,
-            `pathsMatch=${sharedPath === tabPath && sharedPath !== ''}`,
-        ].join(' '));
+            `ipGeoSessionPath=${pathStr}`,
+            geoTab?.id ? `tabId=${geoTab.id}` : '',
+            geoTab?.proxyProfileId != null ? `tabProxyProfileId=${geoTab.proxyProfileId}` : '',
+        ].filter(Boolean).join(' '));
 
         try {
-            await sharedSess.forceReloadProxyConfig();
+            await targetSess.forceReloadProxyConfig();
         } catch (e) {
             ipGeoOut('warn', `forceReloadProxyConfig: ${e?.message || e}`);
         }
 
         try {
-            const rp = await sharedSess.resolveProxy('https://ipinfo.io/json');
+            const rp = await targetSess.resolveProxy('https://ipinfo.io/json');
             ipGeoOut('info', `resolveProxy(https://ipinfo.io/json)=${rp}`);
         } catch (e) {
             ipGeoOut('warn', `resolveProxy failed: ${e?.message || e}`);
@@ -364,8 +461,22 @@ function createProxyMitmService(d) {
             }
         }
 
+        const wcGeo = geoTab?.view?.webContents;
+        if (mode === 'mitm' && geoTab?.cupnetEnabled && wcGeo && !wcGeo.isDestroyed()) {
+            try {
+                const j = await _fetchIpinfoJsonViaWebContents(wcGeo);
+                const result = mapIpinfo(j);
+                ipGeoOut('info', `ok via=webContents.fetch source=ipinfo.io ip=${result.ip}`);
+                _lastIpGeoError = '';
+                rememberGeoOk(result);
+                return result;
+            } catch (e) {
+                ipGeoOut('warn', `webContents.fetch ipinfo failed: ${e?.message || e}`);
+            }
+        }
+
         try {
-            const j = await _fetchIpinfoJsonViaSession(sharedSess);
+            const j = await _fetchIpinfoJsonViaSession(targetSess);
             const result = mapIpinfo(j);
             ipGeoOut('info', `ok via=session.fetch source=ipinfo.io ip=${result.ip}`);
             _lastIpGeoError = '';
@@ -376,7 +487,7 @@ function createProxyMitmService(d) {
         }
 
         try {
-            const j = await _loadJsonUrlThroughHiddenWindow(sharedSess, 'https://ipinfo.io/json');
+            const j = await _loadJsonUrlThroughHiddenWindow(targetSess, 'https://ipinfo.io/json');
             const result = mapIpinfo(j);
             ipGeoOut('info', `ok via=hidden-window source=ipinfo.io ip=${result.ip}`);
             _lastIpGeoError = '';
@@ -390,7 +501,7 @@ function createProxyMitmService(d) {
             const ctrl = new AbortController();
             const timer = setTimeout(() => ctrl.abort(), timeoutMs);
             try {
-                return await sharedSess.fetch(url, {
+                return await targetSess.fetch(url, {
                     signal: ctrl.signal,
                     bypassCustomProtocolHandlers: true,
                 });

@@ -9,6 +9,13 @@
     "debug": "ELECTRON_RUN_AS_NODE= electron --inspect-brk .",
     "rebuild": "electron-rebuild -f -w better-sqlite3",
     "rebuild:arm64": "arch -arm64 node node_modules/.bin/electron-rebuild -f -w better-sqlite3",
+    "rebuild:azuretls": "node scripts/azuretls-electron-rebuild.js",
+    "rebuild:azuretls:arm64": "CUPNET_ELECTRON_REBUILD_ARCH=arm64 node scripts/azuretls-electron-rebuild.js",
+    "rebuild:azuretls:x64": "CUPNET_ELECTRON_REBUILD_ARCH=x64 node scripts/azuretls-electron-rebuild.js",
+    "rebuild:azuretls:universal": "node scripts/azuretls-lipo-universal.js",
+    "smoke:azuretls-native": "node scripts/smoke-azuretls-native.js",
+    "check:native": "npm run rebuild:azuretls && npm run smoke:azuretls-native",
+    "check:native:universal": "npm run rebuild:azuretls:universal && CUPNET_SMOKE_REQUIRE_UNIVERSAL=1 npm run smoke:azuretls-native",
     "setup:ffi": "cd ../greengo22 && npm install",
     "test": "bash tests/run-all.sh",
     "test:e2e": "playwright test tests/e2e/",
@@ -32,7 +39,11 @@
     "@playwright/test": "^1.58.2",
     "electron": "^28.0.0",
     "electron-builder": "^24.13.0",
-    "icon-gen": "^5.0.0"
+    "icon-gen": "^5.0.0",
+    "node-addon-api": "^8.3.0"
+  },
+  "overrides": {
+    "node-addon-api": "^8.3.0"
   },
   "dependencies": {
     "archiver": "^7.0.1",

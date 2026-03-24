@@ -225,7 +225,30 @@ function makeTabEl(tab) {
         api.closeTab(tab.id);
     });
 
+    // Per-tab indicator dots
+    const indicators = document.createElement('span');
+    indicators.className = 'tab-indicators';
+    if (tab.cupnetEnabled) {
+        const dot = document.createElement('span');
+        dot.className = 'tab-dot tab-dot-cupnet';
+        dot.title = 'CupNet ON';
+        indicators.appendChild(dot);
+    }
+    if (tab.proxyProfileId) {
+        const dot = document.createElement('span');
+        dot.className = 'tab-dot tab-dot-proxy';
+        dot.title = 'Per-tab proxy';
+        indicators.appendChild(dot);
+    }
+    if (tab.cookieGroupId && tab.cookieGroupId !== 1) {
+        const dot = document.createElement('span');
+        dot.className = 'tab-dot tab-dot-cookies';
+        dot.title = 'Custom cookie group';
+        indicators.appendChild(dot);
+    }
+
     el.appendChild(faviconWrapper);
+    if (indicators.childElementCount > 0) el.appendChild(indicators);
     el.appendChild(title);
     el.appendChild(closeBtn);
     el.addEventListener('click', () => {
@@ -298,19 +321,8 @@ newTabBtn.addEventListener('click', () => {
     api.newTab(null);
 });
 
-const newIsolatedTabBtn = document.getElementById('new-isolated-tab-btn');
-if (newIsolatedTabBtn) {
-    newIsolatedTabBtn.addEventListener('click', () => {
-        api.newIsolatedTab();
-    });
-}
-
-const newDirectTabBtn = document.getElementById('new-direct-tab-btn');
-if (newDirectTabBtn) {
-    newDirectTabBtn.addEventListener('click', () => {
-        api.newDirectTab();
-    });
-}
+// Legacy buttons removed — single "+" button creates regular tabs.
+// CupNet ON/OFF is toggled via per-tab controls.
 
 let _tabUiPending = null;
 let _tabUiRaf = null;
@@ -488,6 +500,7 @@ let _directIpGeo       = null;
 let _isDirectTabActive = false;
 let _isIsolatedTab     = false;
 let _isNewTabPage      = false;
+let _lastPillTabSig    = '';
 
 const ENV_CLASSES = ['env-direct', 'env-proxy', 'env-isolated', 'env-newtab'];
 
@@ -530,7 +543,7 @@ function _renderPill() {
     const info = _lastProxyInfo;
     if (!info) return;
     const active = !!info.active;
-    const label  = info.proxyName || 'Proxy';
+    const label  = (info.displayProxyName || info.proxyName || 'Proxy');
 
     if (_isIsolatedTab) {
         pbDot.classList.add('isolated');
@@ -582,8 +595,14 @@ function updateProxyStatus(info) {
     _renderPill();
 }
 
+function _activeTabIdForIpGeo() {
+    const a = tabs.find(t => t.isActive);
+    return a?.id;
+}
+
 function _fetchProxyIpGeo() {
-    api.checkIpGeo().then(geo => {
+    const tid = _activeTabIdForIpGeo();
+    api.checkIpGeo(tid).then(geo => {
         if (geo && geo.ip && geo.ip !== 'unknown') {
             _proxyIpGeo = geo;
             _renderPill();
@@ -613,6 +632,16 @@ function _onActiveTabChanged(tabData) {
 
     if (wasDirect !== _isDirectTabActive) _renderPill();
     else _renderPill();
+
+    const pillSig = `${active?.id || ''}|${active?.proxyProfileId ?? ''}|${active?.cupnetEnabled ? 1 : 0}`;
+    if (pillSig !== _lastPillTabSig) {
+        _lastPillTabSig = pillSig;
+        _proxyIpGeo = null;
+        api.getCurrentProxy().then((info) => {
+            updateProxyStatus(info);
+            if (info?.active && !_isDirectTabActive) _fetchProxyIpGeo();
+        }).catch(() => {});
+    }
     if (_isDirectTabActive || !_lastProxyInfo?.active) _fetchDirectIpGeo();
     _interceptHitCount = 0;
     updateRulesHitBadge();

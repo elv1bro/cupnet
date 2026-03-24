@@ -22,7 +22,7 @@ function registerMiscIpc(ctx) {
     });
     ctx.ipcMain.handle('set-ui-pref', (_, key, value) => { ctx.uiPrefsStore.saveUiPref(key, value); return true; });
 
-    ctx.ipcMain.handle('check-ip-geo', async () => ctx.checkCurrentIpGeo());
+    ctx.ipcMain.handle('check-ip-geo', async (_, tabId) => ctx.checkCurrentIpGeo(tabId));
 
     ctx.ipcMain.handle('get-direct-ip', async () => {
         try {

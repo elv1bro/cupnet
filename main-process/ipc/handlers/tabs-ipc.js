@@ -7,13 +7,11 @@
 function registerTabsIpc(ctx) {
     // ── Tab management ───────────────────────────────────────────────────────
     ctx.ipcMain.handle('new-tab', async (_, proxyRules) => {
-        const tabId = await ctx.tabManager.createTab(proxyRules || ctx.persistentAnonymizedProxyUrl || null, ctx.getNewTabUrl(), false, ctx.currentSessionId);
+        const tabId = await ctx.tabManager.createTab({
+            url: ctx.getNewTabUrl(),
+            cookieGroupId: 1,
+        });
         ctx.tabManager.switchTab(tabId);
-        const tab = ctx.tabManager.getTab(tabId);
-        if (tab) {
-            ctx.setupNetworkLogging(tab.view.webContents, tabId, ctx.currentSessionId);
-            ctx.interceptor.attachToSession(tab.tabSession, tabId);
-        }
         ctx.notifyCookieManagerTabs();
         return tabId;
     });
@@ -29,18 +27,12 @@ function registerTabsIpc(ctx) {
                 return tab.id;
             }
         }
-        const tabId = await ctx.tabManager.createTab(
-            ctx.persistentAnonymizedProxyUrl || null,
-            settingsUrl,
-            false,
-            ctx.currentSessionId
-        );
+        const tabId = await ctx.tabManager.createTab({
+            url: settingsUrl,
+            cookieGroupId: 1,
+            cupnetEnabled: false,
+        });
         ctx.tabManager.switchTab(tabId);
-        const tab = ctx.tabManager.getTab(tabId);
-        if (tab) {
-            ctx.setupNetworkLogging(tab.view.webContents, tabId, ctx.currentSessionId);
-            if (ctx.interceptor) ctx.interceptor.attachToSession(tab.tabSession, tabId);
-        }
         ctx.notifyCookieManagerTabs();
         return tabId;
     });

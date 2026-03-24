@@ -98,10 +98,12 @@ async function startMitmProxy() {
             const sessionId = entry.sessionId != null ? entry.sessionId : currentSessionId;
             _recordLatencySample(entry.duration);
             if (entry?.dnsOverride?.host && entry?.dnsOverride?.ip) {
+                const dOv = entry.dnsOverride;
+                const rw = dOv.rewriteHost ? ` Host:${dOv.rewriteHost}` : '';
                 broadcastDnsRuleMatched({
-                    ruleName: `${entry.dnsOverride.host} -> ${entry.dnsOverride.ip}`,
-                    host: entry.dnsOverride.host,
-                    ip: entry.dnsOverride.ip,
+                    ruleName: `${dOv.host} -> ${dOv.ip}${rw}`,
+                    host: dOv.host,
+                    ip: dOv.ip,
                     url: entry.url || '',
                     method: entry.method || 'GET',
                     tabId: tabId || null,
@@ -144,6 +146,7 @@ async function startMitmProxy() {
             }
 
             if (!isLoggingEnabled || !db) return;
+            if (normalizeTrafficMode(currentTrafficMode) === 'mitm' && mitmProxy) return;
             if (!tabId || sessionId == null) return;
             const reqId = entry.requestId;
             if (reqId) {
@@ -719,6 +722,7 @@ const SETTINGS_DEFAULTS = {
         onPageLoadComplete: true,
         onNetworkPendingChange: true,
         onMouseActivity: false,
+        onTypingEnd: true,
         onScrollEnd: false,
         onRuleMatchScreenshot: true,
         pendingDeltaThreshold: 3,
@@ -795,6 +799,7 @@ function normalizeTrackingSettings(raw) {
         onPageLoadComplete: src.onPageLoadComplete !== false,
         onNetworkPendingChange: src.onNetworkPendingChange !== false,
         onMouseActivity: src.onMouseActivity === true,
+        onTypingEnd: src.onTypingEnd !== false,
         onScrollEnd: src.onScrollEnd === true,
         onRuleMatchScreenshot: src.onRuleMatchScreenshot !== false,
         pendingDeltaThreshold: Math.max(1, Math.min(50, Number(src.pendingDeltaThreshold) || base.pendingDeltaThreshold)),
@@ -1170,6 +1175,7 @@ const MITM_DEDUP_MS = 400;
 // ─── CDP network logging ──────────────────────────────────────────────────────
 async function setupNetworkLogging(webContents, tabId, sessionId) {
     if (!webContents || webContents.isDestroyed()) return;
+    if (!isLoggingEnabled && !activeFingerprint) return;
     _wcIdToTabId.set(webContents.id, tabId);
     const ongoingRequests   = new Map();
     const ongoingWebsockets = new Map();
@@ -1240,25 +1246,22 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
     // Large buffer sizes ensure HTML page bodies are retained for getResponseBody.
     // Without these Chrome discards most response bodies (default ≈ 0 bytes buffered).
     await cdp.sendCommand('Network.enable', {
-        maxTotalBufferSize:    100 * 1024 * 1024,  // 100 MB total across all resources
-        maxResourceBufferSize:  10 * 1024 * 1024,  // 10 MB per individual resource
+        maxTotalBufferSize:    isLoggingEnabled ? 100 * 1024 * 1024 : 0,
+        maxResourceBufferSize:  isLoggingEnabled ? 10 * 1024 * 1024 : 0,
     }).catch((err) => {
         safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Network.enable', tabId } }, err, 'info');
     });
 
-    const _tmFetch = normalizeTrafficMode(currentTrafficMode);
-    const _useFetchMitmHeaders = _tmFetch === 'mitm' && !!mitmProxy;
-    if (_useFetchMitmHeaders) {
-        await cdp.sendCommand('Fetch.enable', {
-            patterns: [{ urlPattern: '*', requestStage: 'Request' }],
-        }).catch((err) => {
-            safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Fetch.enable', tabId } }, err, 'info');
-        });
-    } else {
-        await cdp.sendCommand('Fetch.disable', {}).catch((err) => {
-            safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Fetch.disable', tabId } }, err, 'info');
-        });
-    }
+    await cdp.sendCommand('Network.setCacheDisabled', { cacheDisabled: !!isLoggingEnabled }).catch((err) => {
+        safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Network.setCacheDisabled', tabId } }, err, 'info');
+    });
+
+    await cdp.sendCommand('Fetch.disable', {}).catch((err) => {
+        safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Fetch.disable', tabId } }, err, 'info');
+    });
+    await cdp.sendCommand('Network.setExtraHTTPHeaders', { headers: {} }).catch((err) => {
+        safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Network.setExtraHTTPHeaders.clear', tabId } }, err, 'info');
+    });
 
     // Apply active fingerprint via CDP now that the debugger is attached
     if (activeFingerprint) {
@@ -1366,28 +1369,6 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
     };
 
     cdp.on('message', async (_, method, params) => {
-        // Fetch.requestPaused: inject X-CupNet-TabId/SessionId for MITM tab attribution
-        if (method === 'Fetch.requestPaused') {
-            const { requestId, request, responseStatusCode } = params;
-            if (responseStatusCode == null) {
-                const h = request.headers || {};
-                const headers = Object.entries(h).map(([name, value]) => ({ name, value }));
-                headers.push({ name: 'X-CupNet-TabId', value: String(tabId) });
-                headers.push({ name: 'X-CupNet-SessionId', value: String(sessionId) });
-                headers.push({ name: 'X-CupNet-RequestId', value: String(requestId) });
-                cdp.sendCommand('Fetch.continueRequest', { requestId, headers }).catch((err) => {
-                    safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Fetch.continueRequest.headers', tabId } }, err, 'info');
-                });
-            } else {
-                cdp.sendCommand('Fetch.continueResponse', { requestId }).catch((err) => {
-                    safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Fetch.continueResponse', tabId } }, err, 'info');
-                    cdp.sendCommand('Fetch.continueRequest', { requestId }).catch((err2) => {
-                        safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Fetch.continueRequest.fallback', tabId } }, err2, 'info');
-                    });
-                });
-            }
-        }
-
         if (!isLoggingEnabled) return;
 
         const settings      = cachedSettings || loadSettings();
@@ -1791,6 +1772,7 @@ function isScreenshotReasonEnabled(reason, tracking) {
         case 'page-load': return !!tracking.onPageLoadComplete;
         case 'network-pending': return !!tracking.onNetworkPendingChange;
         case 'mouse-activity': return !!tracking.onMouseActivity;
+        case 'typing-end': return tracking.onTypingEnd !== false;
         case 'scroll-end': return !!tracking.onScrollEnd;
         case 'rule': return !!tracking.onRuleMatchScreenshot;
         default: return true;
@@ -3015,7 +2997,7 @@ function createDnsManagerWindow() {
         return;
     }
     dnsManagerWindow = new BrowserWindow({
-        width: 920, height: 660, minWidth: 720, minHeight: 480,
+        width: 980, height: 660, minWidth: 760, minHeight: 480,
         title: 'DNS Manager', icon: iconPath,
         webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
     });
@@ -3255,6 +3237,10 @@ app.whenReady().then(async () => {
 
         trustMitmCA(electronSession.defaultSession);
         tabManager.setTrustMitmCA(trustMitmCA);
+        tabManager.setMitmTabUpstreamCleanup((tid) => {
+            if (mitmProxy && typeof mitmProxy.removeTabUpstream === 'function') mitmProxy.removeTabUpstream(tid);
+        });
+        trustMitmCA(electronSession.fromPartition(tabManager.partitionForGroup(1)));
 
         await applyEffectiveTrafficMode(getCurrentTrafficMode(), persistentAnonymizedProxyUrl, {
             source: 'startup',
@@ -3623,6 +3609,14 @@ app.whenReady().then(async () => {
 
         // First enable ever with a pre-created empty session — start silently
         isLoggingEnabled = true;
+        for (const tab of tabManager.getAllTabs()) {
+            if (tab.direct) continue;
+            if (!tab.view?.webContents || tab.view.webContents.isDestroyed()) continue;
+            const sid = currentSessionId ?? tab.sessionId;
+            if (sid == null) continue;
+            tab.sessionId = sid;
+            setupNetworkLogging(tab.view.webContents, tab.id, sid);
+        }
         sendLogStatus();
         return { status: 'started' };
     });
@@ -4796,8 +4790,9 @@ app.whenReady().then(async () => {
         } else {
             if (!isValidIpv4(ip)) return { success: false, error: 'Invalid IPv4 address' };
         }
+        const rewrite_host = String(payload?.rewrite_host ?? '').trim();
         try {
-            const savedId = await db.saveDnsOverrideAsync({ id, host, ip, enabled, mitm_inject_cors });
+            const savedId = await db.saveDnsOverrideAsync({ id, host, ip, enabled, mitm_inject_cors, rewrite_host });
             syncDnsOverridesToMitm();
             return { success: true, id: savedId };
         } catch (e) {

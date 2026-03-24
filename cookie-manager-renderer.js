@@ -32,6 +32,102 @@ const filterSession         = document.getElementById('filter-session');
 const filterCurrentDomain   = document.getElementById('filter-current-domain');
 const filterCurDomainText   = document.getElementById('filter-cur-domain-text');
 
+const cookieGroupSelect = document.getElementById('cookie-group-select');
+const btnNewGroup       = document.getElementById('btn-new-group');
+const btnCopyGroup      = document.getElementById('btn-copy-group');
+const btnRenameGroup    = document.getElementById('btn-rename-group');
+const btnDeleteGroup    = document.getElementById('btn-delete-group');
+
+let cookieGroups = [];
+
+async function loadCookieGroups() {
+    try {
+        cookieGroups = await api.getCookieGroups();
+    } catch { cookieGroups = [{ id: 1, name: 'Default' }]; }
+    populateCookieGroups();
+}
+
+function populateCookieGroups() {
+    if (!cookieGroupSelect) return;
+    const prev = cookieGroupSelect.value;
+    cookieGroupSelect.innerHTML = '';
+    for (const g of cookieGroups) {
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = g.name;
+        cookieGroupSelect.appendChild(opt);
+    }
+    if (prev && cookieGroupSelect.querySelector(`option[value="${prev}"]`)) {
+        cookieGroupSelect.value = prev;
+    }
+}
+
+if (btnNewGroup) {
+    btnNewGroup.addEventListener('click', async () => {
+        const name = prompt('New cookie group name:');
+        if (!name) return;
+        const res = await api.createCookieGroup(name);
+        if (res?.success) {
+            setStatus(`Group "${name}" created`, 'ok', 2000);
+            await loadCookieGroups();
+        } else {
+            setStatus(`Error: ${res?.error || 'unknown'}`, 'err');
+        }
+    });
+}
+
+if (btnCopyGroup) {
+    btnCopyGroup.addEventListener('click', async () => {
+        const fromId = Number(cookieGroupSelect?.value || 1);
+        const fromGroup = cookieGroups.find(g => g.id === fromId);
+        const name = prompt('Name for the copy:', (fromGroup?.name || 'Default') + ' (copy)');
+        if (!name) return;
+        const res = await api.copyCookieGroup(fromId, name);
+        if (res?.success) {
+            setStatus(`Copied ${res.copiedCount || 0} cookies to "${name}"`, 'ok', 2000);
+            await loadCookieGroups();
+        } else {
+            setStatus(`Error: ${res?.error || 'unknown'}`, 'err');
+        }
+    });
+}
+
+if (btnRenameGroup) {
+    btnRenameGroup.addEventListener('click', async () => {
+        const id = Number(cookieGroupSelect?.value || 1);
+        if (id === 1) { setStatus('Cannot rename Default group', 'err'); return; }
+        const current = cookieGroups.find(g => g.id === id);
+        const name = prompt('New name:', current?.name || '');
+        if (!name) return;
+        const res = await api.renameCookieGroup(id, name);
+        if (res?.success) {
+            setStatus(`Renamed to "${name}"`, 'ok', 2000);
+            await loadCookieGroups();
+        } else {
+            setStatus(`Error: ${res?.error || 'unknown'}`, 'err');
+        }
+    });
+}
+
+if (btnDeleteGroup) {
+    btnDeleteGroup.addEventListener('click', async () => {
+        const id = Number(cookieGroupSelect?.value || 1);
+        if (id === 1) { setStatus('Cannot delete Default group', 'err'); return; }
+        const group = cookieGroups.find(g => g.id === id);
+        if (!confirm(`Delete cookie group "${group?.name}"?`)) return;
+        const res = await api.deleteCookieGroup(id);
+        if (res?.success) {
+            setStatus('Group deleted', 'ok', 2000);
+            await loadCookieGroups();
+        } else {
+            setStatus(`Error: ${res?.error || 'unknown'}`, 'err');
+        }
+    });
+}
+
+loadCookieGroups();
+api.onCookieGroupsUpdated?.(() => { loadCookieGroups(); });
+
 // ─── Delegated row actions (single listener, no re-registration on re-render) ─
 tbody.addEventListener('click', e => {
     const btn = e.target.closest('button');

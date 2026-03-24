@@ -49,6 +49,16 @@ jobs:
             npm i
           fi
 
+      - name: AzureTLS native rebuild + smoke (if azuretls installed)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [ -d azuretls/node_modules/@2060.io/ref-napi ]; then
+            npm run check:native
+          else
+            echo 'skip check:native: no azuretls/node_modules/@2060.io/ref-napi (install azuretls deps locally or in a prior step)'
+          fi
+
       - name: Install deps (Windows)
         if: runner.os == 'Windows'
         shell: powershell

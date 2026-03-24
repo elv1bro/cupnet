@@ -56,6 +56,17 @@ function isValidIpv4(ip) {
     return value.split('.').every(part => Number(part) >= 0 && Number(part) <= 255);
 }
 
+function isValidDnsRewriteHost(value) {
+    const s = String(value || '').trim();
+    if (!s) return true;
+    if (s.length > 255) return false;
+    for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        if (c < 33 || c > 126) return false;
+    }
+    return true;
+}
+
 function escHtml(s) {
     return String(s ?? '')
         .replace(/&/g, '&amp;')
@@ -90,6 +101,8 @@ function openEdit(rule) {
     editPanelTitle.textContent = rule ? `Edit: ${rule.host}` : 'New DNS Rule';
     document.getElementById('e-host').value = rule?.host || '';
     document.getElementById('e-ip').value = rule?.ip || '';
+    const er = document.getElementById('e-rewrite-host');
+    if (er) er.value = rule?.rewrite_host || '';
     document.getElementById('e-enabled').checked = rule ? !!rule.enabled : true;
     const ec = document.getElementById('e-mitm-cors');
     if (ec) ec.checked = rule ? !!rule.mitm_inject_cors : false;
@@ -107,7 +120,9 @@ function applyFilters() {
     const enabledOnly = filterEnabledOnly.checked;
 
     filteredRules = allRules.filter(r => {
-        if (hostQuery && !(r.host || '').toLowerCase().includes(hostQuery)) return false;
+        const h = (r.host || '').toLowerCase();
+        const rw = (r.rewrite_host || '').toLowerCase();
+        if (hostQuery && !h.includes(hostQuery) && !rw.includes(hostQuery)) return false;
         if (ipQuery && !(r.ip || '').toLowerCase().includes(ipQuery)) return false;
         if (enabledOnly && !r.enabled) return false;
         return true;
@@ -119,7 +134,7 @@ function renderTable() {
     countLabel.textContent = `${filteredRules.length} / ${allRules.length} rules`;
 
     if (!filteredRules.length) {
-        tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No DNS override rules</td></tr>';
+        tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No DNS override rules</td></tr>';
         return;
     }
 
@@ -130,6 +145,7 @@ function renderTable() {
             </td>
             <td class="cell-host" title="${escHtml(r.host)}">${escHtml(r.host)}</td>
             <td class="cell-ip" title="${escHtml(r.ip || '—')}">${escHtml(r.ip || '—')}</td>
+            <td class="cell-rewrite" title="${escHtml(r.rewrite_host || '—')}">${escHtml(r.rewrite_host || '—')}</td>
             <td class="dns-cors-cell">
                 <button type="button"
                     class="cors-toggle-btn ${r.mitm_inject_cors ? 'cors-toggle-on' : 'cors-toggle-off'} btn-cors-toggle"
@@ -240,6 +256,7 @@ tbody.addEventListener('click', async (e) => {
             ip: rule.ip,
             enabled: rule.enabled,
             mitm_inject_cors: nextCors,
+            rewrite_host: rule.rewrite_host || '',
         });
         if (!res?.success) {
             setStatus(`CORS toggle failed: ${res?.error || 'unknown'}`, 'err', 0);
@@ -311,6 +328,7 @@ document.getElementById('btn-cancel-edit').addEventListener('click', closeEdit);
 document.getElementById('btn-save-rule').addEventListener('click', async () => {
     const host = document.getElementById('e-host').value.trim().toLowerCase();
     const ip = document.getElementById('e-ip').value.trim();
+    const rewrite_host = document.getElementById('e-rewrite-host')?.value.trim() || '';
     const enabled = document.getElementById('e-enabled').checked;
 
     if (!isValidDnsHost(host)) {
@@ -320,12 +338,26 @@ document.getElementById('btn-save-rule').addEventListener('click', async () => {
 
     const mitm_inject_cors = !!document.getElementById('e-mitm-cors')?.checked;
     if (host.startsWith('*.')) {
+        if (rewrite_host) {
+            setStatus('Rewrite Host недоступен для шаблона *.…', 'err');
+            return;
+        }
         if (!mitm_inject_cors) {
             setStatus('Шаблон *.domain — только вместе с MITM CORS', 'err');
             return;
         }
         if (ip) {
             setStatus('Шаблон *.domain нельзя сочетать с IPv4', 'err');
+            return;
+        }
+    }
+    if (rewrite_host) {
+        if (!ip) {
+            setStatus('Rewrite Host нужен только вместе с IPv4', 'err');
+            return;
+        }
+        if (!isValidDnsRewriteHost(rewrite_host)) {
+            setStatus('Rewrite Host: до 255 символов, только печатный ASCII', 'err');
             return;
         }
     }
@@ -346,6 +378,7 @@ document.getElementById('btn-save-rule').addEventListener('click', async () => {
         ip,
         enabled,
         mitm_inject_cors,
+        rewrite_host,
     };
     const res = await api.saveDnsOverride(payload);
     if (!res?.success) {

@@ -3,14 +3,20 @@
 const { BrowserView, session } = require('electron');
 const path = require('path');
 const db = require('./db');
+const { networkPolicy } = require('./network-policy');
 
 let mainWindow = null;
 let onTabEventCb = null;
 
 const NEW_TAB_PATH = path.join(__dirname, 'new-tab.html');
 
-// All normal tabs share one persistent session (shared cookies, localStorage, etc.)
+// Legacy constant — kept for backward compat with code that references it
 const SHARED_PARTITION = 'persist:cupnet-shared';
+
+const CG_PARTITION_PREFIX = 'persist:cg_';
+function partitionForGroup(cookieGroupId) {
+    return `${CG_PARTITION_PREFIX}${cookieGroupId}`;
+}
 
 /** Converts internal file:// URLs to a clean display string */
 function displayUrl(url) {
@@ -31,15 +37,22 @@ let _trafficOpts = {};
 let _trafficRouteMode = 'mitm';
 let _upstreamProxyRules = null;
 
+/** Локальный MITM без логина в proxyRules; tabId в Basic опционален (см. mitm-proxy _mitmTabIdFromProxyAuthHead). */
+function mitmProxyRulesForTabId(_tabId) {
+    const p = networkPolicy.mitmPort;
+    const hostport = `127.0.0.1:${p}`;
+    return `http=${hostport};https=${hostport}`;
+}
+
 function getMitmOpts() {
     return {
-        proxyRules: 'http=127.0.0.1:8877;https=127.0.0.1:8877',
+        proxyRules: mitmProxyRulesForTabId(null),
         proxyBypassRules: _currentBypassRules,
     };
 }
 
 function getProxyOptsForTab(tabLike = {}) {
-    if (tabLike.direct) return { mode: 'direct' };
+    if (tabLike.direct || tabLike.cupnetEnabled === false) return { mode: 'direct' };
     if (_trafficRouteMode === 'browser_proxy') {
         if (_upstreamProxyRules) {
             return {
@@ -49,7 +62,11 @@ function getProxyOptsForTab(tabLike = {}) {
         }
         return { mode: 'direct' };
     }
-    return getMitmOpts();
+    const tid = tabLike.id || null;
+    return {
+        proxyRules: mitmProxyRulesForTabId(tid),
+        proxyBypassRules: _currentBypassRules,
+    };
 }
 
 // ── Paste Unlock (Don't F*** With Paste) ──────────────────────────────────────
@@ -227,39 +244,91 @@ function attachTabListeners(tab) {
     });
 }
 
-/**
- * Creates a new tab.
- * @param {string|null} proxyRules
- * @param {string|null} initialUrl
- * @param {boolean}     isolated   – if true, gets its own private session (isolated cookies)
- */
-// Callback set by main.js to trust MITM CA on new sessions
 let _trustMitmCA = null;
 function setTrustMitmCA(fn) { _trustMitmCA = fn; }
+
+/** Called when a tab is closed/destroyed so MITM can drop per-tab upstream state. */
+let _mitmTabUpstreamCleanup = null;
+function setMitmTabUpstreamCleanup(fn) {
+    _mitmTabUpstreamCleanup = typeof fn === 'function' ? fn : null;
+}
 
 function reapplyMitmTrustToSharedSession() {
     if (_trafficRouteMode !== 'mitm' || !_trustMitmCA) return;
     try {
-        _trustMitmCA(session.fromPartition(SHARED_PARTITION));
+        const seen = new Set();
+        const trustOnce = (s) => {
+            if (!s || seen.has(s)) return;
+            seen.add(s);
+            try { _trustMitmCA(s); } catch (_) { /* ignore */ }
+        };
+        trustOnce(session.fromPartition(partitionForGroup(1)));
+        trustOnce(session.fromPartition(SHARED_PARTITION));
+        for (const tab of tabs.values()) {
+            if (!tab.cupnetEnabled) continue;
+            const sess = tab.view?.webContents && !tab.view.webContents.isDestroyed()
+                ? tab.view.webContents.session
+                : tab.tabSession;
+            trustOnce(sess);
+        }
     } catch (_) { /* ignore */ }
 }
 
-async function createTab(proxyRules, initialUrl, isolated = false, existingSessionId = null) {
+/**
+ * Creates a new tab with per-tab settings.
+ * @param {object} opts
+ * @param {string}       [opts.url]             – initial URL (default: about:blank → new-tab.html)
+ * @param {number}       [opts.cookieGroupId=1] – cookie group (maps to Electron partition)
+ * @param {boolean}      [opts.cupnetEnabled=true] – CupNet mode (MITM + logging + filters)
+ * @param {number|null}  [opts.proxyProfileId=null] – per-tab proxy profile (null = global)
+ * @param {string|null}  [opts.proxyRules=null] – legacy: raw proxy rules for DB session
+ * @param {number|null}  [opts.existingSessionId=null] – reuse a DB session
+ * @returns {Promise<string>} tabId
+ */
+async function createTab(opts = {}) {
+    // Support legacy call signature: createTab(proxyRules, initialUrl, isolated, existingSessionId)
+    if (typeof opts === 'string' || opts === null) {
+        const [proxyRules, initialUrl, isolated, existingSessionId] = arguments;
+        let cookieGroupId = 1;
+        if (isolated) {
+            const newGroup = await db.createCookieGroupAsync(`Isolated ${Date.now()}`);
+            if (!newGroup) throw new Error('Failed to create cookie group for isolated tab');
+            cookieGroupId = newGroup.id;
+        }
+        return createTab({
+            proxyRules: proxyRules || null,
+            url: initialUrl || null,
+            cookieGroupId,
+            cupnetEnabled: true,
+            existingSessionId: existingSessionId || null,
+        });
+    }
+
+    const {
+        url = null,
+        cookieGroupId = 1,
+        cupnetEnabled = true,
+        proxyProfileId = null,
+        proxyRules = null,
+        existingSessionId = null,
+    } = opts;
+
     const tabId    = `tab_${Date.now()}_${nextTabNumber++}`;
-    const partition = isolated
-        ? `persist:isolated_${tabId}`
-        : SHARED_PARTITION;
+    const partition = partitionForGroup(cookieGroupId);
     const tabSession = session.fromPartition(partition);
 
-    if (_trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(tabSession);
-    await tabSession.setProxy(getProxyOptsForTab({ direct: false })).catch(e => console.error('[tab] setProxy', e?.message));
-    applyTrafficFiltersToSession(tabSession);
+    if (cupnetEnabled) {
+        if (_trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(tabSession);
+        await tabSession.setProxy(getProxyOptsForTab({ cupnetEnabled: true, id: tabId })).catch(e => console.error('[tab] setProxy', e?.message));
+        applyTrafficFiltersToSession(tabSession);
+    } else {
+        await tabSession.setProxy({ mode: 'direct' }).catch(() => {});
+    }
 
     const view = new BrowserView({ webPreferences: buildTabViewWebPreferences(tabSession) });
 
-    // Reuse existing session (shared logging) or create a new one
     let sessionId = existingSessionId || null;
-    if (!sessionId) {
+    if (!sessionId && cupnetEnabled) {
         const sessionRow = await db.createSessionAsync(proxyRules || null, tabId);
         sessionId = sessionRow ? sessionRow.id : null;
     }
@@ -269,28 +338,32 @@ async function createTab(proxyRules, initialUrl, isolated = false, existingSessi
         view,
         tabSession,
         partition,
-        isolated,
+        cookieGroupId,
+        cupnetEnabled,
+        proxyProfileId,
+        // Legacy compat fields
+        isolated:   cookieGroupId !== 1,
+        direct:     !cupnetEnabled,
         proxyRules: proxyRules || null,
         sessionId,
         title: 'New Tab',
-        url: initialUrl || 'about:blank',
+        url:   url || 'about:blank',
         faviconUrl: null
     };
 
     tabs.set(tabId, tab);
     attachTabListeners(tab);
 
-    // Set proxy on webContents.session (Electron may ignore partition-level proxy)
     if (view.webContents && !view.webContents.isDestroyed()) {
         const sess = view.webContents.session;
-        if (_trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(sess);
+        if (cupnetEnabled && _trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(sess);
         sess.setProxy(getProxyOptsForTab(tab)).catch(() => {});
-        if (_upstreamProxyRules) applyWebRtcPolicy(view.webContents);
+        if (cupnetEnabled && _upstreamProxyRules) applyWebRtcPolicy(view.webContents);
         else resetWebRtcPolicy(view.webContents);
     }
 
-    if (initialUrl && initialUrl !== 'about:blank') {
-        view.webContents.loadURL(initialUrl).catch(() => {});
+    if (url && url !== 'about:blank') {
+        view.webContents.loadURL(url).catch(() => {});
     }
 
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -302,61 +375,131 @@ async function createTab(proxyRules, initialUrl, isolated = false, existingSessi
 }
 
 /**
- * Converts the active (or specified) tab to an isolated session.
- * Creates a fresh empty session (no cookies copied). Recreates the BrowserView and reloads.
- * @param {string} [tabId] – defaults to active tab
+ * Toggle CupNet mode on/off for a tab. Requires page reload.
  */
-async function isolateTab(tabId) {
+async function setTabCupNet(tabId, enabled) {
+    const tab = tabs.get(tabId || activeTabId);
+    if (!tab) return { success: false, error: 'Tab not found' };
+
+    tab.cupnetEnabled = !!enabled;
+    tab.direct = !tab.cupnetEnabled;
+
+    const sess = tab.view?.webContents && !tab.view.webContents.isDestroyed()
+        ? tab.view.webContents.session
+        : tab.tabSession;
+
+    if (tab.cupnetEnabled) {
+        if (_trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(sess);
+        await sess.setProxy(getProxyOptsForTab(tab)).catch(() => {});
+        applyTrafficFiltersToSession(sess);
+        if (_upstreamProxyRules && tab.view?.webContents) applyWebRtcPolicy(tab.view.webContents);
+        if (!tab.sessionId) {
+            const sessionRow = await db.createSessionAsync(tab.proxyRules || null, tab.id);
+            tab.sessionId = sessionRow ? sessionRow.id : null;
+        }
+    } else {
+        await sess.setProxy({ mode: 'direct' }).catch(() => {});
+        try { sess.webRequest.onBeforeRequest(null); } catch {}
+        if (tab.view?.webContents) resetWebRtcPolicy(tab.view.webContents);
+        tab.proxyProfileId = null;
+    }
+
+    broadcastTabList(true);
+    if (tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
+        try { tab.view.webContents.reload(); } catch (_) {}
+    }
+    return { success: true };
+}
+
+/**
+ * Set per-tab proxy profile (null = use global proxy).
+ * Fingerprint from the profile should be applied by the caller (via fingerprint-service).
+ */
+async function setTabProxy(tabId, proxyProfileId) {
+    const tab = tabs.get(tabId || activeTabId);
+    if (!tab) return { success: false, error: 'Tab not found' };
+    if (!tab.cupnetEnabled) return { success: false, error: 'CupNet is disabled for this tab' };
+
+    tab.proxyProfileId = proxyProfileId || null;
+    broadcastTabList(true);
+    return { success: true, proxyProfileId: tab.proxyProfileId };
+}
+
+/**
+ * Change cookie group for a tab. Recreates BrowserView with new partition.
+ * Requires page reload since Electron binds sessions at creation.
+ */
+async function setTabCookieGroup(tabId, cookieGroupId) {
     const tid = tabId || activeTabId;
     const tab = tabs.get(tid);
     if (!tab) return { success: false, error: 'Tab not found' };
-    if (tab.isolated) return { success: false, error: 'Already isolated' };
+    if (tab.cookieGroupId === cookieGroupId) return { success: true };
 
-    const currentUrl   = tab.view.webContents.getURL() || tab.url;
-    const currentProxy = tab.proxyRules;
+    try {
+        const ri = require('./request-interceptor');
+        if (ri && typeof ri.detachFromSession === 'function') {
+            ri.detachFromSession(tab.tabSession);
+        }
+    } catch (_) { /* ignore */ }
 
-    // Create new isolated session
-    const newPartition = `persist:isolated_${tid}`;
+    const currentUrl = tab.view.webContents.getURL() || tab.url;
+
+    const newPartition = partitionForGroup(cookieGroupId);
     const newSession   = session.fromPartition(newPartition);
 
-    if (_trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(newSession);
-    await newSession.setProxy(getProxyOptsForTab({ direct: false })).catch(() => {});
-    applyTrafficFiltersToSession(newSession);
+    if (tab.cupnetEnabled) {
+        if (_trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(newSession);
+        await newSession.setProxy(getProxyOptsForTab(tab)).catch(() => {});
+        applyTrafficFiltersToSession(newSession);
+    } else {
+        await newSession.setProxy({ mode: 'direct' }).catch(() => {});
+    }
 
-    // Create new BrowserView with isolated session
     const newView = new BrowserView({ webPreferences: buildTabViewWebPreferences(newSession) });
 
-    // Swap out old view
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.removeBrowserView(tab.view);
     }
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.destroy();
 
-    // Update tab record
-    tab.view       = newView;
-    tab.tabSession = newSession;
-    tab.partition  = newPartition;
-    tab.isolated   = true;
+    tab.view          = newView;
+    tab.tabSession    = newSession;
+    tab.partition     = newPartition;
+    tab.cookieGroupId = cookieGroupId;
+    tab.isolated      = cookieGroupId !== 1;
 
     attachTabListeners(tab);
 
-    newView.webContents.session.setProxy(getProxyOptsForTab(tab)).catch(() => {});
+    if (tab.cupnetEnabled) {
+        newView.webContents.session.setProxy(getProxyOptsForTab(tab)).catch(() => {});
+    }
 
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.addBrowserView(newView);
         if (tid === activeTabId) resizeActiveView();
     }
 
-    // Reload the same URL
     if (currentUrl && currentUrl !== 'about:blank') {
         newView.webContents.loadURL(currentUrl).catch(() => {});
     } else {
-        const newTabUrl = `file://${NEW_TAB_PATH}`;
-        newView.webContents.loadURL(newTabUrl).catch(() => {});
+        newView.webContents.loadURL(`file://${NEW_TAB_PATH}`).catch(() => {});
     }
 
     broadcastTabList(true);
     return { success: true };
+}
+
+/**
+ * @deprecated Use setTabCookieGroup instead. Kept for backward compat.
+ */
+async function isolateTab(tabId) {
+    const tid = tabId || activeTabId;
+    const tab = tabs.get(tid);
+    if (!tab) return { success: false, error: 'Tab not found' };
+    if (tab.isolated) return { success: false, error: 'Already isolated' };
+    const newGroup = await db.createCookieGroupAsync(`Isolated ${Date.now()}`);
+    if (!newGroup) return { success: false, error: 'Failed to create cookie group' };
+    return setTabCookieGroup(tid, newGroup.id);
 }
 
 /**
@@ -393,6 +536,10 @@ function switchTab(tabId) {
 function closeTab(tabId) {
     const tab = tabs.get(tabId);
     if (!tab) return false;
+
+    if (_mitmTabUpstreamCleanup) {
+        try { _mitmTabUpstreamCleanup(tabId); } catch (e) { console.error('[tab-manager] mitm tab cleanup:', e?.message || e); }
+    }
 
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.removeBrowserView(tab.view);
@@ -431,16 +578,20 @@ function navigate(url, tabId) {
  */
 function getTabList() {
     return [...tabs.values()].map((t, i) => ({
-        id:         t.id,
-        num:        i + 1,
-        title:      t.title,
-        url:        displayUrl(t.url),
-        faviconUrl: t.faviconUrl || null,
-        sessionId:  t.sessionId,
-        proxyRules: t.proxyRules,
-        isolated:   t.isolated || false,
-        direct:     t.direct   || false,
-        isActive:   t.id === activeTabId
+        id:              t.id,
+        num:             i + 1,
+        title:           t.title,
+        url:             displayUrl(t.url),
+        faviconUrl:      t.faviconUrl || null,
+        sessionId:       t.sessionId,
+        proxyRules:      t.proxyRules,
+        cookieGroupId:   t.cookieGroupId ?? 1,
+        cupnetEnabled:   t.cupnetEnabled ?? false,
+        proxyProfileId:  t.proxyProfileId ?? null,
+        // Legacy compat
+        isolated:        t.isolated || false,
+        direct:          t.direct   || false,
+        isActive:        t.id === activeTabId
     }));
 }
 
@@ -484,17 +635,8 @@ async function setProxy(tabId, proxyRules) {
 async function setProxyAll(proxyRules, routeMode = _trafficRouteMode) {
     _trafficRouteMode = routeMode === 'browser_proxy' ? 'browser_proxy' : 'mitm';
     _upstreamProxyRules = proxyUrlToRules(proxyRules);
-    const opts = getProxyOptsForTab({ direct: false });
-    try {
-        const shared = session.fromPartition(SHARED_PARTITION);
-        if (_trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(shared);
-        await shared.setProxy(opts);
-    } catch (e) {
-        console.error('[tab-manager] setProxy error for shared session:', e.message);
-    }
-    // Set on each tab's webContents.session (Electron bug: partition session may not apply)
     for (const tab of tabs.values()) {
-        if (tab.direct) continue;
+        if (!tab.cupnetEnabled) continue;
         try {
             if (tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
                 const sess = tab.view.webContents.session;
@@ -530,11 +672,22 @@ function relayout() {
     }, 16);
 }
 
+function _emitTabListUpdated(list) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try { mainWindow.webContents.send('tab-list-updated', list); } catch (_) { /* ignore */ }
+    for (const tab of tabs.values()) {
+        try {
+            const wc = tab.view?.webContents;
+            if (wc && !wc.isDestroyed()) wc.send('tab-list-updated', list);
+        } catch (_) { /* ignore */ }
+    }
+}
+
 function broadcastTabList(immediate = false) {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (immediate) {
         if (_broadcastTimer) { clearTimeout(_broadcastTimer); _broadcastTimer = null; }
-        mainWindow.webContents.send('tab-list-updated', getTabList());
+        _emitTabListUpdated(getTabList());
         return;
     }
     // Debounce rapid bursts (title/favicon/url changes during page load)
@@ -542,7 +695,7 @@ function broadcastTabList(immediate = false) {
     _broadcastTimer = setTimeout(() => {
         _broadcastTimer = null;
         if (!mainWindow || mainWindow.isDestroyed()) return;
-        mainWindow.webContents.send('tab-list-updated', getTabList());
+        _emitTabListUpdated(getTabList());
     }, 80);
 }
 
@@ -551,6 +704,9 @@ function destroyAll() {
     if (_broadcastTimer) { clearTimeout(_broadcastTimer); _broadcastTimer = null; }
     for (const tab of tabs.values()) {
         try {
+            if (_mitmTabUpstreamCleanup) {
+                try { _mitmTabUpstreamCleanup(tab.id); } catch (_) {}
+            }
             if (mainWindow && !mainWindow.isDestroyed()) mainWindow.removeBrowserView(tab.view);
             if (!tab.view.webContents.isDestroyed()) tab.view.webContents.destroy();
         } catch {}
@@ -565,7 +721,7 @@ function getAllTabs() { return tabs.values(); }
 function setBypassRules(bypassStr) {
     _currentBypassRules = bypassStr;
     for (const tab of tabs.values()) {
-        if (tab.direct) continue;
+        if (!tab.cupnetEnabled) continue;
         try {
             if (tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
                 tab.view.webContents.session.setProxy(getProxyOptsForTab(tab)).catch(() => {});
@@ -648,43 +804,10 @@ function setTrafficOpts(opts) {
 }
 
 /**
- * Create a "direct" tab — no MITM proxy, no TLS interception, no traffic filters.
- * Behaves like a normal browser for casual browsing.
+ * @deprecated Use createTab({ cupnetEnabled: false }) instead.
  */
 async function createDirectTab(initialUrl) {
-    const tabId    = `tab_${Date.now()}_${nextTabNumber++}`;
-    const partition = `persist:direct_${tabId}`;
-    const tabSession = session.fromPartition(partition);
-
-    // NO _trustMitmCA — use normal certificate validation
-    // NO setProxy — direct connection
-    // NO applyTrafficFiltersToSession — no blocking
-
-    const view = new BrowserView({ webPreferences: buildTabViewWebPreferences(tabSession) });
-
-    const tab = {
-        id: tabId,
-        view,
-        tabSession,
-        partition,
-        isolated: true,
-        direct: true,
-        proxyRules: null,
-        sessionId: null,
-        title: 'Direct Tab',
-        url: initialUrl || 'about:blank',
-        faviconUrl: null
-    };
-
-    tabs.set(tabId, tab);
-    attachTabListeners(tab);
-
-    if (initialUrl && initialUrl !== 'about:blank') {
-        view.webContents.loadURL(initialUrl).catch(() => {});
-    }
-
-    broadcastTabList();
-    return tabId;
+    return createTab({ url: initialUrl || null, cupnetEnabled: false, cookieGroupId: 1 });
 }
 
 module.exports = {
@@ -693,9 +816,13 @@ module.exports = {
     setProxy, setProxyAll, relayout, destroyAll,
     broadcastTabList, setExtraTopOffset,
     setTrustMitmCA,
+    setMitmTabUpstreamCleanup,
     reapplyMitmTrustToSharedSession,
     setPasteUnlock, getPasteUnlock,
     setBypassRules, setTrafficOpts,
     applyWebRtcPolicy, resetWebRtcPolicy,
+    // New per-tab controls
+    setTabCupNet, setTabProxy, setTabCookieGroup,
+    partitionForGroup,
     SHARED_PARTITION,
 };

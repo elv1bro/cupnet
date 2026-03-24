@@ -432,8 +432,9 @@ const fingerprintSvc = createFingerprintService({
     sysLog,
     safeCatch,
     getTabManager: () => tabManager,
+    getDb: () => db,
 });
-const { applyFingerprintToAllTabs, resetFingerprintOnWebContents } = fingerprintSvc;
+const { applyFingerprintToAllTabs, applyFingerprintFromProfile, resetFingerprintOnWebContents } = fingerprintSvc;
 
 const screenshotSvc = createScreenshotService({
     path,
@@ -682,6 +683,7 @@ const {
     runIvacScoutProcess,
     _sendAnalyzerTabs,
     notifyCookieManagerTabs,
+    notifyCookieGroupsListsUpdated,
     isValidDnsHost,
     isValidIpv4,
     syncDnsOverridesToMitm: syncDnsOverridesToMitm_raw,
@@ -786,7 +788,11 @@ app.whenReady().then(async () => {
 
         if (STEALTH < 4) {
             tabManager.setTrustMitmCA(trustMitmCA);
+            tabManager.setMitmTabUpstreamCleanup((tid) => {
+                if (mitmProxy && typeof mitmProxy.removeTabUpstream === 'function') mitmProxy.removeTabUpstream(tid);
+            });
             if (normalizeTrafficMode(currentTrafficMode) === TRAFFIC_MODE_MITM) {
+                trustMitmCA(electronSession.fromPartition(tabManager.partitionForGroup(1)));
                 trustMitmCA(electronSession.fromPartition('persist:cupnet-shared'));
             }
         } else {
@@ -924,6 +930,7 @@ app.whenReady().then(async () => {
             case 'applyBypassDomains': return applyBypassDomains;
             case 'applyEffectiveTrafficMode': return applyEffectiveTrafficMode;
             case 'applyFingerprintToAllTabs': return applyFingerprintToAllTabs;
+            case 'applyFingerprintFromProfile': return applyFingerprintFromProfile;
             case 'applyTrafficFilters': return applyTrafficFilters;
             case 'broadcastInterceptRuleMatched': return broadcastInterceptRuleMatched;
             case 'broadcastTlsProfileChanged': return broadcastTlsProfileChanged;
@@ -992,6 +999,7 @@ app.whenReady().then(async () => {
             case 'normalizeTrackingSettings': return normalizeTrackingSettings;
             case 'normalizeTrafficMode': return normalizeTrafficMode;
             case 'notifyCookieManagerTabs': return notifyCookieManagerTabs;
+            case 'notifyCookieGroupsListsUpdated': return notifyCookieGroupsListsUpdated;
             case 'notifyProxyProfilesList': return notifyProxyProfilesList;
             case 'notifyProxyStatus': return notifyProxyStatus;
             case 'parseFallbackProxyList': return parseFallbackProxyList;

@@ -178,6 +178,21 @@ function migrateSchema() {
     if (!dnsCols.includes('mitm_inject_cors')) {
         db.exec(`ALTER TABLE dns_overrides ADD COLUMN mitm_inject_cors INTEGER NOT NULL DEFAULT 0`);
     }
+    if (!dnsCols.includes('rewrite_host')) {
+        db.exec(`ALTER TABLE dns_overrides ADD COLUMN rewrite_host TEXT`);
+    }
+    // cookie_groups: ensure table exists for DBs created before this feature
+    const hasCookieGroups = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='cookie_groups'`).get();
+    if (!hasCookieGroups) {
+        db.exec(`
+            CREATE TABLE cookie_groups (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                name       TEXT    NOT NULL UNIQUE,
+                created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+            INSERT INTO cookie_groups (id, name) VALUES (1, 'Default');
+        `);
+    }
 }
 
 function createSchema() {
@@ -260,6 +275,13 @@ function createSchema() {
             traffic_mode    TEXT    NOT NULL DEFAULT 'browser_proxy',
             created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         );
+
+        CREATE TABLE IF NOT EXISTS cookie_groups (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT    NOT NULL UNIQUE,
+            created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        INSERT OR IGNORE INTO cookie_groups (id, name) VALUES (1, 'Default');
 
         CREATE TABLE IF NOT EXISTS rules (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -828,14 +850,26 @@ function deleteInterceptRule(id) {
 
 function getDnsOverrides() {
     return db.prepare(`
-        SELECT id, host, ip, enabled, mitm_inject_cors, created_at, updated_at
+        SELECT id, host, ip, enabled, mitm_inject_cors, rewrite_host, created_at, updated_at
         FROM dns_overrides
         ORDER BY host COLLATE NOCASE ASC
     `).all().map(r => ({
         ...r,
         enabled: !!r.enabled,
         mitm_inject_cors: !!r.mitm_inject_cors,
+        rewrite_host: r.rewrite_host || '',
     }));
+}
+
+function _normalizeDnsRewriteHost(rule) {
+    const raw = String(rule?.rewrite_host ?? '').trim();
+    if (!raw) return null;
+    if (raw.length > 255) throw new Error('Rewrite Host: max 255 characters');
+    for (let i = 0; i < raw.length; i++) {
+        const c = raw.charCodeAt(i);
+        if (c < 33 || c > 126) throw new Error('Rewrite Host: only printable ASCII');
+    }
+    return raw;
 }
 
 function saveDnsOverride(rule) {
@@ -849,12 +883,18 @@ function saveDnsOverride(rule) {
     if (isWildcardHost && !mitmCors) throw new Error('Wildcard host is only allowed for MITM CORS-only rules');
     if (!ip && !mitmCors) throw new Error('IPv4 is required unless MITM CORS-only (no DNS redirect) is enabled');
 
+    const rewriteHost = _normalizeDnsRewriteHost(rule);
+    if (rewriteHost) {
+        if (isWildcardHost) throw new Error('Rewrite Host is not supported for wildcard rules');
+        if (!ip) throw new Error('Rewrite Host requires an IPv4 redirect');
+    }
+
     if (rule?.id) {
         db.prepare(`
             UPDATE dns_overrides
-            SET host = ?, ip = ?, enabled = ?, mitm_inject_cors = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            SET host = ?, ip = ?, enabled = ?, mitm_inject_cors = ?, rewrite_host = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
             WHERE id = ?
-        `).run(host, ip, enabled, mitmCors, rule.id);
+        `).run(host, ip, enabled, mitmCors, rewriteHost, rule.id);
         return rule.id;
     }
 
@@ -862,17 +902,17 @@ function saveDnsOverride(rule) {
     if (existing) {
         db.prepare(`
             UPDATE dns_overrides
-            SET ip = ?, enabled = ?, mitm_inject_cors = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            SET ip = ?, enabled = ?, mitm_inject_cors = ?, rewrite_host = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
             WHERE id = ?
-        `).run(ip, enabled, mitmCors, existing.id);
+        `).run(ip, enabled, mitmCors, rewriteHost, existing.id);
         return existing.id;
     }
 
     const row = db.prepare(`
-        INSERT INTO dns_overrides (host, ip, enabled, mitm_inject_cors)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO dns_overrides (host, ip, enabled, mitm_inject_cors, rewrite_host)
+        VALUES (?, ?, ?, ?, ?)
         RETURNING id
-    `).get(host, ip, enabled, mitmCors);
+    `).get(host, ip, enabled, mitmCors, rewriteHost);
     return row ? row.id : null;
 }
 
@@ -886,6 +926,35 @@ function toggleDnsOverride(id, enabled) {
         SET enabled = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
         WHERE id = ?
     `).run(enabled ? 1 : 0, id);
+}
+
+// ─── Cookie groups ────────────────────────────────────────────────────────────
+
+function getCookieGroups() {
+    return db.prepare(`SELECT id, name, created_at FROM cookie_groups ORDER BY id ASC LIMIT 500`).all();
+}
+
+function createCookieGroup(name) {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) throw new Error('Cookie group name is required');
+    const row = db.prepare(`INSERT INTO cookie_groups (name) VALUES (?) RETURNING *`).get(trimmed);
+    return row || null;
+}
+
+function renameCookieGroup(id, newName) {
+    if (id === 1) throw new Error('Cannot rename the Default group');
+    const trimmed = String(newName || '').trim();
+    if (!trimmed) throw new Error('Cookie group name is required');
+    db.prepare(`UPDATE cookie_groups SET name = ? WHERE id = ?`).run(trimmed, id);
+}
+
+function deleteCookieGroup(id) {
+    if (id === 1) throw new Error('Cannot delete the Default group');
+    db.prepare(`DELETE FROM cookie_groups WHERE id = ?`).run(id);
+}
+
+function getCookieGroup(id) {
+    return db.prepare(`SELECT * FROM cookie_groups WHERE id = ?`).get(id) || null;
 }
 
 // ─── Async queued write-path ────────────────────────────────────────────────
@@ -998,6 +1067,18 @@ function clearTraceEntriesAsync() {
     return enqueueWrite(() => clearTraceEntries(), 'high');
 }
 
+function createCookieGroupAsync(name) {
+    return enqueueWrite(() => createCookieGroup(name), 'high');
+}
+
+function renameCookieGroupAsync(id, newName) {
+    return enqueueWrite(() => renameCookieGroup(id, newName), 'high');
+}
+
+function deleteCookieGroupAsync(id) {
+    return enqueueWrite(() => deleteCookieGroup(id), 'high');
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function parseJsonFields(...fields) {
@@ -1074,6 +1155,9 @@ module.exports = {
     // dns overrides
     getDnsOverrides, saveDnsOverride, deleteDnsOverride, toggleDnsOverride,
     saveDnsOverrideAsync, deleteDnsOverrideAsync, toggleDnsOverrideAsync,
+    // cookie groups
+    getCookieGroups, getCookieGroup, createCookieGroup, renameCookieGroup, deleteCookieGroup,
+    createCookieGroupAsync, renameCookieGroupAsync, deleteCookieGroupAsync,
     // trace
     insertTraceEntry, insertTraceEntryAsync, insertTraceEntryQueued, queryTraceEntries, getTraceEntriesBySession, getTraceEntry, countTraceEntries, clearTraceEntries, clearTraceEntriesAsync,
     getWriteQueueStats,

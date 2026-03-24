@@ -78,6 +78,15 @@ function registerDbLoggingIpc(ctx) {
 
         // First enable ever with a pre-created empty session — start silently
         ctx.isLoggingEnabled = true;
+        // Иначе setupNetworkLogging ранее мог выйти рано (!logging && !fp) — CDP не висит, в MITM пишет только CDP.
+        for (const tab of ctx.tabManager.getAllTabs()) {
+            if (tab.direct) continue;
+            if (!tab.view?.webContents || tab.view.webContents.isDestroyed()) continue;
+            const sid = ctx.currentSessionId ?? tab.sessionId;
+            if (sid == null) continue;
+            tab.sessionId = sid;
+            ctx.setupNetworkLogging(tab.view.webContents, tab.id, sid);
+        }
         ctx.sendLogStatus();
         return { status: 'started' };
     });

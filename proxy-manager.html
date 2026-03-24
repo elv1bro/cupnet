@@ -248,7 +248,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
 .editor-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
 .editor-header {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     padding: 10px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
     background: var(--bg1);
 }
@@ -510,7 +510,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                 <span class="editor-title" id="editor-title">New Profile</span>
                 <button class="btn sm" id="btn-test">⚡ Test</button>
                 <button class="btn sm" id="btn-duplicate" style="display:none" title="Duplicate this profile">⧉ Copy</button>
-                <button class="btn success" id="btn-connect">▶ Connect</button>
+                <button class="btn sm" id="btn-apply-tab" title="Use saved profile + variables from this form (SID etc.) for the browser tab that is active in the main window">Apply to active tab</button>
+                <button class="btn success sm" id="btn-apply-global">Apply globally</button>
                 <button class="btn danger sm" id="btn-delete" style="display:none">✕ Delete</button>
             </div>
 
