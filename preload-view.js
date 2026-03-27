@@ -1,4 +1,22 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
+
+// Camera filter: inject into main world BEFORE any page scripts.
+// Uses synchronous IPC so it blocks until the script is ready — guaranteed early.
+try {
+    const camData = ipcRenderer.sendSync('get-device-permissions-sync');
+    if (camData && camData.script) {
+        webFrame.executeJavaScript(camData.script);
+    }
+} catch { /* ignore — e.g. internal pages where IPC handler may not be ready yet */ }
+
+// Listen for live settings changes — re-inject when user toggles cameras.
+ipcRenderer.on('camera-filter-update', (_, payload) => {
+    try {
+        if (payload && payload.script) {
+            webFrame.executeJavaScript(payload.script);
+        }
+    } catch { /* ignore */ }
+});
 
 // Preload for BrowserView tabs (including new-tab.html)
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -49,7 +67,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     },
     getTabs: () => ipcRenderer.invoke('get-tabs'),
 
-    setTabCupNet:       (id, on)  => ipcRenderer.invoke('set-tab-cupnet', id, on),
     setTabProxy:        (id, pid, ephemeralVars) => ipcRenderer.invoke('set-tab-proxy', id, pid, ephemeralVars),
     setTabCookieGroup:  (id, gid) => ipcRenderer.invoke('set-tab-cookie-group', id, gid),
     getCookieGroups:    ()        => ipcRenderer.invoke('get-cookie-groups'),
@@ -83,6 +100,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     solveTurnstileCaptcha: (tabId, captcha, options) => ipcRenderer.invoke('solve-turnstile-captcha', tabId, captcha, options),
     injectTurnstileToken: (tabId, payload) => ipcRenderer.invoke('inject-turnstile-token', tabId, payload),
     getAppMetrics:      ()        => ipcRenderer.invoke('get-app-metrics'),
+    enumerateMediaDevices: ()     => ipcRenderer.invoke('enumerate-media-devices'),
+    saveDevicePermissions: (cfg) => ipcRenderer.invoke('save-device-permissions', cfg),
 });
 
 let _lastPointerReportTs = 0;

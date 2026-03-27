@@ -18,6 +18,7 @@ test('request-interceptor: exports API', () => {
     assert.equal(typeof interceptor.validateStrictInterceptUrlPattern, 'function');
     assert.equal(typeof interceptor.validateInterceptRuleForSave, 'function');
     assert.equal(typeof interceptor.urlMatchesStrictPattern, 'function');
+    assert.equal(typeof interceptor.bypassInterceptMockBlockForSensitiveUrl, 'function');
 });
 
 test('request-interceptor: setOnRuleMatch accepts callback', () => {
@@ -44,6 +45,15 @@ test('request-interceptor: strict URL — валидация', () => {
     assert.equal(interceptor.validateStrictInterceptUrlPattern('<all_urls>').ok, false);
     assert.equal(interceptor.validateStrictInterceptUrlPattern('example.com').ok, false);
     assert.equal(interceptor.validateStrictInterceptUrlPattern('').ok, false);
+});
+
+test('request-interceptor: bypassInterceptMockBlockForSensitiveUrl (CF / captcha)', () => {
+    const b = interceptor.bypassInterceptMockBlockForSensitiveUrl;
+    assert.equal(b('https://challenges.cloudflare.com/turnstile/v0/api.js'), true);
+    assert.equal(b('https://shop.example/cdn-cgi/challenge-platform/h/b'), true);
+    assert.equal(b('https://shop.example/cdn-cgi/scripts/foo.js'), true);
+    assert.equal(b('https://shop.example/page?__cf_chl_tk=x'), true);
+    assert.equal(b('https://api.example.com/v1/users'), false);
 });
 
 test('request-interceptor: urlMatchesStrictPattern', () => {

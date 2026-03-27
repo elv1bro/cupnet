@@ -18,6 +18,9 @@ let sessionFilterMode = null;
 // Remember which detail tab the user last chose
 let lastActiveTab = 'headers';
 
+/** Incremented when Raw+WS async payload loads — ignore stale responses */
+let _rawWsGen = 0;
+
 // Virtual scroll
 const ROW_HEIGHT = 28;
 const BUFFER     = 24;
@@ -321,6 +324,57 @@ function formatFileSize(bytes) {
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+/** WS Messages tab: preview length before expand */
+const WS_MSG_PREVIEW_CHARS = 200;
+
+/** Last loaded rows for «Copy as JSON» (same session as current WS detail if entryId matches). */
+let _wsMessagesCopyPayload = null;
+
+/**
+ * HTML for one WS payload: first 200 chars + expand/collapse for the rest.
+ */
+function wsMessagePayloadHtml(plainText) {
+    const full = plainText == null ? '' : String(plainText);
+    if (full.length <= WS_MSG_PREVIEW_CHARS) {
+        return `<span class="ws-msg-single">${esc(full)}</span>`;
+    }
+    const head = full.slice(0, WS_MSG_PREVIEW_CHARS);
+    return `<div class="ws-msg-body-payload">`
+        + `<span class="ws-msg-short">${esc(head)}…</span>`
+        + `<span class="ws-msg-full" hidden>${esc(full)}</span>`
+        + `<button type="button" class="ws-msg-toggle" aria-expanded="false">Развернуть</button>`
+        + `</div>`;
+}
+
+/** One listener on #tab-messages — survives innerHTML refresh of #ws-messages-list */
+function setupWsMessagesToggle() {
+    const tab = document.getElementById('tab-messages');
+    if (!tab || tab._wsToggleBound) return;
+    tab._wsToggleBound = true;
+    tab.addEventListener('click', (e) => {
+        const btn = e.target.closest('.ws-msg-toggle');
+        if (!btn || !tab.contains(btn)) return;
+        e.preventDefault();
+        const wrap = btn.closest('.ws-msg-body-payload');
+        if (!wrap) return;
+        const shortEl = wrap.querySelector('.ws-msg-short');
+        const fullEl = wrap.querySelector('.ws-msg-full');
+        if (!shortEl || !fullEl) return;
+        const expanded = btn.getAttribute('aria-expanded') === 'true';
+        if (expanded) {
+            shortEl.hidden = false;
+            fullEl.hidden = true;
+            btn.setAttribute('aria-expanded', 'false');
+            btn.textContent = 'Развернуть';
+        } else {
+            shortEl.hidden = true;
+            fullEl.hidden = false;
+            btn.setAttribute('aria-expanded', 'true');
+            btn.textContent = 'Свернуть';
+        }
+    });
+}
 function parseHeaders(h) {
     if (!h) return null;
     if (typeof h === 'string') { try { return JSON.parse(h); } catch { return null; } }
@@ -348,6 +402,47 @@ function buildCurlCommand(entry) {
     return cmd;
 }
 
+/** Time fragment for WEBSOCKET RAW block (HH:MM:SS.mmm) */
+function formatWsRawTime(iso) {
+    if (!iso) return '—';
+    const s = String(iso).replace('T', ' ');
+    const m = s.match(/(\d{2}:\d{2}:\d{2})([\.,]\d+)?/);
+    if (m) return m[2] ? `${m[1]}${m[2].replace(',', '.')}` : m[1];
+    return s.slice(11, 23) || '—';
+}
+
+/**
+ * Append after HTTP handshake in Raw tab. recv = <<<<<<, send = >>>>>> (vs browser: inbound / outbound).
+ */
+function formatWebSocketRawLog(rows) {
+    if (!rows || !rows.length) {
+        return '\n\n──────── WEBSOCKET RAW ────────\n(no frames in DB yet — reconnect or Refresh Messages tab)\n';
+    }
+    let out = '\n\n──────── WEBSOCKET RAW ────────\n\n';
+    for (const r of rows) {
+        const t = formatWsRawTime(r.created_at);
+        const pl = r.payload;
+        if (typeof pl === 'string' && pl.startsWith('__cupnet_ws_meta__:')) {
+            try {
+                const meta = JSON.parse(pl.slice('__cupnet_ws_meta__:'.length));
+                if (meta.kind === 'closed') {
+                    out += `*** [closed] ${t}  frames=${meta.frames ?? 0}\n\n`;
+                    continue;
+                }
+                if (meta.kind === 'error') {
+                    out += `*** [error] ${t}  ${meta.error || ''}\n\n`;
+                    continue;
+                }
+            } catch { /* fallthrough */ }
+        }
+        const dir = String(r.direction || '').toLowerCase();
+        const arrow = dir === 'send' ? '>>>>>>' : '<<<<<<';
+        const body = pl == null ? '' : String(pl);
+        out += `${arrow} ${t}\n${body}\n\n`;
+    }
+    return out;
+}
+
 /** Build raw HTTP in curl -v style (request with >, response with <) */
 function buildRawHttp(entry) {
     const reqH = parseHeaders(entry.request_headers || entry.request?.headers) || {};
@@ -355,6 +450,7 @@ function buildRawHttp(entry) {
     const method = (entry.method || 'GET').toUpperCase();
     const url = entry.url || '';
     const status = entry.status ?? entry.response?.statusCode ?? 0;
+    const isWs = String(entry.type || '').toLowerCase() === 'websocket';
     let reqBody = entry.request_body ?? entry.request?.body ?? '';
     let respBody = entry.response_body ?? entry.responseBody ?? '';
     if (typeof reqBody !== 'string') reqBody = String(reqBody);
@@ -368,13 +464,20 @@ function buildRawHttp(entry) {
     let path = '/';
     try { const u = new URL(url); path = u.pathname + (u.search || ''); } catch {}
     const reqLine = `${method} ${path} HTTP/1.1`;
-    const reqHeaders = Object.entries(reqH).map(([k, v]) => `${k}: ${v}`);
+    const hdrLine = (k, v) => (isWs ? `${String(k).toLowerCase()}: ${v}` : `${k}: ${v}`);
+    const reqHeaders = Object.entries(reqH).map(([k, v]) => hdrLine(k, v));
     const reqLines = [reqLine, ...reqHeaders, ''].map(l => `> ${l}`);
     const reqPart = reqLines.join('\n') + (reqBody ? `\n${reqBody}` : '');
 
-    const statusText = status >= 200 && status < 300 ? 'OK' : status === 301 ? 'Moved Permanently' : status === 302 ? 'Found' : status === 404 ? 'Not Found' : status === 500 ? 'Internal Server Error' : '';
-    const resLine = `HTTP/1.1 ${status || '000'} ${statusText}`;
-    const resHeaders = Object.entries(resH).map(([k, v]) => `${k}: ${v}`);
+    let statusText = '';
+    if (status === 101) statusText = 'Switching Protocols';
+    else if (status >= 200 && status < 300) statusText = 'OK';
+    else if (status === 301) statusText = 'Moved Permanently';
+    else if (status === 302) statusText = 'Found';
+    else if (status === 404) statusText = 'Not Found';
+    else if (status === 500) statusText = 'Internal Server Error';
+    const resLine = `HTTP/1.1 ${status || '000'} ${statusText}`.trim();
+    const resHeaders = Object.entries(resH).map(([k, v]) => hdrLine(k, v));
     const resLines = [resLine, ...resHeaders, ''].map(l => `< ${l}`);
     const resPart = resLines.join('\n') + (respBody ? `\n${respBody}` : '');
 
@@ -489,6 +592,7 @@ function buildRow(entry, idx) {
     const hl = highlightRules[url];
     if (hl) { row.style.borderLeft = `3px solid ${hl}`; row.classList.add('hl-rule'); }
     if (String(type).toLowerCase() === 'mock') row.classList.add('lv-row-mock');
+    if (String(type).toLowerCase() === 'websocket') row.classList.add('lv-row-ws');
 
     if (type === 'screenshot') {
         row.classList.add('lv-row-screenshot');
@@ -536,13 +640,24 @@ function buildRow(entry, idx) {
     const cookieMarkV3 = scCount > 0
         ? `<sup class="status-cookie" title="${scCount} Set-Cookie(s)">🍪${scCount > 1 ? scCount : ''}</sup>`
         : '';
+    const tLower = String(type || '').toLowerCase();
+    let typeChipHtml;
+    if (tLower === 'websocket') {
+        const n = entry.ws_message_count != null && entry.ws_message_count !== ''
+            ? Number(entry.ws_message_count)
+            : 0;
+        const lbl = n > 0 ? `WS (${n})` : 'WS';
+        typeChipHtml = `<span class="type-chip type-chip-ws" title="${esc(type)} — messages in DB">${esc(lbl)}</span>`;
+    } else {
+        typeChipHtml = `<span class="type-chip" title="${esc(type)}">${esc(shortTypeLabel(type))}</span>`;
+    }
     row.innerHTML =
         `<div class="lv-td col-idx">${idx + 1}</div>` +
         `<div class="lv-td col-method"><span class="method-badge ${methodCls(method)}">${esc(method) || '—'}</span></div>` +
         `<div class="lv-td col-status"><span class="lv-status ${entry.error ? 's-err' : statusCls(status)}">${status || (entry.error ? 'ERR' : '—')}${cookieMarkV3}</span></div>` +
         `<div class="lv-td col-mark">${tagDot}</div>` +
         `<div class="lv-td col-host"><span class="host-chip" title="${esc(host)}">${esc(host)}</span></div>` +
-        `<div class="lv-td col-type"><span class="type-chip" title="${esc(type)}">${esc(shortTypeLabel(type))}</span></div>` +
+        `<div class="lv-td col-type">${typeChipHtml}</div>` +
         `<div class="lv-td col-dur"><span class="lv-dur ${durCls(dur)}">${formatDur(dur)}</span></div>` +
         `<div class="lv-td col-path">${mockBadge}${extBadge}<span class="lv-path" title="${esc(url)}">${esc(truncUrl(url))}</span></div>`;
 
@@ -661,10 +776,12 @@ function addEntry(entry) {
 function entryPassesFilter(e) {
     const q = searchInput.value.trim().toLowerCase();
 
-    // Type filter (multi)
+    // Type filter (multi). By default hide per-frame WS rows (see Messages tab on WS handshake).
     if (selectedTypes.size > 0) {
         const eType = (e.type || '').toLowerCase();
         if (![...selectedTypes].some(t => t.toLowerCase() === eType)) return false;
+    } else if (String(e.type || '').toLowerCase() === 'websocket_frame') {
+        return false;
     }
 
     // Status filter (multi)
@@ -1140,6 +1257,19 @@ function showDetail(entry) {
     if (markPanel) markPanel.classList.toggle('visible', !!canAnnotate);
     if (canAnnotate) syncMarkPanel(entry);
 
+    const msgTabBtn = document.getElementById('lv-tab-messages-btn');
+    const isWsHandshake = String(type || '').toLowerCase() === 'websocket';
+    if (msgTabBtn) {
+        msgTabBtn.style.display = isWsHandshake ? '' : 'none';
+        if (!isWsHandshake) {
+            const msgContent = document.getElementById('tab-messages');
+            if (msgContent?.classList.contains('active')) {
+                activateTab('headers', false);
+                lastActiveTab = 'headers';
+            }
+        }
+    }
+
     // Parse headers once
     const parsedReqHeaders  = parseHeaders(entry.request_headers  || entry.request?.headers);
     const parsedRespHeaders = parseHeaders(entry.response_headers || entry.response?.headers);
@@ -1258,12 +1388,31 @@ function showDetail(entry) {
     // Wire up request body toolbar buttons
     wireReqBodyBtns(reqBody, formPairs);
 
-    // Raw HTTP tab (curl -v style + curl command)
+    // Raw HTTP tab (curl -v style + curl command); WebSocket: append frames from DB
     const rawEl = document.getElementById('raw-http-content');
     const rawWrap = rawEl?.closest('.lv-tab-content');
     if (rawEl) {
-        rawEl.textContent = buildRawHttp(entry);
-        if (rawWrap) rawWrap.dataset.curl = buildCurlCommand(entry);
+        const isWs = String(entry.type || '').toLowerCase() === 'websocket';
+        const setRawText = (wsExtra) => {
+            rawEl.textContent = buildRawHttp(entry) + (wsExtra || '');
+            if (rawWrap) rawWrap.dataset.curl = buildCurlCommand(entry);
+        };
+        setRawText('');
+        if (isWs && api.getWsEvents) {
+            const sid = entry.session_id ?? entry.sessionId ?? currentSessionId;
+            const tid = entry.tabId ?? entry.tab_id ?? null;
+            const url = entry.url || '';
+            const gen = ++_rawWsGen;
+            api.getWsEvents({ sessionId: sid, tabId: tid, url })
+                .then((rows) => {
+                    if (gen !== _rawWsGen || _currentDetailEntry !== entry) return;
+                    setRawText(formatWebSocketRawLog(rows || []));
+                })
+                .catch(() => {
+                    if (gen !== _rawWsGen || _currentDetailEntry !== entry) return;
+                    setRawText('\n\n──────── WEBSOCKET RAW ────────\n(failed to load frames)\n');
+                });
+        }
     }
 
     // Response body
@@ -1393,7 +1542,11 @@ function showDetail(entry) {
     // Render cookies tab
     renderCookiesTab(entry);
 
-    activateTab(lastActiveTab);
+    if (isWsHandshake && lastActiveTab === 'messages') {
+        activateTab('messages', false);
+    } else {
+        activateTab(lastActiveTab);
+    }
 }
 
 function syncMarkPanel(entry) {
@@ -1850,13 +2003,121 @@ function renderCookiesTab(entry) {
     }
 }
 
+/** @param {object} entry — log row with type websocket */
+async function loadWsMessagesPanel(entry) {
+    const listEl = document.getElementById('ws-messages-list');
+    if (!listEl || !api.getWsEvents) return;
+    _wsMessagesCopyPayload = null;
+    const sid = entry.session_id ?? entry.sessionId ?? currentSessionId;
+    const tid = entry.tabId ?? entry.tab_id ?? null;
+    const url = entry.url || '';
+    if (sid == null || !url) {
+        listEl.innerHTML = '<div class="body-empty">No session or URL</div>';
+        return;
+    }
+    listEl.innerHTML = '<div class="body-empty">⏳ Loading…</div>';
+    try {
+        const rows = await api.getWsEvents({ sessionId: sid, tabId: tid, url });
+        if (!rows || !rows.length) {
+            listEl.innerHTML = '<div class="body-empty">No frames yet (or session mismatch)</div>';
+            return;
+        }
+        _wsMessagesCopyPayload = {
+            schema: 'cupnet.ws_messages.v1',
+            entryId: entry.id ?? null,
+            url,
+            sessionId: sid,
+            tabId: tid,
+            messages: rows.map((r) => ({
+                id: r.id,
+                direction: r.direction,
+                connection_id: r.connection_id ?? null,
+                created_at: r.created_at ?? null,
+                payload: r.payload ?? null,
+            })),
+        };
+        const parts = [];
+        for (const r of rows) {
+            const dir = String(r.direction || '').toLowerCase();
+            let payload = r.payload;
+            let rowClass = dir === 'send' ? 'send' : 'recv';
+            let dirLabel = dir === 'send' ? 'Send' : 'Recv';
+            let bodyHtml = '';
+            if (typeof payload === 'string' && payload.startsWith('__cupnet_ws_meta__:')) {
+                rowClass = 'meta';
+                try {
+                    const meta = JSON.parse(payload.slice('__cupnet_ws_meta__:'.length));
+                    if (meta.kind === 'closed') {
+                        dirLabel = 'Close';
+                        bodyHtml = esc(`closed (frames: ${meta.frames ?? 0})`);
+                    } else if (meta.kind === 'error') {
+                        dirLabel = 'Error';
+                        bodyHtml = esc(meta.error || '');
+                    } else {
+                        bodyHtml = wsMessagePayloadHtml(JSON.stringify(meta));
+                    }
+                } catch {
+                    bodyHtml = wsMessagePayloadHtml(String(payload));
+                }
+            } else {
+                const preview = payload == null ? '(empty)' : String(payload);
+                bodyHtml = wsMessagePayloadHtml(preview);
+            }
+            const t = r.created_at ? esc(String(r.created_at).replace('T', ' ').slice(0, 23)) : '—';
+            parts.push(`<div class="ws-msg-row ${rowClass}"><span class="ws-msg-dir">${esc(dirLabel)}</span><div class="ws-msg-body">${bodyHtml}</div><span class="ws-msg-time">${t}</span></div>`);
+        }
+        listEl.innerHTML = parts.join('');
+    } catch (e) {
+        _wsMessagesCopyPayload = null;
+        listEl.innerHTML = `<div class="body-empty">Failed to load: ${esc(e.message || String(e))}</div>`;
+    }
+}
+
 function activateTab(name, remember = true) {
     tabBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === name));
     tabContents.forEach(c => c.classList.toggle('active', c.id === `tab-${name}`));
     if (remember) lastActiveTab = name;
+    if (name === 'messages' && _currentDetailEntry && String(_currentDetailEntry.type || '').toLowerCase() === 'websocket') {
+        loadWsMessagesPanel(_currentDetailEntry);
+    }
 }
 
 tabBtns.forEach(b => b.addEventListener('click', () => activateTab(b.dataset.tab)));
+document.getElementById('ws-msg-refresh-btn')?.addEventListener('click', () => {
+    if (_currentDetailEntry && String(_currentDetailEntry.type || '').toLowerCase() === 'websocket') {
+        loadWsMessagesPanel(_currentDetailEntry);
+    }
+});
+
+document.getElementById('ws-msg-copy-json-btn')?.addEventListener('click', async () => {
+    const cur = _currentDetailEntry;
+    if (!cur || String(cur.type || '').toLowerCase() !== 'websocket') {
+        alert('Выберите строку WebSocket (handshake) в логе.');
+        return;
+    }
+    if (!_wsMessagesCopyPayload?.messages?.length) {
+        alert('Нет загруженных сообщений. Откройте вкладку Messages или нажмите Refresh.');
+        return;
+    }
+    const pe = _wsMessagesCopyPayload.entryId;
+    const cid = cur.id;
+    if (pe != null && cid != null && Number(pe) !== Number(cid)) {
+        alert('Список устарел. Нажмите Refresh.');
+        return;
+    }
+    const text = JSON.stringify(_wsMessagesCopyPayload, null, 2);
+    try {
+        await navigator.clipboard.writeText(text);
+        const btn = document.getElementById('ws-msg-copy-json-btn');
+        if (btn) {
+            const prev = btn.textContent;
+            btn.textContent = '✓ Copied';
+            setTimeout(() => { btn.textContent = prev; }, 1500);
+        }
+    } catch (e) {
+        alert('Не удалось скопировать: ' + (e.message || e));
+    }
+});
 
 // ─── Replay → Request Editor ──────────────────────────────────────────────────
 if (replayBtn) {
@@ -1968,8 +2229,12 @@ clearLogsBtn?.addEventListener('click', async () => {
 
 exportHarBtn?.addEventListener('click', async () => {
     exportHarBtn.disabled = true; exportHarBtn.textContent = '⟳ Exporting…';
-    try { await api.exportHar(currentSessionId); }
-    finally { exportHarBtn.disabled = false; exportHarBtn.textContent = '⬇ HAR'; }
+    try {
+        const res = await api.exportHar(currentSessionId);
+        if (res?.success && res.sidecarPath) {
+            alert(`HAR exported.\nWebSocket sidecar: ${res.sidecarPath}`);
+        }
+    } finally { exportHarBtn.disabled = false; exportHarBtn.textContent = '⬇ HAR'; }
 });
 
 async function resolveSessionIdForDbExport() {
@@ -2082,7 +2347,7 @@ exportBundleBtn?.addEventListener('click', async () => {
         const res = await api.exportBundle(payload);
         if (res?.success) {
             const stats = res.stats || {};
-            alert(`Bundle exported.\nRequests: ${stats.requests || 0}\nProtection: ${stats.protectionLevel || protectionLevel}\nRedacted fields: ${stats.redactedFields || 0}`);
+            alert(`Bundle exported.\nRequests: ${stats.requests || 0}\nWebSocket frames: ${stats.websocketEvents ?? 0}\nProtection: ${stats.protectionLevel || protectionLevel}\nRedacted fields: ${stats.redactedFields || 0}`);
         } else if (!res?.canceled) {
             alert(`Bundle export failed: ${res?.error || 'unknown error'}`);
         }
@@ -2108,7 +2373,8 @@ importBundleBtn?.addEventListener('click', async () => {
             `Exported: ${preview.exportedAt || 'n/a'}\n` +
             `Protection: ${preview.protectionLevel}\n` +
             `Requests: ${preview.requests || 0}\n` +
-            `Trace: ${preview.trace || 0}\n\n` +
+            `Trace: ${preview.trace || 0}\n` +
+            `WebSocket frames: ${preview.websocketEvents ?? 0}\n\n` +
             'Restore this context into current log viewer?'
         );
         if (!ok) return;
@@ -2176,6 +2442,23 @@ api.onNewLogEntryBatch?.((entries) => {
     if (!Array.isArray(entries) || entries.length === 0) return;
     for (const entry of entries) addEntry(entry);
 });
+
+function applyWsHandshakeMessageCount(payload) {
+    if (!payload || payload.handshakeDbId == null) return;
+    const id = Number(payload.handshakeDbId);
+    const cnt = payload.ws_message_count != null ? Number(payload.ws_message_count) : 0;
+    const patch = (arr) => {
+        for (const e of arr) {
+            if (e && Number(e.id) === id) {
+                e.ws_message_count = cnt;
+                return true;
+            }
+        }
+        return false;
+    };
+    if (patch(allEntries) || patch(filteredEntries)) scheduleRenderVirtual();
+}
+api.onWsHandshakeMessageCount?.(applyWsHandshakeMessageCount);
 
 api.onRuleHighlight?.((({ url, color }) => {
     highlightRules[url] = color;
@@ -2263,6 +2546,7 @@ async function init() {
 }
 init();
 setupMarkPanel();
+setupWsMessagesToggle();
 
 // ─── Multi-select filter widgets ─────────────────────────────────────────────
 function syncMsBadge(badgeId, btnId, count) {

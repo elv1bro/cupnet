@@ -3,10 +3,10 @@
 const { networkPolicy } = require('./network-policy');
 
 const TRAFFIC_MODE_MITM = 'mitm';
-const TRAFFIC_MODE_BROWSER_PROXY = 'browser_proxy';
 
-function normalizeTrafficMode(mode) {
-    return mode === TRAFFIC_MODE_MITM ? TRAFFIC_MODE_MITM : TRAFFIC_MODE_BROWSER_PROXY;
+/** Всегда MITM — режим browser_proxy удалён. */
+function normalizeTrafficMode(_mode) {
+    return TRAFFIC_MODE_MITM;
 }
 
 function toProxyRules(proxyUrl) {
@@ -22,27 +22,17 @@ function toProxyRules(proxyUrl) {
     }
 }
 
-function resolveSessionProxyConfig({ mode, upstreamProxyUrl, bypassRules }) {
-    const normalized = normalizeTrafficMode(mode);
-    if (normalized === TRAFFIC_MODE_MITM) {
-        const p = networkPolicy.mitmPort;
-        const hp = `127.0.0.1:${p}`;
-        return {
-            proxyRules: `http=${hp};https=${hp}`,
-            proxyBypassRules: bypassRules || '',
-        };
-    }
-    const proxyRules = toProxyRules(upstreamProxyUrl);
-    if (!proxyRules) return { mode: 'direct' };
+function resolveSessionProxyConfig({ bypassRules } = {}) {
+    const p = networkPolicy.mitmPort;
+    const hp = `127.0.0.1:${p}`;
     return {
-        proxyRules,
+        proxyRules: `http=${hp};https=${hp}`,
         proxyBypassRules: bypassRules || '',
     };
 }
 
 module.exports = {
     TRAFFIC_MODE_MITM,
-    TRAFFIC_MODE_BROWSER_PROXY,
     normalizeTrafficMode,
     toProxyRules,
     resolveSessionProxyConfig,

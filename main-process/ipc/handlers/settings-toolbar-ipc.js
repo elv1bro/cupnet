@@ -16,6 +16,7 @@ function registerSettingsToolbarIpc(ctx) {
             effectiveTrafficMode: ctx.getCurrentTrafficMode(),
             tracking:        ctx.getTrackingSettings(),
             capmonster:      ctx.getCapmonsterSettings(),
+            devicePermissions: ctx.settingsStore.normalizeDevicePermissions(s.devicePermissions),
         };
     });
 
@@ -74,6 +75,46 @@ function registerSettingsToolbarIpc(ctx) {
     ctx.ipcMain.handle('get-traffic-opts', () => {
         const s = ctx.loadSettings();
         return s.trafficOpts || {};
+    });
+
+    ctx.ipcMain.handle('enumerate-media-devices', async () => {
+        const win = ctx.mainWindow;
+        if (!win || win.isDestroyed()) return [];
+        try {
+            const devices = await win.webContents.executeJavaScript(`(async () => {
+                if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return [];
+                const list = await navigator.mediaDevices.enumerateDevices();
+                return list
+                    .filter((d) => d.kind === 'videoinput')
+                    .map((d) => ({ deviceId: d.deviceId, label: d.label || '', kind: d.kind }));
+            })()`, false);
+            return Array.isArray(devices) ? devices : [];
+        } catch {
+            return [];
+        }
+    });
+
+    ctx.ipcMain.handle('save-device-permissions', (_, raw) => {
+        const s = ctx.loadSettings();
+        s.devicePermissions = ctx.settingsStore.normalizeDevicePermissions(raw);
+        ctx.saveSettings(s);
+        if (ctx.tabManager && typeof ctx.tabManager.applyDevicePermissions === 'function') {
+            ctx.tabManager.applyDevicePermissions();
+        }
+        return s.devicePermissions;
+    });
+
+    // Synchronous IPC for preload: must return before ANY page script runs.
+    ctx.ipcMain.on('get-device-permissions-sync', (event) => {
+        try {
+            const dp = ctx.tabManager._getCameraFilterDataForPreload();
+            if (!dp) { event.returnValue = null; return; }
+            event.returnValue = {
+                script: ctx.tabManager.buildCameraFilterScript(dp),
+            };
+        } catch {
+            event.returnValue = null;
+        }
     });
 }
 

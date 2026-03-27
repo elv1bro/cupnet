@@ -7,8 +7,6 @@ function createCdpNetworkLogging({
     Notification,
     getTabManager,
     getMitmProxy,
-    /** 'mitm' | 'browser_proxy' — CDP HTTP пропускаем только когда трафик реально идёт через MITM */
-    getCurrentTrafficMode,
     getIsLoggingEnabled,
     getDb,
     getRulesEngine,
@@ -204,7 +202,20 @@ function createCdpNetworkLogging({
 
                 try {
                     if (logEntry.type === 'websocket_frame' || logEntry.type === 'websocket_closed' || logEntry.type === 'websocket_error') {
-                        await getDb().insertWsEventAsync(sid, tid, logEntry.url || '', logEntry.direction || 'recv', logEntry.data || logEntry.error || null);
+                        const pl = logEntry.type === 'websocket_closed'
+                            ? `__cupnet_ws_meta__:${JSON.stringify({ kind: 'closed', frames: logEntry.framesCount ?? 0 })}`
+                            : logEntry.type === 'websocket_error'
+                                ? `__cupnet_ws_meta__:${JSON.stringify({ kind: 'error', error: String(logEntry.error || '') })}`
+                                : (logEntry.data || null);
+                        const bump = await getDb().insertWsEventAsync(
+                            sid, tid, logEntry.url || '', logEntry.direction || 'recv', pl,
+                            logEntry.connectionId || null
+                        );
+                        if (bump && getLogViewerWindows) {
+                            for (const w of getLogViewerWindows()) {
+                                if (!w.isDestroyed()) w.webContents.send('ws-handshake-message-count', bump);
+                            }
+                        }
                     } else if (logEntry.type === 'screenshot') {
                         await getDb().insertScreenshotAsync(sid, tid, logEntry.path, logEntry.imageData || null, logEntry.screenshotMeta || null);
                     } else {
@@ -246,9 +257,15 @@ function createCdpNetworkLogging({
                     console.error('[DB] insertRequest failed:', e.message);
                 }
 
+                // WS frames/meta: only in DB + Messages tab (not one row per frame in list)
                 if (getLogViewerWindows().length > 0) {
-                    const msg = { ...logEntry, tabId: tid, sessionId: sid };
-                    broadcastLogEntryToViewers(msg);
+                    const skipBroadcast = logEntry.type === 'websocket_frame'
+                        || logEntry.type === 'websocket_closed'
+                        || logEntry.type === 'websocket_error';
+                    if (!skipBroadcast) {
+                        const msg = { ...logEntry, tabId: tid, sessionId: sid };
+                        broadcastLogEntryToViewers(msg);
+                    }
                 }
 
                 ongoingRequests.delete(reqKey);
@@ -302,26 +319,47 @@ function createCdpNetworkLogging({
             }
             if (method === 'Network.webSocketFrameSent') {
                 const ws = ongoingWebsockets.get(params.requestId);
-                if (ws) finalizeLog({ type: 'websocket_frame', direction: 'send', url: ws.url, data: params.response.payloadData });
+                if (ws) finalizeLog({
+                    type: 'websocket_frame',
+                    direction: 'send',
+                    url: ws.url,
+                    data: params.response.payloadData,
+                    connectionId: params.requestId,
+                });
             }
             if (method === 'Network.webSocketFrameReceived') {
                 const ws = ongoingWebsockets.get(params.requestId);
-                if (ws) finalizeLog({ type: 'websocket_frame', direction: 'recv', url: ws.url, data: params.response.payloadData });
+                if (ws) finalizeLog({
+                    type: 'websocket_frame',
+                    direction: 'recv',
+                    url: ws.url,
+                    data: params.response.payloadData,
+                    connectionId: params.requestId,
+                });
             }
             if (method === 'Network.webSocketClosed') {
                 const ws = ongoingWebsockets.get(params.requestId);
                 if (ws) {
-                    finalizeLog({ type: 'websocket_closed', url: ws.url, framesCount: ws.frames.length });
+                    finalizeLog({
+                        type: 'websocket_closed',
+                        url: ws.url,
+                        framesCount: ws.frames.length,
+                        connectionId: params.requestId,
+                    });
                     ongoingWebsockets.delete(params.requestId);
                 }
             }
             if (method === 'Network.webSocketFrameError') {
                 const ws = ongoingWebsockets.get(params.requestId);
-                if (ws) finalizeLog({ type: 'websocket_error', url: ws.url, error: params.errorMessage });
+                if (ws) finalizeLog({
+                    type: 'websocket_error',
+                    url: ws.url,
+                    error: params.errorMessage,
+                    connectionId: params.requestId,
+                });
             }
 
-            const _trafficMode = typeof getCurrentTrafficMode === 'function' ? getCurrentTrafficMode() : 'mitm';
-            if (method === 'Network.requestWillBeSent' && _trafficMode === 'mitm' && getMitmProxy()) {
+            if (method === 'Network.requestWillBeSent' && getMitmProxy()) {
                 const { requestId, request, timestamp, type, redirectResponse } = params;
                 if (redirectResponse) return;
                 if (request.url.startsWith('data:')) return;

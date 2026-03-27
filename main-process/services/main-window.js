@@ -171,9 +171,9 @@ function createMainWindowApi(d) {
                         }
                         sub.notifyCookieManagerTabs();
                     }},
-                    { label: 'New Direct Tab', accelerator: 'CmdOrCtrl+Shift+D', click: async () => {
+                    { label: 'New Tab', accelerator: 'CmdOrCtrl+Shift+D', click: async () => {
                         if (!d.tabManager || !d.mainWindow) return;
-                        const id = await d.tabManager.createDirectTab(d.getNewTabUrl());
+                        const id = await d.tabManager.createTab({ url: d.getNewTabUrl() || null, cookieGroupId: 1 });
                         d.tabManager.switchTab(id);
                         sub.notifyCookieManagerTabs();
                     }},
@@ -202,7 +202,6 @@ function createMainWindowApi(d) {
                           if (item.checked && d.tabManager && d.setupNetworkLogging) {
                               const sid = d.currentSessionId;
                               for (const tab of d.tabManager.getAllTabs()) {
-                                  if (tab.direct) continue;
                                   const wc = tab.view?.webContents;
                                   if (!wc || wc.isDestroyed()) continue;
                                   const effectiveSid = sid ?? tab.sessionId;

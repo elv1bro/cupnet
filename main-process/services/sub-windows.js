@@ -417,7 +417,6 @@ function createSubWindowsApi(d) {
         if (!d.interceptor || !d.tabManager) return;
         const seen = new WeakSet();
         for (const tab of d.tabManager.getAllTabs()) {
-            if (tab.direct) continue;
             const ts = tab.tabSession;
             if (!ts || seen.has(ts)) continue;
             seen.add(ts);

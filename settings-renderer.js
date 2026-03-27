@@ -29,10 +29,29 @@ const spTrackDisableAll = document.getElementById('sp-track-disable-all');
 const spPerfTbody = document.getElementById('sp-perf-tbody');
 const spPerfUpdated = document.getElementById('sp-perf-updated');
 
+const spDevicesList = document.getElementById('sp-devices-list');
+const spDevicesEmpty = document.getElementById('sp-devices-empty');
+const spDevicesRefresh = document.getElementById('sp-devices-refresh');
+const spCamModeGroup = document.getElementById('sp-cam-mode-group');
+
 let activeTab = 'general';
 let perfTimer = null;
 let trackingSaveTimer = null;
+let deviceSaveTimer = null;
 let statusTimer = null;
+
+/** @type {{ cameraMode: string, cameraPriority: string[], cameraDisabledIds: string[], cameraDisabledLabels: string[], microphoneMode: string, microphonePriority: string[] }} */
+let devicePermissionsState = {
+    cameraMode: 'all',
+    cameraPriority: [],
+    cameraDisabledIds: [],
+    cameraDisabledLabels: [],
+    microphoneMode: 'all',
+    microphonePriority: [],
+};
+/** @type {Array<{ deviceId: string, label: string, kind: string }>} */
+let orderedCameras = [];
+let dragListIndex = null;
 
 function setStatus(text) {
     if (!savedStatus) return;
@@ -52,6 +71,199 @@ function switchTab(name) {
     tabBodies.forEach((body) => body.classList.toggle('active', body.id === `sp-tab-${name}`));
     if (name === 'performance') startPerfPoll();
     else stopPerfPoll();
+    if (name === 'devices') refreshCameraDevices();
+}
+
+function escapeHtml(s) {
+    return String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/"/g, '&quot;');
+}
+
+function mergeCameraOrder(freshList, priorityIds) {
+    const map = new Map(freshList.map((d) => [d.deviceId, d]));
+    const out = [];
+    const seen = new Set();
+    for (const id of priorityIds) {
+        const d = map.get(id);
+        if (d) {
+            out.push(d);
+            seen.add(id);
+        }
+    }
+    for (const d of freshList) {
+        if (!seen.has(d.deviceId)) out.push(d);
+    }
+    return out;
+}
+
+function applyDevicePermissionsToForm(dp) {
+    devicePermissionsState = {
+        cameraMode: dp.cameraMode === 'none' || dp.cameraMode === 'custom' ? dp.cameraMode : 'all',
+        cameraPriority: Array.isArray(dp.cameraPriority) ? [...dp.cameraPriority] : [],
+        cameraDisabledIds: Array.isArray(dp.cameraDisabledIds) ? [...dp.cameraDisabledIds] : [],
+        cameraDisabledLabels: Array.isArray(dp.cameraDisabledLabels) ? [...dp.cameraDisabledLabels] : [],
+        microphoneMode: dp.microphoneMode === 'none' ? 'none' : 'all',
+        microphonePriority: Array.isArray(dp.microphonePriority) ? [...dp.microphonePriority] : [],
+    };
+    const mode = devicePermissionsState.cameraMode;
+    spCamModeGroup?.querySelectorAll('input[name="sp-cam-mode"]').forEach((el) => {
+        el.checked = el.value === mode;
+    });
+}
+
+function isCameraDisabledInSettings(d) {
+    const ids = new Set(devicePermissionsState.cameraDisabledIds || []);
+    const labels = new Set(
+        (devicePermissionsState.cameraDisabledLabels || []).map((l) => String(l || '').trim().toLowerCase()).filter(Boolean),
+    );
+    if (ids.has(d.deviceId)) return true;
+    const lab = String(d.label || '').trim().toLowerCase();
+    if (lab && labels.has(lab)) return true;
+    return false;
+}
+
+function renderCameraRows() {
+    if (!spDevicesList) return;
+    const mode = devicePermissionsState.cameraMode;
+    const showCb = mode === 'custom';
+    if (!orderedCameras.length) {
+        spDevicesList.innerHTML = '';
+        if (spDevicesEmpty) spDevicesEmpty.style.display = 'block';
+        return;
+    }
+    if (spDevicesEmpty) spDevicesEmpty.style.display = 'none';
+
+    spDevicesList.innerHTML = orderedCameras.map((d, i) => {
+        const label = d.label || '(Unnamed camera)';
+        const rowClass = showCb ? 'device-row' : 'device-row mode-all';
+        const cb = showCb
+            ? `<input type="checkbox" class="device-cb" data-cam-idx="${i}" ${!isCameraDisabledInSettings(d) ? 'checked' : ''}>`
+            : '';
+        return `<div class="${rowClass}" draggable="true" data-cam-idx="${i}">
+            <span class="device-drag-handle" title="Drag to reorder">⋮⋮</span>
+            <span class="device-priority-num">#${i + 1}</span>
+            ${cb}
+            <span class="device-label" title="${escapeHtml(d.deviceId)}">${escapeHtml(label)}</span>
+        </div>`;
+    }).join('');
+
+    spDevicesList.querySelectorAll('.device-row').forEach((row) => {
+        const idx = Number(row.dataset.camIdx);
+        row.addEventListener('dragstart', (e) => {
+            dragListIndex = idx;
+            try {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', String(idx));
+            } catch { /* ignore */ }
+        });
+        row.addEventListener('dragend', () => {
+            dragListIndex = null;
+            row.classList.remove('drag-over');
+        });
+        row.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            try { e.dataTransfer.dropEffect = 'move'; } catch { /* ignore */ }
+            row.classList.add('drag-over');
+        });
+        row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+        row.addEventListener('drop', (e) => {
+            e.preventDefault();
+            row.classList.remove('drag-over');
+            const from = dragListIndex;
+            const to = idx;
+            if (from == null || Number.isNaN(from) || from === to) return;
+            const item = orderedCameras.splice(from, 1)[0];
+            orderedCameras.splice(to, 0, item);
+            devicePermissionsState.cameraPriority = orderedCameras.map((c) => c.deviceId);
+            renderCameraRows();
+            wireCameraCheckboxes();
+            scheduleDeviceSave();
+        });
+    });
+}
+
+function wireCameraCheckboxes() {
+    if (!spDevicesList || devicePermissionsState.cameraMode !== 'custom') return;
+    spDevicesList.querySelectorAll('.device-cb').forEach((cb) => {
+        cb.addEventListener('change', () => {
+            const idx = Number(cb.dataset.camIdx);
+            const cam = orderedCameras[idx];
+            if (!cam) return;
+            const setIds = new Set(devicePermissionsState.cameraDisabledIds);
+            const lab = String(cam.label || '').trim();
+            let labels = [...(devicePermissionsState.cameraDisabledLabels || [])];
+            if (cb.checked) {
+                setIds.delete(cam.deviceId);
+                if (lab) {
+                    labels = labels.filter((x) => String(x || '').trim().toLowerCase() !== lab.toLowerCase());
+                }
+            } else {
+                setIds.add(cam.deviceId);
+                if (lab) labels.push(lab);
+            }
+            devicePermissionsState.cameraDisabledIds = [...setIds];
+            devicePermissionsState.cameraDisabledLabels = [...new Set(labels.map((x) => String(x || '').trim()).filter(Boolean))];
+            scheduleDeviceSave();
+        });
+    });
+}
+
+function syncCameraDisabledLabelsFromIds() {
+    const ids = new Set(devicePermissionsState.cameraDisabledIds || []);
+    const have = new Set(
+        (devicePermissionsState.cameraDisabledLabels || []).map((l) => String(l || '').trim().toLowerCase()).filter(Boolean),
+    );
+    let added = false;
+    for (const cam of orderedCameras) {
+        if (!ids.has(cam.deviceId) || !cam.label) continue;
+        const t = String(cam.label).trim();
+        const k = t.toLowerCase();
+        if (k && !have.has(k)) {
+            devicePermissionsState.cameraDisabledLabels.push(t);
+            have.add(k);
+            added = true;
+        }
+    }
+    if (added) scheduleDeviceSave();
+}
+
+async function refreshCameraDevices() {
+    if (!api.enumerateMediaDevices) return;
+    try {
+        const fresh = await api.enumerateMediaDevices();
+        orderedCameras = mergeCameraOrder(Array.isArray(fresh) ? fresh : [], devicePermissionsState.cameraPriority);
+        devicePermissionsState.cameraPriority = orderedCameras.map((c) => c.deviceId);
+        syncCameraDisabledLabelsFromIds();
+        renderCameraRows();
+        wireCameraCheckboxes();
+    } catch {
+        orderedCameras = [];
+        renderCameraRows();
+    }
+}
+
+function collectDevicePermissionsPayload() {
+    return {
+        cameraMode: devicePermissionsState.cameraMode,
+        cameraPriority: [...devicePermissionsState.cameraPriority],
+        cameraDisabledIds: [...(devicePermissionsState.cameraDisabledIds || [])],
+        cameraDisabledLabels: [...(devicePermissionsState.cameraDisabledLabels || [])],
+        microphoneMode: devicePermissionsState.microphoneMode || 'all',
+        microphonePriority: [...(devicePermissionsState.microphonePriority || [])],
+    };
+}
+
+function scheduleDeviceSave() {
+    if (deviceSaveTimer) clearTimeout(deviceSaveTimer);
+    deviceSaveTimer = setTimeout(async () => {
+        deviceSaveTimer = null;
+        try {
+            await api.saveDevicePermissions(collectDevicePermissionsPayload());
+            setStatus('Devices saved');
+        } catch { /* ignore */ }
+    }, 250);
 }
 
 tabBtns.forEach((btn) => btn.addEventListener('click', () => switchTab(btn.dataset.spTab)));
@@ -196,6 +408,19 @@ spTrackDisableAll?.addEventListener('click', () => {
     scheduleTrackingSave();
 });
 
+spDevicesRefresh?.addEventListener('click', () => {
+    refreshCameraDevices();
+});
+
+spCamModeGroup?.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t || t.name !== 'sp-cam-mode') return;
+    devicePermissionsState.cameraMode = t.value || 'all';
+    scheduleDeviceSave();
+    renderCameraRows();
+    wireCameraCheckboxes();
+});
+
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) stopPerfPoll();
     else if (activeTab === 'performance') startPerfPoll();
@@ -210,6 +435,8 @@ async function init() {
         if (spBypassDomains) spBypassDomains.value = (data?.bypassDomains || []).join('\n');
         if (spPasteUnlock) spPasteUnlock.checked = data?.pasteUnlock !== false;
         applyTrackingSettings(data?.tracking || {});
+        applyDevicePermissionsToForm(data?.devicePermissions && typeof data.devicePermissions === 'object' ? data.devicePermissions : {});
+        if (activeTab === 'devices') refreshCameraDevices();
     } catch {
         setStatus('Failed to load settings');
     }

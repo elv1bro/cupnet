@@ -309,6 +309,82 @@ function registerPageAnalyzerIpc(ctx) {
         } catch { return {}; }
     });
 
+    const _dumpWebStorageScript = `(function(){
+        function dump(store) {
+            var o = {};
+            try {
+                var n = store.length;
+                for (var i = 0; i < n; i++) {
+                    var k = store.key(i);
+                    if (k != null) o[k] = store.getItem(k);
+                }
+            } catch (e) {}
+            return o;
+        }
+        return { sessionStorage: dump(sessionStorage), localStorage: dump(localStorage) };
+    })`;
+
+    ctx.ipcMain.handle('analyze-page-storage', async (_, tabId) => {
+        const tab = ctx.tabManager.getTab(tabId);
+        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) {
+            return { sessionStorage: {}, localStorage: {} };
+        }
+        try {
+            return await tab.view.webContents.executeJavaScript(_dumpWebStorageScript + '()');
+        } catch {
+            return { sessionStorage: {}, localStorage: {} };
+        }
+    });
+
+    ctx.ipcMain.handle('apply-page-storage', async (_, tabId, payload) => {
+        const tab = ctx.tabManager.getTab(tabId);
+        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) {
+            return { ok: false, error: 'no-tab' };
+        }
+        const target = payload?.target === 'local' ? 'local' : 'session';
+        const entries = payload?.entries;
+        if (!entries || typeof entries !== 'object' || Array.isArray(entries)) {
+            return { ok: false, error: 'entries must be a plain object' };
+        }
+        const storeName = target === 'local' ? 'localStorage' : 'sessionStorage';
+        let literal;
+        try {
+            literal = JSON.stringify(entries);
+        } catch {
+            return { ok: false, error: 'entries not serializable' };
+        }
+        const script = `(function(){
+            try {
+                var entries = ${literal};
+                if (!entries || typeof entries !== 'object' || Array.isArray(entries))
+                    return { ok:false, error:'bad-entries' };
+                var store = window['${storeName}'];
+                var nextKeys = Object.keys(entries);
+                var nk = Object.create(null);
+                for (var i = 0; i < nextKeys.length; i++) nk[nextKeys[i]] = true;
+                for (var i = store.length - 1; i >= 0; i--) {
+                    var k = store.key(i);
+                    if (k != null && !nk[k]) store.removeItem(k);
+                }
+                for (var i = 0; i < nextKeys.length; i++) {
+                    var k = nextKeys[i];
+                    var v = entries[k];
+                    store.setItem(k, v == null ? '' : String(v));
+                }
+                return { ok: true };
+            } catch (e) {
+                return { ok: false, error: String(e && e.message ? e.message : e) };
+            }
+        })()`;
+        try {
+            const out = await tab.view.webContents.executeJavaScript(script);
+            if (out && out.ok) return { ok: true };
+            return { ok: false, error: (out && out.error) || 'script-failed' };
+        } catch (err) {
+            return { ok: false, error: String(err?.message || err) };
+        }
+    });
+
     ctx.ipcMain.handle('analyze-page-endpoints', async (_, tabId) => {
         const tab = ctx.tabManager.getTab(tabId);
         if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return {};

@@ -4,6 +4,7 @@ const { BrowserView, session } = require('electron');
 const path = require('path');
 const db = require('./db');
 const { networkPolicy } = require('./network-policy');
+const settingsStore = require('./main-process/services/settings-store');
 
 let mainWindow = null;
 let onTabEventCb = null;
@@ -34,7 +35,6 @@ let _broadcastTimer = null;
 let _relayoutTimer = null;
 let _currentBypassRules = '<local>,*.youtube.com,*.googlevideo.com,challenges.cloudflare.com';
 let _trafficOpts = {};
-let _trafficRouteMode = 'mitm';
 let _upstreamProxyRules = null;
 
 /** Локальный MITM без логина в proxyRules; tabId в Basic опционален (см. mitm-proxy _mitmTabIdFromProxyAuthHead). */
@@ -52,16 +52,6 @@ function getMitmOpts() {
 }
 
 function getProxyOptsForTab(tabLike = {}) {
-    if (tabLike.direct || tabLike.cupnetEnabled === false) return { mode: 'direct' };
-    if (_trafficRouteMode === 'browser_proxy') {
-        if (_upstreamProxyRules) {
-            return {
-                proxyRules: _upstreamProxyRules,
-                proxyBypassRules: _currentBypassRules,
-            };
-        }
-        return { mode: 'direct' };
-    }
     const tid = tabLike.id || null;
     return {
         proxyRules: mitmProxyRulesForTabId(tid),
@@ -244,6 +234,67 @@ function attachTabListeners(tab) {
     });
 }
 
+/**
+ * Build camera-filter script with full toString anti-detection.
+ * Patches MediaDevices.prototype so both instance and prototype checks pass.
+ * Function.prototype.toString is wrapped with WeakMap-based spoofing.
+ */
+function buildCameraFilterScript(dp) {
+    const disabled = dp.cameraDisabledIds || [];
+    const labels = dp.cameraDisabledLabels || [];
+    const priority = dp.cameraPriority || [];
+    return `(function(){
+if(!navigator.mediaDevices)return;
+var D=new Set(${JSON.stringify(disabled)});
+var DL=${JSON.stringify(labels)};
+var P=${JSON.stringify(priority)};
+function bl(lab){if(!lab)return false;var t=String(lab).trim().toLowerCase();for(var i=0;i<DL.length;i++){if(DL[i]&&String(DL[i]).trim().toLowerCase()===t)return true;}return false;}
+function blk(d){return D.has(d.deviceId)||bl(d.label);}
+var md=navigator.mediaDevices;
+var MDP=Object.getPrototypeOf(md)||MediaDevices.prototype;
+var _e=MDP.enumerateDevices;
+var _g=MDP.getUserMedia;
+if(!_e||!_g)return;
+var _ts=Function.prototype.toString;
+var _sp=new WeakMap();
+function mn(fn,n){_sp.set(fn,'function '+n+'() { [native code] }');return fn;}
+var pts=mn(function toString(){return _sp.has(this)?_sp.get(this):_ts.call(this);},'toString');
+_sp.set(pts,'function toString() { [native code] }');
+Object.defineProperty(Function.prototype,'toString',{value:pts,writable:true,configurable:true,enumerable:false});
+function sf(v){v.sort(function(a,b){var ia=P.indexOf(a.deviceId),ib=P.indexOf(b.deviceId);return(ia<0?999:ia)-(ib<0?999:ib);});return v;}
+var ne=mn(function enumerateDevices(){return _e.call(md).then(function(l){var v=[],r=[];for(var i=0;i<l.length;i++){if(l[i].kind==='videoinput'){if(!blk(l[i]))v.push(l[i]);}else r.push(l[i]);}sf(v);return v.concat(r);});},'enumerateDevices');
+var ng=mn(function getUserMedia(c){if(!c)return _g.call(md,c);function pv(){return _e.call(md).then(function(l){var v=[];for(var i=0;i<l.length;i++){if(l[i].kind==='videoinput'&&!blk(l[i]))v.push(l[i]);}sf(v);return v;});}function hasDev(v){if(!v||typeof v!=='object')return false;var dv=v.deviceId;if(dv==null)return false;if(typeof dv!=='object')return true;return dv.exact!=null||dv.ideal!=null;}if(c.video===true){return pv().then(function(v){if(!v.length)return Promise.reject(new DOMException('Requested device not found','NotFoundError'));var nc={};for(var k in c)nc[k]=c[k];nc.video={deviceId:{exact:v[0].deviceId}};return _g.call(md,nc);});}if(c.video&&typeof c.video==='object'){if(!hasDev(c.video)){return pv().then(function(v){if(!v.length)return Promise.reject(new DOMException('Requested device not found','NotFoundError'));var nc={};for(var k in c)nc[k]=c[k];nc.video=Object.assign({},c.video,{deviceId:{exact:v[0].deviceId}});return _g.call(md,nc);});}var dv=c.video.deviceId;var id=typeof dv==='object'?(dv.exact!=null?dv.exact:dv.ideal):dv;if(id!=null){return _e.call(md).then(function(list){var dev=null;for(var j=0;j<list.length;j++){if(list[j].deviceId===id&&list[j].kind==='videoinput'){dev=list[j];break;}}if(dev&&blk(dev))return Promise.reject(new DOMException('Requested device not found','NotFoundError'));return _g.call(md,c);});}}return _g.call(md,c);},'getUserMedia');
+Object.defineProperty(MDP,'enumerateDevices',{value:ne,writable:true,configurable:true,enumerable:true});
+Object.defineProperty(MDP,'getUserMedia',{value:ng,writable:true,configurable:true,enumerable:true});
+})();`;
+}
+
+function _getCameraFilterDataForPreload() {
+    const dp = settingsStore.normalizeDevicePermissions(settingsStore.loadSettings().devicePermissions);
+    if (dp.cameraMode !== 'custom') return null;
+    const disabled = dp.cameraDisabledIds || [];
+    const labels = dp.cameraDisabledLabels || [];
+    const priority = dp.cameraPriority || [];
+    if (disabled.length === 0 && labels.length === 0 && priority.length === 0) return null;
+    return dp;
+}
+
+function reinjectCameraMediaFilterAllTabs() {
+    const dp = _getCameraFilterDataForPreload();
+    const script = dp ? buildCameraFilterScript(dp) : null;
+    for (const tab of tabs.values()) {
+        try {
+            const wc = tab.view?.webContents;
+            if (!wc || wc.isDestroyed()) continue;
+            const url = wc.getURL() || '';
+            if (url.startsWith('file://') && (url.includes('new-tab.html') || url.includes('settings.html'))) continue;
+            if (script) {
+                wc.send('camera-filter-update', { script });
+            }
+        } catch { /* ignore */ }
+    }
+}
+
 let _trustMitmCA = null;
 function setTrustMitmCA(fn) { _trustMitmCA = fn; }
 
@@ -253,8 +304,68 @@ function setMitmTabUpstreamCleanup(fn) {
     _mitmTabUpstreamCleanup = typeof fn === 'function' ? fn : null;
 }
 
+function _wantsVideoInMediaPermission(details) {
+    try {
+        return details && Array.isArray(details.mediaTypes) && details.mediaTypes.includes('video');
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Stealth: only session permission handlers — no page Media API patches.
+ * cameraMode "none" denies video like a normal Chrome block; "all" / "custom" → default Chromium.
+ */
+function installMediaPermissionHandlers(sess, cameraMode) {
+    if (!sess) return;
+    try {
+        if (cameraMode === 'none') {
+            sess.setPermissionRequestHandler((webContents, permission, callback, details) => {
+                if (permission === 'media' && _wantsVideoInMediaPermission(details)) {
+                    callback(false);
+                    return;
+                }
+                callback(true);
+            });
+            sess.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+                if (permission === 'media' && _wantsVideoInMediaPermission(details)) {
+                    return false;
+                }
+                return true;
+            });
+        } else {
+            sess.setPermissionRequestHandler(null);
+            sess.setPermissionCheckHandler(null);
+        }
+    } catch { /* ignore */ }
+}
+
+function applyDevicePermissions() {
+    const dp = settingsStore.normalizeDevicePermissions(settingsStore.loadSettings().devicePermissions);
+    const mode = dp.cameraMode;
+    const seen = new Set();
+    const applyOne = (sess) => {
+        if (!sess || seen.has(sess)) return;
+        seen.add(sess);
+        installMediaPermissionHandlers(sess, mode);
+    };
+    try {
+        applyOne(session.fromPartition(partitionForGroup(1)));
+        applyOne(session.fromPartition(SHARED_PARTITION));
+    } catch { /* ignore */ }
+    for (const tab of tabs.values()) {
+        try {
+            const sess = tab.view?.webContents && !tab.view.webContents.isDestroyed()
+                ? tab.view.webContents.session
+                : tab.tabSession;
+            applyOne(sess);
+        } catch { /* ignore */ }
+    }
+    reinjectCameraMediaFilterAllTabs();
+}
+
 function reapplyMitmTrustToSharedSession() {
-    if (_trafficRouteMode !== 'mitm' || !_trustMitmCA) return;
+    if (!_trustMitmCA) return;
     try {
         const seen = new Set();
         const trustOnce = (s) => {
@@ -265,7 +376,6 @@ function reapplyMitmTrustToSharedSession() {
         trustOnce(session.fromPartition(partitionForGroup(1)));
         trustOnce(session.fromPartition(SHARED_PARTITION));
         for (const tab of tabs.values()) {
-            if (!tab.cupnetEnabled) continue;
             const sess = tab.view?.webContents && !tab.view.webContents.isDestroyed()
                 ? tab.view.webContents.session
                 : tab.tabSession;
@@ -279,7 +389,6 @@ function reapplyMitmTrustToSharedSession() {
  * @param {object} opts
  * @param {string}       [opts.url]             – initial URL (default: about:blank → new-tab.html)
  * @param {number}       [opts.cookieGroupId=1] – cookie group (maps to Electron partition)
- * @param {boolean}      [opts.cupnetEnabled=true] – CupNet mode (MITM + logging + filters)
  * @param {number|null}  [opts.proxyProfileId=null] – per-tab proxy profile (null = global)
  * @param {string|null}  [opts.proxyRules=null] – legacy: raw proxy rules for DB session
  * @param {number|null}  [opts.existingSessionId=null] – reuse a DB session
@@ -299,7 +408,6 @@ async function createTab(opts = {}) {
             proxyRules: proxyRules || null,
             url: initialUrl || null,
             cookieGroupId,
-            cupnetEnabled: true,
             existingSessionId: existingSessionId || null,
         });
     }
@@ -307,7 +415,6 @@ async function createTab(opts = {}) {
     const {
         url = null,
         cookieGroupId = 1,
-        cupnetEnabled = true,
         proxyProfileId = null,
         proxyRules = null,
         existingSessionId = null,
@@ -317,18 +424,15 @@ async function createTab(opts = {}) {
     const partition = partitionForGroup(cookieGroupId);
     const tabSession = session.fromPartition(partition);
 
-    if (cupnetEnabled) {
-        if (_trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(tabSession);
-        await tabSession.setProxy(getProxyOptsForTab({ cupnetEnabled: true, id: tabId })).catch(e => console.error('[tab] setProxy', e?.message));
-        applyTrafficFiltersToSession(tabSession);
-    } else {
-        await tabSession.setProxy({ mode: 'direct' }).catch(() => {});
-    }
+    if (_trustMitmCA) _trustMitmCA(tabSession);
+    await tabSession.setProxy(getProxyOptsForTab({ id: tabId })).catch(e => console.error('[tab] setProxy', e?.message));
+    applyTrafficFiltersToSession(tabSession);
+    installMediaPermissionHandlers(tabSession, settingsStore.normalizeDevicePermissions(settingsStore.loadSettings().devicePermissions).cameraMode);
 
     const view = new BrowserView({ webPreferences: buildTabViewWebPreferences(tabSession) });
 
     let sessionId = existingSessionId || null;
-    if (!sessionId && cupnetEnabled) {
+    if (!sessionId) {
         const sessionRow = await db.createSessionAsync(proxyRules || null, tabId);
         sessionId = sessionRow ? sessionRow.id : null;
     }
@@ -339,11 +443,9 @@ async function createTab(opts = {}) {
         tabSession,
         partition,
         cookieGroupId,
-        cupnetEnabled,
         proxyProfileId,
         // Legacy compat fields
         isolated:   cookieGroupId !== 1,
-        direct:     !cupnetEnabled,
         proxyRules: proxyRules || null,
         sessionId,
         title: 'New Tab',
@@ -356,9 +458,9 @@ async function createTab(opts = {}) {
 
     if (view.webContents && !view.webContents.isDestroyed()) {
         const sess = view.webContents.session;
-        if (cupnetEnabled && _trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(sess);
+        if (_trustMitmCA) _trustMitmCA(sess);
         sess.setProxy(getProxyOptsForTab(tab)).catch(() => {});
-        if (cupnetEnabled && _upstreamProxyRules) applyWebRtcPolicy(view.webContents);
+        if (_upstreamProxyRules) applyWebRtcPolicy(view.webContents);
         else resetWebRtcPolicy(view.webContents);
     }
 
@@ -375,50 +477,12 @@ async function createTab(opts = {}) {
 }
 
 /**
- * Toggle CupNet mode on/off for a tab. Requires page reload.
- */
-async function setTabCupNet(tabId, enabled) {
-    const tab = tabs.get(tabId || activeTabId);
-    if (!tab) return { success: false, error: 'Tab not found' };
-
-    tab.cupnetEnabled = !!enabled;
-    tab.direct = !tab.cupnetEnabled;
-
-    const sess = tab.view?.webContents && !tab.view.webContents.isDestroyed()
-        ? tab.view.webContents.session
-        : tab.tabSession;
-
-    if (tab.cupnetEnabled) {
-        if (_trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(sess);
-        await sess.setProxy(getProxyOptsForTab(tab)).catch(() => {});
-        applyTrafficFiltersToSession(sess);
-        if (_upstreamProxyRules && tab.view?.webContents) applyWebRtcPolicy(tab.view.webContents);
-        if (!tab.sessionId) {
-            const sessionRow = await db.createSessionAsync(tab.proxyRules || null, tab.id);
-            tab.sessionId = sessionRow ? sessionRow.id : null;
-        }
-    } else {
-        await sess.setProxy({ mode: 'direct' }).catch(() => {});
-        try { sess.webRequest.onBeforeRequest(null); } catch {}
-        if (tab.view?.webContents) resetWebRtcPolicy(tab.view.webContents);
-        tab.proxyProfileId = null;
-    }
-
-    broadcastTabList(true);
-    if (tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
-        try { tab.view.webContents.reload(); } catch (_) {}
-    }
-    return { success: true };
-}
-
-/**
  * Set per-tab proxy profile (null = use global proxy).
  * Fingerprint from the profile should be applied by the caller (via fingerprint-service).
  */
 async function setTabProxy(tabId, proxyProfileId) {
     const tab = tabs.get(tabId || activeTabId);
     if (!tab) return { success: false, error: 'Tab not found' };
-    if (!tab.cupnetEnabled) return { success: false, error: 'CupNet is disabled for this tab' };
 
     tab.proxyProfileId = proxyProfileId || null;
     broadcastTabList(true);
@@ -447,13 +511,10 @@ async function setTabCookieGroup(tabId, cookieGroupId) {
     const newPartition = partitionForGroup(cookieGroupId);
     const newSession   = session.fromPartition(newPartition);
 
-    if (tab.cupnetEnabled) {
-        if (_trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(newSession);
-        await newSession.setProxy(getProxyOptsForTab(tab)).catch(() => {});
-        applyTrafficFiltersToSession(newSession);
-    } else {
-        await newSession.setProxy({ mode: 'direct' }).catch(() => {});
-    }
+    if (_trustMitmCA) _trustMitmCA(newSession);
+    await newSession.setProxy(getProxyOptsForTab(tab)).catch(() => {});
+    applyTrafficFiltersToSession(newSession);
+    installMediaPermissionHandlers(newSession, settingsStore.normalizeDevicePermissions(settingsStore.loadSettings().devicePermissions).cameraMode);
 
     const newView = new BrowserView({ webPreferences: buildTabViewWebPreferences(newSession) });
 
@@ -470,9 +531,7 @@ async function setTabCookieGroup(tabId, cookieGroupId) {
 
     attachTabListeners(tab);
 
-    if (tab.cupnetEnabled) {
-        newView.webContents.session.setProxy(getProxyOptsForTab(tab)).catch(() => {});
-    }
+    newView.webContents.session.setProxy(getProxyOptsForTab(tab)).catch(() => {});
 
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.addBrowserView(newView);
@@ -586,11 +645,11 @@ function getTabList() {
         sessionId:       t.sessionId,
         proxyRules:      t.proxyRules,
         cookieGroupId:   t.cookieGroupId ?? 1,
-        cupnetEnabled:   t.cupnetEnabled ?? false,
         proxyProfileId:  t.proxyProfileId ?? null,
-        // Legacy compat
+        // Legacy compat (все вкладки через MITM)
         isolated:        t.isolated || false,
-        direct:          t.direct   || false,
+        cupnetEnabled:   true,
+        direct:            false,
         isActive:        t.id === activeTabId
     }));
 }
@@ -620,7 +679,7 @@ async function setProxy(tabId, proxyRules) {
     if (!tab) return;
     tab.proxyRules = proxyRules;
     try {
-        if (_trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(tab.tabSession);
+        if (_trustMitmCA) _trustMitmCA(tab.tabSession);
         await tab.tabSession.setProxy(getProxyOptsForTab(tab));
     } catch (e) {
         console.error('[tab-manager] setProxy error for', tabId, ':', e.message);
@@ -629,23 +688,20 @@ async function setProxy(tabId, proxyRules) {
 
 /**
  * Update proxy for ALL tabs AND the shared session.
- * When proxyRules is null (Direct mode) traffic is still routed through the
- * local MITM proxy so that AzureTLS fingerprinting and logging remain active.
+ * Upstream задаётся в MITM; Chromium всегда ходит на локальный MITM.
  */
-async function setProxyAll(proxyRules, routeMode = _trafficRouteMode) {
-    _trafficRouteMode = routeMode === 'browser_proxy' ? 'browser_proxy' : 'mitm';
+async function setProxyAll(proxyRules) {
     _upstreamProxyRules = proxyUrlToRules(proxyRules);
     for (const tab of tabs.values()) {
-        if (!tab.cupnetEnabled) continue;
         try {
             if (tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
                 const sess = tab.view.webContents.session;
-                if (_trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(sess);
+                if (_trustMitmCA) _trustMitmCA(sess);
                 await sess.setProxy(getProxyOptsForTab(tab));
                 if (_upstreamProxyRules) applyWebRtcPolicy(tab.view.webContents);
                 else resetWebRtcPolicy(tab.view.webContents);
             } else {
-                if (_trafficRouteMode === 'mitm' && _trustMitmCA) _trustMitmCA(tab.tabSession);
+                if (_trustMitmCA) _trustMitmCA(tab.tabSession);
                 await tab.tabSession.setProxy(getProxyOptsForTab(tab));
             }
         } catch (e) {
@@ -721,7 +777,6 @@ function getAllTabs() { return tabs.values(); }
 function setBypassRules(bypassStr) {
     _currentBypassRules = bypassStr;
     for (const tab of tabs.values()) {
-        if (!tab.cupnetEnabled) continue;
         try {
             if (tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
                 tab.view.webContents.session.setProxy(getProxyOptsForTab(tab)).catch(() => {});
@@ -745,16 +800,51 @@ const PLACEHOLDER_IMG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000
 
 const SKIP_PROTOCOLS = ['file:', 'devtools:', 'chrome-devtools:', 'chrome-extension:', 'chrome:', 'data:'];
 
-function matchesCaptchaWL(url, whitelist) {
+const _TRAFFIC_FILTER_LOG = process.env.CUPNET_TRAFFIC_FILTER_LOG === '1';
+
+function _cfChallengePathOrQuery(path, search) {
+    const p = path || '';
+    const s = search || '';
+    return (
+        p.includes('challenge-platform') ||
+        p.includes('/cdn-cgi/challenge') ||
+        p.includes('/cdn-cgi/') ||
+        p.includes('__cf_chl') ||
+        s.includes('__cf_chl')
+    );
+}
+
+/**
+ * Cloudflare кладёт challenge на origin (/cdn-cgi/challenge-platform/…). Картинки часто с тех же
+ * хостов с обычными путями (/favicon.ico, /logo…) — без Referer не отличить от «лишних» картинок.
+ */
+function matchesCaptchaWL(url, whitelist, referrer) {
+    let u;
+    try { u = new URL(url); } catch { return false; }
+    const host = (u.hostname || '').toLowerCase();
+    const path = (u.pathname || '').toLowerCase();
+    const search = (u.search || '').toLowerCase();
+    if (_cfChallengePathOrQuery(path, search)) return true;
+
+    const refStr = referrer != null ? String(referrer).trim() : '';
+    if (refStr) {
+        try {
+            const r = new URL(refStr);
+            if ((r.hostname || '').toLowerCase() === host) {
+                const rp = (r.pathname || '').toLowerCase();
+                const rs = (r.search || '').toLowerCase();
+                if (_cfChallengePathOrQuery(rp, rs)) return true;
+            }
+        } catch { /* ignore */ }
+    }
+
     if (!whitelist || !whitelist.length) return false;
-    let host;
-    try { host = new URL(url).hostname; } catch { return false; }
     for (const p of whitelist) {
         if (p.startsWith('*.')) {
-            const suffix = p.slice(1);
+            const suffix = p.slice(1).toLowerCase();
             if (host.endsWith(suffix) || host === suffix.slice(1)) return true;
         } else {
-            if (host === p) return true;
+            if (host === String(p).toLowerCase()) return true;
         }
     }
     return false;
@@ -781,7 +871,11 @@ function applyTrafficFiltersToSession(sess) {
     }
     const whitelist = _trafficOpts.captchaWhitelist || [];
     sess.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
-        if (blocked.includes(details.resourceType) && !matchesCaptchaWL(details.url, whitelist)) {
+        const ref = details.referrer || details.referer || '';
+        if (blocked.includes(details.resourceType) && !matchesCaptchaWL(details.url, whitelist, ref)) {
+            if (_TRAFFIC_FILTER_LOG) {
+                console.log(`[traffic-filter] ${details.resourceType} ${details.url} ref=${ref || '(none)'}`);
+            }
             if (details.resourceType === 'image') {
                 return callback({ redirectURL: PLACEHOLDER_IMG });
             }
@@ -803,15 +897,8 @@ function setTrafficOpts(opts) {
     }
 }
 
-/**
- * @deprecated Use createTab({ cupnetEnabled: false }) instead.
- */
-async function createDirectTab(initialUrl) {
-    return createTab({ url: initialUrl || null, cupnetEnabled: false, cookieGroupId: 1 });
-}
-
 module.exports = {
-    init, createTab, createDirectTab, isolateTab, switchTab, closeTab, navigate,
+    init, createTab, isolateTab, switchTab, closeTab, navigate,
     getTabList, getActiveTabId, getTab, getActiveTab, getAllTabs, getTabIdByWebContentsId,
     setProxy, setProxyAll, relayout, destroyAll,
     broadcastTabList, setExtraTopOffset,
@@ -822,7 +909,10 @@ module.exports = {
     setBypassRules, setTrafficOpts,
     applyWebRtcPolicy, resetWebRtcPolicy,
     // New per-tab controls
-    setTabCupNet, setTabProxy, setTabCookieGroup,
+    setTabProxy, setTabCookieGroup,
     partitionForGroup,
     SHARED_PARTITION,
+    applyDevicePermissions,
+    buildCameraFilterScript,
+    _getCameraFilterDataForPreload,
 };

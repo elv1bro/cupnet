@@ -7,6 +7,7 @@
  */
 function createFingerprintService({ sysLog, safeCatch, getTabManager, getDb }) {
     async function applyFingerprintToWebContents(wc, fp) {
+        if (process.env.CUPNET_DISABLE_FINGERPRINT === '1') return;
         if (!fp || !wc || wc.isDestroyed()) return;
         if (fp.user_agent) {
             try {
@@ -31,7 +32,6 @@ function createFingerprintService({ sysLog, safeCatch, getTabManager, getDb }) {
         const tabManager = typeof getTabManager === 'function' ? getTabManager() : null;
         if (!tabManager) return;
         for (const tab of tabManager.getAllTabs()) {
-            if (!tab.cupnetEnabled) continue;
             if (tab?.view?.webContents && !tab.view.webContents.isDestroyed()) {
                 await applyFingerprintToWebContents(tab.view.webContents, fp).catch((err) => {
                     safeCatch({ module: 'main', eventCode: 'fingerprint.apply.failed', context: { tabId: tab.id } }, err, 'info');

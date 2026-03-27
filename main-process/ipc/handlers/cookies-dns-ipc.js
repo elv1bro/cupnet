@@ -158,7 +158,7 @@ function registerCookiesDnsIpc(ctx) {
         // Mirror set-tab-cookie-group: new BrowserView/session loses MITM upstream + logging unless re-applied.
         if (result?.success) {
             const tab = ctx.tabManager.getTab(tid);
-            if (tab && tab.cupnetEnabled) {
+            if (tab) {
                 ctx.setupNetworkLogging(tab.view.webContents, tab.id, ctx.currentSessionId);
                 if (ctx.interceptor) {
                     try { ctx.interceptor.attachToSession(tab.tabSession, tab.id); } catch (e) {
@@ -194,40 +194,12 @@ function registerCookiesDnsIpc(ctx) {
         return tabId;
     });
 
-    ctx.ipcMain.handle('new-direct-tab', async () => {
-        const tabId = await ctx.tabManager.createDirectTab(ctx.getNewTabUrl());
-        ctx.tabManager.switchTab(tabId);
-        ctx.notifyCookieManagerTabs();
-        return tabId;
-    });
-
     ctx.ipcMain.handle('open-cookie-manager', async (_, tabId) => {
         ctx.createCookieManagerWindow(tabId || ctx.tabManager.getActiveTabId());
         return true;
     });
 
     // ── Per-tab controls ────────────────────────────────────────────────────
-
-    ctx.ipcMain.handle('set-tab-cupnet', async (_, tabId, enabled) => {
-        const tid = tabId || ctx.tabManager.getActiveTabId();
-        const result = await ctx.tabManager.setTabCupNet(tabId, enabled);
-        if (result?.success) {
-            const tab = ctx.tabManager.getTab(tid);
-            if (!enabled) {
-                await applyMitmAndFingerprintForTabProxy(tid, null);
-            } else if (tab) {
-                ctx.setupNetworkLogging(tab.view.webContents, tab.id, ctx.currentSessionId);
-                if (ctx.interceptor) {
-                    try { ctx.interceptor.attachToSession(tab.tabSession, tab.id); } catch {}
-                }
-                if (tab.proxyProfileId) {
-                    await applyMitmAndFingerprintForTabProxy(tid, tab.proxyProfileId);
-                }
-            }
-            ctx.notifyCookieManagerTabs();
-        }
-        return result;
-    });
 
     ctx.ipcMain.handle('set-tab-proxy', async (_, tabId, proxyProfileId, ephemeralVars) => {
         const tid = tabId || ctx.tabManager.getActiveTabId();
@@ -250,7 +222,7 @@ function registerCookiesDnsIpc(ctx) {
         const result = await ctx.tabManager.setTabCookieGroup(tid, cookieGroupId);
         if (result?.success) {
             const tab = ctx.tabManager.getTab(tid);
-            if (tab && tab.cupnetEnabled) {
+            if (tab) {
                 ctx.setupNetworkLogging(tab.view.webContents, tab.id, ctx.currentSessionId);
                 if (ctx.interceptor) {
                     try { ctx.interceptor.attachToSession(tab.tabSession, tab.id); } catch {}

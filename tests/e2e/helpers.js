@@ -343,8 +343,6 @@ async function openNewTabWithFreshCookieGroupAndCupnet(mainWindowPage) {
         const active = tabList.find((t) => t.isActive);
         if (!active) throw new Error('no active tab');
         await window.electronAPI.setTabCookieGroup(active.id, cg.group.id);
-        const cup = await window.electronAPI.setTabCupNet(active.id, true);
-        if (cup && cup.success === false) throw new Error(cup.error || 'setTabCupNet failed');
     });
     await new Promise((r) => setTimeout(r, 750));
 }

@@ -9,9 +9,6 @@ function registerExtProxyIpc(ctx) {
 
     async function startExtPort(config) {
         if (ctx.activeExtPorts.has(config.port)) return ctx.activeExtPorts.get(config.port);
-        if (ctx.getCurrentTrafficMode() !== 'mitm') {
-            throw new Error('External proxy ports require MITM traffic mode');
-        }
         const sess = await ctx.db.createExternalSessionAsync(`ext:${config.port}`, `ext_${config.port}`, config.port);
         const instance = new ctx.ExternalProxyPort(ctx.mitmProxy, {
             port: config.port,

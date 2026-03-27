@@ -132,6 +132,12 @@ quick-proxy-change.html  — быстрая смена прокси
 - Поддерживает фильтрацию по `sessionId`
 - Файл сохраняется через `dialog.showSaveDialog` с расширением `.har`
 - Совместим с Chrome DevTools, Charles Proxy, Fiddler
+- **WebSocket:** на entry handshake добавляются `_webSocketMessages` (как в Chrome) и `_cupnetWebSocketMessages` (полные `payload` из БД + `id`, `connection_id`, `created_at`)
+- **Лимиты экспорта (env):** `CUPNET_HAR_MAX_EXPORT_CHARS` или `CUPNET_HAR_MAX_BODY_CHARS` — максимум символов для HTTP-тел и для поля `data` в `_webSocketMessages` (по умолчанию 1 MiB; `0` = без обрезки)
+- **`CUPNET_EXPORT_WS_FRAME_LIMIT`** — максимум фреймов, подгружаемых из БД на одно соединение / в sidecar (по умолчанию 5 000 000)
+- **`CUPNET_HAR_WS_SIDECAR=1`** — дополнительно пишется `<имя>-websocket.json` рядом с `.har` со всеми строками `ws_events` сессии (`schema: cupnet.ws_sidecar.v1`)
+
+**Incident bundle** (`bundle-utils.js`): `traffic.websocketEvents` использует те же лимиты фреймов; объём HTTP/trace задаётся **`CUPNET_BUNDLE_MAX_ROWS`** (по умолчанию 50 000).
 
 ---
 

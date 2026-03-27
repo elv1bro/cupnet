@@ -41,9 +41,8 @@ function _logRulesSnapshot(reason) {
             pattern: r.url_pattern,
         }));
         const enabledCount = rules.filter(r => r.enabled).length;
-        const hasAny = enabledCount > 0;
-        const msg = `Правила intercept (${reason}): ${enabledCount} вкл. / ${rules.length} всего; protocol.handle=${hasAny ? 'да' : 'нет'}`;
-        const payload = { reason, protocolHandleActive: hasAny, rules };
+        const msg = `Правила intercept (${reason}): ${enabledCount} вкл. / ${rules.length} всего; MITM-path (protocol.handle не используется)`;
+        const payload = { reason, protocolHandleActive: false, rules };
         sysLog('info', 'request-interceptor', msg, payload);
         _mirrorStdout(msg, payload);
     } catch (err) {
@@ -76,6 +75,14 @@ function setOnRuleMatch(fn) { _onRuleMatch = typeof fn === 'function' ? fn : nul
 let _resolveTabIdFromDetails = null;
 function setResolveTabIdFromDetails(fn) {
     _resolveTabIdFromDetails = typeof fn === 'function' ? fn : null;
+}
+
+/**
+ * Режим только MITM: protocol.handle для http(s) не регистрируется —
+ * intercept в mitm-proxy (planMitmIntercept). Вызов сохранён для совместимости (resync при смене режима в IPC).
+ */
+function setTrafficMode(_mode) {
+    resyncWebRequestHooks();
 }
 
 /**
@@ -184,15 +191,205 @@ function ruleMatchesUrl(pattern, url) {
     return matchesPattern(pattern, url);
 }
 
+// ─── MITM pipeline: mock/block после расшифровки (как «ответ AzureTLS»), без protocol short-circuit ──
+
+/**
+ * Запрос уходит на локальный MITM (127.0.0.1:mitmPort) — тогда mock/block обрабатываем в mitm-proxy,
+ * а в protocol.handle пропускаем, иначе Turnstile/CF видят «левый» ответ без нормального прокси-пути.
+ */
+async function sessionUsesCupnetMitm(tabSession, url) {
+    if (!tabSession || typeof tabSession.resolveProxy !== 'function') return false;
+    try {
+        const raw = await tabSession.resolveProxy(url);
+        const first = String(raw || '').split(';').map((s) => s.trim())[0] || '';
+        const port = networkPolicy.mitmPort;
+        return new RegExp(`^PROXY\\s+127\\.0\\.0\\.1:${port}\\b`, 'i').test(first);
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Не применять intercept (mock/block/modifyHeaders) к URL challenge/captcha/CF.
+ * Широкий pattern (*, &lt;all_urls&gt;) иначе подменяет скрипты Turnstile / cdn-cgi на origin.
+ * Отключить: CUPNET_INTERCEPT_ALLOW_MOCK_CF=1
+ */
+function bypassInterceptMockBlockForSensitiveUrl(urlStr) {
+    if (process.env.CUPNET_INTERCEPT_ALLOW_MOCK_CF === '1') return false;
+    let u;
+    try { u = new URL(urlStr); } catch { return false; }
+    const host = (u.hostname || '').toLowerCase();
+    const path = (u.pathname || '').toLowerCase();
+    const search = (u.search || '').toLowerCase();
+    if (host === 'challenges.cloudflare.com') return true;
+    if (host === 'turnstile.com' || host.endsWith('.turnstile.com')) return true;
+    if (host.endsWith('.cloudflareinsights.com')) return true;
+    if (path.includes('challenge-platform') || path.includes('/cdn-cgi/challenge')) return true;
+    if (path.includes('/cdn-cgi/')) return true;
+    if (path.includes('__cf_chl') || search.includes('__cf_chl')) return true;
+    if (host === 'hcaptcha.com' || host.endsWith('.hcaptcha.com')) return true;
+    if (host.includes('recaptcha.net')) return true;
+    if (host.includes('google.com') && path.includes('recaptcha')) return true;
+    if (host.includes('gstatic.com') && path.includes('recaptcha')) return true;
+    return false;
+}
+
+function _patchRequestOptsForMitm(opts, p) {
+    const toSetReq = p.requestHeaders || {};
+    const toRemoveReq = p.removeRequestHeaders || [];
+    if (!opts.headers) opts.headers = {};
+    for (const [k, v] of Object.entries(toSetReq)) opts.headers[k] = v;
+    for (const k of toRemoveReq) {
+        delete opts.headers[k];
+        const lower = String(k).toLowerCase();
+        for (const ex of Object.keys(opts.headers)) {
+            if (String(ex).toLowerCase() === lower) delete opts.headers[ex];
+        }
+    }
+    if (Array.isArray(opts.orderedHeaders) && opts.orderedHeaders.length) {
+        for (const [k, v] of Object.entries(toSetReq)) {
+            let hit = false;
+            opts.orderedHeaders = opts.orderedHeaders.map(([hk, hv]) => {
+                if (String(hk).toLowerCase() === String(k).toLowerCase()) {
+                    hit = true;
+                    return [hk, v];
+                }
+                return [hk, hv];
+            });
+            if (!hit) opts.orderedHeaders.push([k, v]);
+        }
+        for (const k of toRemoveReq) {
+            const lower = String(k).toLowerCase();
+            opts.orderedHeaders = opts.orderedHeaders.filter(
+                ([hk]) => String(hk).toLowerCase() !== lower
+            );
+        }
+    }
+}
+
+/**
+ * @param {object} opts — копия dnsAdjusted (headers/orderedHeaders можно мутировать)
+ * @returns {{ done: true, response: object } | { done: false, opts: object, postProcess: object|null }}
+ */
+function planMitmIntercept(opts) {
+    const url = String(opts.url || '');
+    const rules = loadRules();
+    for (const rule of rules) {
+        if (!ruleMatchesUrl(rule.url_pattern, url)) continue;
+        if (bypassInterceptMockBlockForSensitiveUrl(url)) continue;
+
+        if (rule.type === 'block') {
+            _logRuleApplied('mitm', {
+                type: 'block', ruleName: rule.name, url,
+                tabId: null, detail: 'short-circuit',
+            });
+            if (_onRuleMatch) {
+                try {
+                    _onRuleMatch({ type: 'block', ruleName: rule.name, url, tabId: null });
+                } catch (err) {
+                    safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'block', stage: 'mitm' } }, err);
+                }
+            }
+            return {
+                done: true,
+                response: {
+                    statusCode: 403,
+                    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                    bodyBase64: Buffer.from('Blocked by CupNet', 'utf8').toString('base64'),
+                    dnsOverride: opts.dnsOverride || null,
+                },
+            };
+        }
+
+        if (rule.type === 'mock') {
+            const body = rule.params.body ?? '';
+            const mimeType = rule.params.mimeType || 'text/plain';
+            const statusCode = rule.params.status || 200;
+            _logRuleApplied('mitm', {
+                type: 'mock', ruleName: rule.name, url,
+                tabId: null, method: opts.method || 'GET',
+                status: statusCode, detail: `${statusCode} ${mimeType}`,
+            });
+            if (_onRuleMatch) {
+                const bodyPreview = typeof body === 'string' && body.length > 0
+                    ? body.substring(0, 120) + (body.length > 120 ? '…' : '') : '(empty)';
+                try {
+                    _onRuleMatch({
+                        type: 'mock', ruleName: rule.name, url,
+                        tabId: null, method: opts.method || 'GET',
+                        status: statusCode, mimeType,
+                        body: typeof body === 'string' ? body : String(body ?? ''),
+                        detail: `${statusCode} ${mimeType}`, bodyPreview,
+                    });
+                } catch (err) {
+                    safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'mock', stage: 'mitm' } }, err);
+                }
+            }
+            return {
+                done: true,
+                response: {
+                    statusCode,
+                    headers: { 'Content-Type': mimeType },
+                    bodyBase64: Buffer.from(String(body), 'utf8').toString('base64'),
+                    dnsOverride: opts.dnsOverride || null,
+                },
+            };
+        }
+
+        if (rule.type === 'modifyHeaders') {
+            const p = rule.params;
+            _patchRequestOptsForMitm(opts, p);
+            const hasResp =
+                Object.keys(p.responseHeaders || {}).length > 0
+                || (p.removeResponseHeaders || []).length > 0;
+            const dp = [];
+            if (Object.keys(p.requestHeaders || {}).length) dp.push(`ReqSet: ${Object.keys(p.requestHeaders).join(', ')}`);
+            if ((p.removeRequestHeaders || []).length) dp.push(`ReqRemove: ${p.removeRequestHeaders.join(', ')}`);
+            if (Object.keys(p.responseHeaders || {}).length) dp.push(`RespSet: ${Object.keys(p.responseHeaders).join(', ')}`);
+            if ((p.removeResponseHeaders || []).length) dp.push(`RespRemove: ${p.removeResponseHeaders.join(', ')}`);
+            const detailStr = dp.join('; ') || 'Headers modified';
+            _logRuleApplied('mitm', {
+                type: 'modifyHeaders', ruleName: rule.name, url,
+                tabId: null, detail: detailStr,
+            });
+            if (_onRuleMatch) {
+                try {
+                    _onRuleMatch({ type: 'modifyHeaders', ruleName: rule.name, url, tabId: null, detail: detailStr });
+                } catch (err) {
+                    safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'modifyHeaders', stage: 'mitm' } }, err);
+                }
+            }
+            return { done: false, opts, postProcess: hasResp ? p : null };
+        }
+    }
+    return { done: false, opts, postProcess: null };
+}
+
+function finalizeMitmInterceptResponse(res, ruleParams) {
+    if (!res || !ruleParams) return res;
+    const toSetResp = ruleParams.responseHeaders || {};
+    const toRemoveResp = ruleParams.removeResponseHeaders || [];
+    if (!Object.keys(toSetResp).length && !toRemoveResp.length) return res;
+    const headers = { ...(res.headers || {}) };
+    for (const [k, v] of Object.entries(toSetResp)) headers[k] = v;
+    for (const k of toRemoveResp) {
+        delete headers[k];
+        const lower = String(k).toLowerCase();
+        for (const ex of Object.keys(headers)) {
+            if (String(ex).toLowerCase() === lower) delete headers[ex];
+        }
+    }
+    return { ...res, headers };
+}
+
 /** Для IPC перед сохранением правила */
 function validateInterceptRuleForSave(rule) {
     if (!isStrictInterceptMode()) return { ok: true };
     return validateStrictInterceptUrlPattern(rule?.url_pattern);
 }
 
-// (webRequest hooks полностью удалены — CF Turnstile детектит сам факт регистрации
-//  onBeforeSendHeaders / onHeadersReceived, даже с узким URL-фильтром.
-//  Все типы правил теперь через protocol.handle — он не детектируется.)
+// (webRequest hooks удалены — CF детектит onBeforeSendHeaders / onHeadersReceived.)
+// block/mock при прокси на CupNet MITM: planMitmIntercept в mitm-proxy; в protocol.handle пропуск — sessionUsesCupnetMitm.
 
 /**
  * Matches a URL against a glob-like pattern.
@@ -214,182 +411,12 @@ function matchesPattern(pattern, url) {
 // ─── Session attachment ───────────────────────────────────────────────────────
 
 /**
- * Единый обработчик через protocol.handle — block, modifyHeaders, mock.
- * protocol.handle() прозрачен для антиботов (в отличие от webRequest, который детектируется
- * Cloudflare Turnstile даже при узком URL-фильтре). Для pass-through / modifyHeaders нужен
- * tabSession.fetch(..., { bypassCustomProtocolHandlers: true }) — иначе net.fetch без сессии
- * даёт ERR_CERT_INVALID при MITM. Принудительно net: CUPNET_INTERCEPT_USE_NET_FETCH=1.
+ * Только MITM: не регистрируем protocol.handle — intercept в mitm-proxy (planMitmIntercept).
  */
 function _syncProtocolHandlers(tabSession) {
     if (!tabSession) return;
-    const { net } = require('electron');
-    const allRules = loadRules();
-
-    if (allRules.length > 0) {
-        const timeoutMs = networkPolicy.timeouts.passThroughMs;
-
-        /** MITM: доверие к CA только на Session; net.fetch обходит verifyProc → -207. */
-        const fetchThroughSession = (input, init) => {
-            if (process.env.CUPNET_INTERCEPT_USE_NET_FETCH !== '1'
-                && typeof tabSession.fetch === 'function') {
-                return tabSession.fetch(input, init);
-            }
-            return net.fetch(input, init);
-        };
-
-        const protocolHandler = async (request) => {
-            const rules = loadRules();
-            for (const rule of rules) {
-                if (!ruleMatchesUrl(rule.url_pattern, request.url)) continue;
-
-                // ── Block ────────────────────────────────────────────────
-                if (rule.type === 'block') {
-                    _logRuleApplied('protocol', {
-                        type: 'block', ruleName: rule.name, url: request.url,
-                        tabId: null, detail: 'cancel',
-                    });
-                    if (_onRuleMatch) {
-                        try { _onRuleMatch({ type: 'block', ruleName: rule.name, url: request.url, tabId: null }); } catch (err) {
-                            safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'block' } }, err);
-                        }
-                    }
-                    return new Response('Blocked by CupNet', { status: 403, headers: { 'Content-Type': 'text/plain' } });
-                }
-
-                // ── Mock ─────────────────────────────────────────────────
-                if (rule.type === 'mock') {
-                    const body       = rule.params.body       ?? '';
-                    const mimeType   = rule.params.mimeType   || 'text/plain';
-                    const statusCode = rule.params.status     || 200;
-                    _logRuleApplied('protocol', {
-                        type: 'mock', ruleName: rule.name, url: request.url,
-                        tabId: null, method: request.method || 'GET',
-                        status: statusCode, detail: `${statusCode} ${mimeType}`,
-                    });
-                    if (_onRuleMatch) {
-                        const bodyPreview = typeof body === 'string' && body.length > 0
-                            ? body.substring(0, 120) + (body.length > 120 ? '…' : '') : '(empty)';
-                        try {
-                            _onRuleMatch({
-                                type: 'mock', ruleName: rule.name, url: request.url,
-                                tabId: null, method: request.method || 'GET',
-                                status: statusCode, mimeType,
-                                body: typeof body === 'string' ? body : String(body ?? ''),
-                                detail: `${statusCode} ${mimeType}`, bodyPreview,
-                            });
-                        } catch (err) {
-                            safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'mock' } }, err);
-                        }
-                    }
-                    return new Response(body, { status: statusCode, headers: { 'Content-Type': mimeType } });
-                }
-
-                // ── ModifyHeaders ────────────────────────────────────────
-                if (rule.type === 'modifyHeaders') {
-                    const toSetReq    = rule.params.requestHeaders         || {};
-                    const toRemoveReq = rule.params.removeRequestHeaders   || [];
-                    const toSetResp   = rule.params.responseHeaders        || {};
-                    const toRemoveResp = rule.params.removeResponseHeaders || [];
-                    const hasReqChanges  = Object.keys(toSetReq).length > 0 || toRemoveReq.length > 0;
-                    const hasRespChanges = Object.keys(toSetResp).length > 0 || toRemoveResp.length > 0;
-
-                    let resp;
-                    const ctrl = new AbortController();
-                    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-                    try {
-                        if (hasReqChanges) {
-                            const newHeaders = {};
-                            for (const [k, v] of request.headers.entries()) newHeaders[k] = v;
-                            for (const [k, v] of Object.entries(toSetReq)) newHeaders[k] = v;
-                            for (const k of toRemoveReq) {
-                                delete newHeaders[k];
-                                const lower = k.toLowerCase();
-                                for (const ex of Object.keys(newHeaders)) {
-                                    if (ex.toLowerCase() === lower) delete newHeaders[ex];
-                                }
-                            }
-                            const fetchOpts = {
-                                method: request.method,
-                                headers: newHeaders,
-                                bypassCustomProtocolHandlers: true,
-                                signal: ctrl.signal,
-                            };
-                            if (!['GET', 'HEAD'].includes(request.method) && request.body) {
-                                fetchOpts.body = request.body;
-                            }
-                            resp = await fetchThroughSession(request.url, fetchOpts);
-                        } else {
-                            resp = await fetchThroughSession(request, {
-                                bypassCustomProtocolHandlers: true,
-                                signal: ctrl.signal,
-                            });
-                        }
-                    } finally {
-                        clearTimeout(timer);
-                    }
-
-                    if (hasRespChanges) {
-                        const rh = new Headers(resp.headers);
-                        for (const [k, v] of Object.entries(toSetResp)) rh.set(k, v);
-                        for (const k of toRemoveResp) rh.delete(k);
-                        resp = new Response(resp.body, {
-                            status: resp.status,
-                            statusText: resp.statusText,
-                            headers: rh,
-                        });
-                    }
-
-                    const dp = [];
-                    if (Object.keys(toSetReq).length)  dp.push(`ReqSet: ${Object.keys(toSetReq).join(', ')}`);
-                    if (toRemoveReq.length)             dp.push(`ReqRemove: ${toRemoveReq.join(', ')}`);
-                    if (Object.keys(toSetResp).length)  dp.push(`RespSet: ${Object.keys(toSetResp).join(', ')}`);
-                    if (toRemoveResp.length)            dp.push(`RespRemove: ${toRemoveResp.join(', ')}`);
-                    const detailStr = dp.join('; ') || 'Headers modified';
-                    _logRuleApplied('protocol', {
-                        type: 'modifyHeaders', ruleName: rule.name, url: request.url,
-                        tabId: null, detail: detailStr,
-                    });
-                    if (_onRuleMatch) {
-                        try { _onRuleMatch({ type: 'modifyHeaders', ruleName: rule.name, url: request.url, tabId: null, detail: detailStr }); } catch (err) {
-                            safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'modifyHeaders' } }, err);
-                        }
-                    }
-                    return resp;
-                }
-            }
-
-            // No rule matched — pass through
-            try {
-                const ctrl = new AbortController();
-                const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-                try {
-                    return await fetchThroughSession(request, {
-                        bypassCustomProtocolHandlers: true,
-                        signal: ctrl.signal,
-                    });
-                } finally {
-                    clearTimeout(timer);
-                }
-            } catch (err) {
-                const msg = String(err?.message || err);
-                return new Response(JSON.stringify({
-                    error: 'cupnet_pass_through',
-                    message: msg,
-                }), {
-                    status: 502,
-                    headers: { 'Content-Type': 'application/json' },
-                });
-            }
-        };
-
-        try { tabSession.protocol.handle('http', protocolHandler); }
-        catch (e) { safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.protocol.handle.failed', context: { scheme: 'http' } }, e); }
-        try { tabSession.protocol.handle('https', protocolHandler); }
-        catch (e) { safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.protocol.handle.failed', context: { scheme: 'https' } }, e); }
-    } else {
-        try { tabSession.protocol.unhandle('http'); }  catch { /* ignore */ }
-        try { tabSession.protocol.unhandle('https'); } catch { /* ignore */ }
-    }
+    try { tabSession.protocol.unhandle('http'); } catch { /* ignore */ }
+    try { tabSession.protocol.unhandle('https'); } catch { /* ignore */ }
 }
 
 /** Обратная совместимость: syncMockProtocolHandlers → теперь обрабатывает ВСЕ типы правил. */
@@ -407,16 +434,7 @@ function _removeAllHooks(tabSession) {
 }
 
 /**
- * Attaches intercept rules to a given Electron session.
- *
- * Все типы правил (block, modifyHeaders, mock) обрабатываются через session.protocol.handle().
- * webRequest API полностью не используется — Cloudflare Turnstile детектирует сам факт
- * регистрации onBeforeSendHeaders / onHeadersReceived, даже с узким URL-фильтром.
- * protocol.handle() прозрачен для антиботов.
- *
- * Pass-through / modifyHeaders: `fetchThroughSession` → `tabSession.fetch` (см. `_syncProtocolHandlers`).
- *
- * Для одной и той же session (общая partition) хуки ставятся один раз.
+ * Attaches intercept rules to a given Electron session (MITM path only; protocol.handle не используется).
  */
 const _STEALTH = Number(process.env.CUPNET_STEALTH_LEVEL || 0);
 
@@ -437,8 +455,7 @@ function attachToSession(tabSession, _tabId) {
 }
 
 /**
- * Пересинхронизировать protocol handlers на всех сессиях:
- * есть правила → зарегистрировать protocol.handle; нет правил → unhandle.
+ * Пересинхронизировать снимок правил на всех сессиях (protocol.handle снят, intercept в MITM).
  */
 function resyncWebRequestHooks() {
     for (const sess of _attachedSessions) {
@@ -470,6 +487,11 @@ module.exports = {
     detachFromSession,
     syncMockProtocolHandlers,
     resyncWebRequestHooks,
+    planMitmIntercept,
+    finalizeMitmInterceptResponse,
+    sessionUsesCupnetMitm,
+    bypassInterceptMockBlockForSensitiveUrl,
+    setTrafficMode,
     matchesPattern,
     ruleMatchesUrl,
     invalidateRulesCache,

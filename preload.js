@@ -43,13 +43,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // ── Tab management ─────────────────────────────────────────────────────
     newTab:                  (proxy)   => ipcRenderer.invoke('new-tab', proxy),
     newIsolatedTab:          ()        => ipcRenderer.invoke('new-isolated-tab'),
-    newDirectTab:            ()        => ipcRenderer.invoke('new-direct-tab'),
     openSettingsTab:         ()        => ipcRenderer.invoke('open-settings-tab'),
     closeTab:                (id)      => ipcRenderer.invoke('close-tab', id),
     switchTab:               (id)      => ipcRenderer.invoke('switch-tab', id),
     getTabs:                 ()        => ipcRenderer.invoke('get-tabs'),
     // Per-tab controls
-    setTabCupNet:            (id, on)  => ipcRenderer.invoke('set-tab-cupnet', id, on),
     setTabProxy:             (id, pid, ephemeralVars) => ipcRenderer.invoke('set-tab-proxy', id, pid, ephemeralVars),
     setTabCookieGroup:       (id, gid) => ipcRenderer.invoke('set-tab-cookie-group', id, gid),
     // Cookie groups
@@ -70,10 +68,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openLogViewer:           ()        => ipcRenderer.invoke('open-log-viewer'),
     openLogViewerWithUrl:    (url)     => ipcRenderer.invoke('open-log-viewer-with-url', url),
     getExistingLogs:         ()        => ipcRenderer.invoke('get-existing-logs'),
+    getWsEvents:             (payload) => ipcRenderer.invoke('get-ws-events', payload),
     clearLogs:               ()        => ipcRenderer.invoke('clear-logs'),
     openJsonlFile:           ()        => ipcRenderer.invoke('open-jsonl-file'),
     onNewLogEntry:           (cb)      => sub('new-log-entry', cb),
     onNewLogEntryBatch:      (cb)      => sub('new-log-entry-batch', cb),
+    onWsHandshakeMessageCount: (cb)   => sub('ws-handshake-message-count', cb),
     onRuleHighlight:         (cb)      => sub('rule-highlight', cb),
     onFocusRequestUrl:       (cb)      => sub('focus-request-url', cb),
     onInterceptRuleMatched:  (cb)      => sub('intercept-rule-matched', cb),
@@ -221,6 +221,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     quickConnectProfile:     (id)      => ipcRenderer.invoke('quick-connect-profile', id),
     onInitSettings:          (cb)      => sub('init-settings', cb),
     getAppMetrics:           ()        => ipcRenderer.invoke('get-app-metrics'),
+    enumerateMediaDevices:   ()        => ipcRenderer.invoke('enumerate-media-devices'),
+    saveDevicePermissions:   (cfg)     => ipcRenderer.invoke('save-device-permissions', cfg),
     onRuleNotification:      (cb)      => sub('rule-notification', cb),
 
     // ── Direct IP check ────────────────────────────────────────────────────────
@@ -241,6 +243,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     solveTurnstileCaptcha:   (tabId, captcha, options) => ipcRenderer.invoke('solve-turnstile-captcha', tabId, captcha, options),
     injectTurnstileToken:    (tabId, payload) => ipcRenderer.invoke('inject-turnstile-token', tabId, payload),
     analyzePageMeta:         (tabId)   => ipcRenderer.invoke('analyze-page-meta', tabId),
+    analyzePageStorage:      (tabId)   => ipcRenderer.invoke('analyze-page-storage', tabId),
+    applyPageStorage:        (tabId, payload) => ipcRenderer.invoke('apply-page-storage', tabId, payload),
     analyzePageEndpoints:    (tabId)   => ipcRenderer.invoke('analyze-page-endpoints', tabId),
     pageAnalyzerAction:      (tabId, a) => ipcRenderer.invoke('page-analyzer-action', tabId, a),
     onAnalyzerTabsList:      (cb)      => sub('analyzer-tabs-list', cb),

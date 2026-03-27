@@ -30,7 +30,6 @@ function registerTabsIpc(ctx) {
         const tabId = await ctx.tabManager.createTab({
             url: settingsUrl,
             cookieGroupId: 1,
-            cupnetEnabled: false,
         });
         ctx.tabManager.switchTab(tabId);
         ctx.notifyCookieManagerTabs();

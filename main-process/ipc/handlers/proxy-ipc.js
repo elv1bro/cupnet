@@ -11,7 +11,7 @@ function registerProxyIpc(ctx) {
         const at = ctx.tabManager?.getActiveTab?.();
         let tabProxyProfileId = null;
         let tabProxyName = '';
-        if (at?.cupnetEnabled && at?.proxyProfileId && ctx.db?.getProxyProfileEncrypted) {
+        if (at?.proxyProfileId && ctx.db?.getProxyProfileEncrypted) {
             tabProxyProfileId = at.proxyProfileId;
             try {
                 const row = ctx.db.getProxyProfileEncrypted(at.proxyProfileId);
@@ -229,7 +229,7 @@ function registerProxyIpc(ctx) {
                 variables:     profile.variables || {},
                 notes:         profile.notes || '',
                 country:       profile.country || '',
-                traffic_mode:  profile.traffic_mode === 'mitm' ? 'mitm' : 'browser_proxy',
+                traffic_mode:  'mitm',
                 user_agent:    profile.user_agent || null,
                 timezone:      profile.timezone   || null,
                 language:      profile.language   || null,
@@ -243,7 +243,7 @@ function registerProxyIpc(ctx) {
             variables:  profile.variables || {},
             notes:      profile.notes || '',
             country:    profile.country || '',
-            traffic_mode: profile.traffic_mode === 'mitm' ? 'mitm' : 'browser_proxy',
+            traffic_mode: 'mitm',
             user_agent: profile.user_agent || null,
             timezone:   profile.timezone   || null,
             language:   profile.language   || null,

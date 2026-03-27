@@ -13,12 +13,12 @@ let connectedId    = null;   // id of currently connected profile
 let currentIp      = '';
 let searchQuery    = '';
 
-// Built-in virtual Direct profile
+// Built-in: MITM без upstream (локальный прокси без внешней цепочки)
 const DIRECT_ID = '__direct__';
 const DIRECT_PROFILE = {
     id:          DIRECT_ID,
-    name:        'Direct',
-    url_display: 'No proxy — direct connection',
+    name:        'MITM (no upstream)',
+    url_display: 'Local MITM only — no upstream proxy',
     is_template: 0,
     tls_profile:    'chrome',
     tls_ja3_mode:   'template',
@@ -37,7 +37,6 @@ const searchInput   = document.getElementById('search-profiles');
 const fName         = document.getElementById('f-name');
 const fTemplate     = document.getElementById('f-template');
 const fNotes        = document.getElementById('f-notes');
-const fTrafficMode  = document.getElementById('f-traffic-mode');
 const tplPreview    = document.getElementById('tpl-preview');
 const varsSection   = document.getElementById('vars-section');
 const varsTbody     = document.getElementById('vars-tbody');
@@ -344,7 +343,7 @@ function renderProfileList() {
             ? `<span class="pi-badge geo" style="color:#a5f3fc">${esc(p.last_ip)}</span>` : '';
         const connLabel = p.id === connectedId ? `<span class="pi-connected-label">● CONNECTED</span>` : '';
         const tplBadge  = p.is_template ? `<span class="pi-badge tmpl">template</span>` : '';
-        const modeBadge = `<span class="pi-badge tmpl">${p.traffic_mode === 'mitm' ? 'mitm' : 'browser·dev'}</span>`;
+        const modeBadge = '<span class="pi-badge tmpl">mitm</span>';
 
         el.innerHTML = `
             <div class="pi-name">${esc(p.name)}</div>
@@ -370,17 +369,13 @@ function openDirectEditor() {
 
     editorEmpty.style.display  = 'none';
     editorWrap.style.display   = 'flex';
-    editorTitle.textContent    = '🌐 Direct — No Proxy';
-    fName.value                = 'Direct';
+    editorTitle.textContent    = '🌐 MITM (no upstream)';
+    fName.value                = 'MITM (no upstream)';
     fTemplate.value            = '';
     fNotes.value               = '';
-    if (fTrafficMode) {
-        fTrafficMode.value = 'mitm';
-        fTrafficMode.disabled = true;
-    }
     varsSection.style.display  = 'none';
     varsTbody.innerHTML        = '';
-    tplPreview.innerHTML       = '<span style="color:var(--green)">Direct connection (no proxy)</span>';
+    tplPreview.innerHTML       = '<span style="color:var(--green)">Local MITM — no upstream proxy URL</span>';
 
     // Hide proxy URL row, show read-only message
     const fTemplateRow = fTemplate.closest('.form-row');
@@ -420,10 +415,6 @@ function openEditor(id) {
     fName.value                = profile.name;
     fTemplate.value            = profile.url_display || '';  // show display (password masked) — real template comes from getProxyProfileUrl
     fNotes.value               = profile.notes || '';
-    if (fTrafficMode) {
-        fTrafficMode.value = 'mitm';
-        fTrafficMode.disabled = false;
-    }
     btnDelete.style.display    = '';
     btnDuplicate.style.display = '';
     updateEditorActionButtons();
@@ -463,10 +454,6 @@ function openNewEditor() {
     fName.value                = '';
     fTemplate.value            = '';
     fNotes.value               = '';
-    if (fTrafficMode) {
-        fTrafficMode.value = 'mitm';
-        fTrafficMode.disabled = false;
-    }
     varsSection.style.display  = 'none';
     varsTbody.innerHTML        = '';
     tplPreview.innerHTML       = '—';
@@ -636,10 +623,6 @@ btnDuplicate?.addEventListener('click', async () => {
     fName.value                = `${src.name} (copy)`;
     fTemplate.value            = realTemplate || src.url_display || '';
     fNotes.value               = src.notes || '';
-    if (fTrafficMode) {
-        fTrafficMode.value = 'mitm';
-        fTrafficMode.disabled = false;
-    }
     btnDelete.style.display    = 'none';
     btnDuplicate.style.display = 'none';
     testResult.classList.remove('visible', 'ok', 'err');

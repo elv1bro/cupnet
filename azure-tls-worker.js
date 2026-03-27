@@ -96,7 +96,23 @@ const BROWSER_PROFILES = {
     },
 };
 
-/** Пул AzureTLSClient на ключ (browser+proxy): одна нативная сессия не выдерживает параллельных request(). */
+/**
+ * Имена вроде chrome_120 (дефолт mitm-proxy) не совпадают с ключами BROWSER_PROFILES.
+ * Без applyHTTP2Fingerprint Cloudflare/антиботы видят несогласованный H2 — как в azure-tls-inprocess.js.
+ */
+function http2FingerprintForBrowser(browser) {
+    const b = browser || 'chrome';
+    if (BROWSER_PROFILES[b]?.http2) return BROWSER_PROFILES[b].http2;
+    if (String(b).startsWith('chrome')) return BROWSER_PROFILES.chrome.http2;
+    if (String(b).startsWith('firefox')) return BROWSER_PROFILES.firefox.http2;
+    if (String(b).startsWith('safari')) return BROWSER_PROFILES.safari.http2;
+    if (String(b).startsWith('edge')) return BROWSER_PROFILES.edge.http2;
+    if (String(b).startsWith('opera')) return BROWSER_PROFILES.opera.http2;
+    if (String(b).startsWith('ios')) return BROWSER_PROFILES.ios.http2;
+    return BROWSER_PROFILES.chrome.http2;
+}
+
+/** Пул AzureTLSClient на ключ (browser+proxy+ja3): одна нативная сессия не выдерживает параллельных request(). */
 const BORROW_ABORT = Symbol('cupnet.worker.borrow_abort');
 const pools = new Map();
 const poolLru = [];
@@ -113,9 +129,9 @@ function createAzureClient(profileName, proxy) {
         proxy:   proxy || null,
         debug:   false,
     });
-    const profile = BROWSER_PROFILES[profileName];
-    if (profile && profile.http2) {
-        try { c.applyHTTP2Fingerprint(profile.http2); } catch (e) {
+    const h2 = http2FingerprintForBrowser(profileName);
+    if (h2) {
+        try { c.applyHTTP2Fingerprint(h2); } catch (e) {
             process.stderr.write(`[worker] HTTP/2 apply error for ${profileName}: ${e.message}\n`);
         }
     }
@@ -141,9 +157,14 @@ function evictPoolsIfNeeded() {
     }
 }
 
-async function borrowClient(browser, proxy) {
+function poolJa3Segment(ja3) {
+    const s = ja3 != null ? String(ja3).trim() : '';
+    return s ? `j:${s}` : 't';
+}
+
+async function borrowClient(browser, proxy, ja3) {
     const profileName = browser || 'chrome';
-    const key = `${profileName}::${proxy || ''}`;
+    const key = `${profileName}::${proxy || ''}::${poolJa3Segment(ja3)}`;
     const max = networkPolicy.concurrency.workerFfiConcurrency;
     touchPoolKey(key);
     let pool = pools.get(key);
@@ -293,7 +314,7 @@ async function handleLine(line) {
     let poolKey;
     let client;
     try {
-        ({ client, key: poolKey } = await borrowClient(browser, proxy));
+        ({ client, key: poolKey } = await borrowClient(browser, proxy, ja3));
         httpInflight++;
 
         if (ja3) {

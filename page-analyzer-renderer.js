@@ -45,10 +45,30 @@ let _tabsList = [];
 let _lastForms = [];
 let _lastCaptcha = {};
 let _lastMeta = {};
+let _lastStorage = { sessionStorage: {}, localStorage: {} };
+/** Раскрытые узлы дерева (ключи включают session | local). */
+const _storageOpenPaths = { session: new Set(), local: new Set() };
+let _storageStoreBlockOpen = { session: true, local: false };
+/** 'session' | 'local' — показываем лоадер на блоке до конца записи и повторного чтения */
+let _storageApplyLoading = null;
 let _lastScout = {};
 let _autoRefreshTimer = null;
 let _analysisInFlight = false;
 let _inlineEditCount = 0;
+/** Фокус в textarea Web Storage — не дергать авто-анализ (иначе сброс текста и потеря фокуса). */
+let _storageEditorActiveCount = 0;
+metaContent.addEventListener('focusin', (e) => {
+    const t = e.target;
+    if (t && t.classList?.contains('st-store-json-edit')) {
+        _storageEditorActiveCount++;
+    }
+});
+metaContent.addEventListener('focusout', (e) => {
+    const t = e.target;
+    if (t && t.classList?.contains('st-store-json-edit')) {
+        _storageEditorActiveCount = Math.max(0, _storageEditorActiveCount - 1);
+    }
+});
 const _formsOpenState = new Set();
 const _fieldExpandState = new Set();
 let _capmonsterSettings = {
@@ -88,7 +108,7 @@ function populateTabSelect(tabs) {
     for (const t of _tabsList) {
         const o = document.createElement('option');
         o.value = t.id;
-        const icon = t.direct ? '⊘' : t.isolated ? '🍪' : '🌐';
+        const icon = t.isolated ? '🍪' : '🌐';
         o.textContent = `#${t.num} ${icon} ${(t.title || t.url || 'New Tab').substring(0, 50)}`;
         if (t.isActive) o.textContent += ' ◀';
         tabSelect.appendChild(o);
@@ -126,7 +146,7 @@ refreshBtn.addEventListener('click', () => runAnalysis({ force: true, includeSco
 async function runAnalysis(opts = {}) {
     const includeScout = opts.includeScout === true;
     const force = opts.force === true;
-    if (!force && _inlineEditCount > 0) return;
+    if (!force && (_inlineEditCount > 0 || _storageEditorActiveCount > 0)) return;
     if (_analysisInFlight) return;
     const tabId = getSelectedTabId();
     if (!tabId) {
@@ -144,17 +164,20 @@ async function runAnalysis(opts = {}) {
             api.analyzePageForms(tabId),
             api.analyzePageCaptcha(tabId),
             api.analyzePageMeta(tabId),
+            api.analyzePageStorage(tabId),
         ];
         if (includeScout) jobs.push(api.analyzePageEndpoints(tabId));
         const result = await Promise.all(jobs);
         const forms = result[0];
         const captcha = result[1];
         const meta = result[2];
-        const scout = includeScout ? result[3] : null;
+        const storage = result[3] || { sessionStorage: {}, localStorage: {} };
+        const scout = includeScout ? result[4] : null;
 
         _lastForms = forms || [];
         _lastCaptcha = captcha || {};
         _lastMeta = meta || {};
+        _lastStorage = storage || { sessionStorage: {}, localStorage: {} };
         if (includeScout) _lastScout = scout || {};
 
         renderForms(_lastForms, tabId);
@@ -726,41 +749,395 @@ function _getCaptchaParams(type, item, pageUrl) {
     return params;
 }
 
-// ── Render meta ──
+// ── Render meta / Web Storage tree ──
+function tryParseObjectString(s) {
+    if (typeof s !== 'string') return null;
+    const t = s.trim();
+    if (!t || (t[0] !== '{' && t[0] !== '[')) return null;
+    try {
+        return JSON.parse(s);
+    } catch {
+        return null;
+    }
+}
+
+function _storagePathRoot(storeKind, storageKey) {
+    return `r:${storeKind}:${JSON.stringify(String(storageKey))}`;
+}
+
+function _storagePathJson(storeKind, storageKey, pathSegs) {
+    return `j:${storeKind}:${JSON.stringify([String(storageKey), ...pathSegs])}`;
+}
+
+function normalizeStorageEntries(obj) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+        throw new Error('Нужен JSON-объект вида { "ключ": "значение", ... }');
+    }
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+        if (k === '') continue;
+        if (v === null || v === undefined) out[k] = '';
+        else if (typeof v === 'object') out[k] = JSON.stringify(v);
+        else out[k] = String(v);
+    }
+    return out;
+}
+
+function appendJsonTree(el, val, depth, storeKind, storageKey, pathSegs) {
+    if (depth > 14) {
+        const sp = document.createElement('span');
+        sp.className = 'jt-lit';
+        sp.textContent = '(depth limit)';
+        el.appendChild(sp);
+        return;
+    }
+    if (val === null) {
+        const sp = document.createElement('span');
+        sp.className = 'jt-lit jt-null';
+        sp.textContent = 'null';
+        el.appendChild(sp);
+        return;
+    }
+    const typ = typeof val;
+    if (typ !== 'object') {
+        const sp = document.createElement('span');
+        sp.className = 'jt-lit ' + (typ === 'string' ? 'jt-str' : typ === 'boolean' ? 'jt-bool' : 'jt-num');
+        sp.textContent = typ === 'string' ? JSON.stringify(val) : String(val);
+        el.appendChild(sp);
+        return;
+    }
+    if (Array.isArray(val)) {
+        if (val.length === 0) {
+            el.appendChild(document.createTextNode('[]'));
+            return;
+        }
+        const wrap = document.createElement('div');
+        wrap.className = 'jt-nested';
+        val.forEach((item, i) => {
+            const row = document.createElement('div');
+            row.className = 'jt-row';
+            const lab = document.createElement('span');
+            lab.className = 'jt-idx';
+            lab.textContent = `${i}: `;
+            row.appendChild(lab);
+            const cell = document.createElement('span');
+            if (item !== null && typeof item === 'object') {
+                const inner = document.createElement('details');
+                inner.className = 'jt-details';
+                inner.dataset.paStoreKind = storeKind;
+                const childSegs = [...pathSegs, i];
+                const pkey = _storagePathJson(storeKind, storageKey, childSegs);
+                inner.dataset.paStPath = pkey;
+                if (_storageOpenPaths[storeKind].has(pkey)) inner.open = true;
+                const is = document.createElement('summary');
+                is.textContent = Array.isArray(item) ? `[${item.length}]` : `{${Object.keys(item).length}}`;
+                inner.appendChild(is);
+                const ib = document.createElement('div');
+                appendJsonTree(ib, item, depth + 1, storeKind, storageKey, childSegs);
+                inner.appendChild(ib);
+                cell.appendChild(inner);
+            } else {
+                appendJsonTree(cell, item, depth + 1, storeKind, storageKey, [...pathSegs, i]);
+            }
+            row.appendChild(cell);
+            wrap.appendChild(row);
+        });
+        el.appendChild(wrap);
+        return;
+    }
+    const keys = Object.keys(val).sort();
+    if (keys.length === 0) {
+        el.appendChild(document.createTextNode('{}'));
+        return;
+    }
+    const wrap = document.createElement('div');
+    wrap.className = 'jt-nested';
+    for (const k of keys) {
+        const row = document.createElement('div');
+        row.className = 'jt-row';
+        const lab = document.createElement('span');
+        lab.className = 'jt-prop';
+        lab.textContent = `${k}: `;
+        row.appendChild(lab);
+        const item = val[k];
+        const cell = document.createElement('span');
+        if (item !== null && typeof item === 'object') {
+            const inner = document.createElement('details');
+            inner.className = 'jt-details';
+            inner.dataset.paStoreKind = storeKind;
+            const childSegs = [...pathSegs, k];
+            const pkey = _storagePathJson(storeKind, storageKey, childSegs);
+            inner.dataset.paStPath = pkey;
+            if (_storageOpenPaths[storeKind].has(pkey)) inner.open = true;
+            const is = document.createElement('summary');
+            is.textContent = Array.isArray(item) ? `[${item.length}]` : `{${Object.keys(item).length}}`;
+            inner.appendChild(is);
+            const ib = document.createElement('div');
+            appendJsonTree(ib, item, depth + 1, storeKind, storageKey, childSegs);
+            inner.appendChild(ib);
+            cell.appendChild(inner);
+        } else {
+            appendJsonTree(cell, item, depth + 1, storeKind, storageKey, [...pathSegs, k]);
+        }
+        row.appendChild(cell);
+        wrap.appendChild(row);
+    }
+    el.appendChild(wrap);
+}
+
+function mountStorageTreeRecord(host, record, storeKind) {
+    host.replaceChildren();
+    const rec = record || {};
+    const keys = Object.keys(rec).sort();
+    if (!keys.length) {
+        const empty = document.createElement('div');
+        empty.className = 'st-empty';
+        empty.textContent = '(empty)';
+        host.appendChild(empty);
+        return;
+    }
+    const openSet = _storageOpenPaths[storeKind];
+    for (const k of keys) {
+        const raw = rec[k] == null ? '' : String(rec[k]);
+        const detOuter = document.createElement('details');
+        detOuter.className = 'st-entry';
+        detOuter.dataset.paStoreKind = storeKind;
+        const rpath = _storagePathRoot(storeKind, k);
+        detOuter.dataset.paStPath = rpath;
+        if (openSet.has(rpath)) detOuter.open = true;
+        const sum = document.createElement('summary');
+        const sk = document.createElement('span');
+        sk.className = 'st-key';
+        sk.textContent = k;
+        const sm = document.createElement('span');
+        sm.className = 'st-meta';
+        const parsed = tryParseObjectString(raw);
+        sm.textContent = parsed != null ? 'JSON' : `${raw.length} chars`;
+        sum.appendChild(sk);
+        sum.appendChild(sm);
+        detOuter.appendChild(sum);
+        const body = document.createElement('div');
+        body.className = 'st-body';
+        if (parsed != null) {
+            appendJsonTree(body, parsed, 0, storeKind, k, []);
+        } else {
+            const pre = document.createElement('pre');
+            pre.className = 'st-leaf-pre';
+            pre.textContent = raw;
+            body.appendChild(pre);
+        }
+        detOuter.appendChild(body);
+        host.appendChild(detOuter);
+    }
+}
+
+function bindStorageTreeToggle(host) {
+    host.addEventListener('toggle', (e) => {
+        const t = e.target;
+        if (!(t instanceof HTMLDetailsElement) || !t.dataset.paStPath) return;
+        const kind = t.dataset.paStoreKind;
+        if (kind !== 'session' && kind !== 'local') return;
+        const set = _storageOpenPaths[kind];
+        if (t.open) set.add(t.dataset.paStPath);
+        else set.delete(t.dataset.paStPath);
+    }, true);
+}
+
+async function applyStorageToPage(storeKind, entries) {
+    const tabId = getSelectedTabId();
+    if (!tabId) {
+        statusEl.textContent = 'Нет выбранной вкладки';
+        return;
+    }
+    if (typeof api.applyPageStorage !== 'function') {
+        statusEl.textContent = 'applyPageStorage недоступен (обновите preload)';
+        return;
+    }
+    _storageApplyLoading = storeKind;
+    renderMeta(_lastMeta);
+    await new Promise((r) => requestAnimationFrame(() => r()));
+
+    let errMsg = null;
+    try {
+        const res = await api.applyPageStorage(tabId, { target: storeKind, entries });
+        if (!res?.ok) {
+            errMsg = 'Запись не удалась: ' + (res?.error || '?');
+        } else {
+            const snap = await api.analyzePageStorage(tabId);
+            _lastStorage = snap || { sessionStorage: {}, localStorage: {} };
+        }
+    } catch (err) {
+        errMsg = 'Ошибка: ' + (err.message || err);
+    } finally {
+        _storageApplyLoading = null;
+        renderMeta(_lastMeta);
+        statusEl.textContent = errMsg || 'Данные с вкладки подгружены в форму';
+        setTimeout(() => { statusEl.textContent = 'Ready'; }, 2200);
+    }
+}
+
+function appendStorageInspector(storageSec, ss, ls) {
+    const view = document.createElement('div');
+    view.className = 'meta-storage-view';
+
+    function buildStoreBlock(storeKind, rec) {
+        const block = document.createElement('details');
+        block.className = 'st-store-block';
+        block.dataset.paStoreKind = storeKind;
+        block.open = _storageStoreBlockOpen[storeKind];
+        block.addEventListener('toggle', () => {
+            _storageStoreBlockOpen[storeKind] = block.open;
+        });
+
+        const n = Object.keys(rec).length;
+        const sum = document.createElement('summary');
+        sum.className = 'st-store-summary';
+        sum.textContent = `${storeKind === 'session' ? 'sessionStorage' : 'localStorage'} · ${n} ключ(ей)`;
+
+        const body = document.createElement('div');
+        body.className = 'st-store-body';
+
+        const toolbar = document.createElement('div');
+        toolbar.className = 'st-store-toolbar';
+
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'btn btn-sm btn-primary';
+        copyBtn.textContent = '⎘ Копировать JSON';
+        const applyBtn = document.createElement('button');
+        applyBtn.type = 'button';
+        applyBtn.className = 'btn btn-sm';
+        applyBtn.textContent = 'Записать на страницу';
+        const resetBtn = document.createElement('button');
+        resetBtn.type = 'button';
+        resetBtn.className = 'btn btn-sm';
+        resetBtn.textContent = 'Сбросить';
+
+        const ta = document.createElement('textarea');
+        ta.className = 'st-store-json-edit';
+        ta.spellcheck = false;
+        ta.value = JSON.stringify(rec, null, 2);
+        ta.title = 'Объект { ключ: строка }; вложенные значения будут сохранены как JSON-строка';
+
+        const treeHost = document.createElement('div');
+        treeHost.className = 'st-tree';
+        mountStorageTreeRecord(treeHost, rec, storeKind);
+        bindStorageTreeToggle(treeHost);
+
+        const treeCaption = document.createElement('div');
+        treeCaption.className = 'st-tree-caption';
+        treeCaption.textContent = 'Дерево (только просмотр)';
+
+        copyBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(ta.value).then(() => {
+                statusEl.textContent = '✓ JSON в буфере';
+                setTimeout(() => { statusEl.textContent = 'Ready'; }, 1600);
+            }).catch(() => {});
+        });
+        applyBtn.addEventListener('click', async () => {
+            try {
+                const flat = normalizeStorageEntries(JSON.parse(ta.value));
+                await applyStorageToPage(storeKind, flat);
+            } catch (err) {
+                statusEl.textContent = 'JSON: ' + (err.message || err);
+            }
+        });
+        resetBtn.addEventListener('click', () => {
+            ta.value = JSON.stringify(rec, null, 2);
+            statusEl.textContent = 'Сброшено к снимку';
+            setTimeout(() => { statusEl.textContent = 'Ready'; }, 1400);
+        });
+
+        toolbar.appendChild(copyBtn);
+        toolbar.appendChild(applyBtn);
+        toolbar.appendChild(resetBtn);
+
+        body.appendChild(toolbar);
+        body.appendChild(ta);
+        body.appendChild(treeCaption);
+        body.appendChild(treeHost);
+
+        if (storeKind === _storageApplyLoading) {
+            body.classList.add('st-store-body--loading');
+            const ov = document.createElement('div');
+            ov.className = 'st-store-loading';
+            ov.setAttribute('aria-busy', 'true');
+            const spin = document.createElement('span');
+            spin.className = 'st-store-loading-spin';
+            const tx = document.createElement('span');
+            tx.className = 'st-store-loading-text';
+            tx.textContent = 'Запись и загрузка с вкладки…';
+            ov.appendChild(spin);
+            ov.appendChild(tx);
+            body.appendChild(ov);
+            ta.disabled = true;
+            copyBtn.disabled = true;
+            applyBtn.disabled = true;
+            resetBtn.disabled = true;
+        }
+
+        block.appendChild(sum);
+        block.appendChild(body);
+        return block;
+    }
+
+    view.appendChild(buildStoreBlock('session', ss));
+    view.appendChild(buildStoreBlock('local', ls));
+    storageSec.appendChild(view);
+}
+
 function renderMeta(data) {
     metaContent.innerHTML = '';
-    if (!data.title && !data.url) return;
+    _storageEditorActiveCount = 0;
+    const d = data || {};
+    const hasPageInfo = !!(d.title || d.url);
 
-    const sections = [
-        { title: 'Page', rows: [
-            ['Title', data.title],
-            ['URL', data.url],
-            ['Charset', data.charset],
-            ['Doctype', data.doctype],
-        ]},
-        { title: `Meta Tags (${(data.meta||[]).length})`, rows: (data.meta||[]).map(m => [m.name, m.content]) },
-        { title: `Scripts (${(data.scripts?.external||0) + (data.scripts?.inline||0)})`, rows: [
-            ['Inline', data.scripts?.inline],
-            ['External', data.scripts?.external],
-            ...(data.scripts?.srcs||[]).slice(0, 20).map((s, i) => [`  src[${i}]`, s]),
-        ]},
-        { title: `Iframes (${(data.iframes||[]).length})`, rows: (data.iframes||[]).map(f => [f.id || f.name || '(anon)', f.src]) },
-    ];
+    if (hasPageInfo) {
+        const sections = [
+            { title: 'Page', rows: [
+                ['Title', d.title],
+                ['URL', d.url],
+                ['Charset', d.charset],
+                ['Doctype', d.doctype],
+            ]},
+            { title: `Meta Tags (${(d.meta||[]).length})`, rows: (d.meta||[]).map(m => [m.name, m.content]) },
+            { title: `Scripts (${(d.scripts?.external||0) + (d.scripts?.inline||0)})`, rows: [
+                ['Inline', d.scripts?.inline],
+                ['External', d.scripts?.external],
+                ...(d.scripts?.srcs||[]).slice(0, 20).map((s, i) => [`  src[${i}]`, s]),
+            ]},
+            { title: `Iframes (${(d.iframes||[]).length})`, rows: (d.iframes||[]).map(f => [f.id || f.name || '(anon)', f.src]) },
+        ];
 
-    for (const sec of sections) {
-        if (!sec.rows.length) continue;
-        const div = document.createElement('div');
-        div.className = 'meta-section';
-        div.innerHTML = `<div class="meta-section-title">${esc(sec.title)}</div>`;
-        for (const [k, v] of sec.rows) {
-            if (v === undefined || v === null || v === '') continue;
-            const row = document.createElement('div');
-            row.className = 'meta-row';
-            row.innerHTML = `<span class="meta-key">${esc(String(k))}</span><span class="meta-val">${esc(String(v))}</span>`;
-            div.appendChild(row);
+        for (const sec of sections) {
+            if (!sec.rows.length) continue;
+            const div = document.createElement('div');
+            div.className = 'meta-section';
+            div.innerHTML = `<div class="meta-section-title">${esc(sec.title)}</div>`;
+            for (const [k, v] of sec.rows) {
+                if (v === undefined || v === null || v === '') continue;
+                const row = document.createElement('div');
+                row.className = 'meta-row';
+                row.innerHTML = `<span class="meta-key">${esc(String(k))}</span><span class="meta-val">${esc(String(v))}</span>`;
+                div.appendChild(row);
+            }
+            if (div.querySelectorAll('.meta-row').length) metaContent.appendChild(div);
         }
-        if (div.querySelectorAll('.meta-row').length) metaContent.appendChild(div);
     }
+
+    const ss = _lastStorage?.sessionStorage || {};
+    const ls = _lastStorage?.localStorage || {};
+    const ns = Object.keys(ss).length;
+    const nl = Object.keys(ls).length;
+
+    const storageSec = document.createElement('div');
+    storageSec.className = 'meta-section';
+    const stTitle = document.createElement('div');
+    stTitle.className = 'meta-section-title';
+    stTitle.textContent = `Web storage (${ns} session · ${nl} local)`;
+    storageSec.appendChild(stTitle);
+    appendStorageInspector(storageSec, ss, ls);
+    metaContent.appendChild(storageSec);
 }
 
 function classifyEndpoint(ep) {

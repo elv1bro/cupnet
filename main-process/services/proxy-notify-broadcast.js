@@ -26,7 +26,7 @@ function createProxyNotifyBroadcast({
             : null;
         const actProxy = typeof getActProxy === 'function' ? getActProxy() : '';
         const isDirect = !persistentAnonymizedProxyUrl && actProxy === '';
-        const trafficMode = typeof getCurrentTrafficMode === 'function' ? getCurrentTrafficMode() : 'browser_proxy';
+        const trafficMode = typeof getCurrentTrafficMode === 'function' ? getCurrentTrafficMode() : 'mitm';
         const globalName = (typeof getConnectedProfileName === 'function' ? getConnectedProfileName() : null) || actProxy || '';
         return {
             active: !!persistentAnonymizedProxyUrl,
@@ -72,7 +72,7 @@ function createProxyNotifyBroadcast({
         const tabsArr = Array.isArray(tabList) ? tabList : Array.from(tabList || []);
         const sig = JSON.stringify({
             ...base,
-            tabs: tabsArr.map((t) => `${t.id}:${t.proxyProfileId ?? ''}:${t.cupnetEnabled ? 1 : 0}`).join('|'),
+            tabs: tabsArr.map((t) => `${t.id}:${t.proxyProfileId ?? ''}:1`).join('|'),
         });
         if (sig === _lastProxyStatusSig) return;
         _lastProxyStatusSig = sig;

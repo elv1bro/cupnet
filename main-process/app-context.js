@@ -33,7 +33,7 @@ function createAppContext() {
             profileId: null,
             profileName: null,
             resolvedVars: {},
-            trafficMode: 'browser_proxy',
+            trafficMode: 'mitm',
             resilience: null,
         },
         logging: {

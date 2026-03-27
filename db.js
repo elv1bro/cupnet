@@ -158,8 +158,8 @@ function migrateSchema() {
     if (!cols.includes('tls_profile'))     db.exec(`ALTER TABLE proxy_profiles ADD COLUMN tls_profile TEXT DEFAULT 'chrome'`);
     if (!cols.includes('tls_ja3_mode'))    db.exec(`ALTER TABLE proxy_profiles ADD COLUMN tls_ja3_mode TEXT DEFAULT 'template'`);
     if (!cols.includes('tls_ja3_custom'))  db.exec(`ALTER TABLE proxy_profiles ADD COLUMN tls_ja3_custom TEXT`);
-    if (!cols.includes('traffic_mode'))    db.exec(`ALTER TABLE proxy_profiles ADD COLUMN traffic_mode TEXT NOT NULL DEFAULT 'browser_proxy'`);
-    db.exec(`UPDATE proxy_profiles SET traffic_mode='browser_proxy' WHERE traffic_mode IS NULL OR traffic_mode=''`);
+    if (!cols.includes('traffic_mode'))    db.exec(`ALTER TABLE proxy_profiles ADD COLUMN traffic_mode TEXT NOT NULL DEFAULT 'mitm'`);
+    db.exec(`UPDATE proxy_profiles SET traffic_mode='mitm' WHERE traffic_mode IS NULL OR traffic_mode='' OR traffic_mode='browser_proxy'`);
     // Screenshots: add BLOB column for binary storage (33% smaller than base64 TEXT)
     const ssCols = db.pragma('table_info(screenshots)').map(c => c.name);
     if (!ssCols.includes('data_blob'))       db.exec(`ALTER TABLE screenshots ADD COLUMN data_blob BLOB`);
@@ -174,12 +174,23 @@ function migrateSchema() {
     if (!reqCols.includes('tag'))          db.exec(`ALTER TABLE requests ADD COLUMN tag TEXT`);
     if (!reqCols.includes('note'))         db.exec(`ALTER TABLE requests ADD COLUMN note TEXT`);
     if (!reqCols.includes('has_note'))     db.exec(`ALTER TABLE requests ADD COLUMN has_note INTEGER NOT NULL DEFAULT 0`);
+    if (!reqCols.includes('ws_message_count')) db.exec(`ALTER TABLE requests ADD COLUMN ws_message_count INTEGER NOT NULL DEFAULT 0`);
     const dnsCols = db.pragma('table_info(dns_overrides)').map(c => c.name);
     if (!dnsCols.includes('mitm_inject_cors')) {
         db.exec(`ALTER TABLE dns_overrides ADD COLUMN mitm_inject_cors INTEGER NOT NULL DEFAULT 0`);
     }
     if (!dnsCols.includes('rewrite_host')) {
         db.exec(`ALTER TABLE dns_overrides ADD COLUMN rewrite_host TEXT`);
+    }
+    // ws_events.connection_id: must run AFTER createSchema; index only if column exists (new DB or post-ALTER).
+    const wsCols = db.pragma('table_info(ws_events)').map(c => c.name);
+    if (wsCols.length && !wsCols.includes('connection_id')) {
+        db.exec(`ALTER TABLE ws_events ADD COLUMN connection_id TEXT`);
+    }
+    if (db.pragma('table_info(ws_events)').map(c => c.name).includes('connection_id')) {
+        try {
+            db.exec(`CREATE INDEX IF NOT EXISTS idx_ws_events_conn ON ws_events(session_id, tab_id, url, connection_id)`);
+        } catch { /* ignore */ }
     }
     // cookie_groups: ensure table exists for DBs created before this feature
     const hasCookieGroups = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='cookie_groups'`).get();
@@ -225,6 +236,7 @@ function createSchema() {
             tag             TEXT,
             note            TEXT,
             has_note        INTEGER NOT NULL DEFAULT 0,
+            ws_message_count INTEGER NOT NULL DEFAULT 0,
             created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         );
 
@@ -242,6 +254,7 @@ function createSchema() {
             url         TEXT    NOT NULL,
             direction   TEXT    NOT NULL CHECK(direction IN ('send','recv')),
             payload     TEXT,
+            connection_id TEXT,
             created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         );
         CREATE INDEX IF NOT EXISTS idx_ws_events_session ON ws_events(session_id);
@@ -272,7 +285,7 @@ function createSchema() {
             last_ip         TEXT,
             last_geo        TEXT,
             sort_order      INTEGER NOT NULL DEFAULT 0,
-            traffic_mode    TEXT    NOT NULL DEFAULT 'browser_proxy',
+            traffic_mode    TEXT    NOT NULL DEFAULT 'mitm',
             created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         );
 
@@ -380,7 +393,7 @@ function _prepareStmts() {
              request_headers, response_headers, request_body, response_body, error, host, tag, note, has_note)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id`);
-    _stmtInsertWsEvent = db.prepare(`INSERT INTO ws_events (session_id, tab_id, url, direction, payload) VALUES (?,?,?,?,?)`);
+    _stmtInsertWsEvent = db.prepare(`INSERT INTO ws_events (session_id, tab_id, url, direction, payload, connection_id) VALUES (?,?,?,?,?,?)`);
     _stmtInsertSS      = db.prepare(`INSERT INTO screenshots (session_id, tab_id, url, data_blob, screenshot_meta) VALUES (?,?,?,?,?) RETURNING id`);
     _stmtInsertTrace   = db.prepare(`
         INSERT INTO trace_entries (ts, method, url, request_headers, request_body, status, response_headers, response_body, duration_ms, tab_id, session_id, browser, proxy)
@@ -527,7 +540,7 @@ function queryRequests(filters = {}, limit = 100, offset = 0) {
     if (filters.since)     { conditions.push('created_at >= ?'); params.push(filters.since); }
 
     const sql = `SELECT id, session_id, tab_id, request_id, url, method, status, type,
-                        duration_ms, error, response_headers, host, tag, has_note, note, created_at
+                        duration_ms, error, response_headers, host, tag, has_note, note, created_at, ws_message_count
                  FROM requests
                  WHERE ${conditions.join(' AND ')}
                  ORDER BY id DESC
@@ -644,8 +657,97 @@ function ftsSearch(query, sessionId, limit = 100, offset = 0) {
 
 // ─── WebSocket events ────────────────────────────────────────────────────────
 
-function insertWsEvent(sessionId, tabId, url, direction, payload) {
-    _stmtInsertWsEvent.run(sessionId, tabId || null, url, direction, payload || null);
+function bumpWsHandshakeMessageCount(sessionId, connectionId) {
+    if (!connectionId) return null;
+    const sid = parseInt(String(sessionId), 10);
+    if (!sid) return null;
+    const rid = String(connectionId);
+    db.prepare(`
+        UPDATE requests SET ws_message_count = COALESCE(ws_message_count, 0) + 1
+        WHERE session_id = ? AND request_id = ? AND LOWER(COALESCE(type, '')) = 'websocket'
+    `).run(sid, rid);
+    const row = db.prepare(`
+        SELECT id, ws_message_count FROM requests
+        WHERE session_id = ? AND request_id = ? AND LOWER(COALESCE(type, '')) = 'websocket'
+        LIMIT 1
+    `).get(sid, rid);
+    return row ? { handshakeDbId: row.id, ws_message_count: row.ws_message_count } : null;
+}
+
+function insertWsEvent(sessionId, tabId, url, direction, payload, connectionId = null) {
+    _stmtInsertWsEvent.run(sessionId, tabId || null, url, direction, payload || null, connectionId || null);
+    return bumpWsHandshakeMessageCount(sessionId, connectionId);
+}
+
+/**
+ * MITM handshake логирует как https://host/path; CDP кладёт wss://host/path — совпадаем по обоим.
+ */
+function _wsUrlVariants(url) {
+    const s = String(url || '').trim();
+    if (!s) return [];
+    const v = new Set([s]);
+    try {
+        const u = new URL(s);
+        const host = u.hostname + (u.port ? `:${u.port}` : '');
+        const rest = u.pathname + (u.search || '');
+        if (u.protocol === 'https:' || u.protocol === 'wss:') {
+            v.add(`wss://${host}${rest}`);
+            v.add(`https://${host}${rest}`);
+        }
+        if (u.protocol === 'http:' || u.protocol === 'ws:') {
+            v.add(`ws://${host}${rest}`);
+            v.add(`http://${host}${rest}`);
+        }
+    } catch { /* ignore */ }
+    return [...v];
+}
+
+/** Hard ceiling for WS frame queries (export / log viewer pass explicit limit). */
+const WS_EVENTS_QUERY_MAX = 500_000_000;
+
+/** WebSocket frames for Log Viewer Messages tab (chronological). */
+function queryWsEvents(sessionId, tabId, url, connectionId = null, limit = 10000) {
+    const sid = parseInt(String(sessionId), 10);
+    if (!sid || !url) return [];
+    const lim = Math.min(Math.max(1, Number(limit) || 10000), WS_EVENTS_QUERY_MAX);
+    const tid = tabId != null ? String(tabId) : null;
+    const variants = _wsUrlVariants(url);
+    const inList = variants.map(() => '?').join(', ');
+    if (connectionId) {
+        return db.prepare(`
+            SELECT id, direction, payload, connection_id, created_at
+            FROM ws_events
+            WHERE session_id = ?
+              AND url IN (${inList})
+              AND COALESCE(tab_id, '') = COALESCE(?, '')
+              AND COALESCE(connection_id, '') = COALESCE(?, '')
+            ORDER BY id ASC
+            LIMIT ?
+        `).all(sid, ...variants, tid, String(connectionId), lim);
+    }
+    return db.prepare(`
+        SELECT id, direction, payload, connection_id, created_at
+        FROM ws_events
+        WHERE session_id = ?
+          AND url IN (${inList})
+          AND COALESCE(tab_id, '') = COALESCE(?, '')
+        ORDER BY id ASC
+        LIMIT ?
+    `).all(sid, ...variants, tid, lim);
+}
+
+/** Все WebSocket-фреймы сессии (экспорт HAR / bundle). */
+function queryWsEventsBySession(sessionId, limit = 50000) {
+    const sid = parseInt(String(sessionId), 10);
+    if (!sid) return [];
+    const lim = Math.min(Math.max(1, Number(limit) || 50000), WS_EVENTS_QUERY_MAX);
+    return db.prepare(`
+        SELECT id, session_id, tab_id, url, direction, payload, connection_id, created_at
+        FROM ws_events
+        WHERE session_id = ?
+        ORDER BY id ASC
+        LIMIT ?
+    `).all(sid, lim);
 }
 
 // ─── Screenshots ─────────────────────────────────────────────────────────────
@@ -695,8 +797,8 @@ function getScreenshotData(id) {
 
 // ─── Proxy profiles ──────────────────────────────────────────────────────────
 
-function normalizeTrafficMode(mode) {
-    return mode === 'mitm' ? 'mitm' : 'browser_proxy';
+function normalizeTrafficMode(_mode) {
+    return 'mitm';
 }
 
 function getProxyProfiles() {
@@ -995,8 +1097,8 @@ function setRequestAnnotationAsync(id, data) {
     return enqueueWrite(() => setRequestAnnotation(id, data), 'high');
 }
 
-function insertWsEventAsync(sessionId, tabId, url, direction, payload) {
-    return enqueueWrite(() => insertWsEvent(sessionId, tabId, url, direction, payload), 'low');
+function insertWsEventAsync(sessionId, tabId, url, direction, payload, connectionId = null) {
+    return enqueueWrite(() => insertWsEvent(sessionId, tabId, url, direction, payload, connectionId), 'low');
 }
 
 function insertScreenshotAsync(sessionId, tabId, url, dataB64, screenshotMeta = null) {
@@ -1139,7 +1241,7 @@ module.exports = {
     insertRequest, updateRequest, setRequestAnnotation, queryRequests, queryRequestsFull, countRequests, getRequest, ftsSearch,
     insertRequestAsync, updateRequestAsync, setRequestAnnotationAsync,
     // ws
-    insertWsEvent, insertWsEventAsync,
+    insertWsEvent, insertWsEventAsync, queryWsEvents, queryWsEventsBySession,
     // screenshots
     insertScreenshot, insertScreenshotAsync, getScreenshotsForSession, getScreenshotEntriesForSession, getScreenshotData,
     // proxy profiles

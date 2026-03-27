@@ -16,7 +16,7 @@ const SETTINGS_DEFAULTS = {
     pasteUnlock: true,
     traceMode: false,
     currentProxy: '',
-    effectiveTrafficMode: 'browser_proxy',
+    effectiveTrafficMode: 'mitm',
     tracking: {
         onUserClick: true,
         onPageLoadComplete: true,
@@ -40,7 +40,8 @@ const SETTINGS_DEFAULTS = {
         tlsPassthroughDomains: ['challenges.cloudflare.com'],
         captchaWhitelist: [
             '*.google.com', '*.gstatic.com', '*.recaptcha.net',
-            'challenges.cloudflare.com', '*.hcaptcha.com',
+            'challenges.cloudflare.com', '*.cloudflare.com',
+            '*.hcaptcha.com', 'turnstile.com', '*.turnstile.com',
         ],
     },
     capmonster: {
@@ -49,6 +50,16 @@ const SETTINGS_DEFAULTS = {
         autoSubmit: false,
         pollTimeoutMs: 90000,
         pollIntervalMs: 3000,
+    },
+    /** Camera: enforce only all|none via session handlers; custom + order are UI / notes (stealth). */
+    devicePermissions: {
+        cameraMode: 'all',
+        cameraPriority: [],
+        cameraDisabledIds: [],
+        /** Совпадение по label — deviceId в Chromium зависит от origin (file:// vs https://). */
+        cameraDisabledLabels: [],
+        microphoneMode: 'all',
+        microphonePriority: [],
     },
 };
 
@@ -84,6 +95,54 @@ function normalizeTrackingSettings(raw) {
         pendingDeltaThreshold: Math.max(1, Math.min(50, Number(src.pendingDeltaThreshold) || base.pendingDeltaThreshold)),
         cooldownMs: Math.max(200, Math.min(30000, Number(src.cooldownMs) || base.cooldownMs)),
         maxPerMinute: Math.max(1, Math.min(120, Number(src.maxPerMinute) || base.maxPerMinute)),
+    };
+}
+
+/** Доп. домены для captcha whitelist (старые settings.json без них ломали Turnstile при blockImages). */
+const CAPTCHA_WL_RECOMMENDED = ['*.cloudflare.com', 'turnstile.com', '*.turnstile.com'];
+
+function normalizeTrafficOpts(raw) {
+    const base = SETTINGS_DEFAULTS.trafficOpts;
+    const merged = { ...base, ...(raw && typeof raw === 'object' ? raw : {}) };
+    const wl = Array.isArray(merged.captchaWhitelist) ? [...merged.captchaWhitelist] : [...(base.captchaWhitelist || [])];
+    const norm = (s) => String(s || '').trim().toLowerCase();
+    const have = new Set(wl.map(norm));
+    for (const rec of CAPTCHA_WL_RECOMMENDED) {
+        const k = norm(rec);
+        if (k && !have.has(k)) {
+            wl.push(rec);
+            have.add(k);
+        }
+    }
+    merged.captchaWhitelist = wl;
+    return merged;
+}
+
+function normalizeDevicePermissions(raw) {
+    const src = raw && typeof raw === 'object' ? raw : {};
+    let cameraMode = String(src.cameraMode || '').toLowerCase();
+    if (cameraMode !== 'none' && cameraMode !== 'custom') cameraMode = 'all';
+    const cameraPriority = Array.isArray(src.cameraPriority)
+        ? src.cameraPriority.map((id) => String(id || '').trim()).filter(Boolean)
+        : [];
+    const cameraDisabledIds = Array.isArray(src.cameraDisabledIds)
+        ? src.cameraDisabledIds.map((id) => String(id || '').trim()).filter(Boolean)
+        : [];
+    const cameraDisabledLabels = Array.isArray(src.cameraDisabledLabels)
+        ? src.cameraDisabledLabels.map((s) => String(s || '').trim()).filter(Boolean)
+        : [];
+    let microphoneMode = String(src.microphoneMode || '').toLowerCase();
+    if (microphoneMode !== 'none') microphoneMode = 'all';
+    const microphonePriority = Array.isArray(src.microphonePriority)
+        ? src.microphonePriority.map((id) => String(id || '').trim()).filter(Boolean)
+        : [];
+    return {
+        cameraMode,
+        cameraPriority,
+        cameraDisabledIds,
+        cameraDisabledLabels,
+        microphoneMode,
+        microphonePriority,
     };
 }
 
@@ -155,10 +214,15 @@ function loadSettings() {
             _cached = {
                 ...SETTINGS_DEFAULTS,
                 ...raw,
-                trafficOpts: { ...SETTINGS_DEFAULTS.trafficOpts, ...(raw.trafficOpts || {}) },
+                trafficOpts: normalizeTrafficOpts(raw.trafficOpts),
                 tracking: normalizeTrackingSettings(raw.tracking),
                 capmonster: hydrateCapmonsterFromDisk(raw.capmonster),
+                devicePermissions: normalizeDevicePermissions(raw.devicePermissions),
             };
+            if (_cached.effectiveTrafficMode === 'browser_proxy') {
+                _cached.effectiveTrafficMode = 'mitm';
+                saveSettings(_cached);
+            }
             _syncTrafficModeFromSettings();
             return _cached;
         }
@@ -167,8 +231,10 @@ function loadSettings() {
     }
     _cached = {
         ...SETTINGS_DEFAULTS,
+        trafficOpts: normalizeTrafficOpts({}),
         tracking: normalizeTrackingSettings(),
         capmonster: normalizeCapmonsterSettings(),
+        devicePermissions: normalizeDevicePermissions(),
     };
     _syncTrafficModeFromSettings();
     return _cached;
@@ -201,5 +267,7 @@ module.exports = {
     saveSettings,
     cancelPendingSave,
     normalizeTrackingSettings,
+    normalizeTrafficOpts,
     normalizeCapmonsterSettings,
+    normalizeDevicePermissions,
 };

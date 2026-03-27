@@ -31,22 +31,8 @@ function createTrafficModeService(d) {
 
     function getMitmProxyOpts() {
         return resolveSessionProxyConfig({
-            mode: 'mitm',
-            upstreamProxyUrl: null,
             bypassRules: buildBypassList((d.settingsStore.getCached() || d.loadSettings()).bypassDomains),
         });
-    }
-
-    function getBrowserProxyOpts(proxyUrl) {
-        const opts = resolveSessionProxyConfig({
-            mode: 'browser_proxy',
-            upstreamProxyUrl: proxyUrl,
-            bypassRules: buildBypassList((d.settingsStore.getCached() || d.loadSettings()).bypassDomains),
-        });
-        if (!opts.proxyRules && proxyUrl) {
-            d.safeCatch({ module: 'main', eventCode: 'proxy.parse.failed', context: { op: 'toProxyRules' } }, new Error('Invalid upstream proxy URL'), 'info');
-        }
-        return opts;
     }
 
     async function applyEffectiveTrafficMode(mode, upstreamProxyUrl, context = {}) {
@@ -59,21 +45,17 @@ function createTrafficModeService(d) {
             d.sysLog('info', 'traffic.mode.changed', `mode ${prevMode} -> ${nextMode}`);
         }
 
-        const defaultSessionOpts = nextMode === 'mitm'
-            ? getMitmProxyOpts()
-            : getBrowserProxyOpts(upstreamProxyUrl);
+        const defaultSessionOpts = getMitmProxyOpts();
 
         d.setCurrentTrafficModeRaw(nextMode);
+        const interceptor = d.getInterceptor?.();
+        if (interceptor?.setTrafficMode) interceptor.setTrafficMode(nextMode);
         const mitm = d.getMitmProxy();
-        if (nextMode === 'mitm') {
-            mitm?.setUpstream?.(upstreamProxyUrl || null);
-        } else {
-            mitm?.setUpstream?.(null);
-        }
+        mitm?.setUpstream?.(upstreamProxyUrl || null);
 
         const tabManager = d.getTabManager();
         if (tabManager?.setProxyAll) {
-            await tabManager.setProxyAll(upstreamProxyUrl || null, nextMode);
+            await tabManager.setProxyAll(upstreamProxyUrl || null);
         }
         if (tabManager?.reapplyMitmTrustToSharedSession) {
             tabManager.reapplyMitmTrustToSharedSession();
@@ -119,7 +101,6 @@ function createTrafficModeService(d) {
         buildBypassList,
         getCurrentTrafficMode,
         getMitmProxyOpts,
-        getBrowserProxyOpts,
         applyEffectiveTrafficMode,
         applyBypassDomains,
         applyTrafficFilters,

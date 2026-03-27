@@ -72,9 +72,7 @@ test('t4) изолированная вкладка — загрузка httpbin
     expect(text.length).toBeGreaterThan(40);
 });
 
-test('t5) direct-вкладка + getDirectIp — ip строка', async () => {
-    await mainWindow.evaluate(() => window.electronAPI.newDirectTab());
-    await new Promise((r) => setTimeout(r, 750));
+test('t5) getDirectIp — ip строка', async () => {
     const direct = await mainWindow.evaluate(() => window.electronAPI.getDirectIp());
     expect(direct).toBeTruthy();
     expect(typeof direct.ip).toBe('string');

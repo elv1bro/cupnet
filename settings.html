@@ -245,6 +245,27 @@
         .perf-table th { color: var(--text-dim); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.3px; }
         .perf-table td.num, .perf-table th.num { text-align: right; }
         .status-inline { font-size: 11.5px; color: var(--text-dim); margin-left: 8px; }
+        .cam-mode-row { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+        .cam-mode-row label { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; cursor: pointer; text-align: left; }
+        .cam-mode-row input { margin-top: 2px; flex-shrink: 0; }
+        .device-table { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--panel-soft); min-height: 48px; }
+        .device-row {
+            display: grid;
+            grid-template-columns: 22px 36px 18px 1fr;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--border);
+            font-size: 12.5px;
+            cursor: grab;
+        }
+        .device-row:last-child { border-bottom: 0; }
+        .device-row.drag-over { background: rgba(59, 130, 246, 0.12); }
+        .device-drag-handle { color: var(--text-dim); cursor: grab; user-select: none; font-size: 14px; line-height: 1; }
+        .device-priority-num { color: var(--accent); font-weight: 700; font-size: 11px; }
+        .device-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .device-row .device-cb { width: 14px; height: 14px; margin: 0; }
+        .device-row.mode-all { grid-template-columns: 22px 36px 1fr; }
     </style>
 </head>
 <body>
@@ -252,7 +273,7 @@
     <header class="settings-head">
         <div>
             <h1 class="settings-title">[CupNet] Settings</h1>
-            <p class="settings-subtitle">General, Tracking and Performance configuration</p>
+            <p class="settings-subtitle">General, Tracking, Devices and Performance</p>
         </div>
         <span id="settings-saved-status" class="status-inline"></span>
     </header>
@@ -263,6 +284,7 @@
             <div class="sp-tab-bar">
                 <button class="sp-tab-btn active" data-sp-tab="general">General</button>
                 <button class="sp-tab-btn" data-sp-tab="tracking">Tracking</button>
+                <button class="sp-tab-btn" data-sp-tab="devices">Devices</button>
                 <button class="sp-tab-btn" data-sp-tab="performance">Performance</button>
             </div>
         </aside>
@@ -360,6 +382,30 @@
                         </div>
                     </div>
                     <div class="hint">Dedup is always on. Background, home/new-tab and direct tabs are skipped.</div>
+                </div>
+            </div>
+                </section>
+
+                <section id="sp-tab-devices" class="sp-tab-body">
+            <div class="grid-2">
+                <div class="card">
+                    <h3 class="card-title">Camera access</h3>
+                    <div class="cam-mode-row" id="sp-cam-mode-group">
+                        <label><input type="radio" name="sp-cam-mode" value="all"> <span>Allow camera (same as default Chromium)</span></label>
+                        <label><input type="radio" name="sp-cam-mode" value="none"> <span>Block camera for sites</span></label>
+                        <label><input type="radio" name="sp-cam-mode" value="custom"> <span>Custom list below — unchecked cameras are hidden from sites; order sets default when using generic video</span></label>
+                    </div>
+                    <div class="hint">«Allow» / «Block» use only OS permission handlers. «Custom» additionally wraps <code>navigator.mediaDevices</code> in page (advanced pages could detect this).</div>
+                </div>
+
+                <div class="card">
+                    <div class="row space">
+                        <h3 class="card-title">Camera list &amp; priority</h3>
+                        <button type="button" class="sp-btn" id="sp-devices-refresh">Refresh</button>
+                    </div>
+                    <div class="hint" style="margin-bottom:10px">Drag to set priority (#1 is used for <code>getUserMedia({ video: true })</code> when Custom is on). Reload the page after changing settings if a site already cached the device list.</div>
+                    <div id="sp-devices-list" class="device-table"></div>
+                    <div id="sp-devices-empty" class="hint" style="margin-top:10px;display:none">No cameras detected. Click Refresh or check OS privacy settings.</div>
                 </div>
             </div>
                 </section>

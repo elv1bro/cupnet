@@ -592,20 +592,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                     <input type="text" id="f-notes" placeholder="e.g. SmartProxy rotating — Russia">
                 </div>
 
-                <div class="form-row">
-                    <label>Traffic Mode</label>
-                    <select id="f-traffic-mode">
-                        <option value="mitm">MITM Proxy</option>
-                        <option value="browser_proxy" disabled>Browser proxy (in dev)</option>
-                    </select>
-                    <div class="form-hint">
-                        Only <b>MITM</b> is available here: local TLS interception, logging, rules, and AzureTLS fingerprinting.
-                        Browser-only proxy (no MITM) is disabled until the in-dev mode is finished.
-                    </div>
-                </div>
-
-                <div class="section-divider"></div>
-
                 <!-- Fingerprint / Identity -->
                 <details class="fp-section" id="fp-section">
                     <summary>
@@ -858,9 +844,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                         <div class="section-divider" style="margin:10px 0"></div>
 
                         <div class="form-row" style="margin-bottom:0">
-                            <label>Captcha whitelist <span class="fp-sublabel">— these domains are NEVER blocked (even if images/CSS off)</span></label>
+                            <label>Captcha whitelist <span class="fp-sublabel">— these domains are NEVER blocked (even if images/CSS off); CF challenge paths on any host are auto-exempt</span></label>
                             <textarea id="f-captcha-whitelist" rows="3" style="font-size:11px;font-family:'SF Mono','Fira Code',monospace"
-                                placeholder="*.google.com&#10;*.gstatic.com&#10;*.recaptcha.net&#10;challenges.cloudflare.com&#10;*.hcaptcha.com"></textarea>
+                                placeholder="*.google.com&#10;*.gstatic.com&#10;*.recaptcha.net&#10;challenges.cloudflare.com&#10;*.cloudflare.com&#10;*.hcaptcha.com&#10;*.turnstile.com"></textarea>
                             <div class="form-hint" style="margin-top:4px">
                                 One domain per line. <code style="font-size:10px">*.example.com</code> matches all subdomains.
                                 Google reCAPTCHA and Cloudflare are pre-filled by default.

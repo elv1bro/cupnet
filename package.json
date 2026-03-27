@@ -13,6 +13,7 @@
     "rebuild:azuretls:arm64": "CUPNET_ELECTRON_REBUILD_ARCH=arm64 node scripts/azuretls-electron-rebuild.js",
     "rebuild:azuretls:x64": "CUPNET_ELECTRON_REBUILD_ARCH=x64 node scripts/azuretls-electron-rebuild.js",
     "rebuild:azuretls:universal": "node scripts/azuretls-lipo-universal.js",
+    "rebuild:azuretls:node": "node scripts/azuretls-node-rebuild.js",
     "smoke:azuretls-native": "node scripts/smoke-azuretls-native.js",
     "check:native": "npm run rebuild:azuretls && npm run smoke:azuretls-native",
     "check:native:universal": "npm run rebuild:azuretls:universal && CUPNET_SMOKE_REQUIRE_UNIVERSAL=1 npm run smoke:azuretls-native",

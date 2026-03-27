@@ -2,14 +2,84 @@
 
 const db = require('./db');
 
-/** Limit stored body text in HAR to reduce memory / file size (H5 partial). */
-const HAR_MAX_BODY_CHARS = 1024 * 1024;
+/**
+ * Max chars for HTTP bodies and Chrome `_webSocketMessages[].data` in exported HAR.
+ * `CUPNET_HAR_MAX_EXPORT_CHARS` or legacy `CUPNET_HAR_MAX_BODY_CHARS`.
+ * Set to `0` for no truncation (full dump; large files possible).
+ */
+function getHarExportMaxChars() {
+    const raw = process.env.CUPNET_HAR_MAX_EXPORT_CHARS ?? process.env.CUPNET_HAR_MAX_BODY_CHARS;
+    if (raw === '0') return Number.MAX_SAFE_INTEGER;
+    if (raw === undefined || raw === '') return 1024 * 1024;
+    const n = parseInt(String(raw), 10);
+    return Number.isFinite(n) && n >= 0 ? n : 1024 * 1024;
+}
 
-function _truncateHarText(text) {
+/**
+ * Max WebSocket frames loaded per handshake / session for HAR and bundle (DB query limit).
+ * `CUPNET_EXPORT_WS_FRAME_LIMIT` (default 5_000_000).
+ */
+function getExportWsFrameLimit() {
+    const raw = process.env.CUPNET_EXPORT_WS_FRAME_LIMIT;
+    if (raw === '0' || raw === '') return 500_000_000;
+    const n = parseInt(String(raw), 10);
+    if (!Number.isFinite(n) || n < 1) return 5_000_000;
+    return Math.min(n, 500_000_000);
+}
+
+function truncateExportText(text) {
     if (text == null || text === '') return text;
     const s = typeof text === 'string' ? text : String(text);
-    if (s.length <= HAR_MAX_BODY_CHARS) return s;
-    return s.slice(0, HAR_MAX_BODY_CHARS) + '\n… [truncated by CupNet HAR_MAX_BODY_CHARS]';
+    const max = getHarExportMaxChars();
+    if (max === Number.MAX_SAFE_INTEGER || s.length <= max) return s;
+    return s.slice(0, max) + '\n… [truncated by CupNet HAR export max chars]';
+}
+
+/** Chrome HAR: send | receive, time in seconds, opcode 1 = text */
+function buildWebSocketMessagesHar(rows) {
+    if (!rows || !rows.length) return null;
+    return rows.map((r) => {
+        const dir = String(r.direction || '').toLowerCase();
+        const type = dir === 'send' ? 'send' : 'receive';
+        const time = r.created_at ? new Date(r.created_at).getTime() / 1000 : 0;
+        return {
+            type,
+            time,
+            opcode: 1,
+            data: truncateExportText(r.payload),
+        };
+    });
+}
+
+/**
+ * CupNet extension: full DB payload (no truncation), plus ids for correlation.
+ */
+function buildCupnetWebSocketMessages(rows) {
+    if (!rows || !rows.length) return null;
+    return rows.map((r) => ({
+        id: r.id,
+        direction: r.direction,
+        connection_id: r.connection_id ?? null,
+        created_at: r.created_at ?? null,
+        payload: r.payload == null ? null : String(r.payload),
+    }));
+}
+
+/**
+ * Sidecar JSON: all ws_events for session (no truncation). Written when CUPNET_HAR_WS_SIDECAR=1.
+ */
+function exportWebSocketSidecarPayload(sessionId) {
+    const sid = parseInt(String(sessionId), 10);
+    if (!sid) return null;
+    const limit = getExportWsFrameLimit();
+    const events = db.queryWsEventsBySession(sid, limit);
+    return {
+        schema: 'cupnet.ws_sidecar.v1',
+        sessionId: sid,
+        exportedAt: new Date().toISOString(),
+        frameLimit: limit,
+        events,
+    };
 }
 
 /**
@@ -25,6 +95,7 @@ function exportHar(sessionId, filters = {}) {
     const total = db.countRequests(mergedFilters);
     const rows  = db.queryRequestsFull(mergedFilters, total, 0);
 
+    const wsLimit = getExportWsFrameLimit();
     const entries = [];
     for (const full of rows) {
 
@@ -35,9 +106,9 @@ function exportHar(sessionId, filters = {}) {
             ? new Date(full.created_at).toISOString()
             : new Date().toISOString();
 
-        const reqBodyText = full.request_body ? _truncateHarText(full.request_body) : null;
-        const respBodyText = full.response_body ? _truncateHarText(full.response_body) : '';
-        entries.push({
+        const reqBodyText = full.request_body ? truncateExportText(full.request_body) : null;
+        const respBodyText = full.response_body ? truncateExportText(full.response_body) : '';
+        const entry = {
             startedDateTime,
             time: full.duration_ms || -1,
             request: {
@@ -72,13 +143,35 @@ function exportHar(sessionId, filters = {}) {
             timings: { send: 0, wait: full.duration_ms || -1, receive: 0 },
             _tabId: full.tab_id,
             _sessionId: full.session_id
-        });
+        };
+        if (String(full.type || '').toLowerCase() === 'websocket' && db.queryWsEvents) {
+            try {
+                const wsRows = db.queryWsEvents(
+                    full.session_id,
+                    full.tab_id ?? null,
+                    full.url || '',
+                    null,
+                    wsLimit
+                );
+                const wm = buildWebSocketMessagesHar(wsRows);
+                if (wm && wm.length) {
+                    entry._webSocketMessages = wm;
+                    const cup = buildCupnetWebSocketMessages(wsRows);
+                    if (cup && cup.length) entry._cupnetWebSocketMessages = cup;
+                }
+            } catch { /* ignore */ }
+        }
+        entries.push(entry);
     }
 
     return {
         log: {
             version: '1.2',
-            creator: { name: 'CupNet', version: '2.0', comment: '' },
+            creator: {
+                name: 'CupNet',
+                version: '2.0',
+                comment: 'HTTP/WS export; _webSocketMessages Chrome-style; _cupnetWebSocketMessages full payloads; env CUPNET_HAR_* / CUPNET_EXPORT_WS_FRAME_LIMIT',
+            },
             browser: { name: 'Electron', version: process.versions.electron || '', comment: '' },
             pages: buildPages(sessionId, entries),
             entries
@@ -139,4 +232,9 @@ function statusText(code) {
     return map[code] || '';
 }
 
-module.exports = { exportHar };
+module.exports = {
+    exportHar,
+    exportWebSocketSidecarPayload,
+    getHarExportMaxChars,
+    getExportWsFrameLimit,
+};

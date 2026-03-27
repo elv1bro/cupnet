@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * E2E: intercept rules (block / mock / modifyHeaders) через protocol.handle.
+ * E2E: intercept rules (block / mock / modifyHeaders) через MITM (planMitmIntercept).
  * Запуск: npm run test:e2e:intercept
  */
 
@@ -47,9 +47,6 @@ test.beforeEach(async () => {
     await deleteAllInterceptRules(mainWindow);
     await mainWindow.evaluate(async () => {
         await window.electronAPI.newTab(null);
-        const tabList = await window.electronAPI.getTabs();
-        const active = tabList.find((t) => t.isActive);
-        if (active) await window.electronAPI.setTabCupNet(active.id, true);
     });
     await new Promise((r) => setTimeout(r, 500));
 });
@@ -118,21 +115,18 @@ test('i4) после удаления правил — обычный /get с п
     expect(text).toMatch(/"url"|origin|headers/i);
 });
 
-test('i5) block на shared не влияет на direct-вкладку', async () => {
+test('i5) block — /headers на MITM-вкладке отдаёт Blocked by CupNet', async () => {
     await createInterceptRule(mainWindow, {
-        name: 'e2e-block-headers-direct',
+        name: 'e2e-block-headers-mitm',
         type: 'block',
         url_pattern: '*httpbin.org/headers*',
         enabled: true,
         params: {},
     });
-    await mainWindow.evaluate(() => window.electronAPI.newDirectTab());
-    await new Promise((r) => setTimeout(r, 750));
     await navigateAndWait(electronApp, HTTPBIN_HEADERS, 90_000, {
-        bodySnippet: 'headers',
-        minBodyLength: 30,
+        bodySnippet: 'Blocked',
+        minBodyLength: 10,
     });
     const text = await readActiveTabBodyText(electronApp);
-    expect(text).not.toContain('Blocked by CupNet');
-    expect(text.toLowerCase()).toMatch(/"headers"|httpbin/i);
+    expect(text).toContain('Blocked by CupNet');
 });

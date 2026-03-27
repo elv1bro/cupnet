@@ -110,7 +110,7 @@ function createProxyMitmService(d) {
                 let tabId = entry.tabId ?? null;
                 if (!tabId) {
                     const active = d.getTabManager()?.getActiveTab();
-                    if (active && !active.direct) tabId = active.id;
+                    if (active) tabId = active.id;
                 }
                 const sessionId = entry.sessionId != null ? entry.sessionId : d.getCurrentSessionId();
                 d.recordLatencySample(entry.duration);
@@ -292,7 +292,7 @@ function createProxyMitmService(d) {
         const tm = d.getTabManager?.();
         if (tm) {
             const tryTab = (tab) => {
-                if (!tab || !tab.cupnetEnabled) return null;
+                if (!tab) return null;
                 try {
                     if (tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
                         return tab.view.webContents.session;
@@ -319,12 +319,12 @@ function createProxyMitmService(d) {
         if (!tm) return null;
         if (tabIdHint) {
             const t = tm.getTab(tabIdHint);
-            if (t?.cupnetEnabled) return t;
+            if (t) return t;
         }
         const active = tm.getActiveTab?.();
-        if (active?.cupnetEnabled) return active;
+        if (active) return active;
         for (const t of tm.getAllTabs?.() || []) {
-            if (t.cupnetEnabled) return t;
+            if (t) return t;
         }
         return null;
     }
@@ -462,7 +462,7 @@ function createProxyMitmService(d) {
         }
 
         const wcGeo = geoTab?.view?.webContents;
-        if (mode === 'mitm' && geoTab?.cupnetEnabled && wcGeo && !wcGeo.isDestroyed()) {
+        if (geoTab && wcGeo && !wcGeo.isDestroyed()) {
             try {
                 const j = await _fetchIpinfoJsonViaWebContents(wcGeo);
                 const result = mapIpinfo(j);

@@ -1554,12 +1554,6 @@
                 <div class="lc-logo-wrap"><img class="lc-logo-img" src="img.png" alt="[CupNet]"></div>
                 <span class="lc-logo-name">[CupNet] <span class="lc-version" id="lc-version"></span></span>
             </div>
-            <button type="button" class="hero-mode-toggle nt-on" id="hero-cupnet-toggle"
-                    aria-pressed="true"
-                    title="MITM mode: proxy, logging, and rules. Toggle off for direct browsing — reload tab after switching.">
-                <span class="hero-mode-toggle__track" aria-hidden="true"><span class="hero-mode-toggle__thumb"></span></span>
-                <span class="hero-mode-toggle__label" id="hero-mode-label">MITM</span>
-            </button>
             <div class="lc-clock-inline">
                 <span id="clock">00<span class="colon">:</span>00</span>
                 <span id="date">loading…</span>
@@ -1575,18 +1569,6 @@
             </div>
             <p class="iso-banner-desc">
                 This tab runs in a private session — cookies are completely separate from all other tabs and start empty. No data is shared with the shared session or other tabs.
-            </p>
-        </div>
-
-        <!-- ── Direct tab banner — shown below clock, only when direct ── -->
-        <div class="direct-banner" id="direct-banner">
-            <div class="direct-banner-top">
-                <span class="direct-banner-icon">🏠</span>
-                <span class="direct-banner-title">Direct Connection</span>
-                <span class="direct-banner-badge">Direct</span>
-            </div>
-            <p class="direct-banner-desc">
-                This tab connects directly to the internet — no MITM proxy, no traffic logging, no intercept rules. Works like a regular browser for everyday browsing.
             </p>
         </div>
 
@@ -3491,7 +3473,6 @@ function applyGlow(mode) {
     if (!_heroEl) return;
     _heroEl.classList.add('glow-active');
     GLOW_CLASSES.forEach(c => _heroEl.classList.remove(c));
-    if (mode === 'direct')   _heroEl.classList.add('glow-direct');
     if (mode === 'proxy')    _heroEl.classList.add('glow-proxy');
     if (mode === 'isolated') _heroEl.classList.add('glow-isolated');
 }
@@ -3503,40 +3484,22 @@ const pwIp        = document.getElementById('pw-ip');
 const pwGeo       = document.getElementById('pw-geo');
 const pwModeBadge = document.getElementById('pw-mode-badge');
 const widget      = document.getElementById('proxy-widget');
-let _isDirectTab = false;
 let _isIsolatedTab = false;
 
 function _updateModeBadge(info) {
     if (!pwModeBadge) return;
-    const mode = info?.effectiveMode || info?.trafficMode || '';
-    if (mode === 'mitm') {
-        pwModeBadge.textContent = 'MITM';
-        pwModeBadge.className = 'pw-mode-badge mode-mitm';
-        pwModeBadge.style.display = '';
-    } else if (mode === 'browser_proxy' && info?.active) {
-        pwModeBadge.textContent = 'Proxy';
-        pwModeBadge.className = 'pw-mode-badge mode-browser';
-        pwModeBadge.style.display = '';
-    } else {
-        pwModeBadge.style.display = 'none';
-    }
+    pwModeBadge.textContent = 'MITM';
+    pwModeBadge.className = 'pw-mode-badge mode-mitm';
+    pwModeBadge.style.display = '';
 }
 
 function setProxyWidgetStatus(active, name, info) {
     widget.classList.remove('direct-mode', 'proxy-active');
-    if (_isDirectTab) {
-        pwDot.className = 'pw-dot off';
-        pwStatus.className = 'pw-status off';
-        pwStatus.textContent = 'Direct Connection';
-        widget.classList.add('direct-mode');
-        if (pwModeBadge) pwModeBadge.style.display = 'none';
-    } else {
-        pwDot.className = `pw-dot ${active ? 'on' : 'off'}`;
-        pwStatus.className = `pw-status ${active ? 'on' : 'off'}`;
-        pwStatus.textContent = active ? (name || 'Proxy Active') : 'No Proxy (Direct)';
-        if (active) widget.classList.add('proxy-active');
-        _updateModeBadge(info);
-    }
+    pwDot.className = `pw-dot ${active ? 'on' : 'off'}`;
+    pwStatus.className = `pw-status ${active ? 'on' : 'off'}`;
+    pwStatus.textContent = active ? (name || 'Proxy Active') : 'No upstream proxy';
+    if (active) widget.classList.add('proxy-active');
+    _updateModeBadge(info);
 }
 
 let _ipRetryTimer = null;
@@ -3547,17 +3510,12 @@ async function refreshIpWidget() {
     if (!window.electronAPI) return;
     let ok = false;
     try {
-        let geo;
-        if (_isDirectTab && window.electronAPI.getDirectIp) {
-            geo = await window.electronAPI.getDirectIp();
-        } else {
-            let tid;
-            try {
-                const tl = await window.electronAPI.getTabs?.();
-                tid = Array.isArray(tl) ? tl.find(x => x.isActive)?.id : undefined;
-            } catch (_) { /* ignore */ }
-            geo = await window.electronAPI.checkIpGeo(tid);
-        }
+        let tid;
+        try {
+            const tl = await window.electronAPI.getTabs?.();
+            tid = Array.isArray(tl) ? tl.find(x => x.isActive)?.id : undefined;
+        } catch (_) { /* ignore */ }
+        const geo = await window.electronAPI.checkIpGeo(tid);
         if (geo && geo.ip && geo.ip !== 'unknown') {
             pwIp.textContent = geo.ip;
             const loc = [geo.city, geo.country_name].filter(Boolean).join(', ');
@@ -3584,7 +3542,6 @@ async function refreshIpWidget() {
 
 let _lastProxyActive = false;
 function _resolveGlowMode() {
-    if (_isDirectTab) return 'direct';
     if (_isIsolatedTab) return 'isolated';
     if (_lastProxyActive) return 'proxy';
     return 'home';
@@ -3622,14 +3579,12 @@ if (window.electronAPI) {
         _lastProxyActive = !!info?.active;
         _effectiveTrafficMode = info?.effectiveMode || info?.trafficMode || '';
         window.electronAPI.getMitmReady?.().then(s => setMitmBanner(!!s?.ready)).catch(() => {});
-        if (!_isDirectTab) {
-            setProxyWidgetStatus(info?.active, info?.displayProxyName || info?.proxyName, info);
-            pwIp.textContent  = '…';
-            pwGeo.textContent = 'Checking…';
-            _ipRetryCount = 0;
-            clearTimeout(_ipRetryTimer);
-            setTimeout(refreshIpWidget, 1200);
-        }
+        setProxyWidgetStatus(info?.active, info?.displayProxyName || info?.proxyName, info);
+        pwIp.textContent  = '…';
+        pwGeo.textContent = 'Checking…';
+        _ipRetryCount = 0;
+        clearTimeout(_ipRetryTimer);
+        setTimeout(refreshIpWidget, 1200);
         applyGlow(_resolveGlowMode());
         window.dispatchEvent(new CustomEvent('cupnet-refresh-cookie-bar'));
         window.dispatchEvent(new CustomEvent('cupnet-resync-nt-from-tabs'));
@@ -3661,12 +3616,9 @@ if (window.electronAPI) {
     }
 }
 
-// ── Isolated / Direct banners + hero CupNet toggle, proxy scope pill, cookie Shared/Isolated ──
+// ── Isolated banner + proxy scope pill, cookie Shared/Isolated ──
 (function () {
     const isoBanner = document.getElementById('iso-banner');
-    const directBanner = document.getElementById('direct-banner');
-    const heroCupnet = document.getElementById('hero-cupnet-toggle');
-    const heroModeLabel = document.getElementById('hero-mode-label');
     const pwScopeBadge = document.getElementById('pw-scope-badge');
     const cookieIsoSeg = document.getElementById('cookie-iso-seg');
     const cookieIsoShared = document.getElementById('cookie-iso-shared');
@@ -3684,20 +3636,9 @@ if (window.electronAPI) {
         }).catch(() => { _ntProxyProfiles = []; });
     }
 
-    function syncHeroMode(active) {
-        if (!heroCupnet) return;
-        const cupnetOn = !!(active?.cupnetEnabled);
-        heroCupnet.classList.toggle('nt-on', cupnetOn);
-        heroCupnet.setAttribute('aria-pressed', cupnetOn ? 'true' : 'false');
-        if (heroModeLabel) heroModeLabel.textContent = cupnetOn ? 'MITM' : 'Direct';
-        heroCupnet.title = cupnetOn
-            ? 'MITM mode: proxy, logging, and rules active. Toggle off for direct browsing.'
-            : 'Direct mode: no interception. Toggle on to enable MITM — reload tab after switching.';
-    }
-
     function syncProxyScope(active) {
         if (!pwScopeBadge) return;
-        if (!active || !active.cupnetEnabled) {
+        if (!active) {
             pwScopeBadge.style.display = 'none';
             return;
         }
@@ -3718,30 +3659,21 @@ if (window.electronAPI) {
 
     function syncCookieIso(active) {
         if (!cookieIsoSeg || !cookieIsoShared || !cookieIsoIsolated) return;
-        const cupnetOn = !!(active?.cupnetEnabled);
         const gid = active?.cookieGroupId ?? 1;
         const shared = gid === 1;
 
-        cookieIsoSeg.classList.toggle('cupnet-off', !cupnetOn);
         cookieIsoSeg.classList.toggle('state-isolated', !shared);
         cookieIsoShared.classList.toggle('active', shared);
         cookieIsoIsolated.classList.toggle('active', !shared);
 
-        cookieIsoShared.disabled = !cupnetOn || shared;
-        cookieIsoIsolated.disabled = !cupnetOn || !shared;
+        cookieIsoShared.disabled = shared;
+        cookieIsoIsolated.disabled = !shared;
 
-        const offTitle = 'Enable CupNet for this tab to change cookie session';
-        if (!cupnetOn) {
-            cookieIsoShared.title = offTitle;
-            cookieIsoIsolated.title = offTitle;
-        } else {
-            cookieIsoShared.title = 'Shared session — same cookies as other shared tabs';
-            cookieIsoIsolated.title = 'Isolated session — private cookies for this tab';
-        }
+        cookieIsoShared.title = 'Shared session — same cookies as other shared tabs';
+        cookieIsoIsolated.title = 'Isolated session — private cookies for this tab';
     }
 
     function applyChromeFromActive(active) {
-        syncHeroMode(active);
         syncProxyScope(active);
         syncCookieIso(active);
     }
@@ -3749,14 +3681,10 @@ if (window.electronAPI) {
     function applyTabList(tabs) {
         const active = tabs.find(t => t.isActive);
         if (isoBanner) isoBanner.classList.toggle('visible', !!(active?.isolated));
-        if (directBanner) directBanner.classList.toggle('visible', !!(active?.direct));
 
-        const wasDirect = _isDirectTab;
-        _isDirectTab = !!(active?.direct);
         _isIsolatedTab = !!(active?.isolated);
-        const directFlipped = wasDirect !== _isDirectTab;
 
-        const tabSig = `${active?.id || ''}|${active?.proxyProfileId ?? ''}|${active?.cupnetEnabled ? 1 : 0}|${active?.direct ? 1 : 0}|${active?.cookieGroupId ?? ''}`;
+        const tabSig = `${active?.id || ''}|${active?.proxyProfileId ?? ''}|${active?.cookieGroupId ?? ''}`;
         const tabSigChanged = tabSig !== _lastNtTabSig;
         if (tabSigChanged) _lastNtTabSig = tabSig;
 
@@ -3771,31 +3699,18 @@ if (window.electronAPI) {
             });
         });
 
-        if (tabSigChanged || directFlipped) {
+        if (tabSigChanged) {
             window.electronAPI?.getCurrentProxy().then(info => {
                 _lastProxyActive = !!info?.active;
                 setProxyWidgetStatus(info?.active, info?.displayProxyName || info?.proxyName, info);
                 applyGlow(_resolveGlowMode());
             }).catch(() => {});
-            if (!_isDirectTab) {
-                pwIp.textContent  = '…';
-                pwGeo.textContent = 'Checking…';
-                _ipRetryCount = 0;
-                clearTimeout(_ipRetryTimer);
-                setTimeout(refreshIpWidget, 300);
-            }
+            pwIp.textContent  = '…';
+            pwGeo.textContent = 'Checking…';
+            _ipRetryCount = 0;
+            clearTimeout(_ipRetryTimer);
+            setTimeout(refreshIpWidget, 300);
         }
-    }
-
-    if (heroCupnet && window.electronAPI.setTabCupNet) {
-        heroCupnet.addEventListener('click', (e) => {
-            e.stopPropagation();
-            window.electronAPI.getTabs().then((tabs) => {
-                const active = tabs.find(t => t.isActive);
-                if (!active) return;
-                window.electronAPI.setTabCupNet(active.id, !active.cupnetEnabled);
-            }).catch(() => {});
-        });
     }
 
     if (cookieIsoShared) {
@@ -3804,7 +3719,7 @@ if (window.electronAPI) {
             if (!window.electronAPI.setTabCookieGroup) return;
             window.electronAPI.getTabs().then((tabs) => {
                 const active = tabs.find(t => t.isActive);
-                if (!active || !active.cupnetEnabled) return;
+                if (!active) return;
                 if ((active.cookieGroupId ?? 1) === 1) return;
                 window.electronAPI.setTabCookieGroup(active.id, 1);
             }).catch(() => {});
@@ -3816,7 +3731,7 @@ if (window.electronAPI) {
             if (!window.electronAPI.isolateTab) return;
             window.electronAPI.getTabs().then((tabs) => {
                 const active = tabs.find(t => t.isActive);
-                if (!active || !active.cupnetEnabled) return;
+                if (!active) return;
                 if ((active.cookieGroupId ?? 1) !== 1) return;
                 window.electronAPI.isolateTab(active.id);
             }).catch(() => {});

@@ -54,7 +54,6 @@ function registerDbLoggingIpc(ctx) {
             ctx.currentSessionId = sess ? sess.id : null;
             ctx.logEntryCount = 0;
             for (const tab of ctx.tabManager.getAllTabs()) {
-                if (tab.direct) continue;
                 tab.sessionId = ctx.currentSessionId;
                 ctx.setupNetworkLogging(tab.view.webContents, tab.id, ctx.currentSessionId);
             }
@@ -80,7 +79,6 @@ function registerDbLoggingIpc(ctx) {
         ctx.isLoggingEnabled = true;
         // Иначе setupNetworkLogging ранее мог выйти рано (!logging && !fp) — CDP не висит, в MITM пишет только CDP.
         for (const tab of ctx.tabManager.getAllTabs()) {
-            if (tab.direct) continue;
             if (!tab.view?.webContents || tab.view.webContents.isDestroyed()) continue;
             const sid = ctx.currentSessionId ?? tab.sessionId;
             if (sid == null) continue;
@@ -97,7 +95,6 @@ function registerDbLoggingIpc(ctx) {
             ctx.hadLoggingBeenStopped = false;
             // Re-attach logging for every tab so new tabs opened while paused also log
             for (const tab of ctx.tabManager.getAllTabs()) {
-                if (tab.direct) continue;
                 tab.sessionId = ctx.currentSessionId;
                 ctx.setupNetworkLogging(tab.view.webContents, tab.id, ctx.currentSessionId);
             }
@@ -112,7 +109,6 @@ function registerDbLoggingIpc(ctx) {
         ctx.logEntryCount = 0;
         ctx.hadLoggingBeenStopped = false;
         for (const tab of ctx.tabManager.getAllTabs()) {
-            if (tab.direct) continue;
             tab.sessionId = ctx.currentSessionId;
             ctx.setupNetworkLogging(tab.view.webContents, tab.id, ctx.currentSessionId);
         }
@@ -162,6 +158,11 @@ function registerDbLoggingIpc(ctx) {
         });
     });
 
+    ctx.ipcMain.handle('get-ws-events', async (_, payload) => {
+        const p = payload || {};
+        return ctx.db.queryWsEvents(p.sessionId, p.tabId, p.url, p.connectionId || null, p.limit || 10000);
+    });
+
     ctx.ipcMain.handle('clear-logs', async () => {
         // Start a new session; all open tabs will log into it
         try {
@@ -171,7 +172,6 @@ function registerDbLoggingIpc(ctx) {
             ctx.logEntryCount = 0;
             // Re-attach logging for every open tab so they write to the new session
             for (const tab of ctx.tabManager.getAllTabs()) {
-                if (tab.direct) continue;
                 tab.sessionId = ctx.currentSessionId;
                 ctx.setupNetworkLogging(tab.view.webContents, tab.id, ctx.currentSessionId);
             }

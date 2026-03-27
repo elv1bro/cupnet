@@ -186,9 +186,9 @@ function _formatTabTitle(tab) {
 
 function makeTabEl(tab) {
     const el = document.createElement('div');
-    el.className = 'tab-item' + (tab.isActive ? ' active' : '') + (tab.isolated ? ' isolated' : '') + (tab.direct ? ' direct' : '');
+    el.className = 'tab-item' + (tab.isActive ? ' active' : '') + (tab.isolated ? ' isolated' : '');
     el.dataset.id = tab.id;
-    el.title = (tab.url || '') + (tab.direct ? ' [Direct — no proxy]' : tab.isolated ? ' [Isolated cookies]' : '');
+    el.title = (tab.url || '') + (tab.isolated ? ' [Isolated cookies]' : '');
 
     const fallbackIcon = _tabFallbackIcon(tab);
 
@@ -228,10 +228,10 @@ function makeTabEl(tab) {
     // Per-tab indicator dots
     const indicators = document.createElement('span');
     indicators.className = 'tab-indicators';
-    if (tab.cupnetEnabled) {
+    {
         const dot = document.createElement('span');
         dot.className = 'tab-dot tab-dot-cupnet';
-        dot.title = 'CupNet ON';
+        dot.title = 'MITM / CupNet';
         indicators.appendChild(dot);
     }
     if (tab.proxyProfileId) {
@@ -286,10 +286,10 @@ function renderTabs(tabData) {
             tabList.insertBefore(el, insertBefore);
         } else {
             // Existing tab — patch in-place (avoid full rebuild)
-            const wantClass = 'tab-item' + (tab.isActive ? ' active' : '') + (tab.isolated ? ' isolated' : '') + (tab.direct ? ' direct' : '');
+            const wantClass = 'tab-item' + (tab.isActive ? ' active' : '') + (tab.isolated ? ' isolated' : '');
             if (el.className !== wantClass) el.className = wantClass;
 
-            const wantTitle = (tab.url || '') + (tab.direct ? ' [Direct — no proxy]' : tab.isolated ? ' [Isolated cookies]' : '');
+            const wantTitle = (tab.url || '') + (tab.isolated ? ' [Isolated cookies]' : '');
             if (el.title !== wantTitle) el.title = wantTitle;
 
             const titleEl = el.querySelector('.tab-title');
@@ -497,7 +497,6 @@ const pbDetail = document.getElementById('pb-detail');
 let _lastProxyInfo     = null;
 let _proxyIpGeo        = null;
 let _directIpGeo       = null;
-let _isDirectTabActive = false;
 let _isIsolatedTab     = false;
 let _isNewTabPage      = false;
 let _lastPillTabSig    = '';
@@ -511,7 +510,6 @@ function _setEnvClass(el, cls) {
 }
 
 function _currentEnvClass() {
-    if (_isDirectTabActive) return 'env-direct';
     if (_isIsolatedTab) return 'env-isolated';
     if (_isNewTabPage) return 'env-newtab';
     if (_lastProxyInfo?.active) return 'env-proxy';
@@ -525,20 +523,6 @@ function _renderPill() {
 
     // Reset dot classes
     pbDot.classList.remove('active', 'direct', 'isolated');
-
-    if (_isDirectTabActive) {
-        pbDot.classList.add('direct');
-        pbName.textContent = 'Direct';
-        if (_directIpGeo && _directIpGeo.ip) {
-            const loc = [_directIpGeo.city, _directIpGeo.country].filter(Boolean).join(', ');
-            pbDetail.textContent = _directIpGeo.ip + (loc ? ' · ' + loc : '');
-        } else {
-            pbDetail.textContent = 'checking…';
-        }
-        pbStatusBtn.title = 'Direct tab — no proxy, real IP';
-        if (pbModeBadge) pbModeBadge.style.display = 'none';
-        return;
-    }
 
     const info = _lastProxyInfo;
     if (!info) return;
@@ -575,18 +559,9 @@ function _renderPill() {
 
 function _renderModeBadge(info) {
     if (!pbModeBadge) return;
-    const mode = info?.effectiveMode || info?.trafficMode || '';
-    if (mode === 'mitm') {
-        pbModeBadge.textContent = 'MITM';
-        pbModeBadge.className = 'pb-mode-badge mode-mitm';
-        pbModeBadge.style.display = '';
-    } else if (mode === 'browser_proxy' && info?.active) {
-        pbModeBadge.textContent = 'Proxy';
-        pbModeBadge.className = 'pb-mode-badge mode-browser';
-        pbModeBadge.style.display = '';
-    } else {
-        pbModeBadge.style.display = 'none';
-    }
+    pbModeBadge.textContent = 'MITM';
+    pbModeBadge.className = 'pb-mode-badge mode-mitm';
+    pbModeBadge.style.display = '';
 }
 
 function updateProxyStatus(info) {
@@ -623,26 +598,23 @@ function _fetchDirectIpGeo() {
 function _onActiveTabChanged(tabData) {
     const list = tabData || tabs;
     const active = list.find(t => t.isActive);
-    const wasDirect = _isDirectTabActive;
-    _isDirectTabActive = !!(active?.direct);
     _isIsolatedTab     = !!(active?.isolated);
 
     const url = active?.url || '';
     _isNewTabPage = !url || url === 'about:blank' || url.includes('new-tab.html');
 
-    if (wasDirect !== _isDirectTabActive) _renderPill();
-    else _renderPill();
+    _renderPill();
 
-    const pillSig = `${active?.id || ''}|${active?.proxyProfileId ?? ''}|${active?.cupnetEnabled ? 1 : 0}`;
+    const pillSig = `${active?.id || ''}|${active?.proxyProfileId ?? ''}`;
     if (pillSig !== _lastPillTabSig) {
         _lastPillTabSig = pillSig;
         _proxyIpGeo = null;
         api.getCurrentProxy().then((info) => {
             updateProxyStatus(info);
-            if (info?.active && !_isDirectTabActive) _fetchProxyIpGeo();
+            if (info?.active) _fetchProxyIpGeo();
         }).catch(() => {});
     }
-    if (_isDirectTabActive || !_lastProxyInfo?.active) _fetchDirectIpGeo();
+    if (!_lastProxyInfo?.active) _fetchDirectIpGeo();
     _interceptHitCount = 0;
     updateRulesHitBadge();
     _dnsHitCount = 0;

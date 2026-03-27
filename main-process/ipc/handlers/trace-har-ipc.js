@@ -19,7 +19,15 @@ function registerTraceHarIpc(ctx) {
         try {
             const har = ctx.harExporter.exportHar(sid);
             ctx.fs.writeFileSync(filePath, JSON.stringify(har, null, 2));
-            return { success: true, path: filePath };
+            let sidecarPath = null;
+            if (process.env.CUPNET_HAR_WS_SIDECAR === '1' && typeof ctx.harExporter.exportWebSocketSidecarPayload === 'function') {
+                const side = ctx.harExporter.exportWebSocketSidecarPayload(sid);
+                if (side) {
+                    sidecarPath = filePath.replace(/\.har$/i, '-websocket.json');
+                    ctx.fs.writeFileSync(sidecarPath, JSON.stringify(side, null, 2));
+                }
+            }
+            return { success: true, path: filePath, sidecarPath };
         } catch (e) { return { success: false, error: e.message }; }
     });
 
@@ -51,6 +59,7 @@ function registerTraceHarIpc(ctx) {
                 path: filePath,
                 stats: {
                     requests: bundle.traffic?.requests?.length || 0,
+                    websocketEvents: bundle.traffic?.websocketEvents?.length || 0,
                     protectionLevel: bundle.meta?.protectionLevel || protectionLevel,
                     redactedFields: bundle.meta?.redactionReport?.redactedFieldsCount || 0,
                 },
@@ -122,6 +131,7 @@ function registerTraceHarIpc(ctx) {
                 protectionLevel: bundle.meta?.protectionLevel || 'Raw',
                 requests: Array.isArray(bundle.traffic?.requests) ? bundle.traffic.requests.length : 0,
                 trace: Array.isArray(bundle.traffic?.trace) ? bundle.traffic.trace.length : 0,
+                websocketEvents: Array.isArray(bundle.traffic?.websocketEvents) ? bundle.traffic.websocketEvents.length : 0,
             };
             return { success: true, filePath: filePaths[0], preview, bundle };
         } catch (e) {

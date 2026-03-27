@@ -53,7 +53,7 @@ const diffUtils = require('../diff-utils');
 const { solveTurnstileWithCapMonster, CaptchaSolverError } = require('../captcha-solver');
 const { networkPolicy } = require('../network-policy');
 const { ProxyResilienceManager } = require('../proxy-resilience');
-const { normalizeTrafficMode, resolveSessionProxyConfig, TRAFFIC_MODE_MITM } = require('../traffic-mode-router');
+const { normalizeTrafficMode, resolveSessionProxyConfig } = require('../traffic-mode-router');
 const settingsStore = require('./services/settings-store');
 const uiPrefsStore = require('./services/ui-prefs-store');
 const extPortsStore = require('./services/ext-ports-store');
@@ -92,6 +92,18 @@ const { MitmProxy, ExternalProxyPort } = require('../mitm-proxy.js');
 // ─── Stealth debug: CUPNET_STEALTH_LEVEL=N отключает слои по одному для бисекции CF Turnstile ──
 const STEALTH = Number(process.env.CUPNET_STEALTH_LEVEL || 0);
 if (STEALTH) console.log(`[stealth] CUPNET_STEALTH_LEVEL=${STEALTH}`);
+
+(function logCupnetBisectEnv() {
+    const parts = [];
+    const on = (k) => { if (process.env[k] === '1') parts.push(k); };
+    on('CUPNET_DISABLE_TRAFFIC_WEBREQUEST');
+    on('CUPNET_DISABLE_INTERCEPT_PROTOCOL');
+    on('CUPNET_DISABLE_FINGERPRINT');
+    on('CUPNET_TRAFFIC_FILTER_LOG');
+    on('CUPNET_FORCE_HTTP1');
+    if (STEALTH) parts.push(`CUPNET_STEALTH_LEVEL=${STEALTH}`);
+    if (parts.length) console.log('[cupnet-bisect]', parts.join(' '));
+})();
 
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 // Read bypass domains early (before app.whenReady) for Chromium proxy bypass hints.
@@ -154,7 +166,7 @@ let persistentAnonymizedProxyUrl = null;
 let connectedProfileId           = null;
 let connectedProfileName         = null;
 let connectedResolvedVars        = {};
-let currentTrafficMode           = 'browser_proxy';
+let currentTrafficMode           = 'mitm';
 settingsStore.configure({ onEffectiveTrafficModeLoaded: (mode) => { currentTrafficMode = mode; } });
 let isLoggingEnabled           = false;
 let hadLoggingBeenStopped      = false; // true after first explicit stop; controls modal on re-enable
@@ -458,7 +470,6 @@ const _cdpNetworkLogging = createCdpNetworkLogging({
     Notification,
     getTabManager: () => tabManager,
     getMitmProxy: () => mitmProxy,
-    getCurrentTrafficMode: () => normalizeTrafficMode(currentTrafficMode),
     getIsLoggingEnabled: () => isLoggingEnabled,
     getDb: () => db,
     getRulesEngine: () => rulesEngine,
@@ -502,6 +513,7 @@ const trafficSvc = createTrafficModeService({
     notifyProxyStatus,
     getMitmProxy: () => mitmProxy,
     getTabManager: () => tabManager,
+    getInterceptor: () => interceptor,
     getPersistentAnonymizedProxyUrl: () => persistentAnonymizedProxyUrl,
     getCurrentTrafficModeRaw: () => currentTrafficMode,
     setCurrentTrafficModeRaw: (v) => { currentTrafficMode = v; },
@@ -509,7 +521,6 @@ const trafficSvc = createTrafficModeService({
 const {
     getCurrentTrafficMode,
     getMitmProxyOpts,
-    getBrowserProxyOpts,
     applyEffectiveTrafficMode,
     applyBypassDomains,
     applyTrafficFilters,
@@ -742,7 +753,8 @@ app.whenReady().then(async () => {
     db.init();
     _syncDnsOverrideHostsSet();
     loadSettings();
-    tabManager.setProxyAll(null, getCurrentTrafficMode()).catch((err) => {
+    tabManager.applyDevicePermissions();
+    tabManager.setProxyAll(null).catch((err) => {
         safeCatch({ module: 'main', eventCode: 'traffic.mode.apply.failed', context: { source: 'startup.preload' } }, err, 'info');
     });
     initSysLogIPC();
@@ -758,6 +770,7 @@ app.whenReady().then(async () => {
         broadcastInterceptRuleMatched(info);
         maybeLogMockToNetworkActivity(info);
     });
+    interceptor.setTrafficMode(getCurrentTrafficMode());
 
     const { createAppContext } = require('./app-context');
     appCtx = createAppContext();
@@ -791,10 +804,8 @@ app.whenReady().then(async () => {
             tabManager.setMitmTabUpstreamCleanup((tid) => {
                 if (mitmProxy && typeof mitmProxy.removeTabUpstream === 'function') mitmProxy.removeTabUpstream(tid);
             });
-            if (normalizeTrafficMode(currentTrafficMode) === TRAFFIC_MODE_MITM) {
-                trustMitmCA(electronSession.fromPartition(tabManager.partitionForGroup(1)));
-                trustMitmCA(electronSession.fromPartition('persist:cupnet-shared'));
-            }
+            trustMitmCA(electronSession.fromPartition(tabManager.partitionForGroup(1)));
+            trustMitmCA(electronSession.fromPartition('persist:cupnet-shared'));
         } else {
             console.log('[stealth] trustMitmCA skipped (level >= 4)');
         }

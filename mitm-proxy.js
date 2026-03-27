@@ -5,7 +5,8 @@
  *
  * Architecture:
  *   Chromium (--proxy-server=127.0.0.1:PORT)
- *     ↓  HTTP  → AzureTLS (in-process в Electron или дочерний azure-tls-worker.js)
+ *     ↓  HTTP  → AzureTLS (дочерний azure-tls-worker.js на системном Node в Electron 21+;
+ *               in-process только при CUPNET_AZURETLS_IN_PROCESS=1 — ffi ломается из‑за V8 memory cage)
  *     ↓  HTTPS CONNECT → MITM:
  *         1. Accept CONNECT, reply 200
  *         2. Terminate Chromium's TLS with fake domain cert (Electron trusts it)
@@ -314,13 +315,21 @@ function _buildDomainCert(hostname, pubKey, privKey) {
 // ── AzureTLS worker pool ──────────────────────────────────────────────────────
 
 const { spawn } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
-/** В Electron — FFI в main; в обычном node (тесты) — отдельный процесс. */
+/**
+ * Дочерний worker: в Electron 21+ V8 memory cage не даёт загрузить ffi-napi/ref-napi
+ * (в т.ч. под ELECTRON_RUN_AS_NODE) — нужен отдельный процесс на обычном Node и
+ * аддоны, собранные под его ABI: npm run rebuild:azuretls:node
+ *
+ * Явно in-process: CUPNET_AZURETLS_IN_PROCESS=1 (только если рантайм без cage / эксперимент).
+ */
 function mitmUseChildAzureTlsWorker() {
     if (process.env.CUPNET_AZURETLS_CHILD_PROCESS === '1') return true;
     if (process.env.CUPNET_AZURETLS_IN_PROCESS === '1') return false;
-    return !process.versions?.electron;
+    if (process.versions?.electron) return true;
+    return false;
 }
 
 function createMitmAzureBackend(workerPath) {
@@ -331,9 +340,15 @@ function createMitmAzureBackend(workerPath) {
     } catch (err) {
         const msg = err?.message || String(err);
         const archHint = /incompatible architecture|wrong ELF class|invalid ELF header/i.test(msg);
+        const cageHint = /External buffers are not allowed/i.test(msg);
         console.error(
             '[mitm] AzureTLS in-process: не удалось загрузить нативный модуль (ref-napi / ffi-napi).\n' +
-            '  Отдельный worker грузит те же binding.node — fallback не поможет.\n' +
+            (cageHint
+                ? '  Electron 21+ (V8 memory cage): ffi-napi в процессе Electron не поддерживается.\n' +
+                  '  Уберите CUPNET_AZURETLS_IN_PROCESS — по умолчанию используется worker на системном Node;\n' +
+                  '  затем: npm run rebuild:azuretls:node (аддоны под тот node, что в PATH у воркера).\n'
+                : '  Для worker на системном Node аддоны должны быть собраны под ABI этого Node:\n' +
+                  '    npm run rebuild:azuretls:node\n') +
             (archHint
                 ? '  Скорее всего *.node собран под другую архитектуру (например x86_64, а нужен arm64 для Apple Silicon).\n' +
                   '  Из корня репозитория: npm run rebuild:azuretls (на darwin+AS по умолчанию --arch arm64).\n' +
@@ -382,31 +397,46 @@ class AzureTLSWorker extends EventEmitter {
     }
 
     _start() {
-        // Determine the correct node binary:
-        //   1. Inside a packaged Electron app: use Electron's bundled Node.js
-        //      (set ELECTRON_RUN_AS_NODE so the Electron binary acts as node)
-        //   2. Development / system node available: use 'node'
-        // The worker process loads ffi-napi compiled for the SAME node ABI,
-        // so we must match the runtime that was used during npm install.
-        const isPackaged  = process.defaultApp === false && !process.env.ELECTRON_IS_DEV;
-        const isElectron  = !!(process.versions && process.versions.electron);
-        let nodeBin, env;
-        if (isPackaged && isElectron) {
-            nodeBin = process.execPath;
-            env = {
-                ...process.env,
-                ELECTRON_RUN_AS_NODE: '1',
-                UV_THREADPOOL_SIZE: '32',
-                // main.js выставляет NODE_EXTRA_CA_CERTS до require('electron') — воркер наследует для TLS к MITM/upstream
-                NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS || '',
-            };
+        // Воркер грузит ffi-napi: в Electron 21+ тот же бинарник с ELECTRON_RUN_AS_NODE
+        // всё равно под memory cage → «External buffers are not allowed».
+        // Нужен обычный Node (PATH или CUPNET_AZURETLS_NODE / resources/cupnet-node/node).
+        const isPackaged = process.defaultApp === false && !process.env.ELECTRON_IS_DEV;
+        const isElectron = !!(process.versions && process.versions.electron);
+        const baseEnv = {
+            ...process.env,
+            UV_THREADPOOL_SIZE: '32',
+            NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS || '',
+        };
+
+        let nodeBin;
+        let env = baseEnv;
+
+        if (process.env.CUPNET_AZURETLS_NODE) {
+            nodeBin = process.env.CUPNET_AZURETLS_NODE;
+        } else if (isElectron) {
+            const bundledNode = path.join(
+                process.resourcesPath || '',
+                'cupnet-node',
+                process.platform === 'win32' ? 'node.exe' : 'node'
+            );
+            if (isPackaged && fs.existsSync(bundledNode)) {
+                nodeBin = bundledNode;
+            } else if (isPackaged) {
+                console.warn(
+                    '[azure-worker] нет вложенного Node (resources/cupnet-node); fallback ELECTRON_RUN_AS_NODE — ' +
+                        'ffi может не загрузиться. Добавьте Node в extraResources или CUPNET_AZURETLS_NODE.'
+                );
+                nodeBin = process.execPath;
+                env = { ...baseEnv, ELECTRON_RUN_AS_NODE: '1' };
+            } else {
+                nodeBin = process.platform === 'win32' ? 'node.exe' : 'node';
+            }
         } else {
             nodeBin = process.platform === 'win32' ? 'node.exe' : 'node';
-            env = {
-                ...process.env,
-                UV_THREADPOOL_SIZE: '32',
-                NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS || '',
-            };
+        }
+
+        if (nodeBin !== process.execPath) {
+            delete env.ELECTRON_RUN_AS_NODE;
         }
 
         this.proc = spawn(nodeBin, [this.workerPath], {
@@ -999,6 +1029,24 @@ class MitmProxy {
                     consumed += cl;
                 }
                 inBuf = inBuf.subarray(consumed);
+                if (_isWebSocketUpgrade(req)) {
+                    tlsSocket.removeAllListeners('data');
+                    tlsSocket.removeAllListeners('close');
+                    tlsSocket.removeAllListeners('error');
+                    pipeline.length = 0;
+                    chunks.length = 0;
+                    chunksLen = 0;
+                    this._tunnelWebSocketUpgradeMitm({
+                        clientTls: tlsSocket,
+                        hostname,
+                        port,
+                        req,
+                        tabId: connectTabId,
+                        clientRemainder: inBuf,
+                        hsTimer,
+                    });
+                    return;
+                }
                 dispatchRequest(req);
             }
             if (inBuf.length > 0) { chunks.push(inBuf); chunksLen = inBuf.length; }
@@ -1161,24 +1209,42 @@ class MitmProxy {
         // HTTP/1.1 + fhttp уважает Host из OrderedHeaders — форсируем HTTP/1.1.
         if (dnsAdjusted.dnsOverride) forceHttp1 = true;
 
-        const noBody = /^(GET|HEAD)$/i.test(opts.method || '');
-        const retryCount = /^(GET|HEAD|OPTIONS)$/i.test(opts.method || '')
-            ? networkPolicy.retry.maxRetries
-            : 0;
         const tabUpstream = this._resolveUpstreamForTab(opts.tabId);
         try {
+            const { planMitmIntercept, finalizeMitmInterceptResponse } = require('./request-interceptor');
+            const mitmOpts = {
+                ...dnsAdjusted,
+                headers: { ...(dnsAdjusted.headers || {}) },
+                orderedHeaders: Array.isArray(dnsAdjusted.orderedHeaders)
+                    ? dnsAdjusted.orderedHeaders.map((pair) => [...pair])
+                    : dnsAdjusted.orderedHeaders,
+            };
+            const plan = planMitmIntercept(mitmOpts);
+            if (plan.done) {
+                const ms = Date.now() - t0;
+                st.totalMs += ms;
+                if (ms < st.minMs) st.minMs = ms;
+                if (ms > st.maxMs) st.maxMs = ms;
+                return plan.response;
+            }
+
+            const up = plan.opts;
+            const noBodyUp = /^(GET|HEAD)$/i.test(up.method || '');
+            const retryCountUp = /^(GET|HEAD|OPTIONS)$/i.test(up.method || '')
+                ? networkPolicy.retry.maxRetries
+                : 0;
             const res = await this.worker.request({
-                method:            dnsAdjusted.method,
-                url:               dnsAdjusted.url,
-                headers:           dnsAdjusted.headers,
-                orderedHeaders:    dnsAdjusted.orderedHeaders || undefined,
-                body:              noBody ? undefined : (dnsAdjusted.bodyBase64 ? undefined : (dnsAdjusted.body || null)),
-                bodyBase64:        noBody ? undefined : (dnsAdjusted.bodyBase64 || undefined),
+                method:            up.method,
+                url:               up.url,
+                headers:           up.headers,
+                orderedHeaders:    up.orderedHeaders || undefined,
+                body:              noBodyUp ? undefined : (up.bodyBase64 ? undefined : (up.body || null)),
+                bodyBase64:        noBodyUp ? undefined : (up.bodyBase64 || undefined),
                 proxy:             tabUpstream.proxy || null,
                 browser:           tabUpstream.browser,
                 ja3:               tabUpstream.ja3 || undefined,
                 requestId:         opts.requestId || undefined,
-                maxRetries:        retryCount,
+                maxRetries:        retryCountUp,
                 timeout:           networkPolicy.timeouts.upstreamRequestMs,
                 disableRedirects:  opts.disableRedirects !== false,
                 forceHttp1:         forceHttp1,
@@ -1187,12 +1253,14 @@ class MitmProxy {
             st.totalMs += ms;
             if (ms < st.minMs) st.minMs = ms;
             if (ms > st.maxMs) st.maxMs = ms;
-            return {
+            let out = {
                 statusCode: res.statusCode,
                 headers: res.headers || {},
                 bodyBase64: res.bodyBase64 || '',
                 dnsOverride: dnsAdjusted.dnsOverride || null,
             };
+            if (plan.postProcess) out = finalizeMitmInterceptResponse(out, plan.postProcess);
+            return out;
         } catch (e) {
             st.errors++;
             throw e;
@@ -1252,6 +1320,225 @@ class MitmProxy {
         };
     }
 
+    /**
+     * Прямой TLS к origin (или через upstream CONNECT), без AzureTLS — для WebSocket после Upgrade.
+     */
+    _openRawTlsToUpstream({ connectHost, connectPort, servername, proxyUrl }) {
+        const to = networkPolicy.timeouts.upstreamRequestMs;
+        if (!proxyUrl) {
+            return new Promise((resolve, reject) => {
+                const sock = tls.connect({
+                    host: connectHost,
+                    port: connectPort,
+                    servername,
+                    rejectUnauthorized: true,
+                    ALPNProtocols: ['http/1.1'],
+                });
+                sock.setTimeout(to, () => {
+                    try { sock.destroy(); } catch {}
+                    reject(new Error('TLS connect timeout'));
+                });
+                sock.once('secureConnect', () => resolve(sock));
+                sock.once('error', reject);
+            });
+        }
+        let upstreamUrl;
+        try {
+            upstreamUrl = new URL(proxyUrl);
+        } catch (e) {
+            return Promise.reject(e);
+        }
+        const proxyHost = upstreamUrl.hostname;
+        const proxyPort = Number(upstreamUrl.port || (upstreamUrl.protocol === 'https:' ? 443 : 80));
+        const target = `${connectHost}:${connectPort}`;
+        return new Promise((resolve, reject) => {
+            const upstreamSocket = net.connect(proxyPort, proxyHost);
+            upstreamSocket.setTimeout(to, () => upstreamSocket.destroy());
+            upstreamSocket.once('error', reject);
+            upstreamSocket.once('connect', () => {
+                const proxyAuth = _buildProxyAuthorizationHeader(upstreamUrl);
+                const lines = [
+                    `CONNECT ${target} HTTP/1.1`,
+                    `Host: ${target}`,
+                    'Proxy-Connection: Keep-Alive',
+                    'Connection: Keep-Alive',
+                ];
+                if (proxyAuth) lines.push(`Proxy-Authorization: ${proxyAuth}`);
+                upstreamSocket.write(`${lines.join('\r\n')}\r\n\r\n`);
+            });
+            let respBuf = Buffer.alloc(0);
+            const onResp = (chunk) => {
+                respBuf = Buffer.concat([respBuf, chunk]);
+                const sep = respBuf.indexOf('\r\n\r\n');
+                if (sep === -1) {
+                    if (respBuf.length > 16 * 1024) {
+                        upstreamSocket.removeListener('data', onResp);
+                        reject(new Error('Upstream CONNECT response too large'));
+                    }
+                    return;
+                }
+                upstreamSocket.removeListener('data', onResp);
+                const head = respBuf.toString('utf8', 0, sep);
+                if (!/^HTTP\/1\.[01]\s+200\b/i.test(head)) {
+                    const firstLine = (head.split('\r\n')[0] || '').trim();
+                    reject(new Error(`Upstream CONNECT rejected: ${firstLine || 'unknown'}`));
+                    try { upstreamSocket.destroy(); } catch {}
+                    return;
+                }
+                const tlsSock = tls.connect({
+                    socket: upstreamSocket,
+                    servername,
+                    rejectUnauthorized: true,
+                    ALPNProtocols: ['http/1.1'],
+                });
+                tlsSock.setTimeout(to, () => {
+                    try { tlsSock.destroy(); } catch {}
+                    reject(new Error('TLS over proxy timeout'));
+                });
+                tlsSock.once('secureConnect', () => resolve(tlsSock));
+                tlsSock.once('error', reject);
+            };
+            upstreamSocket.on('data', onResp);
+        });
+    }
+
+    /**
+     * После клиентского GET Upgrade: туннель к origin, ответ 101 и дальше raw duplex.
+     */
+    _tunnelWebSocketUpgradeMitm({ clientTls, hostname, port, req, tabId, clientRemainder, hsTimer }) {
+        if (hsTimer) try { clearTimeout(hsTimer); } catch {}
+        const url = `https://${hostname}${port !== 443 ? ':' + port : ''}${req.path}`;
+        const headers = { ...req.headers };
+        delete headers['proxy-authorization'];
+        const orderedHeaders = (req.orderedHeaders || []).filter(
+            ([k]) => String(k).toLowerCase() !== 'proxy-authorization'
+        );
+        let mitmOpts = { method: req.method, url, headers, orderedHeaders };
+        mitmOpts = this._applyDnsOverride(mitmOpts);
+
+        const { planMitmIntercept, finalizeMitmInterceptResponse } = require('./request-interceptor');
+        const plan = planMitmIntercept(mitmOpts);
+        if (plan.done) {
+            let out = plan.response;
+            if (plan.postProcess) out = finalizeMitmInterceptResponse(out, plan.postProcess);
+            const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, out);
+            try { clientTls.write(buildHttpResponse(resOut)); } catch {}
+            try { clientTls.end(); } catch {}
+            return;
+        }
+        const up = plan.opts;
+        const wire = _buildWireHttpRequest(up);
+        const t0 = Date.now();
+        const requestId = `mitm_ws_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const uObj = new URL(up.url);
+        const logicalHost = uObj.hostname;
+        const targetPort = uObj.port ? parseInt(uObj.port, 10) : 443;
+        const connectHost = up.dnsOverride?.ip || logicalHost;
+        const tabUpstream = this._resolveUpstreamForTab(tabId);
+        const proxyUrl = tabUpstream.proxy || this.upstream;
+
+        const fail = (err) => {
+            dbg(`[mitm] ws tunnel ${url}: ${err?.message || err}\n`);
+            safeCatch({ module: 'mitm-proxy', eventCode: 'mitm.wsTunnel.failed', context: { url } }, err, 'warn');
+            try {
+                this.stats.errors++;
+            } catch { /* ignore */ }
+            if (this.onRequestLogged) {
+                try {
+                    this.onRequestLogged({
+                        url: up.url,
+                        method: req.method || 'GET',
+                        tabId,
+                        sessionId: null,
+                        requestId,
+                        status: 502,
+                        requestHeaders: { ...(up.headers || {}) },
+                        responseHeaders: {},
+                        responseBody: null,
+                        duration: Date.now() - t0,
+                        type: 'websocket',
+                        dnsOverride: up.dnsOverride || null,
+                    });
+                } catch (_) { /* ignore */ }
+            }
+            try {
+                const errRes = {
+                    statusCode: 502,
+                    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                    bodyBase64: Buffer.from(String(err?.message || 'WebSocket tunnel failed'), 'utf8').toString('base64'),
+                };
+                clientTls.write(buildHttpResponse(
+                    applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes)
+                ));
+            } catch {}
+            try { clientTls.end(); } catch {}
+        };
+
+        this._openRawTlsToUpstream({
+            connectHost,
+            connectPort: targetPort,
+            servername: logicalHost,
+            proxyUrl,
+        })
+            .then((upSock) => {
+                upSock.setTimeout(0);
+                upSock.write(wire, 'utf8');
+                return _readOneHttpResponseFromSocket(upSock, networkPolicy.timeouts.upstreamRequestMs).then(
+                    ({ response, remainder, status }) => ({ upSock, response, remainder, status })
+                );
+            })
+            .then(({ upSock, response, remainder, status }) => {
+                const parsed = _parseHttpResponseHead(response);
+                const dur = Date.now() - t0;
+                try {
+                    const st = this.stats;
+                    st.requests++;
+                    st._window[st._winIdx]++;
+                    st.totalMs += dur;
+                    if (dur < st.minMs) st.minMs = dur;
+                    if (dur > st.maxMs) st.maxMs = dur;
+                } catch { /* ignore */ }
+                if (this.onRequestLogged) {
+                    try {
+                        this.onRequestLogged({
+                            url: up.url,
+                            method: req.method || 'GET',
+                            tabId,
+                            sessionId: null,
+                            requestId,
+                            status: parsed.statusCode || status,
+                            requestHeaders: { ...(up.headers || {}) },
+                            responseHeaders: parsed.headers,
+                            responseBody: null,
+                            duration: dur,
+                            type: 'websocket',
+                            dnsOverride: up.dnsOverride || null,
+                        });
+                    } catch (_) { /* ignore */ }
+                }
+                try { clientTls.write(response); } catch {}
+                if (status !== 101) {
+                    dbg(`[mitm] ws non-101 status=${status} ${url}\n`);
+                    try { upSock.end(); } catch {}
+                    try { clientTls.end(); } catch {}
+                    return;
+                }
+                if (remainder && remainder.length) {
+                    try { clientTls.write(remainder); } catch {}
+                }
+                const rem = clientRemainder && clientRemainder.length ? clientRemainder : Buffer.alloc(0);
+                if (rem.length) {
+                    try { upSock.write(rem); } catch {}
+                }
+                upSock.pipe(clientTls);
+                clientTls.pipe(upSock);
+                upSock.on('error', () => { try { clientTls.destroy(); } catch {} });
+                clientTls.on('error', () => { try { upSock.destroy(); } catch {} });
+                dbg(`[mitm] ws tunnel established ${url}\n`);
+            })
+            .catch(fail);
+    }
+
     getStats() {
         const st = this.stats;
         const done = st.requests - st.errors;
@@ -1303,6 +1590,104 @@ function parseHttpRequest(raw) {
         }
         return { method, path, headers, orderedHeaders, body: body || null };
     } catch { return null; }
+}
+
+/** WebSocket upgrade: долгоживущий туннель; AzureTLS request/response этому не подходит. */
+function _isWebSocketUpgrade(req) {
+    if (!req || String(req.method || '').toUpperCase() !== 'GET') return false;
+    const up = String(req.headers['upgrade'] || '').toLowerCase();
+    if (!up.includes('websocket')) return false;
+    const conn = String(req.headers['connection'] || '').toLowerCase();
+    return conn.includes('upgrade');
+}
+
+function _buildWireHttpRequest(up) {
+    const u = new URL(up.url);
+    const path = u.pathname + (u.search || '');
+    const lines = [`${up.method} ${path} HTTP/1.1`];
+    const hop = new Set(['proxy-connection', 'proxy-authorization']);
+    for (const [k, v] of (up.orderedHeaders || [])) {
+        if (hop.has(String(k).toLowerCase())) continue;
+        lines.push(`${k}: ${v}`);
+    }
+    const hasHost = (up.orderedHeaders || []).some(([k]) => String(k).toLowerCase() === 'host');
+    if (!hasHost) {
+        const h = (up.headers && up.headers.host) || u.host;
+        lines.push(`Host: ${h}`);
+    }
+    lines.push('', '');
+    return lines.join('\r\n');
+}
+
+/**
+ * Читает один HTTP-ответ (заголовки + тело по Content-Length) с сокета после записи запроса.
+ * @returns {{ response: Buffer, remainder: Buffer, status: number }}
+ */
+function _parseHttpResponseHead(rawBuf) {
+    const sep = rawBuf.indexOf('\r\n\r\n');
+    if (sep === -1) return { statusCode: 0, headers: {} };
+    const headStr = rawBuf.slice(0, sep).toString('utf8');
+    const lines = headStr.split('\r\n');
+    const first = lines[0] || '';
+    const m = first.match(/^HTTP\/\d\.\d\s+(\d+)/);
+    const statusCode = m ? parseInt(m[1], 10) : 0;
+    const headers = {};
+    for (let i = 1; i < lines.length; i++) {
+        const idx = lines[i].indexOf(':');
+        if (idx < 0) continue;
+        const k = lines[i].slice(0, idx).trim();
+        const v = lines[i].slice(idx + 1).trim();
+        headers[k.toLowerCase()] = v;
+    }
+    return { statusCode, headers };
+}
+
+function _readOneHttpResponseFromSocket(sock, timeoutMs) {
+    return new Promise((resolve, reject) => {
+        let buf = Buffer.alloc(0);
+        const t = setTimeout(() => {
+            cleanup();
+            try { sock.destroy(); } catch {}
+            reject(new Error('HTTP response timeout'));
+        }, timeoutMs);
+        const onData = (chunk) => {
+            buf = Buffer.concat([buf, chunk]);
+            const sep = buf.indexOf('\r\n\r\n');
+            if (sep === -1) {
+                if (buf.length > 1024 * 1024) {
+                    cleanup();
+                    reject(new Error('HTTP response headers too large'));
+                }
+                return;
+            }
+            const headStr = buf.slice(0, sep).toString('utf8');
+            const firstLine = headStr.split('\r\n')[0] || '';
+            const m = firstLine.match(/^HTTP\/\d\.\d\s+(\d+)/);
+            const status = m ? parseInt(m[1], 10) : 0;
+            let cl = 0;
+            for (const line of headStr.split('\r\n').slice(1)) {
+                const ci = line.indexOf(':');
+                if (ci < 0) continue;
+                if (line.slice(0, ci).trim().toLowerCase() === 'content-length') {
+                    cl = parseInt(line.slice(ci + 1).trim(), 10) || 0;
+                }
+            }
+            const total = sep + 4 + cl;
+            if (buf.length < total) return;
+            const response = buf.slice(0, total);
+            const remainder = buf.slice(total);
+            cleanup();
+            resolve({ response, remainder, status });
+        };
+        const onErr = (e) => { cleanup(); reject(e); };
+        const cleanup = () => {
+            clearTimeout(t);
+            sock.removeListener('data', onData);
+            sock.removeListener('error', onErr);
+        };
+        sock.on('data', onData);
+        sock.once('error', onErr);
+    });
 }
 
 /**

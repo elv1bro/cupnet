@@ -237,7 +237,28 @@ test('insertWsEvent: does not throw', () => {
     assert.doesNotThrow(() => {
         db.insertWsEvent(s.id, 'tab_ws', 'wss://echo.ws', 'send', 'ping');
         db.insertWsEvent(s.id, 'tab_ws', 'wss://echo.ws', 'recv', 'pong');
+        db.insertWsEvent(s.id, 'tab_ws', 'wss://echo.ws', 'send', 'x', 'cdp-req-1');
     });
+});
+
+test('queryWsEvents: returns rows by session+tab+url', () => {
+    const s = db.createSession(null, null);
+    db.insertWsEvent(s.id, 't1', 'wss://example.com/ws', 'send', 'a', 'conn-1');
+    db.insertWsEvent(s.id, 't1', 'wss://example.com/ws', 'recv', 'b', 'conn-1');
+    const rows = db.queryWsEvents(s.id, 't1', 'wss://example.com/ws');
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].direction, 'send');
+    assert.equal(rows[2 - 1].direction, 'recv');
+    const byConn = db.queryWsEvents(s.id, 't1', 'wss://example.com/ws', 'conn-1');
+    assert.equal(byConn.length, 2);
+});
+
+test('queryWsEvents: https handshake matches wss CDP url', () => {
+    const s = db.createSession(null, null);
+    db.insertWsEvent(s.id, 't1', 'wss://echo.test/raw', 'send', 'hi', null);
+    const rows = db.queryWsEvents(s.id, 't1', 'https://echo.test/raw');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].payload, 'hi');
 });
 
 // ─── Screenshots ──────────────────────────────────────────────────────────────
@@ -274,7 +295,7 @@ test('saveProxyProfile: insert and retrieve', () => {
     assert.ok(found, 'Should find profile in list');
     assert.equal(found.name, 'Test Proxy');
     assert.equal(found.url_display, 'http://proxy.test:8080');
-    assert.equal(found.traffic_mode, 'browser_proxy');
+    assert.equal(found.traffic_mode, 'mitm');
 });
 
 test('saveProxyProfile: update if name already exists', () => {
@@ -312,11 +333,11 @@ test('proxy profile traffic_mode: supports CRUD + fallback default', () => {
 
     db.updateProxyProfileById(id, { traffic_mode: 'browser_proxy' });
     const updated = db.getProxyProfiles().find(p => p.id === id);
-    assert.equal(updated.traffic_mode, 'browser_proxy');
+    assert.equal(updated.traffic_mode, 'mitm');
 
     db.updateProxyProfileById(id, { traffic_mode: 'unexpected' });
     const fallback = db.getProxyProfiles().find(p => p.id === id);
-    assert.equal(fallback.traffic_mode, 'browser_proxy');
+    assert.equal(fallback.traffic_mode, 'mitm');
 });
 
 // ─── FTS search ───────────────────────────────────────────────────────────────

@@ -6,3 +6,15 @@ log
 .*/
 .roomodes
 !.github
+
+# Local debug dumps (HTML/JSON captures, gitleaks noise, IVAC, stability baselines — not for VCS)
+_debug/
+
+# Secrets — шаблоны с плейсхолдерами остаются в репозитории
+.env
+.env.local
+.env.*.local
+
+# Локальные полные zip-бэкапы рабочей копии (не коммитить)
+cupnet2-workspace-backup-*.zip
+cupnet-pre-rewrite.bundle

@@ -1,6 +1,16 @@
 'use strict';
 
 const crypto = require('crypto');
+const { getExportWsFrameLimit } = require('./har-exporter');
+
+/** Max rows per table for bundle export (`CUPNET_BUNDLE_MAX_ROWS`, default 50_000). `0` = use ceiling. */
+function getBundleMaxRows() {
+    const raw = process.env.CUPNET_BUNDLE_MAX_ROWS;
+    if (raw === '0' || raw === '') return 500_000_000;
+    const n = parseInt(String(raw), 10);
+    if (!Number.isFinite(n) || n < 1) return 50_000;
+    return Math.min(n, 500_000_000);
+}
 
 const BUNDLE_SCHEMA_VERSION = 'cupnet.bundle.v1';
 const PROTECTION_LEVELS = new Set(['Raw', 'Balanced', 'Strict']);
@@ -94,6 +104,69 @@ function parseJsonSafely(text) {
     try { return JSON.parse(text); } catch { return null; }
 }
 
+function normalizeWsEventRow(row) {
+    if (!row || typeof row !== 'object') return null;
+    return {
+        id: row.id,
+        session_id: row.session_id ?? null,
+        tab_id: row.tab_id ?? null,
+        url: row.url || '',
+        direction: row.direction || '',
+        payload: row.payload ?? null,
+        connection_id: row.connection_id ?? null,
+        created_at: row.created_at ?? null,
+    };
+}
+
+function redactWsEventRecord(record, level, report) {
+    if (level === 'Raw') return record;
+    const out = { ...record };
+    out.payload = redactBody(out.payload, level, report, `ws.${record.id}.payload`);
+    if (out.url) out.url = redactStringValue(out.url, level, `ws.${record.id}.url`, report);
+    return out;
+}
+
+/**
+ * @param {object} db
+ * @param {number|null} sessionId
+ * @param {object[]} requestRows — normalized or raw request rows
+ * @param {boolean} partialExport — true if user chose specific request IDs (do not dump whole session WS)
+ */
+function collectWsEventsForBundle(db, sessionId, requestRows, partialExport) {
+    if (!db || typeof db.queryWsEvents !== 'function') return [];
+    const merged = new Map();
+    const pushRow = (ev) => {
+        const n = normalizeWsEventRow(ev);
+        if (n) merged.set(n.id, n);
+    };
+    const isWs = (r) => String(r.type || '').toLowerCase() === 'websocket';
+    const handshakes = (requestRows || []).filter(isWs);
+    if (handshakes.length) {
+        for (const r of handshakes) {
+            const sid = r.session_id ?? sessionId;
+            if (!sid || !r.url) continue;
+            const list = db.queryWsEvents(sid, r.tab_id ?? null, r.url, null, getExportWsFrameLimit());
+            for (const ev of list) {
+                pushRow({
+                    id: ev.id,
+                    session_id: sid,
+                    tab_id: r.tab_id ?? null,
+                    url: r.url,
+                    direction: ev.direction,
+                    payload: ev.payload,
+                    connection_id: ev.connection_id,
+                    created_at: ev.created_at,
+                });
+            }
+        }
+    } else if (sessionId && !partialExport && typeof db.queryWsEventsBySession === 'function') {
+        for (const ev of db.queryWsEventsBySession(Number(sessionId), getExportWsFrameLimit())) {
+            pushRow(ev);
+        }
+    }
+    return [...merged.values()].sort((a, b) => a.id - b.id);
+}
+
 function normalizeRequestRow(row) {
     if (!row || typeof row !== 'object') return null;
     return {
@@ -147,19 +220,27 @@ function buildBundle({ db, sessionId, requestIds, protectionLevel = 'Raw', appVe
         fields: [],
     };
 
+    const maxRows = getBundleMaxRows();
     let rows = [];
-    if (Array.isArray(requestIds) && requestIds.length) {
+    const partialExport = Array.isArray(requestIds) && requestIds.length > 0;
+    if (partialExport) {
         rows = requestIds.map(id => db.getRequest(Number(id))).filter(Boolean);
     } else if (sessionId) {
-        rows = db.queryRequestsFull({ sessionId: Number(sessionId) }, 5000, 0);
+        rows = db.queryRequestsFull({ sessionId: Number(sessionId) }, maxRows, 0);
     }
     const normalized = rows.map(normalizeRequestRow).filter(Boolean);
     const redacted = normalized.map(r => redactRequestRecord(r, level, report));
 
     let traceEntries = [];
     try {
-        if (db.getTraceEntriesBySession && sessionId) traceEntries = db.getTraceEntriesBySession(Number(sessionId), 5000, 0);
+        if (db.getTraceEntriesBySession && sessionId) traceEntries = db.getTraceEntriesBySession(Number(sessionId), maxRows, 0);
     } catch {}
+
+    let websocketEvents = [];
+    try {
+        const rawWs = collectWsEventsForBundle(db, sessionId, rows, partialExport);
+        websocketEvents = rawWs.map(ev => redactWsEventRecord(ev, level, report));
+    } catch { /* ignore */ }
 
     return {
         schemaVersion: BUNDLE_SCHEMA_VERSION,
@@ -174,6 +255,7 @@ function buildBundle({ db, sessionId, requestIds, protectionLevel = 'Raw', appVe
         traffic: {
             requests: redacted,
             trace: traceEntries,
+            websocketEvents,
         },
         context: pickContext(db),
         notes: {
@@ -192,6 +274,9 @@ function validateBundle(bundle) {
         return { ok: false, error: 'Invalid protection level in bundle' };
     }
     if (!Array.isArray(bundle.traffic.requests)) return { ok: false, error: 'traffic.requests must be array' };
+    if (bundle.traffic.websocketEvents != null && !Array.isArray(bundle.traffic.websocketEvents)) {
+        return { ok: false, error: 'traffic.websocketEvents must be array if present' };
+    }
     return { ok: true };
 }
 

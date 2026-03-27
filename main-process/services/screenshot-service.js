@@ -45,8 +45,6 @@ function createScreenshotService({
             const tabManager = typeof getTabManager === 'function' ? getTabManager() : null;
             const activeTab = tabManager ? tabManager.getActiveTab() : null;
             if (!activeTab || activeTab.view.webContents.isDestroyed()) throw new Error('No active tab');
-            if (activeTab.direct) return { success: false, skipped: true, reason: 'direct' };
-
             const wc = activeTab.view.webContents;
             const lastPointer = typeof getLastPointerByTabId === 'function' ? getLastPointerByTabId() : null;
 
