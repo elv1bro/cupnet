@@ -6,6 +6,9 @@ const api = window.electronAPI;
 let allEntries        = [];
 let filteredEntries   = [];
 let selectedIndex     = -1;
+/** Multi-select: DB request ids (Shift / Ctrl+click / Ctrl+A). */
+const selectedRequestIds = new Set();
+let selectionAnchorIdx  = -1;
 let autoScrollEnabled = true;
 let currentSessionId  = null;
 let knownTabs         = new Set();
@@ -57,6 +60,7 @@ const selectedTypes    = new Set();
 const selectedStatuses = new Set();
 const selectedTabs     = new Set();
 const lvCount        = document.getElementById('lv-count');
+const lvSessionFromSelBtn = document.getElementById('lv-session-from-sel-btn');
 const autoScrollBtn  = document.getElementById('auto-scroll-btn');
 const exportHarBtn   = document.getElementById('export-har-btn');
 const exportBundleBtn = document.getElementById('export-bundle-btn');
@@ -88,6 +92,11 @@ const tabContents    = document.querySelectorAll('.lv-tab-content');
 const protectionModal = document.getElementById('protection-modal');
 const protectionConfirmBtn = document.getElementById('protection-confirm-btn');
 const protectionCancelBtn = document.getElementById('protection-cancel-btn');
+const sessionFromSelModal = document.getElementById('session-from-sel-modal');
+const sessionFromSelInput = document.getElementById('session-from-sel-input');
+const sessionFromSelOkBtn = document.getElementById('session-from-sel-ok-btn');
+const sessionFromSelCancelBtn = document.getElementById('session-from-sel-cancel-btn');
+const sessionFromSelErr = document.getElementById('session-from-sel-err');
 const siteExportModal = document.getElementById('site-export-modal');
 const siteExportSelect = document.getElementById('site-export-origin');
 const siteExportConfirmBtn = document.getElementById('site-export-confirm-btn');
@@ -153,7 +162,10 @@ function statusCls(s) {
     return 's-5xx';
 }
 function methodCls(m) {
-    const map = { GET:'m-get', POST:'m-post', PUT:'m-put', PATCH:'m-patch', DELETE:'m-delete', HEAD:'m-head', OPTIONS:'m-options' };
+    const map = {
+        GET:'m-get', POST:'m-post', PUT:'m-put', PATCH:'m-patch', DELETE:'m-delete', HEAD:'m-head', OPTIONS:'m-options',
+        SYS:'m-sys',
+    };
     return map[(m||'').toUpperCase()] || 'm-other';
 }
 function durCls(ms) {
@@ -172,6 +184,44 @@ function truncUrl(url) {
 }
 function extractHost(url) {
     try { return new URL(url).host || '—'; } catch { return '—'; }
+}
+
+const CUPNET_SESSION_PROXY_URL = 'cupnet://session/proxy';
+const CUPNET_SESSION_DIRECT_URL = 'cupnet://session/direct';
+
+/** Системные строки снимка прокси/direct в логе (не HTTP). */
+function getCupnetSessionTrafficPresentation(entry) {
+    if (String(entry?.type || '').toLowerCase() !== 'cupnet') return null;
+    const u = String(entry?.url || '');
+    if (u !== CUPNET_SESSION_PROXY_URL && u !== CUPNET_SESSION_DIRECT_URL) return null;
+    const host = u === CUPNET_SESSION_PROXY_URL ? 'New proxy' : 'Direct';
+    const hostTitle = u === CUPNET_SESSION_PROXY_URL
+        ? 'Системная запись: выбран прокси'
+        : 'Системная запись: прямой трафик';
+    const body = String(entry.response_body ?? entry.responseBody ?? '');
+    let loc = '';
+    let ip = '';
+    for (const line of body.split('\n')) {
+        const t = line.trim();
+        const ci = t.indexOf(':');
+        if (ci < 0) continue;
+        const key = t.slice(0, ci).trim().toLowerCase();
+        const val = t.slice(ci + 1).trim();
+        if (key === 'location') loc = val;
+        else if (key === 'ip') ip = val;
+    }
+    const pathRaw = (loc && loc !== '—') ? loc : (ip || '—');
+    const pathMax = 72;
+    const pathShown = pathRaw.length > pathMax ? `${pathRaw.slice(0, pathMax - 1)}…` : pathRaw;
+    const pathTitle = (body.trim() || pathRaw || u).replace(/\s+/g, ' ').trim();
+    return {
+        method: 'SYS',
+        host,
+        hostTitle,
+        path: pathShown,
+        pathTitle,
+        urlTitle: u,
+    };
 }
 function ensureAnnotationFields(entry) {
     if (!entry || typeof entry !== 'object') return;
@@ -198,6 +248,7 @@ function shortTypeLabel(type) {
         manifest: 'Mfst',
         preflight: 'Pre',
         screenshot: 'SS',
+        cupnet: 'CupNet',
     };
     return map[t] || (t.length > 5 ? t.slice(0, 5) : t);
 }
@@ -520,6 +571,59 @@ function chooseProtectionLevel() {
     });
 }
 
+/** Electron does not support `window.prompt` in the renderer — use overlay instead. */
+function promptNewSessionNameFromSelection() {
+    if (!sessionFromSelModal || !sessionFromSelInput || !sessionFromSelOkBtn || !sessionFromSelCancelBtn) {
+        return Promise.resolve(null);
+    }
+    return new Promise((resolve) => {
+        const cleanup = () => {
+            sessionFromSelModal.classList.remove('visible');
+            sessionFromSelOkBtn.removeEventListener('click', onOk);
+            sessionFromSelCancelBtn.removeEventListener('click', onCancel);
+            sessionFromSelModal.removeEventListener('click', onBackdrop);
+            document.removeEventListener('keydown', onKey);
+        };
+        const onCancel = () => {
+            cleanup();
+            resolve(null);
+        };
+        const onOk = () => {
+            const trimmed = String(sessionFromSelInput.value || '').trim();
+            if (!trimmed) {
+                if (sessionFromSelErr) {
+                    sessionFromSelErr.textContent = 'Enter a non-empty session name.';
+                    sessionFromSelErr.style.display = '';
+                }
+                sessionFromSelInput.focus();
+                return;
+            }
+            cleanup();
+            resolve(trimmed);
+        };
+        const onBackdrop = (e) => {
+            if (e.target === sessionFromSelModal) onCancel();
+        };
+        const onKey = (e) => {
+            if (e.key === 'Escape') onCancel();
+            if (e.key === 'Enter') onOk();
+        };
+        sessionFromSelInput.value = '';
+        if (sessionFromSelErr) {
+            sessionFromSelErr.textContent = '';
+            sessionFromSelErr.style.display = 'none';
+        }
+        sessionFromSelOkBtn.addEventListener('click', onOk);
+        sessionFromSelCancelBtn.addEventListener('click', onCancel);
+        sessionFromSelModal.addEventListener('click', onBackdrop);
+        document.addEventListener('keydown', onKey);
+        sessionFromSelModal.classList.add('visible');
+        requestAnimationFrame(() => {
+            sessionFromSelInput.focus();
+        });
+    });
+}
+
 async function openCompareSidePickerForEntry(entry) {
     if (!entry?.id || !compareSideModal || !compareSidePicker) return;
     const cmpState = await api.getCompare?.().catch(() => null);
@@ -573,6 +677,101 @@ function scheduleRenderVirtual() {
     });
 }
 
+function updateSessionFromSelButton() {
+    if (!lvSessionFromSelBtn) return;
+    lvSessionFromSelBtn.disabled = selectedRequestIds.size === 0;
+}
+
+/** Clear browser text selection (e.g. after Shift/Ctrl row range) so list selection stays visual-only. */
+function clearDomTextSelection() {
+    try {
+        const s = window.getSelection && window.getSelection();
+        if (s && s.rangeCount) s.removeAllRanges();
+    } catch { /* ignore */ }
+}
+
+/** Block native range-select when modifying row selection; mousedown fires before click. */
+function rowModifierMouseDown(e) {
+    if (e.shiftKey || e.ctrlKey || e.metaKey) e.preventDefault();
+}
+
+function showMultiSelectionDetail() {
+    detailEmpty.style.display = 'none';
+    detailPanel.style.display = 'flex';
+    detailPanel.classList.add('multi-sel');
+    const n = selectedRequestIds.size;
+    const multiText = document.getElementById('lv-detail-multi-text');
+    if (multiText) {
+        multiText.textContent = `${n} request(s) selected. Use “+ Session from selection” on the toolbar, then enter a name for the new session.`;
+    }
+    const urlEl = document.getElementById('lv-detail-url');
+    if (urlEl) urlEl.textContent = `Selected: ${n}`;
+    updateSessionFromSelButton();
+}
+
+function handleRowClick(idx, e) {
+    const entry = filteredEntries[idx];
+    if (!entry) return;
+
+    if (!entry.id || String(entry.type || '').toLowerCase() === 'screenshot') {
+        selectedRequestIds.clear();
+        selectionAnchorIdx = idx;
+        updateSessionFromSelButton();
+        selectEntry(idx);
+        return;
+    }
+
+    if (e.shiftKey) {
+        e.preventDefault();
+        clearDomTextSelection();
+        let anchor = selectionAnchorIdx;
+        if (anchor < 0 && selectedIndex >= 0) anchor = selectedIndex;
+        if (anchor < 0) anchor = idx;
+        const lo = Math.min(anchor, idx);
+        const hi = Math.max(anchor, idx);
+        for (let i = lo; i <= hi; i++) {
+            const en = filteredEntries[i];
+            if (en?.id && String(en.type || '').toLowerCase() !== 'screenshot') selectedRequestIds.add(en.id);
+        }
+        selectionAnchorIdx = anchor;
+        selectedIndex = idx;
+        scheduleRenderVirtual();
+        ensureVisible(idx);
+        showMultiSelectionDetail();
+        return;
+    }
+
+    if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        clearDomTextSelection();
+        if (selectedRequestIds.has(entry.id)) selectedRequestIds.delete(entry.id);
+        else selectedRequestIds.add(entry.id);
+        selectionAnchorIdx = idx;
+        selectedIndex = idx;
+        scheduleRenderVirtual();
+        ensureVisible(idx);
+        if (selectedRequestIds.size === 1) {
+            const only = [...selectedRequestIds][0];
+            const i = filteredEntries.findIndex(x => x.id === only);
+            if (i >= 0) selectEntry(i);
+        } else if (selectedRequestIds.size === 0) {
+            detailPanel.classList.remove('multi-sel');
+            detailEmpty.style.display = '';
+            detailPanel.style.display = 'none';
+            updateSessionFromSelButton();
+        } else {
+            showMultiSelectionDetail();
+        }
+        return;
+    }
+
+    selectedRequestIds.clear();
+    selectedRequestIds.add(entry.id);
+    selectionAnchorIdx = idx;
+    updateSessionFromSelButton();
+    selectEntry(idx);
+}
+
 function buildRow(entry, idx) {
     ensureAnnotationFields(entry);
     const row = document.createElement('div');
@@ -580,6 +779,7 @@ function buildRow(entry, idx) {
     row.dataset.index = idx;
     row.style.height = ROW_HEIGHT + 'px';
     if (idx === selectedIndex) row.classList.add('selected');
+    if (entry.id && selectedRequestIds.has(entry.id)) row.classList.add('lv-multi-sel');
     if (entry.error) row.classList.add('lv-error');
 
     const status  = entry.status ?? entry.response?.statusCode;
@@ -592,7 +792,11 @@ function buildRow(entry, idx) {
     const hl = highlightRules[url];
     if (hl) { row.style.borderLeft = `3px solid ${hl}`; row.classList.add('hl-rule'); }
     if (String(type).toLowerCase() === 'mock') row.classList.add('lv-row-mock');
+    if (String(type).toLowerCase() === 'cupnet') row.classList.add('lv-row-cupnet');
     if (String(type).toLowerCase() === 'websocket') row.classList.add('lv-row-ws');
+
+    const cupnetSess = getCupnetSessionTrafficPresentation(entry);
+    if (cupnetSess) row.classList.add('lv-row-cupnet-session');
 
     if (type === 'screenshot') {
         row.classList.add('lv-row-screenshot');
@@ -623,7 +827,8 @@ function buildRow(entry, idx) {
             `<div class="lv-td col-type"><span class="type-chip type-screenshot" title="Screenshot trigger">${esc(typeLbl)}</span></div>` +
             `<div class="lv-td col-dur"><span class="lv-dur">${ts}</span></div>` +
             `<div class="lv-td col-path"><span class="ss-row-badge" title="Screenshot entry">📸</span><span class="lv-path" title="${esc(pageUrl)}">${esc(pageUrl)}</span></div>`;
-        row.addEventListener('click', () => selectEntry(idx));
+        row.addEventListener('mousedown', rowModifierMouseDown);
+        row.addEventListener('click', (e) => handleRowClick(idx, e));
         return row;
     }
 
@@ -651,17 +856,24 @@ function buildRow(entry, idx) {
     } else {
         typeChipHtml = `<span class="type-chip" title="${esc(type)}">${esc(shortTypeLabel(type))}</span>`;
     }
+    const rowMethod = cupnetSess ? cupnetSess.method : method;
+    const rowHost = cupnetSess ? cupnetSess.host : host;
+    const rowHostTitle = cupnetSess ? cupnetSess.hostTitle : host;
+    const pathCell = cupnetSess
+        ? `${mockBadge}${extBadge}<span class="lv-path lv-path-cupnet-sess" title="${esc(cupnetSess.pathTitle)}">${esc(cupnetSess.path)}</span>`
+        : `${mockBadge}${extBadge}<span class="lv-path" title="${esc(url)}">${esc(truncUrl(url))}</span>`;
     row.innerHTML =
         `<div class="lv-td col-idx">${idx + 1}</div>` +
-        `<div class="lv-td col-method"><span class="method-badge ${methodCls(method)}">${esc(method) || '—'}</span></div>` +
+        `<div class="lv-td col-method"><span class="method-badge ${methodCls(rowMethod)}">${esc(rowMethod) || '—'}</span></div>` +
         `<div class="lv-td col-status"><span class="lv-status ${entry.error ? 's-err' : statusCls(status)}">${status || (entry.error ? 'ERR' : '—')}${cookieMarkV3}</span></div>` +
         `<div class="lv-td col-mark">${tagDot}</div>` +
-        `<div class="lv-td col-host"><span class="host-chip" title="${esc(host)}">${esc(host)}</span></div>` +
+        `<div class="lv-td col-host"><span class="host-chip${cupnetSess ? ' host-chip-cupnet-sess' : ''}" title="${esc(rowHostTitle)}">${esc(rowHost)}</span></div>` +
         `<div class="lv-td col-type">${typeChipHtml}</div>` +
         `<div class="lv-td col-dur"><span class="lv-dur ${durCls(dur)}">${formatDur(dur)}</span></div>` +
-        `<div class="lv-td col-path">${mockBadge}${extBadge}<span class="lv-path" title="${esc(url)}">${esc(truncUrl(url))}</span></div>`;
+        `<div class="lv-td col-path">${pathCell}</div>`;
 
-    row.addEventListener('click', () => selectEntry(idx));
+    row.addEventListener('mousedown', rowModifierMouseDown);
+    row.addEventListener('click', (e) => handleRowClick(idx, e));
     return row;
 }
 
@@ -734,6 +946,9 @@ function _flushBatch() {
         // Rebuild filteredEntries after trim (indices may shift)
         filteredEntries = allEntries.filter(entryPassesFilter);
         selectedIndex = -1;
+        selectedRequestIds.clear();
+        selectionAnchorIdx = -1;
+        updateSessionFromSelButton();
         anyPassed = true;
     }
 
@@ -842,6 +1057,10 @@ async function applyFilters() {
         filteredEntries = allEntries.filter(entryPassesFilter);
     }
     selectedIndex = -1;
+    selectedRequestIds.clear();
+    selectionAnchorIdx = -1;
+    detailPanel?.classList.remove('multi-sel');
+    updateSessionFromSelButton();
     updateCount();
     renderVirtual();
     if (autoScrollEnabled) scrollToBottom();
@@ -885,6 +1104,82 @@ function sessionDateStr(s) {
     catch { return ''; }
 }
 
+function appendSessionItem(s) {
+    const isNamed      = !!s.notes;
+    const isCurrentSrv = s.id === currentSrvSessId;
+    const isActive = activeSidebarId === null ? isCurrentSrv
+                                                  : s.id === activeSidebarId;
+
+    const item = document.createElement('div');
+    item.className = 'session-item' + (isActive ? ' active' : '') + (isNamed ? ' named' : '');
+    item.dataset.sessionId = s.id;
+
+    const label = sessionLabel(s);
+    const meta  = [
+        s.request_count != null ? `${s.request_count} reqs` : '',
+        sessionDateStr(s),
+    ].filter(Boolean).join(' · ');
+
+    const proxyHint = s.proxy_info
+        ? `<div class="si-proxy">${esc(s.proxy_info.replace(/:[^:@]+@/, ':***@'))}</div>`
+        : '';
+
+    item.innerHTML = `
+        <div class="si-name-row">
+            <span class="si-name" title="${esc(label)}">${esc(label)}</span>
+            ${isCurrentSrv ? '<span class="si-live-badge">● LIVE</span>' : ''}
+            <span class="si-actions">
+                <button class="si-act-btn si-rename-btn" title="Rename session">✎</button>
+                <button class="si-act-btn si-newwin-btn" title="Open in new window">↗</button>
+                ${!isCurrentSrv ? '<button class="si-act-btn si-del-btn" title="Delete session">🗑</button>' : ''}
+            </span>
+        </div>
+        <div class="si-meta">${esc(meta)}</div>
+        ${proxyHint}`;
+
+    item.addEventListener('click', (e) => {
+        if (e.target.closest('.si-act-btn')) return;
+        activateSidebarSession(s.id, isCurrentSrv);
+    });
+
+    item.querySelector('.si-rename-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        startRenameSession(item, s);
+    });
+
+    item.querySelector('.si-newwin-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        api.openSessionInNewWindow(s.id).catch(() => {});
+    });
+
+    item.querySelector('.si-del-btn')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const count = s.request_count ?? 0;
+        if (count > 1) {
+            const delLabel = s.notes ? `"${s.notes}"` : `Session #${s.id}`;
+            const ok = window.confirm(
+                `Delete ${delLabel}?\n\nThis will permanently remove ${count} requests. This cannot be undone.`
+            );
+            if (!ok) return;
+        }
+        item.style.opacity = '0.4';
+        item.style.pointerEvents = 'none';
+        const res = await api.deleteSession(s.id).catch(() => null);
+        if (res?.success === false && res?.reason === 'active') {
+            item.style.opacity = '';
+            item.style.pointerEvents = '';
+            return;
+        }
+        if (activeSidebarId === s.id) {
+            sessionFilterMode = null;
+            activeSidebarId = null;
+        }
+        await loadSessionSidebar();
+    });
+
+    sessionListEl.appendChild(item);
+}
+
 function renderSessionList() {
     if (!sessionListEl) return;
     sessionListEl.innerHTML = '';
@@ -894,106 +1189,55 @@ function renderSessionList() {
         return;
     }
 
-    // Sort: renamed sessions first (by start desc), then unnamed (by start desc)
     const sorted = [...sidebarSessions].sort((a, b) => {
         const aNamed = !!a.notes, bNamed = !!b.notes;
-        if (aNamed !== bNamed) return bNamed ? 1 : -1; // named float to top
-        // Within same group: most recent first
+        if (aNamed !== bNamed) return bNamed ? 1 : -1;
         return b.started_at > a.started_at ? 1 : b.started_at < a.started_at ? -1 : 0;
     });
 
-    let lastGroupNamed = null; // track group separator
+    const named = sorted.filter(s => !!s.notes);
+    const unnamed = sorted.filter(s => !s.notes);
 
-    for (const s of sorted) {
-        const isNamed      = !!s.notes;
-        // LIVE = only the session currently being written to by main process
-        const isCurrentSrv = s.id === currentSrvSessId;
-        // Active = the one currently shown in this window
-        const isActive = activeSidebarId === null ? isCurrentSrv
-                                                  : s.id === activeSidebarId;
+    for (const s of named) { appendSessionItem(s); }
 
-        // Group separator between named and unnamed
-        if (lastGroupNamed !== null && lastGroupNamed !== isNamed) {
+    if (unnamed.length) {
+        if (named.length) {
             const sep = document.createElement('div');
             sep.style.cssText = 'height:1px;background:var(--border2);margin:4px 0;opacity:0.5';
             sessionListEl.appendChild(sep);
         }
-        lastGroupNamed = isNamed;
-
-        const item = document.createElement('div');
-        item.className = 'session-item' + (isActive ? ' active' : '') + (isNamed ? ' named' : '');
-        item.dataset.sessionId = s.id;
-
-        const label = sessionLabel(s);
-        const meta  = [
-            s.request_count != null ? `${s.request_count} reqs` : '',
-            sessionDateStr(s),
-        ].filter(Boolean).join(' · ');
-
-        const proxyHint = s.proxy_info
-            ? `<div class="si-proxy">${esc(s.proxy_info.replace(/:[^:@]+@/, ':***@'))}</div>`
-            : '';
-
-        item.innerHTML = `
-            <div class="si-name-row">
-                <span class="si-name" title="${esc(label)}">${esc(label)}</span>
-                ${isCurrentSrv ? '<span class="si-live-badge">● LIVE</span>' : ''}
-                <span class="si-actions">
-                    <button class="si-act-btn si-rename-btn" title="Rename session">✎</button>
-                    <button class="si-act-btn si-newwin-btn" title="Open in new window">↗</button>
-                    ${!isCurrentSrv ? '<button class="si-act-btn si-del-btn" title="Delete session">🗑</button>' : ''}
-                </span>
-            </div>
-            <div class="si-meta">${esc(meta)}</div>
-            ${proxyHint}`;
-
-        // Click on item → load session
-        // FIX: use isCurrentSrv (not the removed isLive variable)
-        item.addEventListener('click', (e) => {
-            if (e.target.closest('.si-act-btn')) return;
-            activateSidebarSession(s.id, isCurrentSrv);
-        });
-
-        // Rename
-        item.querySelector('.si-rename-btn').addEventListener('click', (e) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'si-delete-unnamed-wrap';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'si-delete-unnamed-btn';
+        btn.textContent = 'Delete all unnamed sessions…';
+        const totalUnnamedReqs = unnamed.reduce((a, s) => a + (s.request_count || 0), 0);
+        btn.title = `${unnamed.length} session(s), ${totalUnnamedReqs} request(s) (current LIVE recording session is not removed)`;
+        btn.addEventListener('click', async (e) => {
             e.stopPropagation();
-            startRenameSession(item, s);
-        });
-
-        // Open in new window
-        item.querySelector('.si-newwin-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            api.openSessionInNewWindow(s.id).catch(() => {});
-        });
-
-        // Delete session
-        item.querySelector('.si-del-btn')?.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const count = s.request_count ?? 0;
-            if (count > 1) {
-                const label = s.notes ? `"${s.notes}"` : `Session #${s.id}`;
-                const ok = window.confirm(
-                    `Delete ${label}?\n\nThis will permanently remove ${count} requests. This cannot be undone.`
-                );
-                if (!ok) return;
+            const ok = window.confirm(
+                `Delete all unnamed sessions (${unnamed.length} session(s), ${totalUnnamedReqs} request(s))?\n\n` +
+                `The active recording session will not be deleted.\nThis cannot be undone.`
+            );
+            if (!ok) return;
+            btn.disabled = true;
+            try {
+                const res = await api.deleteUnnamedSessions().catch(() => null);
+                if (res?.success === false) return;
+                if (activeSidebarId != null && unnamed.some(u => u.id === activeSidebarId)) {
+                    sessionFilterMode = null;
+                    activeSidebarId = null;
+                }
+                await loadSessionSidebar();
+            } finally {
+                btn.disabled = false;
             }
-            item.style.opacity = '0.4';
-            item.style.pointerEvents = 'none';
-            const res = await api.deleteSession(s.id).catch(() => null);
-            if (res?.success === false && res?.reason === 'active') {
-                item.style.opacity = '';
-                item.style.pointerEvents = '';
-                return;
-            }
-            // If the deleted session was selected, switch to live
-            if (activeSidebarId === s.id) {
-                sessionFilterMode = null;
-                activeSidebarId = null;
-            }
-            await loadSessionSidebar();
         });
+        wrap.appendChild(btn);
+        sessionListEl.appendChild(wrap);
 
-        sessionListEl.appendChild(item);
+        for (const s of unnamed) { appendSessionItem(s); }
     }
 }
 
@@ -1037,6 +1281,9 @@ async function activateSidebarSession(sessionId, isLive) {
 
         // Clear view
         allEntries = []; filteredEntries = []; selectedIndex = -1;
+        selectedRequestIds.clear();
+        selectionAnchorIdx = -1;
+        updateSessionFromSelButton();
         knownTabs.clear();
         if (detailEmpty) detailEmpty.style.display = '';
         if (detailPanel) detailPanel.style.display = 'none';
@@ -1103,6 +1350,14 @@ let _currentDetailEntry = null;
 async function selectEntry(idx) {
     flushCommentAutosave();
     if (idx < 0 || idx >= filteredEntries.length) return;
+    detailPanel?.classList.remove('multi-sel');
+    selectedRequestIds.clear();
+    const ent0 = filteredEntries[idx];
+    if (ent0?.id && String(ent0.type || '').toLowerCase() !== 'screenshot') {
+        selectedRequestIds.add(ent0.id);
+    }
+    selectionAnchorIdx = idx;
+    updateSessionFromSelButton();
     if (selectedIndex >= 0 && selectedIndex < filteredEntries.length) {
         const prev = filteredEntries[selectedIndex];
         if (prev?._detailLoaded) {
@@ -1147,7 +1402,8 @@ function showDetail(entry) {
     dStatus.textContent = status || (entry.error ? 'Error' : '—');
     dStatus.className   = `meta-val lv-status ${entry.error ? 's-err' : statusCls(status)}`;
 
-    document.getElementById('d-method').textContent   = method || '—';
+    const cupnetSessMeta = getCupnetSessionTrafficPresentation(entry);
+    document.getElementById('d-method').textContent   = cupnetSessMeta ? cupnetSessMeta.method : (method || '—');
     document.getElementById('d-type').textContent     = type   || '—';
     document.getElementById('d-duration').textContent = formatDur(dur);
     document.getElementById('d-time').textContent     = formatTime(entry.created_at || entry.timestamp);
@@ -1157,7 +1413,7 @@ function showDetail(entry) {
 
     // Replay bar
     const canAnnotate = entry.id && !String(entry.id).startsWith('ss-');
-    const showReplay = entry.id && !type.startsWith('websocket') && type !== 'screenshot';
+    const showReplay = entry.id && !type.startsWith('websocket') && type !== 'screenshot' && type !== 'cupnet';
     replayBar.classList.toggle('visible', showReplay);
     if (showReplay) replayBtn.dataset.entryId = entry.id;
     replayResult.classList.remove('visible');
@@ -2208,6 +2464,47 @@ clearSearchBtn?.addEventListener('click', () => { searchInput.value = ''; applyF
 filterSession?.addEventListener('change', applyFilters);
 setupMultiSelects();
 
+lvSessionFromSelBtn?.addEventListener('click', async () => {
+    if (selectedRequestIds.size === 0) return;
+    const name = await promptNewSessionNameFromSelection();
+    if (name === null) return;
+    const ids = [...selectedRequestIds].map(Number).filter((n) => Number.isFinite(n) && n > 0);
+    if (!ids.length) {
+        alert('Selected rows have no valid database ids (cannot copy).');
+        return;
+    }
+    lvSessionFromSelBtn.disabled = true;
+    try {
+        const res = await api.createSessionFromRequestIds(ids, name).catch(() => null);
+        if (!res?.success) {
+            alert(res?.error === 'no_requests' ? 'Could not copy requests (nothing selected or rows not found).' : 'Could not create session.');
+            return;
+        }
+        await loadSessionSidebar();
+        if (res.sessionId != null) await activateSidebarSession(res.sessionId, false);
+    } finally {
+        lvSessionFromSelBtn.disabled = false;
+        updateSessionFromSelButton();
+    }
+});
+
+document.addEventListener('keydown', (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    if (e.key !== 'a' && e.key !== 'A') return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    e.preventDefault();
+    selectedRequestIds.clear();
+    for (const en of filteredEntries) {
+        if (en?.id && String(en.type || '').toLowerCase() !== 'screenshot') selectedRequestIds.add(en.id);
+    }
+    selectionAnchorIdx = 0;
+    selectedIndex = filteredEntries.length ? filteredEntries.length - 1 : -1;
+    scheduleRenderVirtual();
+    if (selectedRequestIds.size) showMultiSelectionDetail();
+    else updateSessionFromSelButton();
+}, true);
+
 autoScrollBtn?.addEventListener('click', () => {
     autoScrollEnabled = !autoScrollEnabled;
     autoScrollBtn.classList.toggle('active', autoScrollEnabled);
@@ -2218,6 +2515,10 @@ autoScrollBtn?.addEventListener('click', () => {
 clearLogsBtn?.addEventListener('click', async () => {
     await api.clearLogs();
     allEntries = []; filteredEntries = []; selectedIndex = -1;
+    selectedRequestIds.clear();
+    selectionAnchorIdx = -1;
+    detailPanel?.classList.remove('multi-sel');
+    updateSessionFromSelButton();
     activeSidebarId = null;
     sessionFilterMode = null;
     if (detailEmpty) detailEmpty.style.display = '';
@@ -2383,6 +2684,9 @@ importBundleBtn?.addEventListener('click', async () => {
         allEntries = imported.map((e) => ({ ...e, _fromBundle: true }));
         filteredEntries = allEntries.slice();
         selectedIndex = -1;
+        selectedRequestIds.clear();
+        selectionAnchorIdx = -1;
+        updateSessionFromSelButton();
         autoScrollEnabled = false;
         autoScrollBtn?.classList.remove('active');
         if (autoScrollBtn) autoScrollBtn.textContent = '↓ Paused';
@@ -2511,7 +2815,14 @@ function showInterceptToast(type, ruleName, url) {
 }
 
 // ─── Resize observer ──────────────────────────────────────────────────────────
-const _resizeObs = new ResizeObserver(() => scheduleRenderVirtual());
+let _lvScrollResizeRaf = null;
+const _resizeObs = new ResizeObserver(() => {
+    if (_lvScrollResizeRaf) return;
+    _lvScrollResizeRaf = requestAnimationFrame(() => {
+        _lvScrollResizeRaf = null;
+        scheduleRenderVirtual();
+    });
+});
 _resizeObs.observe(lvScroll);
 window.addEventListener('beforeunload', () => { _resizeObs.disconnect(); });
 

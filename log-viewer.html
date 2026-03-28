@@ -300,6 +300,28 @@ select:focus { border-color: var(--accent); }
 .session-item.named { border-left-color: rgba(168,139,250,0.4); }
 .session-item.named.active { border-left-color: var(--accent); }
 
+.si-delete-unnamed-wrap {
+    padding: 6px 10px 8px;
+    border-bottom: 1px solid var(--border2);
+    flex-shrink: 0;
+}
+.si-delete-unnamed-btn {
+    width: 100%;
+    font-size: 10.5px;
+    padding: 6px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--bg2);
+    color: var(--text-dim);
+    cursor: pointer;
+    transition: border-color 0.12s, color 0.12s, background 0.12s;
+}
+.si-delete-unnamed-btn:hover {
+    border-color: #f87171;
+    color: #f87171;
+    background: rgba(248,113,113,0.08);
+}
+
 .si-name-row {
     display: flex;
     align-items: center;
@@ -444,6 +466,9 @@ select:focus { border-color: var(--accent); }
     border-right: 1px solid var(--border);
     overflow: hidden;
     flex-shrink: 0;
+    /* Range-select rows: Shift/Ctrl+click must not drag-select row labels (copy payloads in the detail pane). */
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 /* Column header */
@@ -533,6 +558,7 @@ select:focus { border-color: var(--accent); }
     position: relative;
 }
 .lv-row:hover { background: rgba(255,255,255,0.04); }
+.lv-row.lv-multi-sel { background: rgba(59,126,248,0.1); }
 .lv-row.selected { background: rgba(59,126,248,0.18) !important; }
 .lv-row.selected::before {
     content: '';
@@ -542,6 +568,23 @@ select:focus { border-color: var(--accent); }
 .lv-row.lv-error { background: rgba(239,68,68,0.06); }
 .lv-row.lv-row-mock { background: rgba(245,158,11,0.06); }
 .lv-row.lv-row-mock:hover { background: rgba(245,158,11,0.12) !important; }
+.lv-row.lv-row-cupnet { background: rgba(59,126,248,0.07); border-left: 2px solid rgba(59,126,248,0.45); }
+.lv-row.lv-row-cupnet:hover { background: rgba(59,126,248,0.11) !important; }
+/* Снимок сессии proxy/direct — заметнее обычных cupnet-строк */
+.lv-row.lv-row-cupnet.lv-row-cupnet-session {
+    background: linear-gradient(90deg, rgba(245, 158, 11, 0.14) 0%, rgba(59, 126, 248, 0.09) 55%, transparent 100%);
+    border-left: 3px solid rgba(245, 190, 90, 0.85);
+    box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.12);
+}
+.lv-row.lv-row-cupnet.lv-row-cupnet-session:hover {
+    background: linear-gradient(90deg, rgba(245, 158, 11, 0.2) 0%, rgba(59, 126, 248, 0.12) 55%, transparent 100%) !important;
+}
+.lv-row.lv-row-cupnet.lv-row-cupnet-session.selected {
+    background: rgba(245, 158, 11, 0.16) !important;
+    border-left-color: rgba(251, 191, 36, 0.95);
+}
+.host-chip.host-chip-cupnet-sess { color: #fcd34d; font-weight: 600; }
+.lv-path.lv-path-cupnet-sess { color: #e2e8f0; font-weight: 500; }
 .lv-row.lv-row-ws { background: rgba(139, 92, 246, 0.06); }
 .lv-row.lv-row-ws:hover { background: rgba(139, 92, 246, 0.11) !important; }
 .lv-row.lv-row-ws.selected { background: rgba(139, 92, 246, 0.2) !important; }
@@ -579,6 +622,7 @@ select:focus { border-color: var(--accent); }
 .m-head    { color: var(--m-other);  background: rgba(107,114,128,0.14);}
 .m-options { color: var(--m-other);  background: rgba(107,114,128,0.14);}
 .m-other   { color: var(--m-other);  background: rgba(107,114,128,0.14);}
+.m-sys     { color: #fbbf24; background: rgba(245, 158, 11, 0.22); font-weight: 800; letter-spacing: 0.06em; }
 
 /* Status */
 .lv-status {
@@ -663,6 +707,8 @@ select:focus { border-color: var(--accent); }
     flex-direction: column;
     overflow: hidden;
     min-width: 280px;
+    user-select: text;
+    -webkit-user-select: text;
 }
 
 /* Empty state */
@@ -693,6 +739,18 @@ select:focus { border-color: var(--accent); }
     overflow: hidden;
     overflow-y: auto;
     scrollbar-width: none;
+}
+
+#lv-detail.multi-sel #lv-detail-meta,
+#lv-detail.multi-sel #lv-replay-bar,
+#lv-detail.multi-sel #lv-mark-panel,
+#lv-detail.multi-sel #lv-tabs,
+#lv-detail.multi-sel #lv-tab-body,
+#lv-detail.multi-sel #lv-screenshot-direct {
+    display: none !important;
+}
+#lv-detail.multi-sel #lv-detail-multi-banner {
+    display: block !important;
 }
 
 /* Detail — meta row */
@@ -1329,6 +1387,8 @@ select:focus { border-color: var(--accent); }
 
     <span id="lv-count">0 entries</span>
 
+    <button type="button" class="lv-btn" id="lv-session-from-sel-btn" title="Create a new named session from selected requests only (Shift: range, Ctrl/⌘: toggle one, Ctrl+A: all in list)" disabled>+ Session from selection</button>
+
     <div class="lv-spacer"></div>
 
     <button class="lv-btn" id="lv-rec-btn" title="Toggle recording on/off">⏺ Rec</button>
@@ -1386,6 +1446,10 @@ select:focus { border-color: var(--accent); }
             <!-- URL bar -->
             <div id="lv-detail-url-bar">
                 <div id="lv-detail-url"></div>
+            </div>
+
+            <div id="lv-detail-multi-banner" style="display:none;padding:10px 12px;font-size:12px;color:var(--text-dim);line-height:1.45;border-bottom:1px solid var(--border2)">
+                <span id="lv-detail-multi-text"></span>
             </div>
 
             <!-- Meta row -->
@@ -1612,6 +1676,22 @@ select:focus { border-color: var(--accent); }
         <div id="compare-side-picker" class="cmp-side-picker"></div>
         <div class="lv-dialog-actions">
             <button class="lv-btn" id="compare-side-cancel-btn">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<div id="session-from-sel-modal" class="lv-overlay">
+    <div class="lv-dialog" style="width:min(420px,calc(100vw - 24px))">
+        <div class="lv-dialog-title">New session from selection</div>
+        <div class="lv-dialog-note">A named session will contain copies of the selected request rows (same order as in the list).</div>
+        <div style="padding:8px 0 4px">
+            <label for="session-from-sel-input" style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:6px">Session name</label>
+            <input type="text" id="session-from-sel-input" autocomplete="off" style="width:100%;box-sizing:border-box;padding:8px 10px;font-size:13px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text)" placeholder="e.g. Checkout flow">
+        </div>
+        <div id="session-from-sel-err" class="lv-dialog-note" style="color:#f87171;min-height:1.2em;display:none"></div>
+        <div class="lv-dialog-actions">
+            <button type="button" class="lv-btn" id="session-from-sel-cancel-btn">Cancel</button>
+            <button type="button" class="lv-btn active" id="session-from-sel-ok-btn">Create</button>
         </div>
     </div>
 </div>

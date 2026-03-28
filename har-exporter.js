@@ -1,6 +1,7 @@
 'use strict';
 
 const db = require('./db');
+const { getSessionEgressMeta, formatEgressComment } = require('./session-egress-meta');
 
 /**
  * Max chars for HTTP bodies and Chrome `_webSocketMessages[].data` in exported HAR.
@@ -164,17 +165,28 @@ function exportHar(sessionId, filters = {}) {
         entries.push(entry);
     }
 
+    const egress = sessionId ? getSessionEgressMeta(db, sessionId) : getSessionEgressMeta(db, null);
+    const baseCreatorComment = 'HTTP/WS export; _webSocketMessages Chrome-style; _cupnetWebSocketMessages full payloads; env CUPNET_HAR_* / CUPNET_EXPORT_WS_FRAME_LIMIT';
+    const creatorComment = formatEgressComment(egress, baseCreatorComment);
+
     return {
         log: {
             version: '1.2',
             creator: {
                 name: 'CupNet',
                 version: '2.0',
-                comment: 'HTTP/WS export; _webSocketMessages Chrome-style; _cupnetWebSocketMessages full payloads; env CUPNET_HAR_* / CUPNET_EXPORT_WS_FRAME_LIMIT',
+                comment: creatorComment,
             },
             browser: { name: 'Electron', version: process.versions.electron || '', comment: '' },
             pages: buildPages(sessionId, entries),
-            entries
+            entries,
+            _cupnet: {
+                egressIp: egress.ip,
+                egressCountry: egress.country,
+                egressLocation: egress.location || null,
+                egressProfile: egress.profile || null,
+                sessionProxyInfo: egress.sessionProxyInfo || null,
+            },
         }
     };
 }

@@ -12,6 +12,7 @@ const {
     extractTemplateVars,
     formatBytes,
     shouldFilterUrl,
+    sanitizeOutgoingRequestHeaders,
     SEARCH_ENGINE,
 } = require('../utils');
 
@@ -190,6 +191,24 @@ test('shouldFilterUrl: reuses cached compiled patterns', () => {
     shouldFilterUrl('https://example.com', patterns);
     assert.equal(shouldFilterUrl('https://example.com/path', patterns), true);
     assert.equal(shouldFilterUrl('https://other.io', patterns), false);
+});
+
+test('sanitizeOutgoingRequestHeaders: strips HTTP/2 pseudo-headers', () => {
+    const h = {
+        ':authority': 'example.com',
+        ':method': 'GET',
+        ':path': '/x',
+        ':scheme': 'https',
+        'User-Agent': 'cupnet',
+        Accept: 'application/json',
+    };
+    const o = sanitizeOutgoingRequestHeaders(h);
+    assert.deepEqual(o, { 'User-Agent': 'cupnet', Accept: 'application/json' });
+});
+
+test('sanitizeOutgoingRequestHeaders: null / non-object → {}', () => {
+    assert.deepEqual(sanitizeOutgoingRequestHeaders(null), {});
+    assert.deepEqual(sanitizeOutgoingRequestHeaders(undefined), {});
 });
 
 console.log('\n✓ All utils tests passed\n');

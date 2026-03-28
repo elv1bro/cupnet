@@ -1,5 +1,9 @@
 'use strict';
 
+const { buildEndpointReport } = require('../../services/page-analyzer-endpoint-scan');
+
+const FETCH_SCRIPT_MS = 25000;
+
 /**
  * Анализ страницы, CapMonster, Turnstile.
  * @param {object} ctx
@@ -388,9 +392,54 @@ function registerPageAnalyzerIpc(ctx) {
     ctx.ipcMain.handle('analyze-page-endpoints', async (_, tabId) => {
         const tab = ctx.tabManager.getTab(tabId);
         if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return {};
+        const wc = tab.view.webContents;
+        const startedAt = Date.now();
+        let collect;
         try {
-            return await tab.view.webContents.executeJavaScript(`(${ctx._analyzeEndpointsScript})()`);
-        } catch { return {}; }
+            collect = await wc.executeJavaScript(`(${ctx._analyzeEndpointsCollectScript})()`);
+        } catch {
+            return {};
+        }
+        const sess = wc.session;
+        const externalScripts = [];
+        const urls = Array.isArray(collect?.scriptUrls) ? collect.scriptUrls : [];
+        for (const u of urls) {
+            try {
+                const ctrl = new AbortController();
+                const timer = setTimeout(() => ctrl.abort(), FETCH_SCRIPT_MS);
+                let resp;
+                try {
+                    resp = await sess.fetch(u, {
+                        bypassCustomProtocolHandlers: true,
+                        cache: 'no-store',
+                        signal: ctrl.signal,
+                    });
+                } finally {
+                    clearTimeout(timer);
+                }
+                const body = await resp.text();
+                externalScripts.push({
+                    url: u,
+                    body,
+                    statusCode: resp.status,
+                });
+            } catch (e) {
+                externalScripts.push({
+                    url: u,
+                    body: '',
+                    statusCode: 0,
+                    error: e?.message || String(e),
+                });
+            }
+        }
+        return buildEndpointReport({
+            pageUrl: collect?.pageUrl,
+            statusHint: collect?.statusHint,
+            inlineScripts: collect?.inlineScripts || [],
+            externalScripts,
+            perfNames: collect?.perfNames || [],
+            startedAt,
+        });
     });
 
     ctx.ipcMain.handle('page-analyzer-action', async (_, tabId, action) => {

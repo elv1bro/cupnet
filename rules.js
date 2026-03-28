@@ -2,6 +2,339 @@
 
 const api = window.electronAPI;
 
+/** Preset before/after bodies (shown in UI + embedded in LLM prompt as reference). */
+const SCRIPT_PRESETS = [
+    {
+        id: 'add-req-header',
+        label: 'Add request header',
+        before: "ctx.headers['X-CupNet-Custom'] = '1';",
+        after: '',
+    },
+    {
+        id: 'short-json-mock',
+        label: 'Short-circuit JSON mock',
+        before: [
+            'ctx.shortCircuit = {',
+            "  statusCode: 200,",
+            "  headers: { 'Content-Type': 'application/json' },",
+            "  body: JSON.stringify({ ok: true, source: 'shortCircuit' }),",
+            '};',
+        ].join('\n'),
+        after: '',
+    },
+    {
+        id: 'rewrite-url-host',
+        label: 'Rewrite hostname in URL',
+        before: [
+            'try {',
+            '  const u = new URL(ctx.url);',
+            "  if (u.hostname === 'api.old.example') {",
+            "    u.hostname = 'api.new.example';",
+            '    ctx.url = u.toString();',
+            '  }',
+            '} catch (e) {}',
+        ].join('\n'),
+        after: '',
+    },
+    {
+        id: 'strip-csp-after',
+        label: 'Remove Content-Security-Policy (after)',
+        before: '',
+        after: [
+            'const h = ctx.response.headers;',
+            'const next = {};',
+            'for (const [k, v] of Object.entries(h)) {',
+            "  if (String(k).toLowerCase() !== 'content-security-policy') next[k] = v;",
+            '}',
+            'ctx.response.headers = next;',
+        ].join('\n'),
+    },
+    {
+        id: 'inject-json-after',
+        label: 'Append field to JSON response (after)',
+        before: '',
+        after: [
+            'try {',
+            "  const raw = Buffer.from(ctx.response.bodyBase64 || '', 'base64').toString('utf8');",
+            '  const o = JSON.parse(raw);',
+            '  o.cupnetInjected = true;',
+            '  ctx.response.body = JSON.stringify(o);',
+            '} catch (e) {}',
+        ].join('\n'),
+    },
+    {
+        id: 'remove-req-header',
+        label: 'Remove request header (e.g. Authorization)',
+        before: [
+            "const kill = 'authorization';",
+            'for (const k of Object.keys(ctx.headers || {})) {',
+            "  if (String(k).toLowerCase() === kill) delete ctx.headers[k];",
+            '}',
+            'if (Array.isArray(ctx.orderedHeaders)) {',
+            '  ctx.orderedHeaders = ctx.orderedHeaders.filter(',
+            '    ([name]) => String(name).toLowerCase() !== kill',
+            '  );',
+            '}',
+        ].join('\n'),
+        after: '',
+    },
+    {
+        id: 'append-query-param',
+        label: 'Append query parameter to URL',
+        before: [
+            'try {',
+            '  const u = new URL(ctx.url);',
+            "  u.searchParams.set('cupnet_ts', String(Date.now()));",
+            '  ctx.url = u.toString();',
+            '} catch (e) {}',
+        ].join('\n'),
+        after: '',
+    },
+    {
+        id: 'rewrite-path-prefix',
+        label: 'Rewrite URL path prefix (/api/v1 → /api/v2)',
+        before: [
+            'try {',
+            '  const u = new URL(ctx.url);',
+            "  if (u.pathname.startsWith('/api/v1/')) {",
+            "    u.pathname = u.pathname.replace(/^\\/api\\/v1/, '/api/v2');",
+            '    ctx.url = u.toString();',
+            '  }',
+            '} catch (e) {}',
+        ].join('\n'),
+        after: '',
+    },
+    {
+        id: 'redirect-302-shortcircuit',
+        label: 'Short-circuit HTTP 302 redirect',
+        before: [
+            'ctx.shortCircuit = {',
+            '  statusCode: 302,',
+            "  headers: { Location: 'https://example.com/new-location' },",
+            "  body: '',",
+            '};',
+        ].join('\n'),
+        after: '',
+    },
+    {
+        id: 'html-shortcircuit',
+        label: 'Short-circuit HTML page',
+        before: [
+            'ctx.shortCircuit = {',
+            '  statusCode: 200,',
+            "  headers: { 'Content-Type': 'text/html; charset=utf-8' },",
+            "  body: '<!doctype html><html><body><h1>Maintenance</h1></body></html>',",
+            '};',
+        ].join('\n'),
+        after: '',
+    },
+    {
+        id: 'before-json-body-patch',
+        label: 'Patch outgoing JSON POST body (before)',
+        before: [
+            'try {',
+            '  if (!ctx.bodyBase64) return;',
+            "  const raw = Buffer.from(ctx.bodyBase64, 'base64').toString('utf8');",
+            '  const o = JSON.parse(raw);',
+            '  o.sentViaCupNet = true;',
+            '  ctx.body = JSON.stringify(o);',
+            '  ctx.bodyBase64 = undefined;',
+            '} catch (e) {}',
+        ].join('\n'),
+        after: '',
+    },
+    {
+        id: 'after-text-replace-body',
+        label: 'Replace substring in response body (text, after)',
+        before: '',
+        after: [
+            'try {',
+            "  let t = Buffer.from(ctx.response.bodyBase64 || '', 'base64').toString('utf8');",
+            "  t = t.replace(/REPLACE_ME/g, 'WITH_THIS');",
+            '  ctx.response.body = t;',
+            '} catch (e) {}',
+        ].join('\n'),
+    },
+    {
+        id: 'after-add-response-header',
+        label: 'Add response header only (after)',
+        before: '',
+        after: "ctx.response.headers['X-CupNet-Injected'] = '1';",
+    },
+    {
+        id: 'after-change-status',
+        label: 'Change response status code only (after)',
+        before: '',
+        after: 'ctx.response.statusCode = 201;',
+    },
+    {
+        id: 'before-header-ordered-sync',
+        label: 'Add request header + orderedHeaders pair',
+        before: [
+            "ctx.headers['X-Dual'] = 'yes';",
+            'if (Array.isArray(ctx.orderedHeaders)) {',
+            "  ctx.orderedHeaders.push(['X-Dual', 'yes']);",
+            '}',
+        ].join('\n'),
+        after: '',
+    },
+];
+
+const INTERCEPT_AI_PROMPT_BASE = `You are a specialist for CupNet “Dynamic script” intercept rules.
+
+CupNet is an Electron-based browser; HTTPS traffic is decrypted by a local MITM proxy, then forwarded. A “Dynamic script” rule runs YOUR JavaScript in the Node.js main process inside a vm sandbox (NOT in the web page). There is no require(), import, fs, process (aside from what the host exposes indirectly), window, document, or fetch. Globals available in the sandbox: ctx, Buffer, TextDecoder, TextEncoder.
+
+=== TWO HOOKS (both optional, but at least one must be non-empty when saving)
+1) “Before MITM” — runs after the browser request is visible to CupNet but BEFORE it is sent to the real server (AzureTLS/upstream). You can mutate the outgoing request or short-circuit a fake response.
+2) “After response” — runs AFTER the origin returned a response (or after your short-circuit path skipped the network — in that case hook #2 is not used because there is no upstream response). You receive ctx.request (frozen snapshot from after hook #1) and the live ctx.response object.
+
+=== OUTPUT FORMAT FOR THE USER
+Return exactly TWO fenced or labeled blocks so the user can paste into “Before upstream” and “After server response”:
+- Label them clearly: e.g. “Before MITM (body only):” and “After response (body only):”.
+- Emit ONLY executable lines that belong inside (function (ctx) { ... })(ctx) — no function keyword, no outer IIFE wrapper.
+- If a phase is unused, output a single line comment such as // (empty) in that block.
+- Prefer small try/catch around JSON.parse, new URL, or Buffer operations so one bad request does not break the proxy for all traffic.
+
+=== ctx IN “BEFORE” (outgoing request)
+- ctx.url — full URL string. Safe to rewrite with new URL(ctx.url), mutate, then ctx.url = u.toString().
+- ctx.method — HTTP verb string (e.g. GET, POST).
+- ctx.headers — plain object map (keys may be mixed case). Mutations here affect the semantic headers map.
+- ctx.orderedHeaders — array of [headerName, value] preserving wire order. If you add/remove sensitive headers (Authorization, Cookie, Host), update BOTH ctx.headers AND ctx.orderedHeaders when possible so the outgoing wire form stays consistent.
+- ctx.body — string or buffer-like usage depends on CupNet: prefer setting ctx.body as a string for UTF-8 text; set ctx.bodyBase64 for binary. If you set ctx.body as a string, CupNet may clear bodyBase64. For edits, often: decode ctx.bodyBase64 with Buffer.from(..., 'base64'), modify, then assign ctx.body or new base64.
+- ctx.bodyBase64 — base64 string of body when the stack uses base64; if you only set ctx.body textual, you can set ctx.bodyBase64 = undefined per pipeline rules.
+- ctx.dnsOverride, ctx.tabId, ctx.requestId — usually leave unchanged unless you understand MITM DNS override semantics.
+- ctx.shortCircuit — assign an object to skip the network entirely (local response like “mock”):
+  { statusCode: number, headers: object, body?: string, bodyBase64?: string }
+  Use shortCircuit for JSON APIs, HTML stubs, redirects (302 + Location header), errors, etc.
+
+=== ctx IN “AFTER” (response path)
+- ctx.request — { url, method, headers, orderedHeaders } snapshot as sent after the “before” hook.
+- ctx.response — { statusCode, headers (object), bodyBase64 (string), optionally set body (string utf-8) to replace payload }.
+- To strip headers, rebuild headers or delete keys case-insensitively (some stacks use varied casing).
+- To edit JSON/text body: decode bodyBase64 → string → parse/modify → assign ctx.response.body = string (host re-encodes to base64) OR set bodyBase64 yourself consistently.
+
+=== RULE MATCHING & SAFETY
+- First enabled intercept rule whose URL pattern matches wins. Patterns are globs with * unless CUPNET_INTERCEPT_STRICT_URLS=1 (then prefix URLs only, no *).
+- Script phases have a timeout (~400 ms default, env CUPNET_INTERCEPT_SCRIPT_MS). Avoid heavy loops or huge string ops.
+- Captcha / Cloudflare challenge domains are skipped by default unless CUPNET_INTERCEPT_ALLOW_MOCK_CF=1.
+- WebSocket upgrades: “after” logic differs from normal HTTP; avoid assuming large response bodies there.
+- vm isolation is not a security boundary; never tell the user to paste untrusted code.
+
+=== REFERENCE SNIPPETS SECTION
+After this instruction, the user’s prompt includes a “REFERENCE SNIPPETS” appendix with real CupNet examples. Use them as patterns: combine, parameterize (hosts, paths, header names), and explain briefly what each line does when the user is learning.
+
+=== TEACHING STYLE
+When the user asks “how do I …?”, name the hook (“before” vs “after”), list which ctx fields you touch, mention orderedHeaders if relevant, and note shortCircuit vs upstream round-trip.`;
+
+function formatPresetsForLlm(presets) {
+    return presets.map((p, i) => {
+        const b = (p.before || '').trim() || '// (empty)';
+        const a = (p.after || '').trim() || '// (empty)';
+        return `### Example ${i + 1}: ${p.label}\nBefore MITM (body only):\n${b}\n\nAfter response (body only):\n${a}`;
+    }).join('\n\n');
+}
+
+function getInterceptAiPrompt() {
+    return `${INTERCEPT_AI_PROMPT_BASE}
+
+─── REFERENCE SNIPPETS
+The following are copy-paste-safe patterns in CupNet. Use them as templates: adjust hostnames, header names, JSON shape, etc. per the user’s request.
+
+${formatPresetsForLlm(SCRIPT_PRESETS)}`;
+}
+
+function syncInterceptAiPromptElements() {
+    const ed = document.getElementById('intercept-ai-prompt-editor');
+    if (ed) ed.value = getInterceptAiPrompt();
+}
+
+function populateScriptPresetSelect() {
+    const sel = document.getElementById('script-snippet-preset');
+    if (!sel) return;
+    while (sel.options.length > 1) sel.remove(1);
+    for (const p of SCRIPT_PRESETS) {
+        const o = document.createElement('option');
+        o.value = p.id;
+        o.textContent = p.label;
+        sel.appendChild(o);
+    }
+}
+
+function getSelectedScriptPreset() {
+    const sel = document.getElementById('script-snippet-preset');
+    const id = sel && sel.value;
+    if (!id) return null;
+    return SCRIPT_PRESETS.find((x) => x.id === id) || null;
+}
+
+function applyScriptPresetToFields() {
+    const p = getSelectedScriptPreset();
+    if (!p) {
+        showMsg('Choose a preset first', true);
+        return;
+    }
+    const b = document.getElementById('edit-script-before');
+    const a = document.getElementById('edit-script-after');
+    if (b) b.value = p.before;
+    if (a) a.value = p.after;
+    showMsg('Preset applied to fields');
+}
+
+async function copyScriptPresetClipboard() {
+    const p = getSelectedScriptPreset();
+    if (!p) {
+        showMsg('Choose a preset first', true);
+        return;
+    }
+    const text = [
+        `CupNet Dynamic script — ${p.label}`,
+        '',
+        '--- Before MITM ---',
+        p.before || '// (empty)',
+        '',
+        '--- After response ---',
+        p.after || '// (empty)',
+    ].join('\n');
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(text);
+        } else {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+        }
+        showMsg('Snippet copied');
+    } catch (e) {
+        showMsg('Copy failed', true);
+    }
+}
+
+async function copyInterceptAiPrompt() {
+    try {
+        const full = getInterceptAiPrompt();
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(full);
+        } else {
+            const ta = document.createElement('textarea');
+            ta.value = full;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+        }
+        showMsg('LLM prompt copied');
+    } catch (e) {
+        showMsg('Copy failed', true);
+    }
+}
+
 // ─── Tab switching ────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -48,160 +381,45 @@ function onChange(id, handler) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HIGHLIGHT RULES
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const FIELDS = ['url', 'method', 'status', 'type', 'duration', 'responseBody', 'requestBody', 'host', 'error'];
-const OPS    = ['equals', 'notEquals', 'contains', 'notContains', 'startsWith', 'endsWith', 'matches', 'gt', 'lt', 'gte', 'lte', 'between', 'exists', 'notExists'];
-const ACTION_TYPES = ['highlight', 'screenshot', 'notification', 'block'];
-
-let editingRuleId = null;
-
-function makeConditionRow(cond = {}) {
-    const row = document.createElement('div');
-    row.className = 'builder-row';
-    row.innerHTML =
-        `<select class="cond-field">${FIELDS.map(f => `<option value="${f}"${cond.field === f ? ' selected' : ''}>${f}</option>`).join('')}</select>` +
-        `<select class="cond-op">${OPS.map(o => `<option value="${o}"${cond.op === o ? ' selected' : ''}>${o}</option>`).join('')}</select>` +
-        `<input type="text" class="cond-value" placeholder="value" value="${escHtml(cond.value || '')}">` +
-        `<button class="btn-danger btn-sm" title="Remove condition">✕</button>`;
-    row.querySelector('.btn-danger').addEventListener('click', () => row.remove());
-    return row;
-}
-
-function makeActionRow(action = {}) {
-    const row = document.createElement('div');
-    row.className = 'builder-row';
-    row.innerHTML =
-        `<select class="action-type">${ACTION_TYPES.map(t => `<option value="${t}"${action.type === t ? ' selected' : ''}>${t}</option>`).join('')}</select>` +
-        `<input class="action-color" type="color" value="${action.color || '#3b82f6'}" title="Highlight color" style="flex:0 0 auto">` +
-        `<button class="btn-danger btn-sm" title="Remove action">✕</button>`;
-    row.querySelector('.btn-danger').addEventListener('click', () => row.remove());
-    const typeSelect  = row.querySelector('.action-type');
-    const colorInput  = row.querySelector('.action-color');
-    const syncColor   = () => { colorInput.style.display = typeSelect.value === 'highlight' ? '' : 'none'; };
-    typeSelect.addEventListener('change', syncColor);
-    syncColor();
-    return row;
-}
-
-function getConditions() {
-    return [...document.querySelectorAll('#conditions-builder .builder-row')].map(row => ({
-        field: row.querySelector('.cond-field').value,
-        op:    row.querySelector('.cond-op').value,
-        value: row.querySelector('.cond-value').value
-    }));
-}
-
-function getActions() {
-    return [...document.querySelectorAll('#actions-builder .builder-row')].map(row => {
-        const type  = row.querySelector('.action-type').value;
-        const color = row.querySelector('.action-color').value;
-        return type === 'highlight' ? { type, color } : { type };
-    });
-}
-
-function showRuleForm(rule = null) {
-    editingRuleId = rule ? rule.id : null;
-    document.getElementById('edit-rule-id').value   = editingRuleId || '';
-    document.getElementById('edit-rule-name').value = rule ? rule.name : '';
-    const cb = document.getElementById('conditions-builder');
-    const ab = document.getElementById('actions-builder');
-    cb.innerHTML = '';
-    ab.innerHTML = '';
-    if (rule) {
-        (rule.conditions || []).forEach(c => cb.appendChild(makeConditionRow(c)));
-        (rule.actions    || []).forEach(a => ab.appendChild(makeActionRow(a)));
-    } else {
-        cb.appendChild(makeConditionRow());
-        ab.appendChild(makeActionRow());
-    }
-    document.getElementById('rule-edit-form').classList.add('visible');
-    document.getElementById('edit-rule-name').focus();
-}
-
-function hideRuleForm() {
-    document.getElementById('rule-edit-form').classList.remove('visible');
-    editingRuleId = null;
-}
-
-async function loadRules() {
-    const rules = await api.getRules();
-    const list  = document.getElementById('rules-list');
-    list.innerHTML = '';
-    if (!rules || !rules.length) {
-        list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🎯</div>No rules yet — click "+ New Rule" to create one.</div>';
-        return;
-    }
-    for (const rule of rules) {
-        const item = document.createElement('div');
-        item.className = 'rule-item';
-        const actionBadges = (rule.actions || [])
-            .map(a => `<span class="badge badge-${a.type === 'block' ? 'block' : a.type === 'highlight' ? 'hl' : 'default'}">${a.type}</span>`)
-            .join(' ');
-        item.innerHTML =
-            `<label class="toggle">
-                <input type="checkbox" class="rule-toggle" data-id="${rule.id}" ${rule.enabled ? 'checked' : ''}>
-                <span class="toggle-track"></span>
-             </label>
-             <span class="rule-name">${escHtml(rule.name)}</span>
-             <span style="display:flex;gap:4px;flex-shrink:0">${actionBadges}</span>
-             <span class="rule-hits" title="Times triggered">${rule.hit_count || 0} hits</span>
-             <span class="rule-meta">${(rule.conditions || []).length} cond</span>
-             <button class="btn-secondary btn-sm btn-edit-rule">Edit</button>
-             <button class="btn-danger btn-sm btn-delete-rule">Delete</button>`;
-        item.querySelector('.rule-toggle').addEventListener('change', async e => {
-            await api.toggleRule(rule.id, e.target.checked);
-        });
-        item.querySelector('.btn-edit-rule').addEventListener('click', () => showRuleForm(rule));
-        item.querySelector('.btn-delete-rule').addEventListener('click', async () => {
-            if (!confirm(`Delete rule "${rule.name}"?`)) return;
-            await api.deleteRule(rule.id);
-            showMsg('Rule deleted');
-            await loadRules();
-        });
-        list.appendChild(item);
-    }
-}
-
-onClick('btn-add-rule', () => showRuleForm());
-onClick('btn-cancel-rule', hideRuleForm);
-onClick('btn-add-condition', () => {
-    document.getElementById('conditions-builder')?.appendChild(makeConditionRow());
-});
-onClick('btn-add-action', () => {
-    document.getElementById('actions-builder')?.appendChild(makeActionRow());
-});
-
-onClick('btn-save-rule', async () => {
-    const name       = document.getElementById('edit-rule-name').value.trim();
-    const conditions = getConditions();
-    const actions    = getActions();
-    if (!name)             { showMsg('Rule name is required', true); return; }
-    if (!conditions.length){ showMsg('At least one condition is required', true); return; }
-    if (!actions.length)   { showMsg('At least one action is required', true); return; }
-    const rule = { name, enabled: true, conditions, actions };
-    if (editingRuleId) rule.id = editingRuleId;
-    await api.saveRule(rule);
-    hideRuleForm();
-    showMsg(editingRuleId ? 'Rule updated' : 'Rule saved');
-    await loadRules();
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // INTERCEPT RULES
 // ═══════════════════════════════════════════════════════════════════════════════
 
 let editingInterceptId = null;
 
+/** Chromium spellcheck + synchronous multi‑MB .value assignment can freeze the window; defer huge payloads. */
+const _MOCK_BODY_DEFER_CHARS = 96 * 1024;
+let _mockBodyDeferredTimer = null;
+
+function setInterceptMockBodyValue(raw) {
+    const el = document.getElementById('edit-mock-body');
+    if (!el) return;
+    if (_mockBodyDeferredTimer) {
+        clearTimeout(_mockBodyDeferredTimer);
+        _mockBodyDeferredTimer = null;
+    }
+    const text = raw == null ? '' : String(raw);
+    el.value = '';
+    if (text.length <= _MOCK_BODY_DEFER_CHARS) {
+        el.value = text;
+        return;
+    }
+    _mockBodyDeferredTimer = setTimeout(() => {
+        _mockBodyDeferredTimer = null;
+        el.value = text;
+    }, 0);
+}
+
 function showInterceptParamsFor(type) {
     document.getElementById('intercept-params-block').style.display   = type === 'block'         ? 'block' : 'none';
-    document.getElementById('intercept-params-headers').style.display = type === 'modifyHeaders'  ? 'block' : 'none';
-    document.getElementById('intercept-params-mock').style.display    = type === 'mock'           ? 'block' : 'none';
+    document.getElementById('intercept-params-headers').style.display = type === 'modifyHeaders' ? 'block' : 'none';
+    document.getElementById('intercept-params-mock').style.display    = type === 'mock'          ? 'block' : 'none';
+    document.getElementById('intercept-params-script').style.display  = type === 'script'        ? 'block' : 'none';
 }
 
 onChange('edit-intercept-type', e => {
     showInterceptParamsFor(e.target.value);
+    const out = document.getElementById('script-test-out');
+    if (out) { out.classList.remove('visible'); out.textContent = ''; }
 });
 
 function showInterceptForm(rule = null) {
@@ -216,7 +434,13 @@ function showInterceptForm(rule = null) {
     document.getElementById('edit-resp-headers').value = rule?.type === 'modifyHeaders' ? JSON.stringify(rule.params?.responseHeaders || {}, null, 2) : '';
     document.getElementById('edit-mock-status').value  = rule?.type === 'mock' ? (rule.params?.status   || 200)              : 200;
     document.getElementById('edit-mock-mime').value    = rule?.type === 'mock' ? (rule.params?.mimeType || 'application/json') : 'application/json';
-    document.getElementById('edit-mock-body').value    = rule?.type === 'mock' ? (rule.params?.body      || '')               : '';
+    setInterceptMockBodyValue(rule?.type === 'mock' ? (rule.params?.body ?? '') : '');
+    const sb = document.getElementById('edit-script-before');
+    const sa = document.getElementById('edit-script-after');
+    if (sb) sb.value = rule?.type === 'script' ? (rule.params?.beforeSource || '') : '';
+    if (sa) sa.value = rule?.type === 'script' ? (rule.params?.afterSource  || '') : '';
+    const out = document.getElementById('script-test-out');
+    if (out) { out.classList.remove('visible'); out.textContent = ''; }
     document.getElementById('intercept-edit-form').classList.add('visible');
     document.getElementById('edit-intercept-name').focus();
 }
@@ -224,6 +448,19 @@ function showInterceptForm(rule = null) {
 function hideInterceptForm() {
     document.getElementById('intercept-edit-form').classList.remove('visible');
     editingInterceptId = null;
+    if (_mockBodyDeferredTimer) {
+        clearTimeout(_mockBodyDeferredTimer);
+        _mockBodyDeferredTimer = null;
+    }
+    const mockEl = document.getElementById('edit-mock-body');
+    if (mockEl) mockEl.value = '';
+}
+
+function interceptBadgeClass(type) {
+    if (type === 'block') return 'badge-block';
+    if (type === 'mock') return 'badge-mock';
+    if (type === 'script') return 'badge-script';
+    return 'badge-modify';
 }
 
 async function loadInterceptRules() {
@@ -235,7 +472,7 @@ async function loadInterceptRules() {
         return;
     }
     for (const rule of rules) {
-        const badgeCls = rule.type === 'block' ? 'badge-block' : rule.type === 'mock' ? 'badge-mock' : 'badge-modify';
+        const badgeCls = interceptBadgeClass(rule.type);
         const item = document.createElement('div');
         item.className = 'rule-item';
         item.innerHTML =
@@ -244,7 +481,7 @@ async function loadInterceptRules() {
                 <span class="toggle-track"></span>
              </label>
              <span class="rule-name">${escHtml(rule.name)}</span>
-             <span class="badge ${badgeCls}">${rule.type}</span>
+             <span class="badge ${badgeCls}">${escHtml(rule.type)}</span>
              <span class="rule-meta" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(rule.url_pattern)}">${escHtml(rule.url_pattern)}</span>
              <button class="btn-secondary btn-sm btn-edit-intercept">Edit</button>
              <button class="btn-danger btn-sm btn-delete-intercept">Delete</button>`;
@@ -275,6 +512,39 @@ onClick('btn-test-notification', async () => {
     showMsg('Test notifications sent to all windows');
 });
 
+onClick('btn-copy-intercept-ai-prompt', () => { void copyInterceptAiPrompt(); });
+onClick('btn-script-preset-insert', () => applyScriptPresetToFields());
+onClick('btn-script-preset-copy', () => { void copyScriptPresetClipboard(); });
+
+onClick('btn-test-script', async () => {
+    const before = document.getElementById('edit-script-before')?.value ?? '';
+    const after  = document.getElementById('edit-script-after')?.value ?? '';
+    const out = document.getElementById('script-test-out');
+    if (!api.testInterceptScript) {
+        showMsg('testInterceptScript is not available (update the app)', true);
+        return;
+    }
+    try {
+        const res = await api.testInterceptScript({
+            beforeSource: before,
+            afterSource: after,
+        });
+        if (out) {
+            out.classList.add('visible');
+            out.textContent = res.ok
+                ? (res.summary || 'OK')
+                : `Error: ${res.error || 'unknown'}`;
+        }
+        showMsg(res.ok ? 'Script self-test: OK' : (res.error || 'Error'), !res.ok);
+    } catch (e) {
+        if (out) {
+            out.classList.add('visible');
+            out.textContent = String(e.message || e);
+        }
+        showMsg(String(e.message || e), true);
+    }
+});
+
 onClick('btn-save-intercept', async () => {
     const name    = document.getElementById('edit-intercept-name').value.trim();
     const pattern = document.getElementById('edit-intercept-pattern').value.trim();
@@ -291,6 +561,9 @@ onClick('btn-save-intercept', async () => {
         params.status   = parseInt(document.getElementById('edit-mock-status').value, 10);
         params.mimeType = document.getElementById('edit-mock-mime').value.trim();
         params.body     = document.getElementById('edit-mock-body').value;
+    } else if (type === 'script') {
+        params.beforeSource = document.getElementById('edit-script-before').value;
+        params.afterSource  = document.getElementById('edit-script-after').value;
     }
 
     const rule = { name, enabled: true, url_pattern: pattern, type, params };
@@ -307,11 +580,9 @@ onClick('btn-save-intercept', async () => {
 
 // ─── Prefill from log-viewer ───────────────────────────────────────────────────
 api.onPrefillInterceptRule?.((data) => {
-    // Switch to Intercept tab
     const interceptTabBtn = document.querySelector('.tab-btn[data-tab="intercept"]');
     if (interceptTabBtn) interceptTabBtn.click();
 
-    // Open form with pre-filled data
     showInterceptForm({
         name: data.name || '',
         url_pattern: data.url_pattern || '',
@@ -358,8 +629,11 @@ function renderActivity() {
         }
         const row = document.createElement('div');
         row.className = 'act-entry';
-        const icon = e.type === 'mock' ? '⚡' : e.type === 'block' ? '🚫' : '🔧';
-        const typeCls = e.type === 'mock' ? 'act-type-mock' : e.type === 'block' ? 'act-type-block' : 'act-type-modify';
+        let icon = '🔧';
+        let typeCls = 'act-type-modify';
+        if (e.type === 'mock') { icon = '⚡'; typeCls = 'act-type-mock'; }
+        else if (e.type === 'block') { icon = '🚫'; typeCls = 'act-type-block'; }
+        else if (e.type === 'script') { icon = '📜'; typeCls = 'act-type-script'; }
         let html = `<span class="act-time">${fmtTime(e.ts)}</span>` +
             `<span class="act-icon">${icon}</span>` +
             `<span class="act-rule ${typeCls}">${escHtml(e.ruleName)}</span>` +
@@ -421,7 +695,6 @@ function _onInterceptRuleMatched(info) {
         ts: info.ts ? new Date(info.ts) : new Date(),
     });
     updateActivityCount();
-    // Re-render only if Activity tab is visible
     const actTab = document.getElementById('tab-activity');
     if (actTab && actTab.classList.contains('active')) {
         renderActivity();
@@ -433,7 +706,6 @@ api.onInterceptRuleMatchedBatch?.((items) => {
     for (const info of items) _onInterceptRuleMatched(info);
 });
 
-// Show activity when switching to tab
 document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         if (btn.dataset.tab === 'activity') renderActivity();
@@ -444,8 +716,10 @@ onClick('btn-clear-activity', () => {
     _actCurrentPage = null;
     updateActivityCount();
     renderActivity();
+    api.resetToolbarActivityBadge?.('rules');
 });
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
-loadRules();
+populateScriptPresetSelect();
+syncInterceptAiPromptElements();
 loadInterceptRules();

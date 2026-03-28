@@ -109,6 +109,17 @@ async function startMitmProxy() {
                     tabId: tabId || null,
                     sessionId: sessionId ?? null,
                 });
+            } else if (entry?.dnsCorsMatch?.host && entry?.dnsCorsMatch?.pattern) {
+                const cm = entry.dnsCorsMatch;
+                broadcastDnsRuleMatched({
+                    ruleName: `${cm.pattern} -> ${cm.host} (CORS)`,
+                    host: cm.host,
+                    ip: '',
+                    url: entry.url || '',
+                    method: entry.method || 'GET',
+                    tabId: tabId || null,
+                    sessionId: sessionId ?? null,
+                });
             }
 
             // Trace mode: full request/response to DB + live update to trace window
@@ -845,7 +856,9 @@ function getTrackingSettings() {
 
 function getInternalPageUrl(pageName) {
     const name = String(pageName || '').trim().toLowerCase();
-    const file = name === 'settings' ? 'settings.html' : 'new-tab.html';
+    let file = 'new-tab.html';
+    if (name === 'settings') file = 'settings.html';
+    else if (name === 'guide') file = 'cupnet-guide.html';
     return `file://${path.join(__dirname, file)}`;
 }
 
@@ -1736,7 +1749,9 @@ async function captureScreenshot(opts = {}) {
         const currentUrl = wc.getURL() || '';
         const newTabPath = path.join(__dirname, 'new-tab.html').replace(/\\/g, '/');
         if (!currentUrl || currentUrl.startsWith('file://') && (
-            currentUrl.includes('new-tab.html') || currentUrl === `file://${newTabPath}`
+            currentUrl.includes('new-tab.html')
+            || currentUrl.includes('cupnet-guide.html')
+            || currentUrl === `file://${newTabPath}`
         )) {
             return { success: false, skipped: true, reason: 'home' };
         }
@@ -2029,6 +2044,14 @@ function createMainWindow() {
         });
         notifyProxyProfilesList();
         notifyProxyStatus();
+        try {
+            if (_recentDnsEvents.length > 0) {
+                mainWindow.webContents.send('dns-rule-matched-batch', _recentDnsEvents.slice(-100));
+            }
+            if (_recentInterceptEvents.length > 0) {
+                mainWindow.webContents.send('intercept-rule-matched-batch', _recentInterceptEvents.slice(-80));
+            }
+        } catch (_) { /* ignore */ }
     });
 
     // Forward F12 / F5 / Ctrl+R from toolbar to active BrowserView
@@ -3162,7 +3185,7 @@ function buildMenu() {
                 { type: 'separator' },
                 { label: 'Proxy Manager', accelerator: 'CmdOrCtrl+P', click: () => createProxyManagerWindow() },
                 { label: 'Network Activity', accelerator: 'CmdOrCtrl+Shift+L', click: () => createLogViewerWindow() },
-                { label: 'Cookie Manager', accelerator: 'CmdOrCtrl+Shift+C', click: () => createCookieManagerWindow(tabManager?.getActiveTabId()) },
+                { label: 'Cookie Manager', accelerator: 'CmdOrCtrl+Alt+C', click: () => createCookieManagerWindow(tabManager?.getActiveTabId()) },
                 { label: 'DNS Manager', accelerator: 'CmdOrCtrl+Shift+M', click: () => createDnsManagerWindow() },
                 { label: 'Rules & Interceptor', click: () => createRulesWindow() },
                 { label: 'System Console', accelerator: 'CmdOrCtrl+Shift+K', click: () => createConsoleViewerWindow() },
@@ -3368,6 +3391,12 @@ app.whenReady().then(async () => {
 
     // ── Mouse activity ───────────────────────────────────────────────────────
     ipcMain.on('report-mouse-activity', () => { lastMouseMoveTime = Date.now(); });
+    ipcMain.on('reset-toolbar-activity-badge', (_, tool) => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        try {
+            mainWindow.webContents.send('toolbar-activity-badge-reset', tool);
+        } catch (_) { /* ignore */ }
+    });
     ipcMain.on('report-tab-pointer', (event, payload) => {
         try {
             const tabId = _wcIdToTabId.get(event.sender.id);
@@ -3526,6 +3555,17 @@ app.whenReady().then(async () => {
         const alias = raw.toLowerCase();
         if (alias === 'cupnet://settings' || alias === 'cupnet:settings') {
             tabManager.navigate(getInternalPageUrl('settings'));
+            return;
+        }
+        if (alias === 'cupnet://guide' || alias === 'cupnet:guide') {
+            tabManager.navigate(getInternalPageUrl('guide'));
+            return;
+        }
+        if (alias === 'cupnet://home'
+            || alias === 'cupnet:home'
+            || alias === 'cupnet://new-tab'
+            || alias === 'cupnet:new-tab') {
+            tabManager.navigate(getNewTabUrl());
             return;
         }
         const url = resolveNavigationUrl(rawInput);
@@ -3897,6 +3937,14 @@ app.whenReady().then(async () => {
         setTimeout(() => broadcast({ type: 'block', ruleName: 'Test Block Rule', url: 'https://example.com/ads/tracker.js' }), 800);
         setTimeout(() => broadcast({ type: 'modifyHeaders', ruleName: 'Test Modify Rule', url: 'https://example.com/api/auth', detail: 'Set: X-Custom-Token; Remove: Cookie' }), 1600);
         return true;
+    });
+    ipcMain.handle('test-intercept-script', async (_, payload) => {
+        try {
+            const ri = require('../request-interceptor');
+            return ri.runInterceptScriptSelfTest(payload || {});
+        } catch (e) {
+            return { ok: false, error: e.message || String(e) };
+        }
     });
 
     // ── Proxy Manager ────────────────────────────────────────────────────────

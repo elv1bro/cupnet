@@ -5,7 +5,7 @@ function ipcScopeGet(k) {
         case 'ExternalProxyPort': return ExternalProxyPort;
         case 'ProxyChain': return ProxyChain;
         case '_analyzeCaptchaScript': return _analyzeCaptchaScript;
-        case '_analyzeEndpointsScript': return _analyzeEndpointsScript;
+        case '_analyzeEndpointsCollectScript': return _analyzeEndpointsCollectScript;
         case '_analyzeFormsScript': return _analyzeFormsScript;
         case '_analyzeMetaScript': return _analyzeMetaScript;
         case '_broadcastCompareUpdated': return _broadcastCompareUpdated;

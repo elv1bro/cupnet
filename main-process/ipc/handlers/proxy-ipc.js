@@ -1,5 +1,7 @@
 'use strict';
 
+const { insertCupnetTrafficSnapshot, insertCupnetTrafficSnapshotWithGeo } = require('../../services/cupnet-network-meta-log');
+
 /**
  * Текущий прокси, connect/disconnect, профили, тесты.
  * @param {object} ctx
@@ -122,7 +124,17 @@ function registerProxyIpc(ctx) {
                     ctx.safeCatch({ module: 'main', eventCode: 'db.write.failed', context: { op: 'updateProxyProfileGeo', profileId } }, err);
                 });
                 ctx.notifyProxyProfilesList();
-            }).catch(e => ctx.sysLog('warn', 'proxy', 'geo check after proxy connect failed: ' + (e?.message || e)));
+                insertCupnetTrafficSnapshot(ctx, {
+                    mode: 'proxy',
+                    profileName: row.name || null,
+                    ip: geo?.ip && geo.ip !== 'unknown' ? geo.ip : '—',
+                    country: geo?.country_name || '',
+                    city: geo?.city || '',
+                }).catch(() => {});
+            }).catch((e) => {
+                ctx.sysLog('warn', 'proxy', 'geo check after proxy connect failed: ' + (e?.message || e));
+                insertCupnetTrafficSnapshotWithGeo(ctx, { mode: 'proxy', profileName: row.name || null }).catch(() => {});
+            });
             return { success: true, resolvedUrl, resolvedVars };
         } catch (e) {
             ctx.sysLog('warn', 'proxy', 'connect-proxy-template failed, switching to direct mode: ' + (e?.message || e));
@@ -162,6 +174,7 @@ function registerProxyIpc(ctx) {
             });
             ctx.buildMenu();
             ctx.notifyProxyStatus();
+            await insertCupnetTrafficSnapshotWithGeo(ctx, { mode: 'proxy', profileName: 'Quick proxy' }).catch(() => {});
             return { success: true, message: 'Proxy applied successfully' };
         } catch (e) { return { success: false, error: e.message }; }
     });
@@ -197,6 +210,7 @@ function registerProxyIpc(ctx) {
 
             ctx.buildMenu();
             ctx.notifyProxyStatus();
+            await insertCupnetTrafficSnapshotWithGeo(ctx, { mode: 'direct' }).catch(() => {});
             // No reload needed — MITM upstream switches instantly
             return { success: true };
         } catch (e) { return { success: false, error: e.message }; }

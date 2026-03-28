@@ -44,6 +44,14 @@ function registerRulesIpc(ctx) {
         setTimeout(() => broadcast({ type: 'modifyHeaders', ruleName: 'Test Modify Rule', url: 'https://example.com/api/auth', detail: 'Set: X-Custom-Token; Remove: Cookie' }), 1600);
         return true;
     });
+
+    ctx.ipcMain.handle('test-intercept-script', async (_, payload) => {
+        try {
+            return requestInterceptor.runInterceptScriptSelfTest(payload || {});
+        } catch (e) {
+            return { ok: false, error: e.message || String(e) };
+        }
+    });
 }
 
 module.exports = { registerRulesIpc };

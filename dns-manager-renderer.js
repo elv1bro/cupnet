@@ -75,11 +75,33 @@ function escHtml(s) {
         .replace(/"/g, '&quot;');
 }
 
+const REWRITE_DISPLAY_MAX = 40;
+
+function truncateDisplay(s, max) {
+    const t = String(s ?? '');
+    if (t.length <= max) return t;
+    return `${t.slice(0, Math.max(0, max - 1))}…`;
+}
+
+async function copyText(text) {
+    const t = String(text ?? '');
+    if (!t) {
+        setStatus('Nothing to copy', 'err', 1500);
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(t);
+        setStatus('Copied', 'ok', 1500);
+    } catch {
+        setStatus('Copy failed', 'err', 2000);
+    }
+}
+
 function formatDate(v) {
     if (!v) return '—';
     const d = new Date(v);
     if (Number.isNaN(d.getTime())) return '—';
-    return d.toLocaleString('ru-RU');
+    return d.toLocaleString('en-GB');
 }
 
 function extractPage(url) {
@@ -93,11 +115,12 @@ function extractPage(url) {
 
 function formatTime(v) {
     const d = v instanceof Date ? v : new Date(v);
-    return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 function openEdit(rule) {
     editingRule = rule || null;
+    if (!rule) selectedRuleId = null;
     editPanelTitle.textContent = rule ? `Edit: ${rule.host}` : 'New DNS Rule';
     document.getElementById('e-host').value = rule?.host || '';
     document.getElementById('e-ip').value = rule?.ip || '';
@@ -134,39 +157,68 @@ function renderTable() {
     countLabel.textContent = `${filteredRules.length} / ${allRules.length} rules`;
 
     if (!filteredRules.length) {
-        tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No DNS override rules</td></tr>';
+        tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No DNS override rules</td></tr>';
         return;
     }
 
-    tbody.innerHTML = filteredRules.map((r, idx) => `
-        <tr data-idx="${idx}" class="${r.enabled ? 'rule-enabled' : 'rule-disabled'}">
+    tbody.innerHTML = filteredRules.map((r, idx) => {
+        const rwFull = r.rewrite_host || '';
+        const rwEmpty = !String(rwFull).trim();
+        const rwTitle = escHtml(rwEmpty ? '—' : rwFull);
+        const rwShown = rwEmpty ? '—' : truncateDisplay(rwFull, REWRITE_DISPLAY_MAX);
+        const corsTitle = r.mitm_inject_cors
+            ? 'MITM injects Access-Control-* (needs Origin). Rule on.'
+            : 'BROWSER: server CORS only, no inject.';
+        const corsL2 = r.mitm_inject_cors ? 'MITM' : 'BROWSER';
+        const rowClass = `${r.enabled ? 'rule-enabled' : 'rule-disabled'}${selectedRuleId === r.id ? ' row-selected' : ''}`;
+        const ipVal = (r.ip || '').trim();
+        const ipShown = ipVal ? escHtml(ipVal) : '—';
+        const ipCopyBtn = ipVal
+            ? `<button type="button" class="btn-icon-copy btn-copy" data-copy="${escHtml(ipVal)}" title="Copy IP" aria-label="Copy IP">📋</button>`
+            : '';
+        const stateTitle = r.enabled ? 'Click: turn OFF' : 'Click: turn ON';
+        return `
+        <tr data-idx="${idx}" class="${rowClass}">
             <td>
-                <input type="radio" name="selected-rule" ${selectedRuleId === r.id ? 'checked' : ''}>
+                <div class="state-cell">
+                    <button type="button"
+                        class="state-toggle-btn ${r.enabled ? 'state-on' : 'state-off'} btn-state-toggle"
+                        aria-pressed="${r.enabled ? 'true' : 'false'}"
+                        title="${escHtml(stateTitle)}">
+                        <span class="state-onoff">${r.enabled ? 'ON' : 'OFF'}</span>
+                    </button>
+                </div>
             </td>
-            <td class="cell-host" title="${escHtml(r.host)}">${escHtml(r.host)}</td>
-            <td class="cell-ip" title="${escHtml(r.ip || '—')}">${escHtml(r.ip || '—')}</td>
-            <td class="cell-rewrite" title="${escHtml(r.rewrite_host || '—')}">${escHtml(r.rewrite_host || '—')}</td>
+            <td>
+                <div class="cell-with-copy">
+                    <span class="cell-text cell-host" title="${escHtml(r.host)}">${escHtml(r.host)}</span>
+                    <button type="button" class="btn-icon-copy btn-copy" data-copy="${escHtml(r.host)}" title="Copy host" aria-label="Copy host">📋</button>
+                </div>
+            </td>
+            <td>
+                <div class="cell-with-copy">
+                    <span class="cell-text cell-ip" title="${escHtml(ipVal || '—')}">${ipShown}</span>
+                    ${ipCopyBtn}
+                </div>
+            </td>
+            <td class="cell-rewrite" title="${rwTitle}">${escHtml(rwShown)}</td>
             <td class="dns-cors-cell">
                 <button type="button"
                     class="cors-toggle-btn ${r.mitm_inject_cors ? 'cors-toggle-on' : 'cors-toggle-off'} btn-cors-toggle"
                     aria-pressed="${r.mitm_inject_cors ? 'true' : 'false'}"
-                    title="Click: toggle MITM CORS headers for this host (requires Origin on requests). Enabled DNS rule only.">
-                    CORS ${r.mitm_inject_cors ? 'ON' : 'OFF'}
+                    title="${escHtml(corsTitle)}">
+                    <span class="cors-l1">CORS</span>
+                    <span class="cors-l2">${escHtml(corsL2)}</span>
                 </button>
-            </td>
-            <td>
-                <span class="state-pill ${r.enabled ? 'enabled' : 'disabled'}">${r.enabled ? 'ON' : 'OFF'}</span>
             </td>
             <td title="${escHtml(r.updated_at || '')}">${escHtml(formatDate(r.updated_at || r.created_at))}</td>
             <td>
                 <div class="actions-cell">
-                    <button class="btn ${r.enabled ? 'btn-danger' : 'btn-success'} btn-sm btn-toggle">${r.enabled ? 'Disable' : 'Enable'}</button>
-                    <button class="btn btn-ghost btn-sm btn-edit">Edit</button>
-                    <button class="btn btn-danger btn-sm btn-delete">Delete</button>
+                    <button type="button" class="btn btn-danger btn-sm btn-delete" title="Delete">✕</button>
                 </div>
             </td>
-        </tr>
-    `).join('');
+        </tr>`;
+    }).join('');
 }
 
 function updateActivityCount() {
@@ -242,12 +294,17 @@ tbody.addEventListener('click', async (e) => {
     const rule = filteredRules[idx];
     if (!rule) return;
 
-    selectedRuleId = rule.id;
+    const copyBtn = e.target.closest('.btn-copy');
+    if (copyBtn) {
+        e.stopPropagation();
+        await copyText(copyBtn.dataset.copy || '');
+        return;
+    }
 
-    if (e.target.classList.contains('btn-cors-toggle')) {
+    if (e.target.closest('.btn-cors-toggle')) {
         const nextCors = !rule.mitm_inject_cors;
         if (!nextCors && !String(rule.ip || '').trim()) {
-            setStatus('Сначала укажите IPv4 или удалите правило (сейчас только MITM CORS без редиректа).', 'err', 0);
+            setStatus('Set IPv4 or delete rule to disable MITM CORS.', 'err', 0);
             return;
         }
         const res = await api.saveDnsOverride({
@@ -267,11 +324,7 @@ tbody.addEventListener('click', async (e) => {
         return;
     }
 
-    if (e.target.classList.contains('btn-edit')) {
-        openEdit(rule);
-        return;
-    }
-    if (e.target.classList.contains('btn-delete')) {
+    if (e.target.closest('.btn-delete')) {
         if (!confirm(`Delete DNS rule for "${rule.host}"?`)) return;
         const res = await api.deleteDnsOverride(rule.id);
         if (!res?.success) {
@@ -282,7 +335,7 @@ tbody.addEventListener('click', async (e) => {
         await loadRules();
         return;
     }
-    if (e.target.classList.contains('btn-toggle')) {
+    if (e.target.closest('.btn-state-toggle')) {
         const res = await api.toggleDnsOverride(rule.id, !rule.enabled);
         if (!res?.success) {
             setStatus(`Toggle failed: ${res?.error || 'unknown error'}`, 'err', 0);
@@ -292,6 +345,9 @@ tbody.addEventListener('click', async (e) => {
         await loadRules();
         return;
     }
+
+    selectedRuleId = rule.id;
+    openEdit(rule);
     renderTable();
 });
 
@@ -302,24 +358,7 @@ document.getElementById('btn-clear-activity').addEventListener('click', () => {
     activityCurrentPage = null;
     updateActivityCount();
     renderActivity();
-});
-
-document.getElementById('btn-delete-selected').addEventListener('click', async () => {
-    if (!selectedRuleId) {
-        setStatus('Select a rule first', 'err');
-        return;
-    }
-    const selected = allRules.find(r => r.id === selectedRuleId);
-    if (!selected) return;
-    if (!confirm(`Delete DNS rule for "${selected.host}"?`)) return;
-    const res = await api.deleteDnsOverride(selectedRuleId);
-    if (!res?.success) {
-        setStatus(`Delete failed: ${res?.error || 'unknown error'}`, 'err', 0);
-        return;
-    }
-    selectedRuleId = null;
-    setStatus(`Deleted rule ${selected.host}`, 'ok');
-    await loadRules();
+    api.resetToolbarActivityBadge?.('dns');
 });
 
 document.getElementById('btn-close-edit').addEventListener('click', closeEdit);
@@ -339,25 +378,25 @@ document.getElementById('btn-save-rule').addEventListener('click', async () => {
     const mitm_inject_cors = !!document.getElementById('e-mitm-cors')?.checked;
     if (host.startsWith('*.')) {
         if (rewrite_host) {
-            setStatus('Rewrite Host недоступен для шаблона *.…', 'err');
+            setStatus('*. pattern: no Rewrite Host', 'err');
             return;
         }
         if (!mitm_inject_cors) {
-            setStatus('Шаблон *.domain — только вместе с MITM CORS', 'err');
+            setStatus('*. pattern: needs CORS MITM', 'err');
             return;
         }
         if (ip) {
-            setStatus('Шаблон *.domain нельзя сочетать с IPv4', 'err');
+            setStatus('*. pattern: no IPv4', 'err');
             return;
         }
     }
     if (rewrite_host) {
         if (!ip) {
-            setStatus('Rewrite Host нужен только вместе с IPv4', 'err');
+            setStatus('Rewrite Host needs IPv4', 'err');
             return;
         }
         if (!isValidDnsRewriteHost(rewrite_host)) {
-            setStatus('Rewrite Host: до 255 символов, только печатный ASCII', 'err');
+            setStatus('Rewrite Host: ≤255 print ASCII', 'err');
             return;
         }
     }
@@ -386,7 +425,7 @@ document.getElementById('btn-save-rule').addEventListener('click', async () => {
         return;
     }
     selectedRuleId = res.id || editingRule?.id || null;
-    setStatus(ip ? `Saved rule ${host} -> ${ip}` : `Saved rule ${host} (MITM CORS only, без DNS-редиректа)`, 'ok');
+    setStatus(ip ? `Saved ${host} → ${ip}` : `Saved ${host} (CORS MITM, no IP)`, 'ok');
     closeEdit();
     await loadRules();
 });

@@ -1,5 +1,7 @@
 'use strict';
 
+const { insertSessionBootstrapTrafficRow } = require('../../services/cupnet-network-meta-log');
+
 /**
  * БД запросов/сессий и управление логированием.
  * @param {object} ctx
@@ -53,6 +55,7 @@ function registerDbLoggingIpc(ctx) {
             const sess = await ctx.db.createSessionAsync(ctx.actProxy || null, null);
             ctx.currentSessionId = sess ? sess.id : null;
             ctx.logEntryCount = 0;
+            await insertSessionBootstrapTrafficRow(ctx).catch(() => {});
             for (const tab of ctx.tabManager.getAllTabs()) {
                 tab.sessionId = ctx.currentSessionId;
                 ctx.setupNetworkLogging(tab.view.webContents, tab.id, ctx.currentSessionId);
@@ -108,6 +111,7 @@ function registerDbLoggingIpc(ctx) {
         ctx.currentSessionId = sess ? sess.id : null;
         ctx.logEntryCount = 0;
         ctx.hadLoggingBeenStopped = false;
+        await insertSessionBootstrapTrafficRow(ctx).catch(() => {});
         for (const tab of ctx.tabManager.getAllTabs()) {
             tab.sessionId = ctx.currentSessionId;
             ctx.setupNetworkLogging(tab.view.webContents, tab.id, ctx.currentSessionId);
@@ -129,6 +133,17 @@ function registerDbLoggingIpc(ctx) {
         if (id === ctx.currentSessionId) return { success: false, reason: 'active' };
         await ctx.db.deleteSessionAsync(id);
         return { success: true };
+    });
+
+    ctx.ipcMain.handle('delete-unnamed-sessions', async () => {
+        const res = await ctx.db.deleteUnnamedSessionsAsync(ctx.currentSessionId ?? null);
+        return { success: true, deleted: res.deleted };
+    });
+
+    ctx.ipcMain.handle('create-session-from-request-ids', async (_, requestIds, name) => {
+        const row = await ctx.db.createSessionFromRequestIdsAsync(requestIds || [], name);
+        if (!row?.id) return { success: false, error: 'no_requests' };
+        return { success: true, sessionId: row.id };
     });
 
     ctx.ipcMain.handle('open-session-in-new-window', async (_, sessionId) => {
@@ -170,6 +185,7 @@ function registerDbLoggingIpc(ctx) {
             const newSession = await ctx.db.createSessionAsync(ctx.actProxy || null, null);
             ctx.currentSessionId = newSession ? newSession.id : null;
             ctx.logEntryCount = 0;
+            await insertSessionBootstrapTrafficRow(ctx).catch(() => {});
             // Re-attach logging for every open tab so they write to the new session
             for (const tab of ctx.tabManager.getAllTabs()) {
                 tab.sessionId = ctx.currentSessionId;

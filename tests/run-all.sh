@@ -31,12 +31,23 @@ run_test() {
 }
 
 run_test tests/test-utils.js
+run_test tests/test-page-analyzer-endpoints.js
 run_test tests/test-reliability-policy.js
 run_test tests/test-proxy-resilience.js
 run_test tests/test-traffic-mode-router.js
 run_test tests/test-safe-catch.js
 run_test tests/test-secrets-sanitization.js
 run_test tests/test-mitm.js
+# DNS / CORS unit tests: subprocess AzureTLS worker оставляет handles — --test-force-exit
+echo "──────────────────────────────────────────"
+echo "▶  test-dns-mitm.js  (node --test --test-force-exit)"
+echo "──────────────────────────────────────────"
+if node --test --test-force-exit tests/test-dns-mitm.js; then
+    PASS=$((PASS + 1))
+else
+    FAIL=$((FAIL + 1))
+    echo "✗ FAILED: test-dns-mitm.js"
+fi
 run_test tests/test-interceptor.js
 run_test tests/test-rules-engine.js
 run_test tests/test-mitm-integration.js

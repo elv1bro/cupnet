@@ -97,11 +97,29 @@ function shouldFilterUrl(url, patterns) {
     return false;
 }
 
+/**
+ * Remove HTTP/2 pseudo-headers from a header map.
+ * Chromium/CDP often stores :authority, :method, :path, :scheme in captured requests;
+ * Go net/http rejects field names starting with ':'.
+ */
+function sanitizeOutgoingRequestHeaders(headers) {
+    const out = {};
+    if (!headers || typeof headers !== 'object') return out;
+    for (const [k, v] of Object.entries(headers)) {
+        if (k == null || v === undefined) continue;
+        const name = String(k).trim();
+        if (!name || name.startsWith(':')) continue;
+        out[k] = v;
+    }
+    return out;
+}
+
 module.exports = {
     resolveNavigationUrl,
     parseProxyTemplate,
     extractTemplateVars,
     formatBytes,
     shouldFilterUrl,
+    sanitizeOutgoingRequestHeaders,
     SEARCH_ENGINE,
 };

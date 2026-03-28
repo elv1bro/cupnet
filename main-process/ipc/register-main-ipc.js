@@ -23,9 +23,11 @@ const { registerDiagnosticsIpc } = require('./handlers/diagnostics-ipc');
 const { registerQuickConnectIpc } = require('./handlers/quick-connect-ipc');
 const { registerMitmTlsResilienceIpc } = require('./handlers/mitm-tls-resilience-ipc');
 const { registerExtProxyIpc } = require('./handlers/ext-proxy-ipc');
+const { registerToolbarActivityBadgeIpc } = require('./handlers/toolbar-activity-badge-ipc');
 
 function registerMainProcessIpc(ctx) {
     registerMitmStartupIpc(ctx);
+    registerToolbarActivityBadgeIpc(ctx);
     registerTrackingIpc(ctx);
     registerTabsIpc(ctx);
     registerDbLoggingIpc(ctx);

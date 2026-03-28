@@ -1,8 +1,16 @@
 'use strict';
 
+const vm = require('node:vm');
 const db = require('./db');
 const { networkPolicy } = require('./network-policy');
 const { safeCatch, sysLog } = require('./sys-log');
+
+const INTERCEPT_SCRIPT_MS = Math.min(
+    60_000,
+    Math.max(50, Number(process.env.CUPNET_INTERCEPT_SCRIPT_MS || 400) || 400),
+);
+
+const MITM_POST_SCRIPT_AFTER = 'scriptAfter';
 
 /** Логировать каждое срабатывание правила (block/modifyHeaders/mock). Выключить: CUPNET_INTERCEPT_LOG_MATCHES=0 */
 function _interceptLogMatchesEnabled() {
@@ -41,7 +49,7 @@ function _logRulesSnapshot(reason) {
             pattern: r.url_pattern,
         }));
         const enabledCount = rules.filter(r => r.enabled).length;
-        const msg = `Правила intercept (${reason}): ${enabledCount} вкл. / ${rules.length} всего; MITM-path (protocol.handle не используется)`;
+        const msg = `Intercept rules (${reason}): ${enabledCount} enabled / ${rules.length} total; MITM path (no protocol.handle)`;
         const payload = { reason, protocolHandleActive: false, rules };
         sysLog('info', 'request-interceptor', msg, payload);
         _mirrorStdout(msg, payload);
@@ -53,7 +61,7 @@ function _logRulesSnapshot(reason) {
 function _logRuleApplied(stage, info) {
     if (!_interceptLogMatchesEnabled()) return;
     const url = String(info.url || '').slice(0, 256);
-    const msg = `Сработало правило [${stage}] «${info.ruleName || '?'}» type=${info.type}`;
+    const msg = `Rule matched [${stage}] "${info.ruleName || '?'}" type=${info.type}`;
     const payload = {
         stage,
         ruleName: info.ruleName,
@@ -143,24 +151,24 @@ function isStrictInterceptMode() {
  */
 function validateStrictInterceptUrlPattern(pattern) {
     const p = String(pattern || '').trim();
-    if (!p) return { ok: false, error: 'Пустой URL pattern' };
+    if (!p) return { ok: false, error: 'URL pattern is empty' };
     if (p.includes('*')) {
         return {
             ok: false,
-            error: 'В строгом режиме (CUPNET_INTERCEPT_STRICT_URLS=1) символ * запрещён. Укажите префикс, например https://api.example.com/v1/',
+            error: 'With CUPNET_INTERCEPT_STRICT_URLS=1, * is not allowed. Use a prefix, e.g. https://api.example.com/v1/',
         };
     }
-    if (p.toLowerCase() === '<all_urls>') return { ok: false, error: 'Запрещено использовать <all_urls> в строгом режиме' };
-    if (/\s/.test(p)) return { ok: false, error: 'Уберите пробелы из URL pattern' };
-    if (!/^https?:\/\//i.test(p)) return { ok: false, error: 'Нужна схема https:// или http://' };
+    if (p.toLowerCase() === '<all_urls>') return { ok: false, error: '<all_urls> is not allowed in strict mode' };
+    if (/\s/.test(p)) return { ok: false, error: 'Remove spaces from the URL pattern' };
+    if (!/^https?:\/\//i.test(p)) return { ok: false, error: 'Use an https:// or http:// URL' };
     let u;
     try {
         u = new URL(p);
     } catch {
-        return { ok: false, error: 'Некорректный URL' };
+        return { ok: false, error: 'Invalid URL' };
     }
-    if (!u.hostname) return { ok: false, error: 'Укажите хост' };
-    if (u.username || u.password) return { ok: false, error: 'Не используйте user:password в pattern' };
+    if (!u.hostname) return { ok: false, error: 'Host is required' };
+    if (u.username || u.password) return { ok: false, error: 'Do not use user:password in the pattern' };
     return { ok: true };
 }
 
@@ -188,6 +196,13 @@ function urlMatchesStrictPattern(pattern, url) {
 
 function ruleMatchesUrl(pattern, url) {
     if (isStrictInterceptMode()) return urlMatchesStrictPattern(pattern, url);
+    const p = String(pattern || '').trim();
+    // Plain https? URL without globs: match like strict prefix on origin+pathname (query/hash on the
+    // request do not break the match). Regex-on-full-string mode used to require ^...$ on the entire
+    // href, so ?culture=… blocked mocks for URLs copied from DevTools without *.
+    if (/^https?:\/\//i.test(p) && !p.includes('*')) {
+        return urlMatchesStrictPattern(p, url);
+    }
     return matchesPattern(pattern, url);
 }
 
@@ -234,6 +249,169 @@ function bypassInterceptMockBlockForSensitiveUrl(urlStr) {
     return false;
 }
 
+/**
+ * @param {string} source пользовательское тело, аргумент ctx
+ * @param {object} ctx
+ * @param {string} phaseLabel
+ * @returns {string|null} сообщение об ошибке
+ */
+function runInterceptScriptPhase(source, ctx, phaseLabel) {
+    const src = String(source || '').trim();
+    if (!src) return null;
+    const wrapped = `(function (ctx) {\n${src}\n})(ctx);`;
+    const sandbox = {
+        ctx,
+        Buffer,
+        TextDecoder: globalThis.TextDecoder,
+        TextEncoder: globalThis.TextEncoder,
+    };
+    try {
+        vm.runInNewContext(wrapped, sandbox, {
+            timeout: INTERCEPT_SCRIPT_MS,
+            filename: `cupnet-intercept-${phaseLabel}.js`,
+            displayErrors: true,
+        });
+        return null;
+    } catch (e) {
+        return e.message || String(e);
+    }
+}
+
+/**
+ * @param {string} body
+ * @param {string} label
+ * @returns {string|null}
+ */
+function validateScriptSyntax(body, label) {
+    const wrapped = `(function (ctx) {\n${body}\n})({});`;
+    try {
+        new vm.Script(wrapped, { filename: `cupnet-intercept-validate-${label}.js` });
+        return null;
+    } catch (e) {
+        return e.message || String(e);
+    }
+}
+
+/**
+ * @param {object} sc
+ * @param {object|null} dnsOverride
+ */
+function normalizeShortCircuitResponse(sc, dnsOverride) {
+    if (!sc || typeof sc !== 'object') return null;
+    const statusCode = Number(sc.statusCode) >= 100 ? Number(sc.statusCode) : 200;
+    const headers = { ...(sc.headers || {}) };
+    let bodyBase64 = sc.bodyBase64;
+    if (bodyBase64 == null && sc.body != null) {
+        bodyBase64 = Buffer.from(String(sc.body), 'utf8').toString('base64');
+    }
+    if (bodyBase64 == null) bodyBase64 = '';
+    return {
+        statusCode,
+        headers,
+        bodyBase64: String(bodyBase64),
+        dnsOverride: dnsOverride || null,
+    };
+}
+
+function _applyBeforeCtxToMitmOpts(opts, beforeCtx) {
+    opts.url = String(beforeCtx.url != null ? beforeCtx.url : opts.url || '');
+    opts.method = String(beforeCtx.method != null ? beforeCtx.method : opts.method || 'GET');
+    opts.headers = { ...(beforeCtx.headers || {}) };
+    if (Array.isArray(beforeCtx.orderedHeaders)) {
+        opts.orderedHeaders = beforeCtx.orderedHeaders.map((pair) => [...pair]);
+    }
+    if (beforeCtx.bodyBase64 != null && String(beforeCtx.bodyBase64) !== '') {
+        opts.bodyBase64 = String(beforeCtx.bodyBase64);
+        opts.body = undefined;
+    } else if (beforeCtx.body !== null && beforeCtx.body !== undefined) {
+        opts.body = beforeCtx.body;
+        opts.bodyBase64 = undefined;
+    } else {
+        opts.body = undefined;
+        opts.bodyBase64 = undefined;
+    }
+}
+
+/**
+ * Прогон скриптов на тестовых данных (без сети).
+ * @param {object} payload
+ */
+function runInterceptScriptSelfTest(payload) {
+    const sampleUrl = payload?.sampleUrl || 'https://example.com/api/test';
+    const method = payload?.sampleMethod || 'GET';
+    const reqHeaders = payload?.sampleRequestHeaders && typeof payload.sampleRequestHeaders === 'object'
+        ? { ...payload.sampleRequestHeaders }
+        : { 'User-Agent': 'CupNetTest/1' };
+    const orderedHeaders = Object.entries(reqHeaders).map(([k, v]) => [k, String(v)]);
+    const beforeCtx = {
+        url: sampleUrl,
+        method,
+        headers: { ...reqHeaders },
+        orderedHeaders,
+        body: payload?.sampleBody ?? null,
+        bodyBase64: payload?.sampleBodyBase64 != null ? String(payload.sampleBodyBase64) : null,
+        dnsOverride: null,
+        tabId: null,
+        requestId: 'test',
+        shortCircuit: null,
+    };
+    const beforeSrc = String(payload?.beforeSource || '');
+    const afterSrc = String(payload?.afterSource || '');
+    const errB = runInterceptScriptPhase(beforeSrc, beforeCtx, 'before-selftest');
+    if (errB) return { ok: false, error: `before MITM: ${errB}` };
+    if (beforeCtx.shortCircuit) {
+        const sc = normalizeShortCircuitResponse(beforeCtx.shortCircuit, null);
+        if (!sc) return { ok: false, error: 'shortCircuit: invalid object' };
+        return {
+            ok: true,
+            summary: `Short-circuit (no network): HTTP ${sc.statusCode}, ${Object.keys(sc.headers).length} header(s), bodyBase64 length ${sc.bodyBase64.length}`,
+        };
+    }
+    const reqSnap = {
+        url: String(beforeCtx.url),
+        method: String(beforeCtx.method),
+        headers: { ...(beforeCtx.headers || {}) },
+        orderedHeaders: Array.isArray(beforeCtx.orderedHeaders)
+            ? mapHeaderPairs(beforeCtx.orderedHeaders)
+            : [],
+    };
+    const statusCode = payload?.sampleResponseStatus ?? 200;
+    const respHeaders = payload?.sampleResponseHeaders && typeof payload.sampleResponseHeaders === 'object'
+        ? { ...payload.sampleResponseHeaders }
+        : { 'content-type': 'application/json' };
+    let bodyB64 = '';
+    if (payload?.sampleResponseBodyBase64) {
+        bodyB64 = String(payload.sampleResponseBodyBase64);
+    } else {
+        const txt = payload?.sampleResponseBodyText != null ? String(payload.sampleResponseBodyText) : '{"test":true}';
+        bodyB64 = Buffer.from(txt, 'utf8').toString('base64');
+    }
+    const afterCtx = {
+        request: reqSnap,
+        response: {
+            statusCode,
+            headers: { ...respHeaders },
+            bodyBase64: bodyB64,
+        },
+    };
+    const errA = runInterceptScriptPhase(afterSrc, afterCtx, 'after-selftest');
+    if (errA) return { ok: false, error: `after response: ${errA}` };
+    const outStatus = afterCtx.response.statusCode;
+    const hk = Object.keys(afterCtx.response.headers || {}).length;
+    const blen = String(afterCtx.response.bodyBase64 || '').length;
+    return {
+        ok: true,
+        summary: `After \"before\": ${reqSnap.method} ${reqSnap.url}\nAfter \"after\": HTTP ${outStatus}, ${hk} header(s), bodyBase64 length ${blen}`,
+    };
+}
+
+function mapHeaderPairs(arr) {
+    return arr.map((pair) => {
+        if (!Array.isArray(pair) || pair.length < 2) return [String(pair?.[0] ?? ''), String(pair?.[1] ?? '')];
+        return [String(pair[0]), String(pair[1])];
+    });
+}
+
 function _patchRequestOptsForMitm(opts, p) {
     const toSetReq = p.requestHeaders || {};
     const toRemoveReq = p.removeRequestHeaders || [];
@@ -268,24 +446,30 @@ function _patchRequestOptsForMitm(opts, p) {
 }
 
 /**
- * @param {object} opts — копия dnsAdjusted (headers/orderedHeaders можно мутировать)
+ * @param {object} opts — копия dnsAdjusted (headers/orderedHeaders можно мутировать).
+ *   Если задан `interceptMatchUrl`, правила матчятся по нему (логический URL до DNS‑подмены host→IP).
+ * @param {{ rulesOverride?: object[] }|undefined} planOptions
  * @returns {{ done: true, response: object } | { done: false, opts: object, postProcess: object|null }}
  */
-function planMitmIntercept(opts) {
-    const url = String(opts.url || '');
-    const rules = loadRules();
+function planMitmIntercept(opts, planOptions) {
+    const wireUrl = String(opts.url || '');
+    /** URL как в браузере (hostname), если MITM подменил host на IP в `wireUrl`. */
+    const matchUrl = String(opts.interceptMatchUrl || opts.url || '');
+    const rules = (planOptions && Array.isArray(planOptions.rulesOverride))
+        ? planOptions.rulesOverride
+        : loadRules();
     for (const rule of rules) {
-        if (!ruleMatchesUrl(rule.url_pattern, url)) continue;
-        if (bypassInterceptMockBlockForSensitiveUrl(url)) continue;
+        if (!ruleMatchesUrl(rule.url_pattern, matchUrl)) continue;
+        if (bypassInterceptMockBlockForSensitiveUrl(matchUrl)) continue;
 
         if (rule.type === 'block') {
             _logRuleApplied('mitm', {
-                type: 'block', ruleName: rule.name, url,
+                type: 'block', ruleName: rule.name, url: matchUrl,
                 tabId: null, detail: 'short-circuit',
             });
             if (_onRuleMatch) {
                 try {
-                    _onRuleMatch({ type: 'block', ruleName: rule.name, url, tabId: null });
+                    _onRuleMatch({ type: 'block', ruleName: rule.name, url: matchUrl, tabId: null });
                 } catch (err) {
                     safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'block', stage: 'mitm' } }, err);
                 }
@@ -306,7 +490,7 @@ function planMitmIntercept(opts) {
             const mimeType = rule.params.mimeType || 'text/plain';
             const statusCode = rule.params.status || 200;
             _logRuleApplied('mitm', {
-                type: 'mock', ruleName: rule.name, url,
+                type: 'mock', ruleName: rule.name, url: matchUrl,
                 tabId: null, method: opts.method || 'GET',
                 status: statusCode, detail: `${statusCode} ${mimeType}`,
             });
@@ -315,7 +499,7 @@ function planMitmIntercept(opts) {
                     ? body.substring(0, 120) + (body.length > 120 ? '…' : '') : '(empty)';
                 try {
                     _onRuleMatch({
-                        type: 'mock', ruleName: rule.name, url,
+                        type: 'mock', ruleName: rule.name, url: matchUrl,
                         tabId: null, method: opts.method || 'GET',
                         status: statusCode, mimeType,
                         body: typeof body === 'string' ? body : String(body ?? ''),
@@ -349,17 +533,96 @@ function planMitmIntercept(opts) {
             if ((p.removeResponseHeaders || []).length) dp.push(`RespRemove: ${p.removeResponseHeaders.join(', ')}`);
             const detailStr = dp.join('; ') || 'Headers modified';
             _logRuleApplied('mitm', {
-                type: 'modifyHeaders', ruleName: rule.name, url,
+                type: 'modifyHeaders', ruleName: rule.name, url: matchUrl,
                 tabId: null, detail: detailStr,
             });
             if (_onRuleMatch) {
                 try {
-                    _onRuleMatch({ type: 'modifyHeaders', ruleName: rule.name, url, tabId: null, detail: detailStr });
+                    _onRuleMatch({ type: 'modifyHeaders', ruleName: rule.name, url: matchUrl, tabId: null, detail: detailStr });
                 } catch (err) {
                     safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'modifyHeaders', stage: 'mitm' } }, err);
                 }
             }
             return { done: false, opts, postProcess: hasResp ? p : null };
+        }
+
+        if (rule.type === 'script') {
+            const p = rule.params || {};
+            const beforeSrc = String(p.beforeSource || '');
+            const afterSrc = String(p.afterSource || '');
+            const beforeCtx = {
+                url: String(opts.url || ''),
+                method: String(opts.method || 'GET'),
+                headers: { ...(opts.headers || {}) },
+                orderedHeaders: Array.isArray(opts.orderedHeaders)
+                    ? mapHeaderPairs(opts.orderedHeaders)
+                    : [],
+                body: opts.body !== undefined && opts.body !== null ? opts.body : null,
+                bodyBase64: opts.bodyBase64 != null ? String(opts.bodyBase64) : null,
+                dnsOverride: opts.dnsOverride || null,
+                tabId: opts.tabId != null ? opts.tabId : null,
+                requestId: opts.requestId != null ? String(opts.requestId) : null,
+                shortCircuit: null,
+            };
+            const errBefore = runInterceptScriptPhase(beforeSrc, beforeCtx, 'before');
+            if (errBefore) {
+                safeCatch(
+                    { module: 'request-interceptor', eventCode: 'intercept.script.before_failed', context: { ruleName: rule.name, url: matchUrl } },
+                    new Error(errBefore),
+                    'warn',
+                );
+                continue;
+            }
+            const sc = normalizeShortCircuitResponse(
+                beforeCtx.shortCircuit,
+                beforeCtx.dnsOverride != null ? beforeCtx.dnsOverride : opts.dnsOverride,
+            );
+            if (sc) {
+                _logRuleApplied('mitm', {
+                    type: 'script', ruleName: rule.name, url: beforeCtx.url || wireUrl,
+                    tabId: null, detail: 'shortCircuit',
+                    status: sc.statusCode,
+                });
+                if (_onRuleMatch) {
+                    try {
+                        _onRuleMatch({
+                            type: 'script', ruleName: rule.name, url: beforeCtx.url || wireUrl,
+                            tabId: null, detail: 'shortCircuit', status: sc.statusCode,
+                        });
+                    } catch (err) {
+                        safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'script', stage: 'mitm' } }, err);
+                    }
+                }
+                return { done: true, response: sc, postProcess: null };
+            }
+            _applyBeforeCtxToMitmOpts(opts, beforeCtx);
+            const requestSnapshot = {
+                url: String(opts.url || ''),
+                method: String(opts.method || 'GET'),
+                headers: { ...(opts.headers || {}) },
+                orderedHeaders: Array.isArray(opts.orderedHeaders) ? mapHeaderPairs(opts.orderedHeaders) : [],
+            };
+            const hasAfter = String(afterSrc).trim().length > 0;
+            const postProcess = hasAfter
+                ? {
+                    _mitmPost: MITM_POST_SCRIPT_AFTER,
+                    afterSource: afterSrc,
+                    ruleName: rule.name,
+                    requestSnapshot,
+                }
+                : null;
+            const detailStr = hasAfter ? 'script forward + after' : 'script forward';
+            _logRuleApplied('mitm', {
+                type: 'script', ruleName: rule.name, url: opts.url, tabId: null, detail: detailStr,
+            });
+            if (_onRuleMatch) {
+                try {
+                    _onRuleMatch({ type: 'script', ruleName: rule.name, url: opts.url, tabId: null, detail: detailStr });
+                } catch (err) {
+                    safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'script', stage: 'mitm' } }, err);
+                }
+            }
+            return { done: false, opts, postProcess };
         }
     }
     return { done: false, opts, postProcess: null };
@@ -367,6 +630,7 @@ function planMitmIntercept(opts) {
 
 function finalizeMitmInterceptResponse(res, ruleParams) {
     if (!res || !ruleParams) return res;
+    if (ruleParams._mitmPost === MITM_POST_SCRIPT_AFTER) return res;
     const toSetResp = ruleParams.responseHeaders || {};
     const toRemoveResp = ruleParams.removeResponseHeaders || [];
     if (!Object.keys(toSetResp).length && !toRemoveResp.length) return res;
@@ -382,10 +646,71 @@ function finalizeMitmInterceptResponse(res, ruleParams) {
     return { ...res, headers };
 }
 
+/**
+ * Пост-обработка ответа MITM (modifyHeaders и фаза «после» скрипта).
+ * @param {object} res
+ * @param {object|null} ruleParams
+ */
+async function finalizeMitmInterceptResponseAsync(res, ruleParams) {
+    if (!res || !ruleParams) return res;
+    if (ruleParams._mitmPost === MITM_POST_SCRIPT_AFTER) {
+        const afterSrc = String(ruleParams.afterSource || '');
+        if (!afterSrc.trim()) return res;
+        const respHeaders = { ...(res.headers || {}) };
+        const afterCtx = {
+            request: ruleParams.requestSnapshot || {},
+            response: {
+                statusCode: res.statusCode,
+                headers: respHeaders,
+                bodyBase64: res.bodyBase64 || '',
+            },
+        };
+        const err = runInterceptScriptPhase(afterSrc, afterCtx, 'after');
+        if (err) {
+            safeCatch(
+                {
+                    module: 'request-interceptor',
+                    eventCode: 'intercept.script.after_failed',
+                    context: { ruleName: ruleParams.ruleName },
+                },
+                new Error(err),
+                'warn',
+            );
+            return res;
+        }
+        let bodyBase64 = afterCtx.response.bodyBase64;
+        if (afterCtx.response.body != null && afterCtx.response.body !== undefined) {
+            bodyBase64 = Buffer.from(String(afterCtx.response.body), 'utf8').toString('base64');
+        }
+        return {
+            ...res,
+            statusCode: Number(afterCtx.response.statusCode) || res.statusCode,
+            headers: { ...(afterCtx.response.headers || {}) },
+            bodyBase64: bodyBase64 != null ? String(bodyBase64) : (res.bodyBase64 || ''),
+        };
+    }
+    return finalizeMitmInterceptResponse(res, ruleParams);
+}
+
 /** Для IPC перед сохранением правила */
 function validateInterceptRuleForSave(rule) {
-    if (!isStrictInterceptMode()) return { ok: true };
-    return validateStrictInterceptUrlPattern(rule?.url_pattern);
+    if (isStrictInterceptMode()) {
+        const v = validateStrictInterceptUrlPattern(rule?.url_pattern);
+        if (!v.ok) return v;
+    }
+    if (rule?.type === 'script') {
+        const p = parseParams(rule.params);
+        const before = String(p.beforeSource || '').trim();
+        const after = String(p.afterSource || '').trim();
+        if (!before && !after) {
+            return { ok: false, error: 'Provide at least one script (before or after MITM)' };
+        }
+        const errB = validateScriptSyntax(before || 'void 0;', 'before');
+        if (errB) return { ok: false, error: `Before MITM script: ${errB}` };
+        const errA = validateScriptSyntax(after || 'void 0;', 'after');
+        if (errA) return { ok: false, error: `After response script: ${errA}` };
+    }
+    return { ok: true };
 }
 
 // (webRequest hooks удалены — CF детектит onBeforeSendHeaders / onHeadersReceived.)
@@ -489,6 +814,8 @@ module.exports = {
     resyncWebRequestHooks,
     planMitmIntercept,
     finalizeMitmInterceptResponse,
+    finalizeMitmInterceptResponseAsync,
+    runInterceptScriptSelfTest,
     sessionUsesCupnetMitm,
     bypassInterceptMockBlockForSensitiveUrl,
     setTrafficMode,

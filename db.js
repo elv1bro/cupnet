@@ -192,6 +192,27 @@ function migrateSchema() {
             db.exec(`CREATE INDEX IF NOT EXISTS idx_ws_events_conn ON ws_events(session_id, tab_id, url, connection_id)`);
         } catch { /* ignore */ }
     }
+    // intercept_rules: SQLite не меняет CHECK на ALTER — пересоздаём таблицу, если нет типа script
+    const irMaster = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='intercept_rules'`).get();
+    if (irMaster?.sql && !irMaster.sql.includes("'script'")) {
+        db.exec(`
+            BEGIN IMMEDIATE;
+            CREATE TABLE intercept_rules__cupnet_new (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT    NOT NULL,
+                enabled     INTEGER NOT NULL DEFAULT 1,
+                url_pattern TEXT    NOT NULL,
+                type        TEXT    NOT NULL CHECK(type IN ('block','modifyHeaders','mock','script')),
+                params      TEXT,
+                created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+            );
+            INSERT INTO intercept_rules__cupnet_new (id, name, enabled, url_pattern, type, params, created_at)
+                SELECT id, name, enabled, url_pattern, type, params, created_at FROM intercept_rules;
+            DROP TABLE intercept_rules;
+            ALTER TABLE intercept_rules__cupnet_new RENAME TO intercept_rules;
+            COMMIT;
+        `);
+    }
     // cookie_groups: ensure table exists for DBs created before this feature
     const hasCookieGroups = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='cookie_groups'`).get();
     if (!hasCookieGroups) {
@@ -311,7 +332,7 @@ function createSchema() {
             name        TEXT    NOT NULL,
             enabled     INTEGER NOT NULL DEFAULT 1,
             url_pattern TEXT    NOT NULL,
-            type        TEXT    NOT NULL CHECK(type IN ('block','modifyHeaders','mock')),
+            type        TEXT    NOT NULL CHECK(type IN ('block','modifyHeaders','mock','script')),
             params      TEXT,
             created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         );
@@ -452,6 +473,66 @@ function deleteSession(id) {
     db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
 }
 
+function listUnnamedSessionIds(keepSessionId) {
+    const keep = keepSessionId != null ? Number(keepSessionId) : -1;
+    return db.prepare(`
+        SELECT id FROM sessions
+        WHERE (notes IS NULL OR TRIM(notes) = '')
+        AND id != ?
+    `).all(keep).map(r => r.id);
+}
+
+/** All sessions with empty/whitespace notes, except keepSessionId (e.g. current LIVE). */
+function deleteUnnamedSessions(keepSessionId) {
+    const ids = listUnnamedSessionIds(keepSessionId);
+    for (const id of ids) deleteSession(id);
+    return { deleted: ids.length };
+}
+
+function requestRowToInsertEntry(row) {
+    let reqH = null;
+    let respH = null;
+    if (row.request_headers) {
+        try { reqH = JSON.parse(row.request_headers); } catch { reqH = null; }
+    }
+    if (row.response_headers) {
+        try { respH = JSON.parse(row.response_headers); } catch { respH = null; }
+    }
+    return {
+        requestId: row.request_id,
+        url: row.url,
+        method: row.method,
+        status: row.status,
+        type: row.type,
+        duration: row.duration_ms,
+        requestHeaders: reqH,
+        responseHeaders: respH,
+        requestBody: row.request_body,
+        responseBody: row.response_body,
+        error: row.error,
+        tag: row.tag,
+        note: row.note,
+    };
+}
+
+/** Copy listed request rows (by DB id, ascending = chronological) into a new named session. */
+function createSessionFromRequestIds(requestIds, name) {
+    const ids = [...new Set((requestIds || []).map(Number))]
+        .filter(n => Number.isFinite(n) && n > 0)
+        .sort((a, b) => a - b);
+    if (!ids.length) return null;
+    const sess = createSession(null, null);
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (trimmed) renameSession(sess.id, trimmed);
+    for (const rid of ids) {
+        const row = getRequest(rid);
+        if (!row) continue;
+        const entry = requestRowToInsertEntry(row);
+        insertRequest(sess.id, row.tab_id, entry);
+    }
+    return getSession(sess.id);
+}
+
 function deleteEmptySessions(keepId) {
     // Remove sessions with no requests, except the one currently active
     db.prepare(`
@@ -540,7 +621,10 @@ function queryRequests(filters = {}, limit = 100, offset = 0) {
     if (filters.since)     { conditions.push('created_at >= ?'); params.push(filters.since); }
 
     const sql = `SELECT id, session_id, tab_id, request_id, url, method, status, type,
-                        duration_ms, error, response_headers, host, tag, has_note, note, created_at, ws_message_count
+                        duration_ms, error, response_headers, host, tag, has_note, note, created_at, ws_message_count,
+                        CASE WHEN lower(COALESCE(type, '')) = 'cupnet'
+                                  AND url IN ('cupnet://session/proxy', 'cupnet://session/direct')
+                             THEN response_body ELSE NULL END AS response_body
                  FROM requests
                  WHERE ${conditions.join(' AND ')}
                  ORDER BY id DESC
@@ -1081,6 +1165,39 @@ function deleteSessionAsync(id) {
     return enqueueWrite(() => deleteSession(id), 'high');
 }
 
+async function deleteUnnamedSessionsAsync(keepSessionId) {
+    const ids = listUnnamedSessionIds(keepSessionId);
+    for (const id of ids) {
+        await deleteSessionAsync(id);
+    }
+    return { deleted: ids.length };
+}
+
+/** Copy requests in chunks so the DB lock yields between batches — other IPC (e.g. get-request-detail) can run. */
+async function createSessionFromRequestIdsAsync(requestIds, name) {
+    const ids = [...new Set((requestIds || []).map(Number))]
+        .filter(n => Number.isFinite(n) && n > 0)
+        .sort((a, b) => a - b);
+    if (!ids.length) return null;
+    const sess = await createSessionAsync(null, null);
+    if (!sess) return null;
+    const sid = sess.id;
+    const trimmed = typeof name === 'string' ? name.trim() : '';
+    if (trimmed) await renameSessionAsync(sid, trimmed);
+    const BATCH = 80;
+    for (let i = 0; i < ids.length; i += BATCH) {
+        const slice = ids.slice(i, i + BATCH);
+        await enqueueWrite(() => {
+            for (const rid of slice) {
+                const row = getRequest(rid);
+                if (!row) continue;
+                insertRequest(sid, row.tab_id, requestRowToInsertEntry(row));
+            }
+        }, 'high');
+    }
+    return getSession(sid);
+}
+
 function deleteEmptySessionsAsync(keepId) {
     return enqueueWrite(() => deleteEmptySessions(keepId), 'low');
 }
@@ -1235,8 +1352,9 @@ function getWriteQueueStats() {
 module.exports = {
     init, initWithPath, close, getDb, getDbPath,
     // sessions
-    createSession, createExternalSession, endSession, getSessions, getSessionsWithStats, renameSession, getSession, deleteSession, deleteEmptySessions,
-    createSessionAsync, createExternalSessionAsync, endSessionAsync, renameSessionAsync, deleteSessionAsync, deleteEmptySessionsAsync,
+    createSession, createExternalSession, endSession, getSessions, getSessionsWithStats, renameSession, getSession, deleteSession, deleteUnnamedSessions, deleteEmptySessions,
+    requestRowToInsertEntry, createSessionFromRequestIds,
+    createSessionAsync, createExternalSessionAsync, endSessionAsync, renameSessionAsync, deleteSessionAsync, deleteUnnamedSessionsAsync, deleteEmptySessionsAsync, createSessionFromRequestIdsAsync,
     // requests
     insertRequest, updateRequest, setRequestAnnotation, queryRequests, queryRequestsFull, countRequests, getRequest, ftsSearch,
     insertRequestAsync, updateRequestAsync, setRequestAnnotationAsync,

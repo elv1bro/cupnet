@@ -2772,17 +2772,26 @@ a#copy-url:hover {
 /* ── Rule notification toast ─────────────────────────────────────────────────── */
 .rules-hit-badge {
     position: absolute;
-    top: 1px; right: 1px;
-    min-width: 16px; height: 16px;
+    top: 0;
+    right: 0;
+    z-index: 5;
+    box-sizing: border-box;
+    min-width: 16px;
+    min-height: 16px;
     padding: 0 4px;
     border-radius: 8px;
     background: #ef4444;
     color: #fff;
     font-size: 9px;
     font-weight: 700;
-    line-height: 16px;
+    line-height: 1;
+    display: none;
+    align-items: center;
+    justify-content: center;
     text-align: center;
     pointer-events: none;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.45);
     animation: badge-pop 0.25s ease;
 }
 @keyframes badge-pop { from { transform: scale(0); } to { transform: scale(1); } }

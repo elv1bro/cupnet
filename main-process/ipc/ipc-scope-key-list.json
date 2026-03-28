@@ -4,7 +4,7 @@
   "ExternalProxyPort",
   "ProxyChain",
   "_analyzeCaptchaScript",
-  "_analyzeEndpointsScript",
+  "_analyzeEndpointsCollectScript",
   "_analyzeFormsScript",
   "_analyzeMetaScript",
   "_broadcastCompareUpdated",

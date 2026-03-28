@@ -1,5 +1,7 @@
 'use strict';
 
+const { getDebugMitmLevel, setDebugMitmLevel } = require('../../../mitm-proxy.js');
+
 /**
  * Открытие вспомогательных окон (proxy manager, console, analyzer, IVAC).
  * @param {object} ctx
@@ -11,6 +13,14 @@ function registerLauncherIpc(ctx) {
     // ── Console Viewer ───────────────────────────────────────────────────────
     ctx.ipcMain.handle('open-console-viewer', async () => { ctx.createConsoleViewerWindow(); return true; });
     ctx.ipcMain.handle('get-console-history', () => ctx.consoleCaptureApi.getConsoleBufferSnapshot());
+    ctx.ipcMain.handle('get-debug-mitm-level', () => getDebugMitmLevel());
+    ctx.ipcMain.handle('set-debug-mitm-level', (_, lvl) => {
+        const n = setDebugMitmLevel(lvl);
+        try {
+            process.stdout.write(`[mitm] CUPNET_DEBUG_MITM=${n} (from console UI)\n`);
+        } catch { /* ignore */ }
+        return n;
+    });
     ctx.ipcMain.handle('save-console-log', async (_, content) => {
         const { canceled, filePath } = await ctx.dialog.showSaveDialog(ctx.consoleViewerWindow || ctx.mainWindow, {
             title: 'Save Console Log',

@@ -90,6 +90,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getCurrentSessionId:     ()        => ipcRenderer.invoke('get-current-session-id'),
     renameSession:           (id, n)   => ipcRenderer.invoke('rename-session', id, n),
     deleteSession:           (id)      => ipcRenderer.invoke('delete-session', id),
+    deleteUnnamedSessions:   ()        => ipcRenderer.invoke('delete-unnamed-sessions'),
+    createSessionFromRequestIds: (ids, name) => ipcRenderer.invoke('create-session-from-request-ids', ids, name),
     openSessionInNewWindow:  (id)      => ipcRenderer.invoke('open-session-in-new-window', id),
     getInitialSessionId:     ()        => ipcRenderer.invoke('get-initial-session-id'),
 
@@ -144,6 +146,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     saveInterceptRule:       (r)       => ipcRenderer.invoke('save-intercept-rule', r),
     deleteInterceptRule:     (id)      => ipcRenderer.invoke('delete-intercept-rule', id),
     testInterceptNotification: ()     => ipcRenderer.invoke('test-intercept-notification'),
+    testInterceptScript:       (p)    => ipcRenderer.invoke('test-intercept-script', p || {}),
 
     // ── Proxy profiles ─────────────────────────────────────────────────────
     getProxyProfiles:        ()        => ipcRenderer.invoke('get-proxy-profiles'),
@@ -191,6 +194,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onDnsOverridesUpdated:   (cb)      => sub('dns-overrides-updated', cb),
     onDnsRuleMatched:        (cb)      => sub('dns-rule-matched', cb),
     onDnsRuleMatchedBatch:   (cb)      => sub('dns-rule-matched-batch', cb),
+    resetToolbarActivityBadge: (tool) => ipcRenderer.send('reset-toolbar-activity-badge', tool),
+    onToolbarActivityBadgeReset: (cb) => sub('toolbar-activity-badge-reset', cb),
 
     // ── Request Editor ──────────────────────────────────────────────────────────
     openRequestEditor:       (id)      => ipcRenderer.invoke('open-request-editor', id),
@@ -231,6 +236,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // ── Console Viewer ─────────────────────────────────────────────────────────
     openConsoleViewer:       ()        => ipcRenderer.invoke('open-console-viewer'),
     getConsoleHistory:       ()        => ipcRenderer.invoke('get-console-history'),
+    getDebugMitmLevel:       ()        => ipcRenderer.invoke('get-debug-mitm-level'),
+    setDebugMitmLevel:       (lvl)     => ipcRenderer.invoke('set-debug-mitm-level', lvl),
     onConsoleLog:            (cb)      => sub('console-log', cb),
     saveConsoleLog:          (content) => ipcRenderer.invoke('save-console-log', content),
 

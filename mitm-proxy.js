@@ -361,8 +361,44 @@ function createMitmAzureBackend(workerPath) {
     }
 }
 
-const DEBUG_MITM = parseInt(process.env.CUPNET_DEBUG_MITM, 10) || 0;
-function dbg(msg) { if (DEBUG_MITM >= 1) process.stderr.write(msg); }
+function _parseDebugMitm() {
+    const v = process.env.CUPNET_DEBUG_MITM;
+    if (v === undefined || v === '') return 1;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n : 1;
+}
+let debugMitmLevel = _parseDebugMitm();
+
+function getDebugMitmLevel() {
+    return debugMitmLevel;
+}
+
+/** @param {number|string} n уровень 0–4; синхронизирует process.env.CUPNET_DEBUG_MITM */
+function setDebugMitmLevel(n) {
+    let v = typeof n === 'number' ? n : parseInt(String(n), 10);
+    if (!Number.isFinite(v)) v = 1;
+    v = Math.max(0, Math.min(4, Math.floor(v)));
+    debugMitmLevel = v;
+    process.env.CUPNET_DEBUG_MITM = String(v);
+    return debugMitmLevel;
+}
+
+function dbg(msg) { if (debugMitmLevel >= 1) process.stderr.write(msg); }
+
+/** stderr + префикс [mitm] → во вкладку MITM в System Console (stdout даёт только «System»). */
+function mitmUserLog(chunk) {
+    const raw = Array.isArray(chunk) ? chunk.join('\n') : String(chunk);
+    for (const line of raw.split('\n')) {
+        if (line === '') continue;
+        process.stderr.write(`[mitm] ${line}\n`);
+    }
+}
+
+/** Метка клиентского TCP-порта — в логе видно, что два одинаковых URL это разные соединения браузера. */
+function _clientTag(socket) {
+    const p = socket && socket.remotePort;
+    return typeof p === 'number' && p > 0 ? ` (:${p})` : '';
+}
 
 function _fmtHeaders(h) {
     if (!h || typeof h !== 'object') return '';
@@ -447,7 +483,7 @@ class AzureTLSWorker extends EventEmitter {
         this._stdinDraining = false;
 
         // Redirect worker stderr only in debug mode (very noisy in production)
-        this.proc.stderr.on('data', d => { if (DEBUG_MITM) process.stderr.write('[azure-worker] ' + d); });
+        this.proc.stderr.on('data', d => { if (debugMitmLevel) process.stderr.write('[azure-worker] ' + d); });
 
         this.proc.stdout.setEncoding('utf8');
         this.proc.stdout.on('data', chunk => {
@@ -501,7 +537,7 @@ class AzureTLSWorker extends EventEmitter {
             this._restartDelay = Math.min(delay * 2, 30000);
             this._restartCount++;
             this.emit('worker-exited', { code, delayMs: delay, restartCount: this._restartCount });
-            if (DEBUG_MITM) console.error(`[azure-worker] exited (${code}), restart in ${delay}ms`);
+            if (debugMitmLevel) console.error(`[azure-worker] exited (${code}), restart in ${delay}ms`);
             setTimeout(() => { if (!this._stopped) this._start(); }, delay);
         });
     }
@@ -837,7 +873,17 @@ class MitmProxy {
         this._dnsOverrides = next;
         this._dnsCorsPatterns = corsPatterns;
         if (corsPatterns.length || next.size) {
-            console.log(`[mitm-proxy] DNS overrides: ${next.size} IPs, CORS patterns: [${corsPatterns.join(', ')}]`);
+            const rows = ['━━ DNS overrides · reload ━━', `  IPv4 → ${next.size} host(s)`];
+            for (const [h, v] of next) {
+                const bits = [`${h} → ${v.ip}`];
+                if (v.rewriteHost) bits.push(`Host: ${v.rewriteHost}`);
+                rows.push(`    · ${bits.join(' · ')}`);
+            }
+            rows.push(
+                `  MITM CORS: ${corsPatterns.length ? corsPatterns.join(', ') : '—'}`,
+                '━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+            );
+            mitmUserLog(rows);
         }
         this.worker.clearSessions().catch(() => {});
     }
@@ -853,6 +899,19 @@ class MitmProxy {
         return false;
     }
 
+    /** @returns {{ host: string, pattern: string }|null} */
+    _mitmCorsMatchDetail(urlStr) {
+        if (shouldSkipMitmCorsForUrl(urlStr)) return null;
+        let u;
+        try { u = new URL(urlStr); } catch { return null; }
+        const h = (u.hostname || '').toLowerCase();
+        if (!h) return null;
+        for (const p of this._dnsCorsPatterns) {
+            if (_matchHostPattern(p, h)) return { host: h, pattern: p };
+        }
+        return null;
+    }
+
     async start() {
         await this.worker.waitReady();
 
@@ -860,7 +919,7 @@ class MitmProxy {
         await new Promise((res, rej) =>
             this._server.listen(this.port, '127.0.0.1', err => err ? rej(err) : res())
         );
-        console.log(`[mitm-proxy] Listening on 127.0.0.1:${this.port} (browser=${this.browser})`);
+        mitmUserLog(`Proxy listening 127.0.0.1:${this.port} · profile=${this.browser}`);
         return this;
     }
 
@@ -877,7 +936,7 @@ class MitmProxy {
             const head = data.toString('utf8', 0, 8192);
             if (head.startsWith('CONNECT ')) {
                 const hostport = head.split('\r\n')[0].split(' ')[1] || '';
-                dbg(`[mitm] CONNECT ${hostport}\n`);
+                dbg(`[mitm] CONNECT ${hostport}${_clientTag(socket)}\n`);
                 this._handleConnect(socket, head, data);
             } else {
                 this._handleHttp(socket, head, data);
@@ -901,8 +960,9 @@ class MitmProxy {
 
         socket.write('HTTP/1.0 200 Connection Established\r\n\r\n');
         socket.pause(); // Prevent losing TLS ClientHello before we're ready
+        const ctag = _clientTag(socket);
         const hsTimer = setTimeout(() => {
-            dbg(`[mitm] TLS handshake timeout ${hostname}:${port}\n`);
+            dbg(`[mitm] TLS handshake timeout ${hostname}:${port}${ctag}\n`);
             try { socket.destroy(); } catch {}
         }, networkPolicy.timeouts.tlsHandshakeMs);
 
@@ -950,18 +1010,18 @@ class MitmProxy {
                 if (hasBody && SKIP_WHEN_BODY.includes(kl)) return false;
                 return true;
             });
-            dbg(`[mitm] → ${req.method} ${url}\n`);
-            if (DEBUG_MITM >= 2) dbg(_fmtHeaders(headers));
-            if (DEBUG_MITM >= 3) dbg(_fmtBody(req.body, req.bodyBase64, 'req body'));
+            dbg(`[mitm] → ${req.method} ${url}${ctag}\n`);
+            if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(headers));
+            if (debugMitmLevel >= 3) mitmUserLog(_fmtBody(req.body, req.bodyBase64, 'req body'));
 
             const entry = { done: false, data: null };
             pipeline.push(entry);
             const t0 = Date.now();
             this._doRequest({ method: req.method, url, headers, orderedHeaders, body: req.body, bodyBase64: req.bodyBase64, requestId, tabId })
                 .then(res  => {
-                    dbg(`[mitm] ← ${url} status=${res.statusCode}\n`);
-                    if (DEBUG_MITM >= 2) dbg(_fmtHeaders(res.headers));
-                    if (DEBUG_MITM >= 4) dbg(_fmtBody(null, res.bodyBase64, 'res body'));
+                    dbg(`[mitm] ← ${url} status=${res.statusCode}${ctag}\n`);
+                    if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(res.headers));
+                    if (debugMitmLevel >= 4) mitmUserLog(_fmtBody(null, res.bodyBase64, 'res body'));
                     const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, res);
                     entry.data = buildHttpResponse(resOut);
                     if (this.onRequestLogged) {
@@ -975,17 +1035,20 @@ class MitmProxy {
                             }
                         }
                         const reqBodyForLog = req.body || (req.bodyBase64 ? Buffer.from(req.bodyBase64, 'base64').toString('utf8') : null);
+                        const dnsCorsMatch = !res.dnsOverride ? this._mitmCorsMatchDetail(url) : null;
                         this.onRequestLogged({
                             url, method: req.method, tabId, sessionId, requestId,
                             status: resOut.statusCode, requestHeaders: headers,
                             responseHeaders: resOut.headers, requestBody: reqBodyForLog,
                             responseBody: logBody, duration: Date.now() - t0,
                             type: inferMitmResourceType(url, req.method, headers, resOut.headers),
+                            dnsOverride: res.dnsOverride || null,
+                            dnsCorsMatch,
                         });
                     }
                 })
                 .catch((e) => {
-                    dbg(`[mitm] ✗ ${url} ${e.message}\n`);
+                    dbg(`[mitm] ✗ ${url} ${e.message}${ctag}\n`);
                     const errRes = { statusCode: 502, headers: {}, bodyBase64: '' };
                     const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
                     entry.data = buildHttpResponse(resOut);
@@ -1054,7 +1117,7 @@ class MitmProxy {
         });
         tlsSocket.on('error', () => { clearTimeout(hsTimer); try { tlsSocket.destroy(); } catch {} });
         tlsSocket.on('close', () => { chunks.length = 0; chunksLen = 0; pipeline.length = 0; });
-        }).catch((e) => { clearTimeout(hsTimer); dbg(`[mitm] cert error ${hostname}: ${e?.message}\n`); socket.destroy(); });
+        }).catch((e) => { clearTimeout(hsTimer); dbg(`[mitm] cert error ${hostname}: ${e?.message}${ctag}\n`); socket.destroy(); });
     }
 
     _handleConnectPassthrough(clientSocket, hostname, port) {
@@ -1151,9 +1214,10 @@ class MitmProxy {
             return true;
         });
 
-        dbg(`[mitm] → ${req.method} ${url}\n`);
-        if (DEBUG_MITM >= 2) dbg(_fmtHeaders(headers));
-        if (DEBUG_MITM >= 3) dbg(_fmtBody(req.body, req.bodyBase64, 'req body'));
+        const ctagPlain = _clientTag(socket);
+        dbg(`[mitm] → ${req.method} ${url}${ctagPlain}\n`);
+        if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(headers));
+        if (debugMitmLevel >= 3) mitmUserLog(_fmtBody(req.body, req.bodyBase64, 'req body'));
 
         this._doRequest({
             method: req.method,
@@ -1166,16 +1230,16 @@ class MitmProxy {
             tabId,
         })
             .then(res => {
-                dbg(`[mitm] ← ${url} status=${res.statusCode}\n`);
-                if (DEBUG_MITM >= 2) dbg(_fmtHeaders(res.headers));
-                if (DEBUG_MITM >= 4) dbg(_fmtBody(null, res.bodyBase64, 'res body'));
+                dbg(`[mitm] ← ${url} status=${res.statusCode}${ctagPlain}\n`);
+                if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(res.headers));
+                if (debugMitmLevel >= 4) mitmUserLog(_fmtBody(null, res.bodyBase64, 'res body'));
                 const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, res);
                 const resp = buildHttpResponse(resOut);
                 socket.write(resp);
                 socket.end();
             })
             .catch((e) => {
-                dbg(`[mitm] ✗ ${url} ${e.message}\n`);
+                dbg(`[mitm] ✗ ${url} ${e.message}${ctagPlain}\n`);
                 const errRes = { statusCode: 502, headers: {}, bodyBase64: '' };
                 const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
                 socket.write(buildHttpResponse(resOut));
@@ -1192,9 +1256,10 @@ class MitmProxy {
         const t0 = Date.now();
         const dnsAdjusted = this._applyDnsOverride(opts);
         const url = dnsAdjusted.url || '';
-        if (dnsAdjusted.dnsOverride && DEBUG_MITM) {
+        if (dnsAdjusted.dnsOverride && debugMitmLevel) {
             const d = dnsAdjusted.dnsOverride;
-            dbg(`[mitm][dns] ${d.host} -> ${d.ip}\n`);
+            const rw = d.rewriteHost ? ` · Host→${d.rewriteHost}` : '';
+            dbg(`[mitm] dns  ${d.host}  →  ${d.ip}${rw}\n`);
         }
         // YouTube/googlevideo: HTTP/2 → PROTOCOL_ERROR; force HTTP/1.1
         // CUPNET_FORCE_HTTP1=1 — force for ALL requests (debug)
@@ -1211,7 +1276,7 @@ class MitmProxy {
 
         const tabUpstream = this._resolveUpstreamForTab(opts.tabId);
         try {
-            const { planMitmIntercept, finalizeMitmInterceptResponse } = require('./request-interceptor');
+            const { planMitmIntercept, finalizeMitmInterceptResponseAsync } = require('./request-interceptor');
             const mitmOpts = {
                 ...dnsAdjusted,
                 headers: { ...(dnsAdjusted.headers || {}) },
@@ -1259,7 +1324,9 @@ class MitmProxy {
                 bodyBase64: res.bodyBase64 || '',
                 dnsOverride: dnsAdjusted.dnsOverride || null,
             };
-            if (plan.postProcess) out = finalizeMitmInterceptResponse(out, plan.postProcess);
+            if (plan.postProcess) {
+                out = await finalizeMitmInterceptResponseAsync(out, plan.postProcess);
+            }
             return out;
         } catch (e) {
             st.errors++;
@@ -1314,6 +1381,8 @@ class MitmProxy {
         return {
             ...opts,
             url: overriddenUrl.toString(),
+            /** Исходный URL до подмены хоста на IP — для intercept rules (паттерны с доменом). */
+            interceptMatchUrl: sourceUrl,
             headers: nextHeaders,
             orderedHeaders: nextOrdered,
             dnsOverride: { host, ip: overrideIp, rewriteHost: rewriteHost || undefined },
@@ -1416,14 +1485,22 @@ class MitmProxy {
         let mitmOpts = { method: req.method, url, headers, orderedHeaders };
         mitmOpts = this._applyDnsOverride(mitmOpts);
 
-        const { planMitmIntercept, finalizeMitmInterceptResponse } = require('./request-interceptor');
+        const { planMitmIntercept, finalizeMitmInterceptResponseAsync } = require('./request-interceptor');
         const plan = planMitmIntercept(mitmOpts);
         if (plan.done) {
-            let out = plan.response;
-            if (plan.postProcess) out = finalizeMitmInterceptResponse(out, plan.postProcess);
-            const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, out);
-            try { clientTls.write(buildHttpResponse(resOut)); } catch {}
-            try { clientTls.end(); } catch {}
+            const finishShort = async () => {
+                let out = plan.response;
+                if (plan.postProcess) {
+                    out = await finalizeMitmInterceptResponseAsync(out, plan.postProcess);
+                }
+                const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, out);
+                try { clientTls.write(buildHttpResponse(resOut)); } catch {}
+                try { clientTls.end(); } catch {}
+            };
+            void finishShort().catch((err) => {
+                try { safeCatch({ module: 'mitm-proxy', eventCode: 'mitm.ws.shortCircuitFinalize.failed', context: { url } }, err, 'warn'); } catch (_) { /* ignore */ }
+                try { clientTls.end(); } catch {}
+            });
             return;
         }
         const up = plan.opts;
@@ -1769,16 +1846,16 @@ function shouldSkipMitmCorsForUrl(urlStr) {
 
 function applyMitmCorsToResponse(enabled, url, requestHeaders, requestMethod, res) {
     if (!enabled || !res) {
-        if (DEBUG_MITM && enabled === false) dbg(`[mitm-cors] SKIP (not enabled) ${url}\n`);
+        if (debugMitmLevel && enabled === false) dbg(`[mitm-cors] SKIP (not enabled) ${url}\n`);
         return res;
     }
     if (shouldSkipMitmCorsForUrl(url)) return res;
     const origin = _resolveCorsAllowOrigin(requestHeaders);
     if (!origin) {
-        if (DEBUG_MITM) dbg(`[mitm-cors] SKIP (no origin/referer) ${url}\n`);
+        if (debugMitmLevel) dbg(`[mitm-cors] SKIP (no origin/referer) ${url}\n`);
         return res;
     }
-    if (DEBUG_MITM) dbg(`[mitm-cors] INJECT origin=${origin} method=${requestMethod} status=${res.statusCode} ${url}\n`);
+    if (debugMitmLevel) dbg(`[mitm-cors] INJECT origin=${origin} method=${requestMethod} status=${res.statusCode} ${url}\n`);
 
     const src = res.headers && typeof res.headers === 'object' ? res.headers : {};
     const merged = {};
@@ -1927,6 +2004,7 @@ class ExternalProxyPort {
         const hostport = line.split(' ')[1] || '';
         const [hostname, portStr] = hostport.split(':');
         const port = parseInt(portStr) || 443;
+        const ctagExt = _clientTag(socket);
 
         socket.write('HTTP/1.0 200 Connection Established\r\n\r\n');
         socket.pause();
@@ -1981,16 +2059,19 @@ class ExternalProxyPort {
                             else { try { logBody = Buffer.from(resOut.bodyBase64, 'base64').toString('utf8'); } catch {} }
                         }
                         const reqBody = r.body || (r.bodyBase64 ? Buffer.from(r.bodyBase64, 'base64').toString('utf8') : null);
+                        const dnsCorsMatch = !res.dnsOverride ? this.parent._mitmCorsMatchDetail(url) : null;
                         this._logRequest({
                             url, method: r.method, status: resOut.statusCode,
                             requestHeaders: headers, responseHeaders: resOut.headers,
                             requestBody: reqBody, responseBody: logBody,
                             duration: Date.now() - t0,
                             type: inferMitmResourceType(url, r.method, headers, resOut.headers),
+                            dnsOverride: res.dnsOverride || null,
+                            dnsCorsMatch,
                         });
                     })
                     .catch((e) => {
-                        dbg(`[mitm] ✗ ${url} ${e.message}\n`);
+                        dbg(`[mitm] ✗ ${url} ${e.message}${ctagExt}\n`);
                         const errRes = { statusCode: 502, headers: {}, bodyBase64: '' };
                         const resOut = applyMitmCorsToResponse(this.parent._mitmCorsEnabledForUrl(url), url, headers, r.method, errRes);
                         entry.data = buildHttpResponse(resOut);
@@ -2052,6 +2133,7 @@ class ExternalProxyPort {
             return kl !== 'proxy-authorization' && !(hasBody && SKIP_WHEN_BODY.includes(kl));
         });
 
+        const ctagExtHttp = _clientTag(socket);
         const t0 = Date.now();
         this.parent._doRequest({ method: req.method, url, headers, orderedHeaders, body: req.body, bodyBase64: req.bodyBase64, disableRedirects: !this.followRedirects, tabId })
             .then(res => {
@@ -2064,16 +2146,19 @@ class ExternalProxyPort {
                     if (_isBinaryContentType(ct)) logBody = '__b64__:' + resOut.bodyBase64;
                     else { try { logBody = Buffer.from(resOut.bodyBase64, 'base64').toString('utf8'); } catch {} }
                 }
+                const dnsCorsMatch = !res.dnsOverride ? this.parent._mitmCorsMatchDetail(url) : null;
                 this._logRequest({
                     url, method: req.method, status: resOut.statusCode,
                     requestHeaders: headers, responseHeaders: resOut.headers,
                     requestBody: req.body || null, responseBody: logBody,
                     duration: Date.now() - t0,
                     type: inferMitmResourceType(url, req.method, headers, resOut.headers),
+                    dnsOverride: res.dnsOverride || null,
+                    dnsCorsMatch,
                 });
             })
             .catch((e) => {
-                dbg(`[mitm] ✗ ${url} ${e.message}\n`);
+                dbg(`[mitm] ✗ ${url} ${e.message}${ctagExtHttp}\n`);
                 const errRes = { statusCode: 502, headers: {}, bodyBase64: '' };
                 const resOut = applyMitmCorsToResponse(this.parent._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
                 socket.write(buildHttpResponse(resOut));
@@ -2084,7 +2169,19 @@ class ExternalProxyPort {
 
 // ── Module exports + standalone entry ────────────────────────────────────────
 
-module.exports = { MitmProxy, ExternalProxyPort, generateCA, generateCAAsync, loadOrGenerateCA };
+module.exports = {
+    MitmProxy,
+    ExternalProxyPort,
+    generateCA,
+    generateCAAsync,
+    loadOrGenerateCA,
+    getDebugMitmLevel,
+    setDebugMitmLevel,
+    /** @internal used by tests/test-dns-mitm.js */
+    _testApplyMitmCorsToResponse: applyMitmCorsToResponse,
+    _testShouldSkipMitmCorsForUrl: shouldSkipMitmCorsForUrl,
+    _testMatchHostPattern: _matchHostPattern,
+};
 
 if (require.main === module) {
     const { caKeyPem, caCertPem } = generateCA();

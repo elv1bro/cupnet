@@ -7,6 +7,9 @@ log
 .roomodes
 !.github
 
+# Playwright / local e2e output (not for VCS)
+test-results/
+
 # Local debug dumps (HTML/JSON captures, gitleaks noise, IVAC, stability baselines — not for VCS)
 _debug/
 

@@ -74,7 +74,7 @@ const {
     _analyzeFormsScript,
     _analyzeCaptchaScript,
     _analyzeMetaScript,
-    _analyzeEndpointsScript,
+    _analyzeEndpointsCollectScript,
 } = require('./services/page-analyzer-injected-scripts');
 
 // Re-export shouldFilterUrl under the same name used throughout this file
@@ -486,7 +486,9 @@ const setupNetworkLogging = _cdpNetworkLogging.setupNetworkLogging;
 
 function getInternalPageUrl(pageName) {
     const name = String(pageName || '').trim().toLowerCase();
-    const file = name === 'settings' ? 'settings.html' : 'new-tab.html';
+    let file = 'new-tab.html';
+    if (name === 'settings') file = 'settings.html';
+    else if (name === 'guide') file = 'cupnet-guide.html';
     return `file://${path.join(_cupnetRoot, file)}`;
 }
 
@@ -574,6 +576,26 @@ const {
     connectProxyWithFailover,
 } = proxySvc;
 
+const { insertSessionBootstrapTrafficRow } = require('./services/cupnet-network-meta-log');
+
+/** Первая строка SET PROXY/DIRECT в Network при появлении session id у главного окна (до db-logging IPC). */
+async function bootstrapSessionTrafficMetaLog() {
+    const ctx = {
+        get db() { return db; },
+        get currentSessionId() { return currentSessionId; },
+        get isLoggingEnabled() { return isLoggingEnabled; },
+        get logEntryCount() { return logEntryCount; },
+        set logEntryCount(v) { logEntryCount = v; },
+        _broadcastLogEntryToViewers,
+        checkCurrentIpGeo,
+        get persistentAnonymizedProxyUrl() { return persistentAnonymizedProxyUrl; },
+        get actProxy() { return actProxy; },
+        get connectedProfileId() { return connectedProfileId; },
+        get connectedProfileName() { return connectedProfileName; },
+    };
+    await insertSessionBootstrapTrafficRow(ctx);
+}
+
 function rwWin(getter, setter) {
     return { get: getter, set: setter, enumerable: true, configurable: true };
 }
@@ -651,6 +673,7 @@ Object.assign(dMain, {
     getTrackingSettings,
     sendLogStatus,
     requestScreenshot,
+    bootstrapSessionTrafficMetaLog,
 });
 Object.defineProperties(dMain, {
     forceAppQuit:    { get() { return forceAppQuit; },    set(v) { forceAppQuit = v; },    enumerable: true, configurable: true },
@@ -920,7 +943,7 @@ app.whenReady().then(async () => {
             case 'ExternalProxyPort': return ExternalProxyPort;
             case 'ProxyChain': return ProxyChain;
             case '_analyzeCaptchaScript': return _analyzeCaptchaScript;
-            case '_analyzeEndpointsScript': return _analyzeEndpointsScript;
+            case '_analyzeEndpointsCollectScript': return _analyzeEndpointsCollectScript;
             case '_analyzeFormsScript': return _analyzeFormsScript;
             case '_analyzeMetaScript': return _analyzeMetaScript;
             case '_broadcastCompareUpdated': return _broadcastCompareUpdated;

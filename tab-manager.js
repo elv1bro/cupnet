@@ -24,6 +24,7 @@ function displayUrl(url) {
     if (!url || url === 'about:blank') return '';
     if (url.startsWith('file://') && url.includes('new-tab.html')) return '';
     if (url.startsWith('file://') && url.includes('settings.html')) return 'cupnet://settings';
+    if (url.startsWith('file://') && url.includes('cupnet-guide.html')) return 'cupnet://guide';
     return url;
 }
 
@@ -287,7 +288,7 @@ function reinjectCameraMediaFilterAllTabs() {
             const wc = tab.view?.webContents;
             if (!wc || wc.isDestroyed()) continue;
             const url = wc.getURL() || '';
-            if (url.startsWith('file://') && (url.includes('new-tab.html') || url.includes('settings.html'))) continue;
+            if (url.startsWith('file://') && (url.includes('new-tab.html') || url.includes('settings.html') || url.includes('cupnet-guide.html'))) continue;
             if (script) {
                 wc.send('camera-filter-update', { script });
             }

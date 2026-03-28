@@ -12,11 +12,13 @@ let sortCol         = 'domain';
 let sortAsc         = true;
 let autoRefreshTimer    = null;
 let currentTabDomain    = '';   // hostname of the active tab's current URL
+let currentTabUrl       = '';   // full URL — для бейджа «for this URL» при смене path
 
 // ─── DOM ──────────────────────────────────────────────────────────────────────
 const tabSelect         = document.getElementById('tab-select');
 const tbody             = document.getElementById('cookie-tbody');
 const countLabel        = document.getElementById('count-label');
+const pageUrlMatchLabel = document.getElementById('page-url-match-label');
 const statusMsg         = document.getElementById('status-msg');
 const editPanel         = document.getElementById('edit-panel');
 const editPanelTitle    = document.getElementById('edit-panel-title');
@@ -273,6 +275,7 @@ function syncDomainFilter() {
 function setActiveDomain(tabId) {
     const tab = allTabs.find(t => t.id === tabId);
     currentTabDomain = tab ? extractDomain(tab.url) : '';
+    currentTabUrl = tab?.url || '';
     syncDomainFilter();
 }
 
@@ -349,7 +352,32 @@ function formatExpires(c) {
     return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU', {hour:'2-digit',minute:'2-digit'});
 }
 
+function activeTabPageUrlForCookies() {
+    const tab = allTabs.find(t => t.id === activeTabId);
+    const u = tab?.url;
+    if (!u || u === '(blank)' || u === 'about:blank') return null;
+    try {
+        new URL(u);
+        return u;
+    } catch {
+        return null;
+    }
+}
+
+function updatePageUrlMatchBadge() {
+    if (!pageUrlMatchLabel) return;
+    const pageUrl = activeTabPageUrlForCookies();
+    const matchApi = window.CupNetCookiePageMatch;
+    if (!pageUrl || !matchApi) {
+        pageUrlMatchLabel.textContent = '—';
+        return;
+    }
+    const n = matchApi.countCookiesForPageUrl(allCookies, pageUrl);
+    pageUrlMatchLabel.textContent = `${n} for this URL`;
+}
+
 function renderTable() {
+    updatePageUrlMatchBadge();
     countLabel.textContent = `${filteredCookies.length} / ${allCookies.length} cookies`;
 
     if (!filteredCookies.length) {
@@ -633,9 +661,14 @@ api.onTabsUpdated((tabs) => {
         setActiveDomain(activeTabId);
         loadCookies();
     } else {
-        // URL of the active tab may have changed — update domain filter if needed
+        // URL of the active tab may have changed — domain and/or path
         const activeTab = tabs.find(t => t.id === activeTabId);
         const newDomain = activeTab ? extractDomain(activeTab.url) : '';
+        const newUrl = activeTab?.url || '';
+        if (newUrl !== currentTabUrl) {
+            currentTabUrl = newUrl;
+            updatePageUrlMatchBadge();
+        }
         if (newDomain !== currentTabDomain) {
             currentTabDomain = newDomain;
             syncDomainFilter();

@@ -63,6 +63,7 @@ api.onURLUpdate((url) => {
     const normalized = _normalizeToolbarUrl(url);
     _setToolbarUrlIfChanged(normalized, { respectFocus: true });
     ssHandleUrlChange(normalized);
+    scheduleCookiePageBadgeRefresh();
 });
 
 // Navigation started by a link click or JS (will-navigate).
@@ -75,10 +76,7 @@ api.onTabWillNavigate?.((data) => {
         // Force-update + blur: page navigation started, typed draft is no longer relevant.
         _setToolbarUrlIfChanged(normalized, { respectFocus: false, blur: true });
         ssHandleUrlChange(normalized);
-        _interceptHitCount = 0;
-        updateRulesHitBadge();
-        _dnsHitCount = 0;
-        updateDnsHitBadge();
+        scheduleCookiePageBadgeRefresh();
     }
 });
 
@@ -341,6 +339,7 @@ function _scheduleTabUiUpdate(tabData) {
             _setToolbarUrlIfChanged(normalized, { respectFocus: true });
             ssHandleUrlChange(normalized);
         }
+        scheduleCookiePageBadgeRefresh();
     });
 }
 
@@ -355,13 +354,7 @@ api.onTabUrlChanged((data) => {
         _setToolbarUrlIfChanged(normalized, { respectFocus: true });
         ssHandleUrlChange(normalized);
     }
-    // Reset intercept badge on navigation
-    if (typeof _interceptHitCount !== 'undefined') {
-        _interceptHitCount = 0;
-        updateRulesHitBadge();
-    }
-    _dnsHitCount = 0;
-    updateDnsHitBadge();
+    if (active && active.id === data.tabId) scheduleCookiePageBadgeRefresh();
 });
 
 // ─── Right toolbar actions ────────────────────────────────────────────────────
@@ -415,6 +408,37 @@ function ssHandleUrlChange(url) {
         ssUpdateBadge(0);
     } else {
         ssUpdateBadge(0);
+    }
+}
+
+// ─── Cookie count on toolbar (current page URL) ───────────────────────────────
+const cookiePageBadge = document.getElementById('cookie-page-badge');
+let _cookieBadgeTimer = null;
+function scheduleCookiePageBadgeRefresh() {
+    clearTimeout(_cookieBadgeTimer);
+    _cookieBadgeTimer = setTimeout(() => { void refreshCookiePageBadge(); }, 450);
+}
+async function refreshCookiePageBadge() {
+    if (!cookiePageBadge || !window.CupNetCookiePageMatch) return;
+    const active = tabs.find(t => t.isActive);
+    const url = active?.url || '';
+    if (!active || ssIsHomePage(url)) {
+        cookiePageBadge.style.display = 'none';
+        cookiePageBadge.textContent = '';
+        return;
+    }
+    try {
+        const list = await api.getCookies(active.id, {});
+        const n = window.CupNetCookiePageMatch.countCookiesForPageUrl(list, url);
+        if (n > 0) {
+            cookiePageBadge.textContent = n > 99 ? '99+' : String(n);
+            cookiePageBadge.style.display = 'inline-flex';
+        } else {
+            cookiePageBadge.style.display = 'none';
+            cookiePageBadge.textContent = '';
+        }
+    } catch {
+        cookiePageBadge.style.display = 'none';
     }
 }
 
@@ -615,10 +639,7 @@ function _onActiveTabChanged(tabData) {
         }).catch(() => {});
     }
     if (!_lastProxyInfo?.active) _fetchDirectIpGeo();
-    _interceptHitCount = 0;
-    updateRulesHitBadge();
-    _dnsHitCount = 0;
-    updateDnsHitBadge();
+    scheduleCookiePageBadgeRefresh();
 }
 
 // Click opens Proxy Manager
@@ -679,11 +700,13 @@ const dnsHitBadge = document.getElementById('dns-hit-badge');
 let _interceptHitCount = 0;
 let _dnsHitCount = 0;
 
+const _BADGE_VISIBLE = 'inline-flex';
+
 function updateRulesHitBadge() {
     if (!rulesHitBadge) return;
     if (_interceptHitCount > 0) {
-        rulesHitBadge.textContent = _interceptHitCount > 99 ? '99+' : _interceptHitCount;
-        rulesHitBadge.style.display = '';
+        rulesHitBadge.textContent = _interceptHitCount > 99 ? '99+' : String(_interceptHitCount);
+        rulesHitBadge.style.display = _BADGE_VISIBLE;
     } else {
         rulesHitBadge.style.display = 'none';
     }
@@ -692,8 +715,8 @@ function updateRulesHitBadge() {
 function updateDnsHitBadge() {
     if (!dnsHitBadge) return;
     if (_dnsHitCount > 0) {
-        dnsHitBadge.textContent = _dnsHitCount > 99 ? '99+' : _dnsHitCount;
-        dnsHitBadge.style.display = '';
+        dnsHitBadge.textContent = _dnsHitCount > 99 ? '99+' : String(_dnsHitCount);
+        dnsHitBadge.style.display = _BADGE_VISIBLE;
     } else {
         dnsHitBadge.style.display = 'none';
     }
@@ -705,21 +728,30 @@ function _onInterceptRuleMatched(info) {
 }
 api.onInterceptRuleMatched?.(_onInterceptRuleMatched);
 api.onInterceptRuleMatchedBatch?.((items) => {
-    if (!Array.isArray(items) || items.length === 0) return;
+    if (!Array.isArray(items) || !items.length) return;
     _interceptHitCount += items.length;
     updateRulesHitBadge();
 });
 
-function _onDnsRuleMatched(info) {
-    const active = tabs.find(t => t.isActive);
-    if (info?.tabId && active && info.tabId !== active.id) return;
+function _onDnsRuleMatched() {
     _dnsHitCount++;
     updateDnsHitBadge();
 }
 api.onDnsRuleMatched?.(_onDnsRuleMatched);
 api.onDnsRuleMatchedBatch?.((items) => {
-    if (!Array.isArray(items) || items.length === 0) return;
-    for (const info of items) _onDnsRuleMatched(info);
+    if (!Array.isArray(items) || !items.length) return;
+    _dnsHitCount += items.length;
+    updateDnsHitBadge();
+});
+api.onToolbarActivityBadgeReset?.((tool) => {
+    const t = String(tool || '');
+    if (t === 'dns') {
+        _dnsHitCount = 0;
+        updateDnsHitBadge();
+    } else if (t === 'rules') {
+        _interceptHitCount = 0;
+        updateRulesHitBadge();
+    }
 });
 
 
@@ -764,4 +796,4 @@ document.addEventListener('mousemove', () => {
 });
 
 // ─── Init: fetch current tabs ─────────────────────────────────────────────────
-api.getTabs().then(td => { renderTabs(td); _onActiveTabChanged(td); }).catch(() => {});
+api.getTabs().then(td => { renderTabs(td); _onActiveTabChanged(td); scheduleCookiePageBadgeRefresh(); }).catch(() => {});

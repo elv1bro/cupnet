@@ -1,5 +1,7 @@
 'use strict';
 
+const { insertCupnetTrafficSnapshotWithGeo } = require('../../services/cupnet-network-meta-log');
+
 /**
  * Cookies, DNS overrides, isolate/direct tabs, DevTools.
  * @param {object} ctx
@@ -214,6 +216,18 @@ function registerCookiesDnsIpc(ctx) {
             } catch (_) { /* ignore */ }
         }
         if (typeof ctx.notifyProxyStatus === 'function') ctx.notifyProxyStatus();
+        try {
+            let profileLabel = 'Direct · tab';
+            if (proxyProfileId && ctx.db?.getProxyProfileEncrypted) {
+                const prow = ctx.db.getProxyProfileEncrypted(proxyProfileId);
+                if (prow?.name) profileLabel = `${prow.name} · tab`;
+                else profileLabel = `Profile #${proxyProfileId} · tab`;
+            }
+            await insertCupnetTrafficSnapshotWithGeo(ctx, {
+                mode: proxyProfileId ? 'proxy' : 'direct',
+                profileName: profileLabel,
+            }).catch(() => {});
+        } catch (_) { /* ignore */ }
         return result;
     });
 

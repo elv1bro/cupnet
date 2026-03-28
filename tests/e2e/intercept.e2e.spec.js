@@ -130,3 +130,23 @@ test('i5) block — /headers на MITM-вкладке отдаёт Blocked by Cu
     const text = await readActiveTabBodyText(electronApp);
     expect(text).toContain('Blocked by CupNet');
 });
+
+test('i6) script — заголовок X-CupNet-Script в JSON httpbin /headers', async () => {
+    await createInterceptRule(mainWindow, {
+        name: 'e2e-script-headers',
+        type: 'script',
+        url_pattern: '*httpbin.org/headers*',
+        enabled: true,
+        params: {
+            beforeSource: 'ctx.headers[\'X-CupNet-Script\'] = \'e2e-script\';',
+            afterSource: '',
+        },
+    });
+    await navigateAndWait(electronApp, HTTPBIN_HEADERS, 90_000, {
+        bodySnippet: 'headers',
+        minBodyLength: 20,
+    });
+    const text = (await readActiveTabBodyText(electronApp)).toLowerCase();
+    expect(text.includes('x-cupnet-script') || text.includes('cupnet-script')).toBe(true);
+    expect(text).toContain('e2e-script');
+});

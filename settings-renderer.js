@@ -273,6 +273,7 @@ function applyTrackingSettings(cfg = {}) {
     if (spTrackPageLoad) spTrackPageLoad.checked = cfg.onPageLoadComplete !== false;
     if (spTrackPending) spTrackPending.checked = cfg.onNetworkPendingChange !== false;
     if (spTrackMouse) spTrackMouse.checked = !!cfg.onMouseActivity;
+    if (spTrackTypingEnd) spTrackTypingEnd.checked = cfg.onTypingEnd !== false;
     if (spTrackScrollEnd) spTrackScrollEnd.checked = !!cfg.onScrollEnd;
     if (spTrackRule) spTrackRule.checked = cfg.onRuleMatchScreenshot !== false;
     if (spTrackPendingThreshold) spTrackPendingThreshold.value = Math.max(1, Math.min(50, Number(cfg.pendingDeltaThreshold) || 3));

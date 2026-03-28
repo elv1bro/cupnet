@@ -126,6 +126,17 @@ function createProxyMitmService(d) {
                         tabId: tabId || null,
                         sessionId: sessionId ?? null,
                     });
+                } else if (entry?.dnsCorsMatch?.host && entry?.dnsCorsMatch?.pattern) {
+                    const cm = entry.dnsCorsMatch;
+                    d.broadcastDnsRuleMatched({
+                        ruleName: `${cm.pattern} -> ${cm.host} (CORS)`,
+                        host: cm.host,
+                        ip: '',
+                        url: entry.url || '',
+                        method: entry.method || 'GET',
+                        tabId: tabId || null,
+                        sessionId: sessionId ?? null,
+                    });
                 }
 
                 const s2 = d.settingsStore.getCached() || d.loadSettings();

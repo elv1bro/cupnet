@@ -12,15 +12,15 @@ const tabsBar     = document.getElementById('pa-tabs-bar');
 const badgeForms   = document.getElementById('badge-forms');
 const badgeCaptcha = document.getElementById('badge-captcha');
 const badgeMeta    = document.getElementById('badge-meta');
+const badgeStorage = document.getElementById('badge-storage');
 const badgeScout   = document.getElementById('badge-scout');
 
 const panelForms   = document.getElementById('panel-forms');
-const panelCaptcha = document.getElementById('panel-captcha');
-const panelMeta    = document.getElementById('panel-meta');
 
 const formsEmpty   = document.getElementById('forms-empty');
 const formsList    = document.getElementById('forms-list');
 const metaContent  = document.getElementById('meta-content');
+const storageContent = document.getElementById('storage-content');
 const scoutHomeEl = document.getElementById('scout-home');
 const scoutScriptsEl = document.getElementById('scout-scripts');
 const scoutEndpointsEl = document.getElementById('scout-endpoints');
@@ -30,14 +30,6 @@ const scoutCopyBtn = document.getElementById('scout-copy');
 const scoutEmptyEl = document.getElementById('scout-empty');
 const scoutTableEl = document.getElementById('scout-table');
 const scoutTbodyEl = document.getElementById('scout-tbody');
-const captchaApiKeyEl = document.getElementById('captcha-api-key');
-const captchaSitekeyOverrideEl = document.getElementById('captcha-sitekey-override');
-const captchaSaveKeyBtn = document.getElementById('captcha-save-key');
-const captchaAutoInjectEl = document.getElementById('captcha-auto-inject');
-const captchaAutoSubmitEl = document.getElementById('captcha-auto-submit');
-const captchaSolveBtn = document.getElementById('captcha-solve-turnstile');
-const captchaRetryBtn = document.getElementById('captcha-retry-last');
-const captchaSolverStatusEl = document.getElementById('captcha-solver-status');
 
 let _activePanel = 'forms';
 let _selectedTabId = null;
@@ -57,26 +49,23 @@ let _analysisInFlight = false;
 let _inlineEditCount = 0;
 /** Фокус в textarea Web Storage — не дергать авто-анализ (иначе сброс текста и потеря фокуса). */
 let _storageEditorActiveCount = 0;
-metaContent.addEventListener('focusin', (e) => {
-    const t = e.target;
-    if (t && t.classList?.contains('st-store-json-edit')) {
-        _storageEditorActiveCount++;
-    }
-});
-metaContent.addEventListener('focusout', (e) => {
-    const t = e.target;
-    if (t && t.classList?.contains('st-store-json-edit')) {
-        _storageEditorActiveCount = Math.max(0, _storageEditorActiveCount - 1);
-    }
-});
+function bindStorageEditorPause(host) {
+    host.addEventListener('focusin', (e) => {
+        const t = e.target;
+        if (t && t.classList?.contains('st-store-json-edit')) {
+            _storageEditorActiveCount++;
+        }
+    });
+    host.addEventListener('focusout', (e) => {
+        const t = e.target;
+        if (t && t.classList?.contains('st-store-json-edit')) {
+            _storageEditorActiveCount = Math.max(0, _storageEditorActiveCount - 1);
+        }
+    });
+}
+bindStorageEditorPause(storageContent);
 const _formsOpenState = new Set();
 const _fieldExpandState = new Set();
-let _capmonsterSettings = {
-    apiKey: '',
-    autoInject: true,
-    autoSubmit: false,
-};
-let _lastTurnstileSolvePayload = null;
 
 // ── Tab panel switching ──
 for (const btn of tabsBar.querySelectorAll('.atab')) {
@@ -183,6 +172,7 @@ async function runAnalysis(opts = {}) {
         renderForms(_lastForms, tabId);
         renderCaptcha(_lastCaptcha);
         renderMeta(_lastMeta);
+        renderStorage();
         if (includeScout) renderScout(_lastScout);
         updateBadges();
 
@@ -219,122 +209,15 @@ function updateBadges() {
     const mc = (_lastMeta.meta || []).length;
     badgeMeta.textContent = mc || '—';
 
+    const ss = _lastStorage?.sessionStorage || {};
+    const ls = _lastStorage?.localStorage || {};
+    const stc = Object.keys(ss).length + Object.keys(ls).length;
+    badgeStorage.textContent = stc;
+    badgeStorage.classList.toggle('has-items', stc > 0);
+
     const sc = (_lastScout.endpoints || []).length;
     badgeScout.textContent = sc;
     badgeScout.classList.toggle('has-items', sc > 0);
-}
-
-function setCaptchaSolveStatus(text, tone = 'neutral') {
-    if (!captchaSolverStatusEl) return;
-    captchaSolverStatusEl.textContent = text || 'Idle';
-    captchaSolverStatusEl.classList.remove('ok', 'err');
-    if (tone === 'ok') captchaSolverStatusEl.classList.add('ok');
-    if (tone === 'err') captchaSolverStatusEl.classList.add('err');
-}
-
-function syncCapmonsterSettingsToUi() {
-    if (captchaApiKeyEl) captchaApiKeyEl.value = _capmonsterSettings.apiKey || '';
-    if (captchaAutoInjectEl) captchaAutoInjectEl.checked = _capmonsterSettings.autoInject !== false;
-    if (captchaAutoSubmitEl) captchaAutoSubmitEl.checked = _capmonsterSettings.autoSubmit === true;
-}
-
-async function persistCapmonsterSettingsFromUi() {
-    const next = {
-        apiKey: String(captchaApiKeyEl?.value || '').trim(),
-        autoInject: !!captchaAutoInjectEl?.checked,
-        autoSubmit: !!captchaAutoSubmitEl?.checked,
-    };
-    _capmonsterSettings = await api.saveCapmonsterSettings(next);
-    syncCapmonsterSettingsToUi();
-    return _capmonsterSettings;
-}
-
-function pickTurnstileForSolve() {
-    const list = _lastCaptcha?.turnstile || [];
-    if (!list.length) return null;
-    const withSitekey = list.find(x => x && x.sitekey);
-    if (withSitekey) return withSitekey;
-    const first = list[0];
-    if (!first) return null;
-    const iframeSrc = String(first.iframeSrc || '');
-    let sitekey = '';
-    try {
-        if (iframeSrc) {
-            const u = new URL(iframeSrc);
-            sitekey = String(u.searchParams.get('k') || u.searchParams.get('sitekey') || u.searchParams.get('render') || '');
-        }
-    } catch {}
-    return { ...first, sitekey };
-}
-
-function resolveTurnstileSitekeyOverride() {
-    const v = String(captchaSitekeyOverrideEl?.value || '').trim();
-    return v || '';
-}
-
-async function solveTurnstileCaptchaFlow(retry = false) {
-    const tabId = getSelectedTabId();
-    if (!tabId) {
-        setCaptchaSolveStatus('No target tab selected.', 'err');
-        return;
-    }
-    const item = retry ? _lastTurnstileSolvePayload : pickTurnstileForSolve();
-    if (!item) {
-        setCaptchaSolveStatus('Turnstile not detected on current page.', 'err');
-        return;
-    }
-    const sitekeyOverride = resolveTurnstileSitekeyOverride();
-    let runOptions = null;
-    try {
-        runOptions = await persistCapmonsterSettingsFromUi();
-    } catch (e) {
-        setCaptchaSolveStatus(`Settings save failed: ${e?.message || e}`, 'err');
-        return;
-    }
-    if (!runOptions.apiKey) {
-        setCaptchaSolveStatus('CapMonster API key is required.', 'err');
-        return;
-    }
-    const tab = _tabsList.find(t => String(t.id) === String(tabId));
-    const payload = {
-        ...item,
-        sitekey: sitekeyOverride || item.sitekey || '',
-        pageUrl: item.pageUrl || _lastCaptcha?.pageUrl || tab?.url || '',
-    };
-    if (!payload.sitekey) {
-        setCaptchaSolveStatus('Sitekey not found. Paste it into "Sitekey override" and retry.', 'err');
-        if (captchaRetryBtn) captchaRetryBtn.disabled = false;
-        return;
-    }
-    _lastTurnstileSolvePayload = payload;
-    if (captchaRetryBtn) captchaRetryBtn.disabled = false;
-    const started = Date.now();
-    setCaptchaSolveStatus('detected -> solving', 'neutral');
-    if (captchaSolveBtn) captchaSolveBtn.disabled = true;
-    try {
-        const result = await api.solveTurnstileCaptcha(tabId, payload, runOptions);
-        if (!result?.ok) {
-            const err = result?.error || {};
-            setCaptchaSolveStatus(`solve failed: ${err.message || err.code || 'unknown error'}`, 'err');
-            return;
-        }
-        const elapsed = Math.round((Date.now() - started) / 1000);
-        const inj = result.inject || {};
-        if (inj.injected) {
-            const post = inj.submitted ? 'injected + submitted' : 'injected';
-            const cb = Number(inj.callbacksInvoked || 0);
-            const cbTail = cb > 0 ? `, callbacks:${cb}` : '';
-            setCaptchaSolveStatus(`token received -> ${post}${cbTail} (${elapsed}s)`, 'ok');
-        } else {
-            setCaptchaSolveStatus(`token received, inject skipped (${inj.reason || 'auto-inject off'}, ${elapsed}s)`, 'ok');
-        }
-        statusEl.textContent = 'Turnstile token solved';
-        setTimeout(() => { statusEl.textContent = 'Ready'; }, 1800);
-    } catch (e) {
-        setCaptchaSolveStatus(`solve failed: ${e?.message || e}`, 'err');
-    } finally {
-        if (captchaSolveBtn) captchaSolveBtn.disabled = false;
-    }
 }
 
 // ── Render forms ──
@@ -631,16 +514,18 @@ function copyFormAsObject(form) {
     });
 }
 
-// ── Render captcha ──
+// ── Render captcha (detection only, no solver) ──
 const captchaSections = document.getElementById('captcha-sections');
 
 function renderCaptcha(data) {
+    if (!captchaSections) return;
     captchaSections.innerHTML = '';
 
     const types = [
         { key: 'recaptcha', icon: '🔵', title: 'reCAPTCHA', items: data.recaptcha || [] },
         { key: 'hcaptcha',  icon: '🟡', title: 'hCaptcha',  items: data.hcaptcha || [] },
         { key: 'turnstile', icon: '🟣', title: 'Turnstile',  items: data.turnstile || [] },
+        { key: 'geetest',   icon: '🟠', title: 'GeeTest',   items: data.geetest || [] },
         { key: 'other',     icon: '⚪', title: 'Other',      items: data.other || [], note: 'in development' },
     ];
 
@@ -695,7 +580,7 @@ function renderCaptcha(data) {
         captchaSections.appendChild(sec);
     }
 
-    captchaSections.addEventListener('click', (e) => {
+    captchaSections.onclick = (e) => {
         const valEl = e.target.closest('.captcha-param-val');
         if (valEl) {
             navigator.clipboard.writeText(valEl.dataset.copy || valEl.textContent).then(() => {
@@ -709,7 +594,7 @@ function renderCaptcha(data) {
         if (copyAllBtn) {
             const key = copyAllBtn.dataset.captchaType;
             const idx = parseInt(copyAllBtn.dataset.captchaIdx, 10);
-            const items = (key === 'recaptcha' ? data.recaptcha : key === 'hcaptcha' ? data.hcaptcha : key === 'turnstile' ? data.turnstile : data.other) || [];
+            const items = (key === 'recaptcha' ? data.recaptcha : key === 'hcaptcha' ? data.hcaptcha : key === 'turnstile' ? data.turnstile : key === 'geetest' ? data.geetest : data.other) || [];
             const item = items[idx];
             if (item) {
                 const obj = { type: key };
@@ -721,7 +606,7 @@ function renderCaptcha(data) {
                 });
             }
         }
-    });
+    };
 }
 
 function _getCaptchaParams(type, item, pageUrl) {
@@ -743,6 +628,12 @@ function _getCaptchaParams(type, item, pageUrl) {
         if (item.cData)  params.push(['cData', item.cData]);
         if (item.theme)  params.push(['theme', item.theme]);
         if (item.size)   params.push(['size', item.size]);
+    } else if (type === 'geetest') {
+        if (item.gt) params.push(['gt', item.gt]);
+        if (item.challenge) params.push(['challenge', item.challenge]);
+        if (item.apiServer) params.push(['apiServer', item.apiServer]);
+        if (item.version) params.push(['version', item.version]);
+        if (item.scriptSrc) params.push(['scriptSrc', item.scriptSrc]);
     }
     if (item.iframeSrc) params.push(['iframeSrc', item.iframeSrc]);
     if (item.selector && item.selector !== 'iframe') params.push(['selector', item.selector]);
@@ -955,6 +846,8 @@ async function applyStorageToPage(storeKind, entries) {
     }
     _storageApplyLoading = storeKind;
     renderMeta(_lastMeta);
+    renderStorage();
+    updateBadges();
     await new Promise((r) => requestAnimationFrame(() => r()));
 
     let errMsg = null;
@@ -971,6 +864,8 @@ async function applyStorageToPage(storeKind, entries) {
     } finally {
         _storageApplyLoading = null;
         renderMeta(_lastMeta);
+        renderStorage();
+        updateBadges();
         statusEl.textContent = errMsg || 'Данные с вкладки подгружены в форму';
         setTimeout(() => { statusEl.textContent = 'Ready'; }, 2200);
     }
@@ -1124,7 +1019,12 @@ function renderMeta(data) {
             if (div.querySelectorAll('.meta-row').length) metaContent.appendChild(div);
         }
     }
+}
 
+function renderStorage() {
+    if (!storageContent) return;
+    storageContent.innerHTML = '';
+    _storageEditorActiveCount = 0;
     const ss = _lastStorage?.sessionStorage || {};
     const ls = _lastStorage?.localStorage || {};
     const ns = Object.keys(ss).length;
@@ -1137,7 +1037,7 @@ function renderMeta(data) {
     stTitle.textContent = `Web storage (${ns} session · ${nl} local)`;
     storageSec.appendChild(stTitle);
     appendStorageInspector(storageSec, ss, ls);
-    metaContent.appendChild(storageSec);
+    storageContent.appendChild(storageSec);
 }
 
 function classifyEndpoint(ep) {
@@ -1229,29 +1129,8 @@ scoutCopyBtn?.addEventListener('click', () => {
     }).catch(() => {});
 });
 
-captchaSaveKeyBtn?.addEventListener('click', async () => {
-    try {
-        await persistCapmonsterSettingsFromUi();
-        setCaptchaSolveStatus('Settings saved.', 'ok');
-    } catch (e) {
-        setCaptchaSolveStatus(`Settings save failed: ${e?.message || e}`, 'err');
-    }
-});
-captchaAutoInjectEl?.addEventListener('change', () => { persistCapmonsterSettingsFromUi().catch(() => {}); });
-captchaAutoSubmitEl?.addEventListener('change', () => { persistCapmonsterSettingsFromUi().catch(() => {}); });
-captchaSolveBtn?.addEventListener('click', () => solveTurnstileCaptchaFlow(false));
-captchaRetryBtn?.addEventListener('click', () => solveTurnstileCaptchaFlow(true));
-
 // Initial load
-Promise.all([
-    api.getTabs?.(),
-    api.getCapmonsterSettings?.().catch(() => null),
-]).then(([tabs, capmonster]) => {
-    if (capmonster && typeof capmonster === 'object') {
-        _capmonsterSettings = { ..._capmonsterSettings, ...capmonster };
-    }
-    syncCapmonsterSettingsToUi();
-    setCaptchaSolveStatus('Idle');
+api.getTabs?.().then((tabs) => {
     populateTabSelect(tabs);
     setupAutoRefresh();
     if (autoCheck.checked) setTimeout(() => runAnalysis({ includeScout: false }), 300);

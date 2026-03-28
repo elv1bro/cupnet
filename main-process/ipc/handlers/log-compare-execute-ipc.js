@@ -1,5 +1,7 @@
 'use strict';
 
+const { sanitizeOutgoingRequestHeaders } = require('../../../utils');
+
 /**
  * Log viewer, compare, JSONL, rules window, request editor, execute-request.
  * @param {object} ctx
@@ -243,6 +245,7 @@ function registerLogCompareExecuteIpc(ctx) {
     ctx.ipcMain.handle('execute-request', async (_, { method, url, headers, body, tlsProfile }) => {
         const start = Date.now();
         const reqMethod = (method || 'GET').toUpperCase();
+        const sanitizedHeaders = sanitizeOutgoingRequestHeaders(headers || {});
 
         /** Log the result to DB and forward to open log viewer windows */
         function maybeLog(result) {
@@ -298,7 +301,7 @@ function registerLogCompareExecuteIpc(ctx) {
                 const res = await ctx.mitmProxy.worker.request({
                     method:            reqMethod,
                     url,
-                    headers:           headers || {},
+                    headers:           sanitizedHeaders,
                     body:              body || undefined,
                     proxy:            currentProxy,
                     browser:          profile,
@@ -334,7 +337,7 @@ function registerLogCompareExecuteIpc(ctx) {
 
             // Fallback: Electron net.fetch
             const safe = {};
-            for (const [k, v] of Object.entries(headers || {})) {
+            for (const [k, v] of Object.entries(sanitizedHeaders)) {
                 if (!EXEC_FORBIDDEN.has(k.toLowerCase())) safe[k] = v;
             }
             const isBodyless = ['GET','HEAD','OPTIONS'].includes(reqMethod);

@@ -12,13 +12,6 @@
             color: #e2e8f0;
             height: 100vh;
             overflow: hidden;
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            grid-template-rows: 100vh;
-            transition: grid-template-columns 0.28s cubic-bezier(.4,0,.2,1);
-        }
-        body.guide-hidden {
-            grid-template-columns: 1fr 0px;
         }
         /* Disable all transitions during initial state restore to prevent flash */
         body.no-transition,
@@ -83,69 +76,8 @@
             justify-content: flex-start;
             padding: 0;
             background: linear-gradient(160deg, #0f1117 0%, #1a1d2e 60%, #0d1117 100%);
-            border-right: 1px solid rgba(255,255,255,0.06);
             position: relative;
             overflow: hidden;
-        }
-
-        /* ── Guide toggle button ── */
-        #guide-toggle {
-            position: fixed;
-            left: 50%;
-            top: 50%;
-            transform: translateY(-50%);
-            z-index: 100;
-            width: 22px; height: 96px;
-            background: linear-gradient(180deg, #1e2a4a 0%, #1a2240 100%);
-            border: 1px solid rgba(99,130,255,0.28);
-            /* guide open: button at split, flat left side → right corners rounded */
-            border-left: none;
-            border-radius: 0 8px 8px 0;
-            cursor: pointer;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            color: #6b82b8;
-            font-size: 10px;
-            transition: left 0.28s cubic-bezier(.4,0,.2,1),
-                        border-radius 0.28s cubic-bezier(.4,0,.2,1),
-                        background 0.18s, color 0.18s,
-                        border-color 0.18s, box-shadow 0.18s;
-            padding: 0;
-            box-shadow: 2px 0 10px rgba(60,100,255,0.1);
-        }
-        #guide-toggle:hover {
-            background: linear-gradient(180deg, #253460 0%, #1e2d55 100%);
-            color: #a0b4e8;
-            border-color: rgba(99,130,255,0.55);
-            box-shadow: 2px 0 16px rgba(60,100,255,0.22);
-        }
-        /* guide hidden: button at right screen edge, flat right side → left corners rounded */
-        body.guide-hidden #guide-toggle {
-            left: calc(100% - 22px);
-            border-left: 1px solid rgba(99,130,255,0.28);
-            border-right: none;
-            border-radius: 8px 0 0 8px;
-            box-shadow: -2px 0 10px rgba(60,100,255,0.1);
-        }
-        #guide-toggle .gt-arrow {
-            line-height: 1;
-            font-size: 12px;
-            /* no rotation needed — we swap the character in JS */
-        }
-        #guide-toggle .gt-label {
-            writing-mode: vertical-rl;
-            text-orientation: mixed;
-            transform: rotate(180deg);
-            font-size: 9px;
-            font-weight: 600;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            color: inherit;
-            opacity: 0.75;
-            user-select: none;
         }
 
         /* ash / ember canvas */
@@ -216,7 +148,10 @@
             flex: 0 0 auto;
             display: flex;
             align-items: center;
-            gap: 14px;
+            justify-content: space-between;
+            gap: 16px;
+            width: 100%;
+            box-sizing: border-box;
             padding: 0 40px;
             position: relative;
             transition: margin-top 0.45s ease;
@@ -226,7 +161,7 @@
             align-items: center;
             gap: 0;
             min-width: 0;
-            flex-shrink: 1;
+            flex-shrink: 0;
         }
         /* ── Hero mode toggle (MITM / Direct) — bare inline style ───── */
         .hero-mode-toggle {
@@ -363,8 +298,12 @@
         }
         .lc-clock-inline {
             display: flex;
-            align-items: baseline;
-            gap: 10px;
+            flex-direction: column;
+            align-items: flex-end;
+            justify-content: center;
+            gap: 5px;
+            flex-shrink: 0;
+            text-align: right;
             transition: opacity 0.3s ease;
         }
 
@@ -389,11 +328,12 @@
 
         #date {
             font-family: 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
-            font-size: 11px;
-            font-weight: 400;
-            color: rgba(255,255,255,0.35);
-            letter-spacing: 1.5px;
+            font-size: 10.5px;
+            font-weight: 500;
+            color: rgba(255,255,255,0.38);
+            letter-spacing: 0.12em;
             text-transform: uppercase;
+            line-height: 1.2;
         }
 
         /* ══════════════════════════════════════════
@@ -413,8 +353,9 @@
             grid-template-columns: 1fr 1fr;
             gap: 14px;
             margin-top: 8px;
+            align-items: start;
         }
-        .lc-col { display: flex; flex-direction: column; gap: 0; min-width: 0; align-self: stretch; }
+        .lc-col { display: flex; flex-direction: column; gap: 0; min-width: 0; align-self: start; }
         .lc-full { grid-column: 1 / -1; }
 
         .search-wrapper { width: 100%; position: relative; margin-bottom: 8px; flex-shrink: 0; }
@@ -807,47 +748,62 @@
         .cookie-iso-seg {
             display: flex;
             flex-shrink: 0;
-            border-radius: 6px;
+            border-radius: 10px;
             overflow: hidden;
-            border: 1px solid rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.14);
+            box-shadow: 0 1px 0 rgba(0,0,0,0.25), inset 0 0 0 1px rgba(0,0,0,0.12);
+            background: rgba(15, 23, 42, 0.65);
         }
         .cookie-iso-seg.cupnet-off {
             opacity: 0.5;
         }
         .cookie-iso-btn {
-            padding: 4px 8px;
-            font-size: 9px;
-            font-weight: 700;
+            position: relative;
+            flex: 1;
+            min-width: 92px;
+            padding: 9px 12px;
+            font-size: 11px;
+            font-weight: 800;
             text-transform: uppercase;
-            letter-spacing: 0.04em;
+            letter-spacing: 0.08em;
             border: none;
-            background: rgba(255,255,255,0.04);
-            color: #64748b;
+            background: transparent;
+            color: #94a3b8;
             cursor: pointer;
-            transition: background 0.15s, color 0.15s;
+            transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+        }
+        .cookie-iso-btn + .cookie-iso-btn::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 20%;
+            bottom: 20%;
+            width: 1px;
+            background: rgba(255,255,255,0.1);
+            pointer-events: none;
         }
         .cookie-iso-btn:hover:not(:disabled) {
             background: rgba(255,255,255,0.08);
-            color: #94a3b8;
+            color: #e2e8f0;
         }
-        .cookie-iso-btn:disabled {
-            opacity: 0.35;
+        .cookie-iso-btn:disabled:not(.active) {
+            opacity: 0.4;
             cursor: not-allowed;
         }
+        .cookie-iso-btn.active:disabled {
+            opacity: 1;
+            cursor: default;
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+        }
         .cookie-iso-btn.active {
-            background: rgba(96, 165, 250, 0.16);
-            color: #7dd3fc;
+            background: linear-gradient(180deg, rgba(56, 189, 248, 0.22) 0%, rgba(14, 165, 233, 0.12) 100%);
+            color: #e0f2fe;
+            text-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
         }
         .cookie-iso-seg.state-isolated .cookie-iso-btn.active {
-            background: rgba(236, 72, 153, 0.2);
-            color: #f9a8d4;
-        }
-        .cookie-in-dev-hint {
-            font-size: 9px;
-            color: #475569;
-            line-height: 1.35;
-            margin: 0;
-            padding: 0 1px;
+            background: linear-gradient(180deg, rgba(244, 114, 182, 0.28) 0%, rgba(219, 39, 119, 0.14) 100%);
+            color: #fce7f3;
+            text-shadow: 0 0 12px rgba(244, 114, 182, 0.35);
         }
 
         .pw-top { display: flex; align-items: center; gap: 8px; }
@@ -1027,7 +983,6 @@
             opacity: 1;
             transition: opacity 0.3s;
         }
-        body.guide-hidden .scroll-hint { width: 100%; }
         .scroll-hint.hidden { opacity: 0; }
         .scroll-hint-arrow {
             display: flex;
@@ -1177,15 +1132,31 @@
         .epw-start-btn:disabled { opacity: 0.5; cursor: wait; transform: none; filter: none; }
 
         /* ON — status */
-        .epw-on-state { display: flex; flex-direction: column; gap: 12px; }
-        .epw-status-bar {
-            display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+        .epw-on-state { display: flex; flex-direction: column; gap: 10px; }
+        .epw-status-card {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
         }
-        .epw-status-primary {
-            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+        .epw-status-top {
+            display: flex;
+            flex-wrap: nowrap;
+            align-items: center;
+            gap: 10px;
+        }
+        .epw-status-chips {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: nowrap;
         }
         .epw-live-badge {
-            display: inline-flex; align-items: center; gap: 8px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
             font-size: 11px; font-weight: 600; color: #bbf7d0;
             padding: 5px 10px 5px 8px;
             border-radius: 999px;
@@ -1203,6 +1174,7 @@
             50% { opacity: 0.75; transform: scale(0.92); }
         }
         .epw-port-pill {
+            flex-shrink: 0;
             font-family: 'SF Mono','Fira Code',monospace;
             font-size: 11px; font-weight: 700; color: #e2e8f0;
             padding: 4px 11px; border-radius: 8px;
@@ -1210,8 +1182,14 @@
             border: 1px solid rgba(255,255,255,0.1);
         }
         .epw-chain-box {
-            display: inline-flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
-            padding: 5px 10px; border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: nowrap;
+            flex-shrink: 1;
+            min-width: 0;
+            padding: 5px 10px;
+            border-radius: 8px;
             background: rgba(0,0,0,0.18);
             border: 1px solid rgba(255,255,255,0.06);
         }
@@ -1225,7 +1203,8 @@
         }
         .epw-chain-upstream.direct { color: #94a3b8; font-weight: 500; font-style: italic; }
         .epw-stop-btn {
-            margin-left: auto;
+            flex-shrink: 0;
+            align-self: center;
             font-size: 11px; font-weight: 600;
             padding: 7px 14px; border-radius: 9px; border: none;
             background: rgba(239,68,68,0.14); color: #fca5a5;
@@ -1237,40 +1216,137 @@
         }
         .epw-stop-btn:disabled { opacity: 0.5; cursor: wait; }
         .epw-session-meta {
-            margin: -4px 0 0; font-size: 10px; color: #64748b;
+            margin: 0;
+            font-size: 10px;
+            color: #64748b;
+            line-height: 1.3;
         }
+
+        .epw-url-sheet { margin-top: 0; }
+        .epw-url-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .epw-url-toggle {
+            flex: 1;
+            min-width: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            margin: 0;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            cursor: pointer;
+            text-align: left;
+            color: inherit;
+            transition: background 0.15s;
+        }
+        .epw-url-toggle:hover { background: rgba(255,255,255,0.04); }
+        .epw-url-toggle-label {
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 0.09em;
+            text-transform: uppercase;
+            color: #64748b;
+        }
+        .epw-url-chevron {
+            font-size: 10px;
+            color: #64748b;
+            transition: transform 0.15s;
+        }
+        .epw-url-chevron.open { transform: rotate(90deg); }
+        .epw-url-copy-head {
+            flex-shrink: 0;
+            font-size: 10px;
+            font-weight: 700;
+            padding: 6px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(34,197,94,0.28);
+            background: rgba(34,197,94,0.12);
+            color: #86efac;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+        .epw-url-copy-head:hover { background: rgba(34,197,94,0.22); color: #bbf7d0; }
+
+        .epw-url-body { margin-top: 4px; display: flex; flex-direction: column; gap: 8px; }
 
         .epw-section-label {
             font-size: 9px; font-weight: 700; letter-spacing: 0.09em;
             text-transform: uppercase; color: #64748b;
-            margin-bottom: -4px;
+            margin: 2px 0 2px;
         }
 
-        .epw-cards { display: flex; flex-direction: column; gap: 8px; }
-        .epw-card {
-            border-radius: 12px;
+        .epw-target-block {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
             padding: 10px 12px;
-            background: rgba(0,0,0,0.22);
+            border-radius: 12px;
+            background: rgba(0,0,0,0.2);
+            border: 1px solid rgba(255,255,255,0.07);
+            box-sizing: border-box;
+        }
+        .epw-target-seg {
+            display: flex;
+            width: 100%;
+            box-sizing: border-box;
+            padding: 2px;
+            border-radius: 9px;
+            background: rgba(0,0,0,0.35);
             border: 1px solid rgba(255,255,255,0.08);
-            transition: border-color 0.15s;
         }
-        .epw-card:hover { border-color: rgba(255,255,255,0.12); }
-        .epw-card-lan { border-color: rgba(251,191,36,0.15); }
-        .epw-card-lan:hover { border-color: rgba(251,191,36,0.28); }
-        .epw-card-top {
-            display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
-            margin-bottom: 8px;
+        .epw-seg-btn {
+            flex: 1;
+            min-width: 0;
+            box-sizing: border-box;
+            font-size: 10px; font-weight: 600;
+            padding: 6px 10px; border-radius: 7px;
+            border: 1px solid transparent;
+            cursor: pointer;
+            background: transparent; color: #94a3b8;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
         }
-        .epw-card-titles { min-width: 0; }
-        .epw-card-title {
-            display: block; font-size: 12px; font-weight: 700; color: #f1f5f9;
+        .epw-seg-btn:hover { color: #cbd5e1; }
+        .epw-seg-btn.active {
+            background: rgba(124,58,237,0.35);
+            color: #e9d5ff;
+            border-color: rgba(167,139,250,0.35);
         }
-        .epw-card-sub {
-            display: block; font-size: 10px; color: #64748b; margin-top: 2px;
+        .epw-endpoint-sub {
+            margin: 0;
+            width: 100%;
+            box-sizing: border-box;
+            font-size: 10px; line-height: 1.35; color: #64748b;
             font-family: 'SF Mono','Fira Code',monospace;
         }
+        .epw-url-row {
+            display: flex;
+            align-items: stretch;
+            gap: 8px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .epw-url-code {
+            flex: 1; min-width: 0; margin: 0;
+            font-family: 'SF Mono','Fira Code',monospace;
+            font-size: 10px; line-height: 1.45; color: #cbd5e1;
+            word-break: break-all; white-space: pre-wrap;
+            max-height: 48px; overflow-y: auto;
+            padding: 8px 10px; border-radius: 8px;
+            background: rgba(0,0,0,0.35);
+            border: 1px solid rgba(255,255,255,0.05);
+            user-select: all; cursor: text;
+        }
+        .epw-url-code::-webkit-scrollbar { width: 4px; }
+        .epw-url-code::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.12); border-radius: 3px;
+        }
         .epw-btn-copy {
-            flex-shrink: 0;
+            flex-shrink: 0; align-self: stretch;
             font-size: 10px; font-weight: 600;
             padding: 5px 11px; border-radius: 7px; border: none;
             cursor: pointer;
@@ -1281,42 +1357,70 @@
         .epw-btn-copy:hover {
             background: rgba(34,197,94,0.26); color: #bbf7d0;
         }
-        .epw-card-url {
-            display: block; margin: 0;
-            font-family: 'SF Mono','Fira Code',monospace;
-            font-size: 10px; line-height: 1.5; color: #cbd5e1;
-            word-break: break-all; white-space: pre-wrap;
-            max-height: 52px; overflow-y: auto;
-            padding: 8px 10px; border-radius: 8px;
-            background: rgba(0,0,0,0.35);
-            border: 1px solid rgba(255,255,255,0.05);
-            user-select: all; cursor: text;
-        }
-        .epw-card-url::-webkit-scrollbar { width: 4px; }
-        .epw-card-url::-webkit-scrollbar-thumb {
-            background: rgba(255,255,255,0.12); border-radius: 3px;
-        }
 
-        .epw-callout {
-            display: flex; align-items: flex-start; gap: 10px;
-            padding: 10px 12px; border-radius: 10px;
-            font-size: 11px; line-height: 1.45; color: #fde68a;
-            background: rgba(245,158,11,0.1);
-            border: 1px solid rgba(245,158,11,0.28);
+        .epw-fw-compact {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 10px; border-radius: 8px;
+            font-size: 10px; line-height: 1.35; color: #fde68a;
+            background: rgba(245,158,11,0.08);
+            border: 1px solid rgba(245,158,11,0.22);
         }
-        .epw-callout-icon {
-            flex-shrink: 0; font-size: 14px; line-height: 1.2; opacity: 0.9;
+        .epw-fw-icon { flex-shrink: 0; opacity: 0.9; }
+        .epw-fw-text {
+            min-width: 0;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
         }
-        .epw-callout strong { color: #fcd34d; font-weight: 700; }
+        .epw-fw-text strong { color: #fcd34d; font-weight: 700; }
 
+        .epw-curl-sheet {
+            margin-top: 2px;
+        }
+        .epw-curl-bar {
+            display: flex; align-items: center; gap: 8px;
+        }
+        .epw-curl-toggle {
+            flex: 1; min-width: 0;
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 6px 8px; margin: 0;
+            border: none; border-radius: 8px;
+            background: transparent;
+            cursor: pointer;
+            text-align: left;
+            color: inherit;
+            transition: background 0.15s;
+        }
+        .epw-curl-toggle:hover { background: rgba(255,255,255,0.04); }
+        .epw-curl-toggle-label {
+            font-size: 9px; font-weight: 700; letter-spacing: 0.09em;
+            text-transform: uppercase; color: #64748b;
+        }
+        .epw-curl-chevron {
+            font-size: 10px; color: #64748b;
+            transition: transform 0.15s;
+        }
+        .epw-curl-chevron.open { transform: rotate(90deg); }
+        .epw-curl-copy-head {
+            flex-shrink: 0;
+            font-size: 10px; font-weight: 700;
+            padding: 6px 12px; border-radius: 8px; border: none;
+            background: rgba(34,197,94,0.12); color: #86efac;
+            border: 1px solid rgba(34,197,94,0.28);
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+        .epw-curl-copy-head:hover { background: rgba(34,197,94,0.22); color: #bbf7d0; }
+
+        .epw-curl-body { margin-top: 4px; }
         .epw-curl-shell {
-            display: flex; gap: 10px; align-items: stretch;
             background: rgba(0,0,0,0.28);
             border: 1px solid rgba(255,255,255,0.08);
             border-radius: 12px; overflow: hidden;
         }
         .epw-curl-code {
-            flex: 1; min-width: 0; margin: 0;
+            margin: 0;
             font-family: 'SF Mono','Fira Code',monospace;
             font-size: 10px; line-height: 1.5; color: #94a3b8;
             padding: 10px 12px;
@@ -1328,17 +1432,6 @@
             white-space: nowrap; overflow-x: auto; overflow-y: hidden;
             word-break: normal; text-overflow: unset;
         }
-        .epw-curl-copy {
-            flex-shrink: 0;
-            align-self: stretch;
-            min-width: 64px;
-            font-size: 10px; font-weight: 700;
-            padding: 0 12px;
-            border: none; border-left: 1px solid rgba(255,255,255,0.08);
-            background: rgba(34,197,94,0.1); color: #86efac;
-            cursor: pointer; transition: background 0.15s;
-        }
-        .epw-curl-copy:hover { background: rgba(34,197,94,0.22); color: #bbf7d0; }
 
         .epw-error {
             font-size: 11px; line-height: 1.4; color: #fca5a5;
@@ -1348,184 +1441,13 @@
         }
 
         @media (max-width: 420px) {
-            .epw-stop-btn { margin-left: 0; width: 100%; }
-            .epw-status-bar { flex-direction: column; align-items: stretch; }
-        }
-
-        /* ═══════════════════════════════════════════════════════════
-           RIGHT — Guide (styled like index.html)
-        ═══════════════════════════════════════════════════════════ */
-        .right-panel {
-            background: #0b1020;
-            overflow-y: auto;
-            overflow-x: hidden;
-            padding: 22px 22px 48px;
-            scrollbar-width: thin;
-            scrollbar-color: #1f2a44 transparent;
-            font-size: 13px;
-            line-height: 1.55;
-            color: #e8eefc;
-            transition: opacity 0.2s, padding 0.28s;
-        }
-        body.guide-hidden .right-panel {
-            overflow: hidden;
-            padding: 0;
-            opacity: 0;
-            pointer-events: none;
-        }
-        .right-panel::-webkit-scrollbar { width: 5px; }
-        .right-panel::-webkit-scrollbar-thumb { background: #1f2a44; border-radius: 3px; }
-
-        /* Hero row */
-        .g-hero {
-            display: flex; align-items: center; gap: 14px;
-            background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
-            border: 1px solid #1f2a44; border-radius: 16px; padding: 14px 16px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05);
-            margin-bottom: 16px;
-        }
-        .g-hero-icon { font-size: 40px; line-height: 1; flex-shrink: 0; }
-        .g-hero-logo {
-            width: 54px;
-            height: 54px;
-            object-fit: contain;
-            border-radius: 14px;
-            flex-shrink: 0;
-            filter: drop-shadow(0 4px 14px rgba(0,0,0,0.55))
-                    drop-shadow(0 0 28px rgba(96,165,250,0.14));
-            box-shadow: 0 0 0 1px rgba(99,130,255,0.18),
-                        inset 0 1px 0 rgba(255,255,255,0.07);
-        }
-        .g-hero-title { font-size: 18px; font-weight: 700; margin: 0 0 4px 0; color: #f1f5f9; }
-        .g-hero-sub { font-size: 12px; color: #9fb0d0; }
-        .g-hero-links { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-        .g-hero-link {
-            display: inline-block; padding: 7px 14px;
-            border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 12px;
-            border: 1px solid rgba(255,255,255,0.15);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-            transition: transform 0.15s, box-shadow 0.15s;
-        }
-        .g-hero-link:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.35); }
-        .g-hero-link.orange { background: linear-gradient(135deg,#ff6e00,#ff9e4d); color:#fff; }
-        .g-hero-link.blue   { background: linear-gradient(135deg,#0078ff,#00c3ff); color:#fff; }
-
-        /* Cards */
-        .g-card {
-            background: #12182a; border: 1px solid #1f2a44; border-radius: 14px;
-            padding: 14px 16px; margin-bottom: 14px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.25);
-        }
-        .g-card h2 { font-size: 15px; margin: 0 0 10px 0; color: #e8eefc; }
-        .g-card h3 { font-size: 13px; margin: 14px 0 6px; color: #c7d7f0; }
-        .g-card p  { margin: 6px 0; color: #9fb0d0; font-size: 12.5px; }
-        .g-card ul, .g-card ol { margin: 6px 0 0 16px; padding: 0; }
-        .g-card li { margin-bottom: 5px; color: #9fb0d0; font-size: 12.5px; }
-        .g-card li b, .g-card p b { color: #e8eefc; }
-        .g-card a { color: #4f7cff; text-decoration: none; }
-        .g-card a:hover { text-decoration: underline; }
-
-        /* TOC links */
-        .g-toc a { display: block; padding: 5px 0; color: #4f7cff; font-size: 13px; text-decoration: none; border-bottom: 1px solid #1f2a44; }
-        .g-toc a:last-child { border-bottom: none; }
-        .g-toc a:hover { color: #93c5fd; }
-
-        /* code / kbd */
-        code {
-            font-family: 'SF Mono','Fira Code','Courier New',monospace;
-            background: #0e1425; color: #cfe0ff;
-            border: 1px solid #1f2a44;
-            padding: 1px 5px; border-radius: 6px; font-size: 0.9em;
-        }
-        kbd {
-            display: inline-block;
-            font-family: 'SF Mono','Fira Code','Courier New',monospace;
-            background: #0e1425; color: #cfe0ff;
-            border: 1px solid #1f2a44;
-            padding: 2px 6px; border-radius: 6px; font-size: 0.88em;
-            white-space: nowrap;
-        }
-        pre {
-            background: #0e1425; border: 1px solid #1f2a44;
-            padding: 10px 12px; border-radius: 10px; overflow: auto;
-            font-size: 11px; line-height: 1.6;
-        }
-
-        /* tip blocks */
-        .g-tip {
-            background: linear-gradient(180deg,rgba(255,255,255,0.03),rgba(255,255,255,0.02));
-            border: 1px dashed #1f2a44;
-            padding: 8px 12px; border-radius: 10px;
-            color: #9fb0d0; font-size: 12px; line-height: 1.5;
-            margin: 6px 0;
-        }
-
-        /* status pills */
-        .g-status {
-            display: inline-flex; align-items: center; gap: 6px;
-            padding: 4px 10px; border-radius: 999px; border: 1px solid #1f2a44;
-            background: rgba(255,255,255,0.03); font-size: 12px; margin: 4px 4px 0 0;
-        }
-        .g-status.ok   { color: #bff6d8; }
-        .g-status.warn { color: #ffe3ad; }
-
-        details {
-            border: 1px solid #1f2a44; border-radius: 10px;
-            padding: 8px 12px; background: rgba(255,255,255,0.02);
-            margin-top: 8px;
-        }
-        summary { cursor: pointer; user-select: none; color: #9fb0d0; font-size: 12px; }
-
-        .g-pill {
-            display: inline-block; padding: 2px 8px; border-radius: 999px;
-            border: 1px solid #1f2a44; background: rgba(255,255,255,0.04);
-            color: #9fb0d0; font-size: 11px; margin-right: 4px;
-        }
-        .g-hr { height: 1px; background: linear-gradient(90deg,transparent,#263457,transparent); margin: 14px 0; border: none; }
-        .g-footer { margin-top: 18px; color: #4f5e7a; font-size: 11px; text-align: center; }
-
-        /* keyboard shortcut row */
-        .g-kbd-row { margin: 4px 0; display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
-        .g-kbd-row .kd { flex-shrink: 0; min-width: 120px; }
-        .g-kbd-row .kd-desc { color: #9fb0d0; }
-
-        /* ── Language switcher ── */
-        #g-lang-bar {
-            display: flex; align-items: center; gap: 4px;
-            margin-bottom: 14px; padding-bottom: 12px;
-            border-bottom: 1px solid #1f2a44;
-            position: sticky; top: 0; z-index: 10;
-            background: #0b1020;
-            padding-top: 4px;
-        }
-        .g-lang-globe { color: #4f5e7a; font-size: 13px; margin-right: 4px; flex-shrink: 0; }
-        .g-lang-btn {
-            background: transparent; border: 1px solid #1f2a44;
-            color: #9fb0d0; padding: 3px 8px; border-radius: 6px;
-            font-size: 11px; font-weight: 600; cursor: pointer;
-            transition: color 0.15s, background 0.15s, border-color 0.15s;
-            letter-spacing: 0.5px; font-family: inherit;
-        }
-        .g-lang-btn:hover { color: #e8eefc; border-color: #3b5380; }
-        .g-lang-btn.active { background: #1a2540; color: #93c5fd; border-color: #3b5380; }
-
-        /* new-feature badge */
-        .g-new {
-            display: inline-block; padding: 1px 6px; border-radius: 999px;
-            background: linear-gradient(135deg,#1d4ed8,#2563eb);
-            color: #bfdbfe; font-size: 10px; font-weight: 700;
-            letter-spacing: 0.3px; vertical-align: middle; margin-left: 5px;
-        }
-        /* warning tip variant */
-        .g-tip.danger {
-            border-color: #7f1d1d; background: rgba(127,29,29,0.12); color: #fca5a5;
-        }
-        .g-tip.success {
-            border-color: #14532d; background: rgba(20,83,45,0.12); color: #86efac;
+            .epw-status-top { flex-wrap: wrap; }
+            .epw-status-chips { flex-wrap: wrap; }
+            .epw-stop-btn { width: 100%; }
         }
     </style>
 </head>
-<body class="guide-hidden no-transition">
+<body class="no-transition">
 <div id="startup-splash" aria-hidden="true">
     <div id="startup-splash-inner">
         <img src="img.png" alt="[CupNet]">
@@ -1535,12 +1457,6 @@
     </div>
 </div>
 
-<!-- Guide toggle — outside both panels so it's always visible -->
-<button id="guide-toggle" title="Open guide">
-    <span class="gt-arrow">›</span>
-    <span class="gt-label">Guide</span>
-</button>
-
 <!-- ═══════════════════ LEFT ═══════════════════ -->
 <div class="left-panel">
 
@@ -1548,7 +1464,7 @@
 
     <div class="left-content">
 
-        <!-- ── Hero: brand left, mode toggle right, clock far right ── -->
+        <!-- ── Hero: brand left — clock + date stacked, right-aligned ── -->
         <div class="lc-hero">
             <div class="lc-hero-brand">
                 <div class="lc-logo-wrap"><img class="lc-logo-img" src="img.png" alt="[CupNet]"></div>
@@ -1556,7 +1472,7 @@
             </div>
             <div class="lc-clock-inline">
                 <span id="clock">00<span class="colon">:</span>00</span>
-                <span id="date">loading…</span>
+                <span id="date">…</span>
             </div>
         </div>
 
@@ -1617,7 +1533,6 @@
                                 <button class="cookie-bar-btn cookie-bar-clear" id="cookie-bar-clear" disabled title="Clear all cookies">Clear</button>
                             </div>
                         </div>
-                        <p class="cookie-in-dev-hint" id="cookie-in-dev-hint">Advanced cookie groups: Cookie Manager <span class="cookie-in-dev-tag">(in development)</span>.</p>
                     </div>
                 </div>
             </div>
@@ -1671,55 +1586,66 @@
 
                     <!-- ON state -->
                     <div class="epw-on-state" id="epw-on-state" style="display:none">
-                        <div class="epw-status-bar">
-                            <div class="epw-status-primary">
-                                <span class="epw-live-badge">
-                                    <span class="epw-status-dot" aria-hidden="true"></span>
-                                    Listening
-                                </span>
-                                <span class="epw-port-pill" id="epw-active-port" title="TCP port">—</span>
-                                <div class="epw-chain-box">
-                                    <span class="epw-chain-label">Upstream</span>
-                                    <span class="epw-chain-upstream direct" id="epw-chain-upstream">direct</span>
-                                </div>
-                            </div>
-                            <button type="button" class="epw-stop-btn" id="epw-stop-btn">Stop</button>
-                        </div>
-                        <p class="epw-session-meta" id="epw-meta"></p>
-
-                        <div class="epw-section-label">HTTP proxy URL</div>
-                        <div class="epw-cards">
-                            <div class="epw-card">
-                                <div class="epw-card-top">
-                                    <div class="epw-card-titles">
-                                        <span class="epw-card-title">This computer</span>
-                                        <span class="epw-card-sub">127.0.0.1 — scripts &amp; terminals on this machine</span>
+                        <div class="epw-status-card">
+                            <div class="epw-status-top">
+                                <div class="epw-status-chips">
+                                    <span class="epw-live-badge">
+                                        <span class="epw-status-dot" aria-hidden="true"></span>
+                                        Listening
+                                    </span>
+                                    <span class="epw-port-pill" id="epw-active-port" title="TCP port">—</span>
+                                    <div class="epw-chain-box">
+                                        <span class="epw-chain-label">Upstream</span>
+                                        <span class="epw-chain-upstream direct" id="epw-chain-upstream">direct</span>
                                     </div>
-                                    <button type="button" class="epw-btn-copy" id="epw-copy-local-url" title="Copy proxy URL">Copy</button>
                                 </div>
-                                <code class="epw-card-url" id="epw-endpoint-local">—</code>
+                                <button type="button" class="epw-stop-btn" id="epw-stop-btn">Stop</button>
                             </div>
-                            <div class="epw-card epw-card-lan" id="epw-endpoint-lan-wrap" style="display:none">
-                                <div class="epw-card-top">
-                                    <div class="epw-card-titles">
-                                        <span class="epw-card-title">LAN / other devices</span>
-                                        <span class="epw-card-sub"><span id="epw-lan-host-label">—</span> — phones, VMs, teammates on Wi-Fi</span>
+                            <p class="epw-session-meta" id="epw-meta"></p>
+                        </div>
+
+                        <div class="epw-url-sheet">
+                            <div class="epw-url-bar">
+                                <button type="button" class="epw-url-toggle" id="epw-url-toggle" aria-expanded="false">
+                                    <span class="epw-url-toggle-label">HTTP proxy URL</span>
+                                    <span class="epw-url-chevron" id="epw-url-chevron">▸</span>
+                                </button>
+                                <button type="button" class="epw-url-copy-head" id="epw-copy-url-head" title="Copy proxy URL">Copy</button>
+                            </div>
+                            <div class="epw-url-body" id="epw-url-body" style="display:none">
+                                <div class="epw-target-block">
+                                    <div class="epw-target-seg" id="epw-target-seg" style="display:none" role="group" aria-label="Proxy endpoint">
+                                        <button type="button" class="epw-seg-btn active" id="epw-seg-local" aria-pressed="true">This PC</button>
+                                        <button type="button" class="epw-seg-btn" id="epw-seg-lan" aria-pressed="false">LAN</button>
                                     </div>
-                                    <button type="button" class="epw-btn-copy" id="epw-copy-lan-url" title="Copy proxy URL">Copy</button>
+                                    <p class="epw-endpoint-sub" id="epw-endpoint-sub">127.0.0.1 — this machine</p>
+                                    <div class="epw-url-row">
+                                        <code class="epw-url-code" id="epw-endpoint-url">—</code>
+                                        <button type="button" class="epw-btn-copy" id="epw-copy-url" title="Copy proxy URL">Copy</button>
+                                    </div>
                                 </div>
-                                <code class="epw-card-url" id="epw-endpoint-lan">—</code>
+
+                                <div class="epw-fw-compact" id="epw-lan-firewall-hint" style="display:none" role="note"
+                                    title="Allow inbound TCP on this computer in the firewall, otherwise LAN clients cannot connect.">
+                                    <span class="epw-fw-icon" aria-hidden="true">⚠</span>
+                                    <span class="epw-fw-text">Firewall: allow inbound <strong>TCP <span id="epw-lan-hint-port"></span></strong> on this host for LAN clients.</span>
+                                </div>
                             </div>
                         </div>
 
-                        <div class="epw-callout" id="epw-lan-firewall-hint" style="display:none" role="note">
-                            <span class="epw-callout-icon" aria-hidden="true">⚠</span>
-                            <span>Allow inbound <strong>TCP <span id="epw-lan-hint-port"></span></strong> in the firewall on <strong>this</strong> computer, otherwise LAN clients cannot connect.</span>
-                        </div>
-
-                        <div class="epw-section-label">Example · curl</div>
-                        <div class="epw-curl-shell">
-                            <pre class="epw-curl-code epw-curl-single" id="epw-curl">—</pre>
-                            <button type="button" class="epw-curl-copy" id="epw-copy-curl">Copy</button>
+                        <div class="epw-curl-sheet">
+                            <div class="epw-curl-bar">
+                                <button type="button" class="epw-curl-toggle" id="epw-curl-toggle" aria-expanded="false">
+                                    <span class="epw-curl-toggle-label">Example · curl</span>
+                                    <span class="epw-curl-chevron" id="epw-curl-chevron">▸</span>
+                                </button>
+                                <button type="button" class="epw-curl-copy-head" id="epw-copy-curl">Copy</button>
+                            </div>
+                            <div class="epw-curl-body" id="epw-curl-body" style="display:none">
+                                <div class="epw-curl-shell">
+                                    <pre class="epw-curl-code epw-curl-single" id="epw-curl">—</pre>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -1750,7 +1676,7 @@
                             <span class="hs-key">Ctrl+L</span><span class="hs-desc">Address bar</span>
                             <span class="hs-key">Ctrl+P</span><span class="hs-desc">Proxy Manager</span>
                             <span class="hs-key">Ctrl+⇧L</span><span class="hs-desc">Network Logs</span>
-                            <span class="hs-key">Ctrl+⇧C</span><span class="hs-desc">Cookies</span>
+                            <span class="hs-key">Ctrl+Alt+C</span><span class="hs-desc">Cookies</span>
                             <span class="hs-key">Ctrl+⇧K</span><span class="hs-desc">Console</span>
                             <span class="hs-key">F2</span><span class="hs-desc">Screenshot</span>
                             <span class="hs-key">F12</span><span class="hs-desc">DevTools</span>
@@ -1828,18 +1754,6 @@
     </div>
 </div>
 
-<!-- ═══════════════════ RIGHT ═══════════════════ -->
-<div class="right-panel">
-    <div id="g-lang-bar">
-        <span class="g-lang-globe">🌐</span>
-        <button class="g-lang-btn active" data-lang="en">EN</button>
-        <button class="g-lang-btn" data-lang="fr">FR</button>
-        <button class="g-lang-btn" data-lang="es">ES</button>
-        <button class="g-lang-btn" data-lang="ru">RU</button>
-    </div>
-    <div id="g-content"><!-- filled by JS --></div>
-</div>
-
 <script>
 'use strict';
 
@@ -1859,7 +1773,13 @@ function runWhenIdle(fn, timeout = 1200) {
         setTimeout(fn, 0);
     }
 }
-window.electronAPI?.consumeStartupSplash?.()
+function endInitialNoTransition() {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        document.body.classList.remove('no-transition');
+    }));
+}
+
+Promise.resolve(window.electronAPI?.consumeStartupSplash?.())
     .then((splash) => {
         if (splash?.show) {
             _startupSplashDelay = Math.max(1500, Math.min(3000, Number(splash.durationMs) || 0));
@@ -1872,1209 +1792,8 @@ window.electronAPI?.consumeStartupSplash?.()
     .catch(() => {
         clearTimeout(_startupSplashSafety);
         hideStartupSplash();
-    });
-
-// ── Guide panel toggle ─────────────────────────────────────────────────────────
-(function () {
-    const GUIDE_KEY = 'guide-open';
-    const body      = document.body;
-    const btn       = document.getElementById('guide-toggle');
-    const arrow     = btn.querySelector('.gt-arrow');
-
-    function applyState(hidden) {
-        // guide open  → ‹ (pointing left = "click to close/collapse")
-        // guide hidden → › (pointing right = "click to open/expand")
-        arrow.textContent = hidden ? '›' : '‹';
-        btn.title = hidden ? 'Open guide' : 'Close guide';
-    }
-
-    function setHidden(hidden) {
-        if (hidden) body.classList.add('guide-hidden');
-        else        body.classList.remove('guide-hidden');
-        applyState(hidden);
-        if (!hidden) window.dispatchEvent(new Event('guide-opened'));
-        if (window.electronAPI?.setUiPref) {
-            window.electronAPI.setUiPref(GUIDE_KEY, !hidden);
-        }
-    }
-
-    // Restore saved state via electronAPI
-    // Body starts as guide-hidden + no-transition to prevent any flash on load
-    (async function () {
-        let startOpen = true;
-        if (window.electronAPI?.getUiPref) {
-            const saved = await window.electronAPI.getUiPref(GUIDE_KEY, true);
-            startOpen = saved !== false;
-        }
-        // Apply correct state instantly (no-transition still active)
-        setHidden(!startOpen);
-        // Re-enable transitions after two frames (ensures layout is settled)
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-            body.classList.remove('no-transition');
-        }));
-    })();
-
-    btn.addEventListener('click', () => {
-        const nowHidden = body.classList.contains('guide-hidden');
-        setHidden(!nowHidden);
-    });
-
-    // Exposed for use by Guide quick link
-    window.openGuidePanel = function () {
-        if (body.classList.contains('guide-hidden')) {
-            setHidden(false);
-        }
-    };
-})();
-
-// ── Guide i18n ─────────────────────────────────────────────────────────────────
-(function () {
-    const LANG_KEY = 'guide-lang';
-
-    // ── helper to build repeating kbd rows ────────────────────────────────────
-    function kbdRow(key, desc) {
-        return `<div class="g-kbd-row"><span class="kd">${key}</span><span class="kd-desc">${desc}</span></div>`;
-    }
-
-    // ══════════════════════════════════════════════════════════════════════════
-    //  TRANSLATIONS
-    // ══════════════════════════════════════════════════════════════════════════
-    const LANGS = {
-
-// ─────────────────────────── ENGLISH ─────────────────────────────────────────
-en: `
-<div class="g-hero">
-    <img src="img.png" class="g-hero-logo" alt="CupNet">
-    <div>
-        <h1 class="g-hero-title">CupNet — How to Use</h1>
-        <div class="g-hero-sub">Anti-detection browser · MITM proxy · TLS fingerprinting · SQLite network logs</div>
-        <div style="margin-top:6px">
-            <span class="g-pill">v2.0</span><span class="g-pill">SQLite</span>
-            <span class="g-pill">CDP</span><span class="g-pill">AzureTLS</span>
-        </div>
-    </div>
-</div>
-
-<div class="g-card g-toc">
-    <h2>Contents</h2>
-    <a href="#gs">1. Quick Start</a>
-    <a href="#proxy">2. Proxy Manager</a>
-    <a href="#fingerprint">3. Fingerprint &amp; TLS Spoofing</a>
-    <a href="#toolbar">4. Toolbar &amp; Buttons</a>
-    <a href="#hotkeys">5. Hotkeys</a>
-    <a href="#logs">6. Network Logs &amp; Screenshots</a>
-    <a href="#editor">7. Request Editor</a>
-    <a href="#rules">8. Rules Engine</a>
-    <a href="#intercept">9. Request Interception</a>
-    <a href="#cookies">10. Cookie Manager</a>
-    <a href="#isolated">11. Isolated Cookie Sessions <span class="g-new">NEW</span></a>
-    <a href="#mitm">12. MITM Proxy &amp; CA Certificate <span class="g-new">NEW</span></a>
-    <a href="#newtab">13. New Tab Page <span class="g-new">NEW</span></a>
-    <a href="#settings">14. Settings Panel</a>
-    <a href="#issues">15. Common Issues</a>
-</div>
-
-<div id="gs" class="g-card">
-    <h2>1) Quick Start</h2>
-    <ol>
-        <li>Run <code>ELECTRON_RUN_AS_NODE= npm start</code> inside <code>node/cupnet2/</code>. The browser window opens maximized.</li>
-        <li>Network logging starts automatically — session badge on the <b>Log</b> button shows session # and request count.</li>
-        <li>To use a proxy: click the <b>proxy status pill</b> in the toolbar → Proxy Manager opens. Connect any saved profile.</li>
-        <li>New tabs: <kbd>Ctrl T</kbd> or <b>+</b> button. Isolated tabs: <b>+🔒</b> button.</li>
-        <li>For HTTPS inspection, install the MITM CA certificate once (see section 12).</li>
-    </ol>
-    <div class="g-tip">Direct mode (no proxy) works out of the box. Proxy is optional.</div>
-</div>
-
-<div id="proxy" class="g-card">
-    <h2>2) Proxy Manager</h2>
-    <p>Click the <b>proxy status pill</b> in the toolbar or the widget on this page. Supported: <code>http</code>, <code>https</code>, <code>socks4</code>, <code>socks5</code>.</p>
-    <h3>Proxy Profiles</h3>
-    <p>Profiles store URLs encrypted via OS keychain (safeStorage). Each profile may also include a <b>Fingerprint Identity</b>.</p>
-    <ul>
-        <li><b>Save Profile</b> — name + URL, optional variables, country tag, notes</li>
-        <li><b>⚡ Test</b> — checks IP, geo and latency through the proxy</li>
-        <li><b>▶ Connect</b> — activates for all tabs; applies fingerprint from the profile</li>
-        <li><b>Disconnect</b> — returns to direct mode and resets fingerprint overrides</li>
-    </ul>
-    <h3>Template Variables</h3>
-    <div class="g-tip">
-        <code>{RAND:min-max}</code> — random integer on every Connect<br>
-        <code>{SID}</code> — ephemeral session ID (auto-generates <code>cupnet</code>+10 digits)<br>
-        <code>{VARNAME}</code> — saved variable stored with the profile
-    </div>
-    <details><summary>Template example</summary>
-        <pre>socks5://user-{SID}:{PASSWORD}@{COUNTRY}.proxy.com:{RAND:10000-19999}</pre>
-    </details>
-    <span class="g-status ok">✓ Proxy credentials are never stored in plain text — OS keychain only.</span>
-    <span class="g-status warn">⚠ After connecting, the active tab reloads to route through the new proxy.</span>
-</div>
-
-<div id="fingerprint" class="g-card">
-    <h2>3) Fingerprint &amp; TLS Spoofing</h2>
-    <p>Each proxy profile carries an <b>identity</b> applied on connect. Open Proxy Manager → expand <b>🎭 Fingerprint / Identity</b>.</p>
-    <h3>Browser-level overrides (via CDP)</h3>
-    <ul>
-        <li><b>User-Agent</b> — presets: Chrome Win/Mac, Firefox, Safari, Mobile. Affects both HTTP headers and <code>navigator.userAgent</code></li>
-        <li><b>Timezone</b> — overrides <code>Intl</code>, <code>Date</code>, <code>navigator.timezone</code></li>
-        <li><b>Accept-Language</b> — overrides HTTP header and <code>navigator.language</code></li>
-    </ul>
-    <h3>TLS Fingerprint (AzureTLS)</h3>
-    <p>CupNet uses an <b>AzureTLS worker</b> to route HTTPS traffic with a real browser TLS handshake — bypassing Electron's default fingerprint.</p>
-    <ul>
-        <li>Profiles: <code>chrome</code>, <code>firefox</code>, <code>safari</code>, <code>ios</code>, <code>edge</code>, <code>opera</code></li>
-        <li>Select in <b>⚙ Settings → General → TLS Profile</b> or per-proxy-profile</li>
-        <li>JA3/JA3S fingerprint matches the selected browser exactly</li>
-    </ul>
-    <div class="g-tip success">All overrides clear automatically on Disconnect. New tabs inherit the active profile's fingerprint.</div>
-</div>
-
-<div id="toolbar" class="g-card">
-    <h2>4) Toolbar &amp; Buttons</h2>
-    ${kbdRow('← → ↻ ⌂', 'Back / Forward / Reload / Home')}
-    ${kbdRow('Address bar', 'URL or search query → Enter to navigate')}
-    <hr class="g-hr" style="margin:10px 0">
-    ${kbdRow('<b>🔵 Proxy pill</b>', 'Shows active proxy name + protocol. Click → Proxy Manager')}
-    ${kbdRow('<b>⚙ Settings</b>', 'Inline panel: General (screenshot, filters, TLS profile) + Performance (live CPU/RAM per process)')}
-    <hr class="g-hr" style="margin:10px 0">
-    ${kbdRow('<b>Log #N</b>', 'Open Network Activity viewer. Badge = session # + request count')}
-    ${kbdRow('<b>DevTools</b>', 'Chrome DevTools for the <i>active tab</i> — not the browser shell. Also F12')}
-    ${kbdRow('<b>Cookies</b>', 'Cookie Manager — view, edit, import/export, share between tabs')}
-    ${kbdRow('<b>📷 Screenshot</b>', 'Capture active tab now. Countdown badge = time to next auto-capture')}
-    ${kbdRow('<b>+ / +🔒</b>', 'New tab / New isolated tab (separate cookie session). Both appear after all tabs')}
-</div>
-
-<div id="hotkeys" class="g-card">
-    <h2>5) Hotkeys</h2>
-    <p>On macOS use <kbd>⌘ Cmd</kbd> instead of <kbd>Ctrl</kbd>.</p>
-    <h3>Tabs</h3>
-    ${kbdRow('<kbd>Ctrl T</kbd>', 'New tab')}
-    ${kbdRow('<kbd>Ctrl ⇧T</kbd>', 'New isolated tab (separate cookies)')}
-    ${kbdRow('<kbd>Ctrl W</kbd>', 'Close active tab')}
-    ${kbdRow('<kbd>Ctrl Tab</kbd>', 'Next tab')}
-    ${kbdRow('<kbd>Ctrl ⇧Tab</kbd>', 'Previous tab')}
-    ${kbdRow('<kbd>Ctrl 1-9</kbd>', 'Switch to tab N (9 = last tab)')}
-    <h3>Navigation</h3>
-    ${kbdRow('<kbd>Enter</kbd> in URL bar', 'Navigate or search')}
-    ${kbdRow('<kbd>Ctrl L</kbd>', 'Focus address bar')}
-    ${kbdRow('<kbd>Ctrl R</kbd> / <kbd>F5</kbd>', 'Reload active tab')}
-    ${kbdRow('<kbd>Ctrl ⇧R</kbd>', 'Hard reload (bypass cache)')}
-    ${kbdRow('<kbd>Alt ←</kbd> / <kbd>Alt →</kbd>', 'Back / Forward')}
-    ${kbdRow('<kbd>Esc</kbd> in URL bar', 'Cancel editing')}
-    <h3>Tools</h3>
-    ${kbdRow('<kbd>Ctrl P</kbd>', 'Open Proxy Manager')}
-    ${kbdRow('<kbd>Ctrl ⇧L</kbd>', 'Open Network Logs')}
-    ${kbdRow('<kbd>Ctrl ⇧C</kbd>', 'Open Cookie Manager')}
-    ${kbdRow('<kbd>F2</kbd>', 'Take screenshot now')}
-    ${kbdRow('<kbd>F12</kbd>', 'DevTools for active tab')}
-    ${kbdRow('<kbd>Ctrl ⇧I</kbd>', 'DevTools for browser shell')}
-</div>
-
-<div id="logs" class="g-card">
-    <h2>6) Network Logs &amp; Screenshots</h2>
-    <p>Every HTTP/HTTPS/WebSocket event is captured via Chrome DevTools Protocol and stored in SQLite.</p>
-    <ul>
-        <li><b>Request:</b> URL, method, headers, POST body, type</li>
-        <li><b>Response:</b> status code, headers, MIME type, body (text or base64), duration ms</li>
-        <li><b>WebSocket:</b> all frames (send/receive) with payload</li>
-        <li><b>Screenshots:</b> inline 📷 rows with thumbnail in the log list</li>
-    </ul>
-    <h3>Log Viewer</h3>
-    ${kbdRow('Filter bar', 'Filter by method, status, content-type, session, tab')}
-    ${kbdRow('FTS search', 'Full-text search across URL + response body (SQLite FTS5)')}
-    ${kbdRow('Export HAR', 'Export as .har — compatible with Charles, Fiddler, Wireshark, Chrome DevTools')}
-    ${kbdRow('▶ Replay', 'Open selected request in Request Editor')}
-    ${kbdRow('Sessions', 'Switch between named logging sessions; rename or delete old sessions')}
-    <h3>Auto-Screenshot</h3>
-    <p>Configure in <b>⚙ Settings → General</b> (default: 5 s). Set <code>0</code> to disable. The start page is never captured. Identical consecutive frames are deduplicated.</p>
-</div>
-
-<div id="editor" class="g-card">
-    <h2>7) Request Editor</h2>
-    <p>Click <b>▶ Replay</b> on any log entry — or open via toolbar. A Postman-style tool running on <code>net.fetch</code> (Electron, not browser sandbox).</p>
-    <ul>
-        <li><b>Method &amp; URL</b> — change freely</li>
-        <li><b>Query params</b> — key-value table, synced with URL field</li>
-        <li><b>Headers</b> — add/edit/remove. Browser-restricted headers marked <b>★</b></li>
-        <li><b>Body</b> — None / Raw / JSON / Form-urlencoded</li>
-        <li><b>TLS Profile</b> — per-request AzureTLS fingerprint override</li>
-        <li><b>Response panel</b> — status, headers, body (JSON auto-formatted), timing</li>
-        <li><b>Copy as cURL</b> — generates the equivalent <code>curl</code> command</li>
-    </ul>
-    <div class="g-tip">★ Some headers (Host, Content-Length, Proxy-*) are restricted by the Fetch spec and may be ignored by the OS networking layer even when sent.</div>
-</div>
-
-<div id="rules" class="g-card">
-    <h2>8) Rules Engine</h2>
-    <p>Open via <b>Tools → Rules &amp; Interceptor</b>. Rules fire <i>after</i> each request is logged.</p>
-    <h3>Conditions — match on:</h3>
-    <p><b>URL, method, status, content-type, duration, host, request body, response body, error</b><br>
-    Operators: <code>equals</code> · <code>contains</code> · <code>startsWith</code> · <code>matches</code> (regex) · <code>gt/lt</code> · <code>between</code></p>
-    <h3>Actions</h3>
-    <div class="g-tip"><b>highlight</b> — colour-code the row in the log viewer</div>
-    <div class="g-tip"><b>screenshot</b> — auto-capture the active tab when matched</div>
-    <div class="g-tip"><b>notification</b> — system notification + in-app toast with rule name + URL</div>
-    <div class="g-tip"><b>block</b> — mark matching requests; use Intercept Rules to block before they hit the network</div>
-    <p>Each rule card shows a <b>hit counter</b>. Rules can be enabled/disabled individually.</p>
-</div>
-
-<div id="intercept" class="g-card">
-    <h2>9) Request Interception</h2>
-    <p>The <b>Interceptor</b> tab (same Rules window) fires <i>before</i> requests reach the network. Patterns support <code>*</code> wildcards.</p>
-    <div class="g-tip"><b>block</b> — cancel request entirely (network error returned)</div>
-    <div class="g-tip"><b>modifyRequestHeaders</b> — add/change/remove headers before sending.<br><code>{"X-Custom": "value", "Authorization": ""}</code> — empty string removes a header</div>
-    <div class="g-tip"><b>modifyResponseHeaders</b> — patch server response headers (e.g. remove <code>Content-Security-Policy</code>)</div>
-    <div class="g-tip"><b>mock</b> — return a fake response (custom status + MIME + body) without hitting the server</div>
-    <span class="g-status ok">✓ Rules apply per-tab via isolated Chromium sessions.</span>
-</div>
-
-<div id="cookies" class="g-card">
-    <h2>10) Cookie Manager</h2>
-    <p>Click <b>Cookies</b> in the toolbar. Shows cookies for the selected tab's session.</p>
-    <ul>
-        <li>View domain, path, value, expiry, flags: HttpOnly · Secure · SameSite</li>
-        <li>Live filter — by domain, name or value</li>
-        <li><b>Current tab</b> toggle — lock filter to the active tab's domain automatically</li>
-        <li>Inline edit, add new cookies, delete single or all</li>
-        <li><b>Export</b>: JSON or Netscape <code>cookies.txt</code> (curl / wget compatible)</li>
-        <li><b>Import</b>: JSON or Netscape format (max 10 MB)</li>
-        <li><b>⇄ Share to tab</b> — copy cookies from one session to another (optionally filter by domain)</li>
-    </ul>
-    <div class="g-tip">Tabs are isolated — cookies never leak between them unless you use Share.</div>
-</div>
-
-<div id="isolated" class="g-card">
-    <h2>11) Isolated Cookie Sessions <span class="g-new">NEW</span></h2>
-    <p>Click <b>+🔒</b> in the tab bar to open an <b>Isolated Tab</b>. It uses a brand-new Chromium session — completely separate cookies, localStorage, cache and IndexedDB.</p>
-    <ul>
-        <li>Shown with a 🔒 lock icon in the tab bar</li>
-        <li>The New Tab start page shows a prominent <b>🔒 ISOLATED COOKIE SESSION</b> banner</li>
-        <li>Session key is unique per tab (format: <code>isolated-&lt;timestamp&gt;</code>) — never shared</li>
-        <li>Closing the tab destroys the session and all its data permanently</li>
-        <li>You can have multiple isolated tabs simultaneously — each is independent</li>
-    </ul>
-    <div class="g-tip success">Ideal for testing the same site with different accounts, or for fresh-session registration flows.</div>
-    <div class="g-tip danger">⚠ Cookies in isolated tabs are <b>not</b> backed up to SQLite — they disappear when the tab closes.</div>
-</div>
-
-<div id="mitm" class="g-card">
-    <h2>12) MITM Proxy &amp; CA Certificate <span class="g-new">NEW</span></h2>
-    <p>CupNet runs a built-in <b>Man-in-the-Middle proxy on port 8877</b> to decrypt and log HTTPS traffic. It terminates TLS with a self-signed CA and re-encrypts upstream.</p>
-    <h3>Installing the CA certificate</h3>
-    <ol>
-        <li>Open <b>⚙ Settings → MITM</b> and click <b>Copy CA Certificate</b></li>
-        <li>Save as <code>cupnet-ca.pem</code></li>
-        <li><b>macOS:</b> double-click the file → Keychain Access → set to <i>Always Trust</i></li>
-        <li><b>Windows:</b> right-click → <i>Install Certificate</i> → Local Machine → Trusted Root CAs</li>
-        <li>Restart the browser / reload tabs</li>
-    </ol>
-    <div class="g-tip">Without the CA, HTTPS sites will show certificate errors in the log. HTTP sites work without any certificate changes.</div>
-    <h3>AzureTLS upstream</h3>
-    <p>The MITM proxy forwards decrypted traffic through the <b>AzureTLS worker</b> — a Go process that re-encrypts with the selected TLS profile (Chrome, Firefox, etc.). This is what makes JA3 spoofing work end-to-end.</p>
-    <span class="g-status warn">⚠ Install the CA only in browsers/machines you control. Never import untrusted CAs.</span>
-</div>
-
-<div id="newtab" class="g-card">
-    <h2>13) New Tab Page <span class="g-new">NEW</span></h2>
-    <p>The start page (this page) is a full-featured dashboard. All settings persist in <code>localStorage</code>.</p>
-    <h3>Quick Links bar</h3>
-    <ul>
-        <li>Click <b>+</b> to add a URL or proxy profile shortcut with a custom icon and label</li>
-        <li>Pinned built-ins: <b>📖 Guide</b> (this panel) always appears first</li>
-        <li>Click a proxy link to instantly activate that profile — no need to open Proxy Manager</li>
-        <li>Remove any user link with the <b>✕</b> button</li>
-    </ul>
-    <h3>Cookie status bar 🍪</h3>
-    <p>Shows how many cookies the current session has. <b>Clear all</b> wipes every cookie — useful to start a registration flow from zero.</p>
-    <h3>Proxy / IP widget</h3>
-    <p>Displays connection status, current IP address and geolocation. Refreshes every 30 s or on proxy change.</p>
-    <h3>Search engines</h3>
-    <p>DuckDuckGo · Google · Yandex · Bing. Selection persists across sessions.</p>
-</div>
-
-<div id="settings" class="g-card">
-    <h2>14) Settings Panel</h2>
-    <p>Click <b>⚙ Settings</b> in the toolbar. The panel slides in below the address bar.</p>
-    <h3>General</h3>
-    <ul>
-        <li><b>Auto screenshot interval</b> — 0–60 s (default 5 s). Set 0 to disable.</li>
-        <li><b>URL filter patterns</b> — one glob per line (<code>*</code> wildcard). Matching URLs are excluded from logs.</li>
-        <li><b>TLS Profile</b> — global AzureTLS fingerprint: chrome · firefox · safari · ios · edge · opera</li>
-        <li><b>Homepage</b> — URL loaded when clicking the ⌂ button</li>
-    </ul>
-    <h3>Performance</h3>
-    <p>Live table of all Electron/Chromium processes: type (Browser, Renderer, GPU, Utility), PID, CPU %, RAM. Refreshes every 3 s.</p>
-</div>
-
-<div id="issues" class="g-card">
-    <h2>15) Common Issues</h2>
-    <ul>
-        <li><b>Proxy not working</b> — verify format <code>protocol://user:pass@host:port</code>. Use <b>⚡ Test</b>. Supported schemes: http, https, socks4, socks5.</li>
-        <li><b>HTTPS shows cert errors</b> — install the MITM CA certificate (section 12).</li>
-        <li><b>Wrong IP shown</b> — widget refreshes every 30 s; click <b>⟳ Check IP</b> in Proxy Manager for instant update.</li>
-        <li><b>Intercept rule not firing</b> — check rule is enabled, pattern matches (try <code>*example.com*</code>).</li>
-        <li><b>Log badge stuck at 0</b> — logging is always active; 0 means no requests yet on this tab.</li>
-        <li><b>DevTools opens on shell</b> — use toolbar <b>DevTools</b> or <kbd>F12</kbd>, not <kbd>Cmd+Option+I</kbd>.</li>
-        <li><b>App won't start (IDE)</b> — <code>ELECTRON_RUN_AS_NODE=1</code> is set by Cursor; run: <code>ELECTRON_RUN_AS_NODE= npm start</code></li>
-        <li><b>Native module error</b> — rebuild: <code>npm run rebuild:arm64</code> (Apple Silicon) or <code>npx electron-rebuild</code></li>
-        <li><b>Quick proxy change hangs</b> — was a known bug (dead IPC channel), fixed in current build.</li>
-    </ul>
-    <details><summary>Launch commands</summary>
-        <pre>cd node/cupnet2
-npm install --ignore-scripts
-npm run rebuild:arm64      # Apple Silicon
-ELECTRON_RUN_AS_NODE= npm start</pre>
-    </details>
-</div>
-
-<div class="g-footer">© CupNet 2.0 — All rights reserved.</div>
-`,
-
-// ─────────────────────────── FRANÇAIS ────────────────────────────────────────
-fr: `
-<div class="g-hero">
-    <img src="img.png" class="g-hero-logo" alt="CupNet">
-    <div>
-        <h1 class="g-hero-title">CupNet — Guide d'utilisation</h1>
-        <div class="g-hero-sub">Navigateur anti-détection · proxy MITM · spoofing TLS · journalisation réseau SQLite</div>
-        <div style="margin-top:6px">
-            <span class="g-pill">v2.0</span><span class="g-pill">SQLite</span>
-            <span class="g-pill">CDP</span><span class="g-pill">AzureTLS</span>
-        </div>
-    </div>
-</div>
-
-<div class="g-card g-toc">
-    <h2>Sommaire</h2>
-    <a href="#gs">1. Démarrage rapide</a>
-    <a href="#proxy">2. Gestionnaire de proxies</a>
-    <a href="#fingerprint">3. Empreinte &amp; Spoofing TLS</a>
-    <a href="#toolbar">4. Barre d'outils</a>
-    <a href="#hotkeys">5. Raccourcis clavier</a>
-    <a href="#logs">6. Journaux réseau &amp; Captures</a>
-    <a href="#editor">7. Éditeur de requêtes</a>
-    <a href="#rules">8. Moteur de règles</a>
-    <a href="#intercept">9. Interception de requêtes</a>
-    <a href="#cookies">10. Gestionnaire de cookies</a>
-    <a href="#isolated">11. Sessions cookies isolées <span class="g-new">NOUVEAU</span></a>
-    <a href="#mitm">12. Proxy MITM &amp; Certificat CA <span class="g-new">NOUVEAU</span></a>
-    <a href="#newtab">13. Page de nouvel onglet <span class="g-new">NOUVEAU</span></a>
-    <a href="#settings">14. Panneau de paramètres</a>
-    <a href="#issues">15. Problèmes fréquents</a>
-</div>
-
-<div id="gs" class="g-card">
-    <h2>1) Démarrage rapide</h2>
-    <ol>
-        <li>Exécutez <code>ELECTRON_RUN_AS_NODE= npm start</code> dans <code>node/cupnet2/</code>. La fenêtre s'ouvre en plein écran.</li>
-        <li>La journalisation réseau démarre automatiquement — le badge sur le bouton <b>Log</b> affiche le n° de session et le nombre de requêtes.</li>
-        <li>Pour utiliser un proxy : cliquez sur la <b>pastille proxy</b> dans la barre d'outils → le Gestionnaire de proxies s'ouvre.</li>
-        <li>Nouvel onglet : <kbd>Ctrl T</kbd> ou bouton <b>+</b>. Onglet isolé : bouton <b>+🔒</b>.</li>
-        <li>Pour l'inspection HTTPS, installez le certificat CA MITM une seule fois (voir section 12).</li>
-    </ol>
-    <div class="g-tip">Le mode direct (sans proxy) fonctionne immédiatement. Le proxy est facultatif.</div>
-</div>
-
-<div id="proxy" class="g-card">
-    <h2>2) Gestionnaire de proxies</h2>
-    <p>Cliquez sur la <b>pastille proxy</b> dans la barre d'outils ou sur le widget de cette page. Protocoles supportés : <code>http</code>, <code>https</code>, <code>socks4</code>, <code>socks5</code>.</p>
-    <h3>Profils de proxy</h3>
-    <p>Les URLs sont chiffrées via le trousseau OS (safeStorage). Chaque profil peut inclure une <b>identité d'empreinte</b>.</p>
-    <ul>
-        <li><b>Enregistrer</b> — nom + URL, variables facultatives, pays, notes</li>
-        <li><b>⚡ Tester</b> — vérifie l'IP, la géolocalisation et la latence</li>
-        <li><b>▶ Connecter</b> — active le proxy pour tous les onglets</li>
-        <li><b>Déconnecter</b> — retour en mode direct, réinitialise l'empreinte</li>
-    </ul>
-    <h3>Variables de modèle</h3>
-    <div class="g-tip">
-        <code>{RAND:min-max}</code> — entier aléatoire à chaque connexion<br>
-        <code>{SID}</code> — identifiant de session éphémère<br>
-        <code>{NOMVAR}</code> — variable sauvegardée avec le profil
-    </div>
-    <span class="g-status ok">✓ Les identifiants proxy ne sont jamais stockés en clair — trousseau OS uniquement.</span>
-</div>
-
-<div id="fingerprint" class="g-card">
-    <h2>3) Empreinte &amp; Spoofing TLS</h2>
-    <h3>Overrides navigateur (via CDP)</h3>
-    <ul>
-        <li><b>User-Agent</b> — préréglages : Chrome Win/Mac, Firefox, Safari, Mobile</li>
-        <li><b>Fuseau horaire</b> — modifie <code>Intl</code>, <code>Date</code>, <code>navigator.timezone</code></li>
-        <li><b>Accept-Language</b> — modifie l'en-tête HTTP et <code>navigator.language</code></li>
-    </ul>
-    <h3>Empreinte TLS (AzureTLS)</h3>
-    <p>CupNet utilise un <b>worker AzureTLS</b> pour router le trafic HTTPS avec un vrai handshake TLS de navigateur.</p>
-    <ul>
-        <li>Profils : <code>chrome</code>, <code>firefox</code>, <code>safari</code>, <code>ios</code>, <code>edge</code>, <code>opera</code></li>
-        <li>Sélection dans <b>⚙ Paramètres → Général → Profil TLS</b></li>
-        <li>L'empreinte JA3 correspond exactement au navigateur sélectionné</li>
-    </ul>
-    <div class="g-tip success">Tous les overrides se réinitialisent automatiquement à la déconnexion.</div>
-</div>
-
-<div id="toolbar" class="g-card">
-    <h2>4) Barre d'outils</h2>
-    ${kbdRow('← → ↻ ⌂', 'Précédent / Suivant / Actualiser / Accueil')}
-    ${kbdRow('Barre d\'adresse', 'URL ou recherche → Entrée pour naviguer')}
-    <hr class="g-hr" style="margin:10px 0">
-    ${kbdRow('<b>🔵 Pastille proxy</b>', 'Statut proxy actif. Clic → Gestionnaire de proxies')}
-    ${kbdRow('<b>⚙ Paramètres</b>', 'Panneau inline : Général + Performance (CPU/RAM par processus)')}
-    <hr class="g-hr" style="margin:10px 0">
-    ${kbdRow('<b>Log #N</b>', 'Ouvre le visualiseur d\'activité réseau')}
-    ${kbdRow('<b>DevTools</b>', 'Chrome DevTools pour l\'<i>onglet actif</i>. Aussi F12')}
-    ${kbdRow('<b>Cookies</b>', 'Gestionnaire de cookies — voir, éditer, importer/exporter')}
-    ${kbdRow('<b>📷 Capture</b>', 'Capture l\'onglet actif maintenant')}
-</div>
-
-<div id="hotkeys" class="g-card">
-    <h2>5) Raccourcis clavier</h2>
-    <p>Sur macOS utilisez <kbd>⌘ Cmd</kbd> au lieu de <kbd>Ctrl</kbd>.</p>
-    <h3>Onglets</h3>
-    ${kbdRow('<kbd>Ctrl T</kbd>', 'Nouvel onglet')}
-    ${kbdRow('<kbd>Ctrl ⇧T</kbd>', 'Onglet isolé (cookies séparés)')}
-    ${kbdRow('<kbd>Ctrl W</kbd>', 'Fermer l\'onglet actif')}
-    ${kbdRow('<kbd>Ctrl Tab</kbd>', 'Onglet suivant')}
-    ${kbdRow('<kbd>Ctrl ⇧Tab</kbd>', 'Onglet précédent')}
-    ${kbdRow('<kbd>Ctrl 1-9</kbd>', 'Aller à l\'onglet N (9 = dernier)')}
-    <h3>Navigation</h3>
-    ${kbdRow('<kbd>Entrée</kbd> dans la barre', 'Naviguer ou rechercher')}
-    ${kbdRow('<kbd>Ctrl L</kbd>', 'Focus sur la barre d\'adresse')}
-    ${kbdRow('<kbd>Ctrl R</kbd> / <kbd>F5</kbd>', 'Actualiser l\'onglet actif')}
-    ${kbdRow('<kbd>Ctrl ⇧R</kbd>', 'Actualisation forcée (vider le cache)')}
-    ${kbdRow('<kbd>Alt ←</kbd> / <kbd>Alt →</kbd>', 'Précédent / Suivant')}
-    <h3>Outils</h3>
-    ${kbdRow('<kbd>Ctrl P</kbd>', 'Gestionnaire de proxies')}
-    ${kbdRow('<kbd>Ctrl ⇧L</kbd>', 'Journaux réseau')}
-    ${kbdRow('<kbd>Ctrl ⇧C</kbd>', 'Gestionnaire de cookies')}
-    ${kbdRow('<kbd>F2</kbd>', 'Capture d\'écran')}
-    ${kbdRow('<kbd>F12</kbd>', 'DevTools pour l\'onglet actif')}
-    ${kbdRow('<kbd>Ctrl ⇧I</kbd>', 'DevTools de la coque')}
-</div>
-
-<div id="logs" class="g-card">
-    <h2>6) Journaux réseau &amp; Captures d'écran</h2>
-    <p>Chaque requête HTTP/HTTPS/WebSocket est capturée via CDP et stockée dans SQLite.</p>
-    <ul>
-        <li><b>Requête :</b> URL, méthode, en-têtes, corps</li>
-        <li><b>Réponse :</b> statut, en-têtes, MIME, corps, durée en ms</li>
-        <li><b>WebSocket :</b> toutes les trames (envoi/réception)</li>
-    </ul>
-    <h3>Visualiseur de logs</h3>
-    ${kbdRow('Filtres', 'Méthode, statut, content-type, session, onglet')}
-    ${kbdRow('Recherche FTS', 'Recherche plein texte URL + corps (SQLite FTS5)')}
-    ${kbdRow('Export HAR', 'Compatible Charles, Fiddler, Wireshark')}
-    ${kbdRow('▶ Rejouer', 'Ouvrir dans l\'Éditeur de requêtes')}
-</div>
-
-<div id="editor" class="g-card">
-    <h2>7) Éditeur de requêtes</h2>
-    <p>Cliquez sur <b>▶ Rejouer</b> sur n'importe quelle entrée de log. Outil de type Postman basé sur <code>net.fetch</code> d'Electron.</p>
-    <ul>
-        <li>Méthode, URL, paramètres de requête, en-têtes, corps</li>
-        <li>Profil TLS par requête</li>
-        <li>Panneau réponse : statut, en-têtes, corps JSON formaté</li>
-        <li><b>Copier en cURL</b> — génère la commande <code>curl</code> équivalente</li>
-    </ul>
-</div>
-
-<div id="rules" class="g-card">
-    <h2>8) Moteur de règles</h2>
-    <p>Ouvrir via <b>Outils → Règles &amp; Intercepteur</b>. Les règles s'exécutent <i>après</i> chaque requête.</p>
-    <h3>Conditions — correspond à :</h3>
-    <p>URL · méthode · statut · content-type · durée · hôte · corps requête/réponse · erreur</p>
-    <h3>Actions</h3>
-    <div class="g-tip"><b>highlight</b> — colorier la ligne dans le visualiseur</div>
-    <div class="g-tip"><b>screenshot</b> — capturer l'onglet automatiquement</div>
-    <div class="g-tip"><b>notification</b> — notification système + toast in-app</div>
-    <div class="g-tip"><b>block</b> — marquer les requêtes correspondantes</div>
-</div>
-
-<div id="intercept" class="g-card">
-    <h2>9) Interception de requêtes</h2>
-    <p>L'onglet <b>Intercepteur</b> agit <i>avant</i> que les requêtes atteignent le réseau. Patterns avec <code>*</code> wildcards.</p>
-    <div class="g-tip"><b>block</b> — annuler la requête entièrement</div>
-    <div class="g-tip"><b>modifyRequestHeaders</b> — modifier les en-têtes avant envoi</div>
-    <div class="g-tip"><b>modifyResponseHeaders</b> — modifier les en-têtes de réponse (ex : supprimer CSP)</div>
-    <div class="g-tip"><b>mock</b> — retourner une fausse réponse sans contacter le serveur</div>
-</div>
-
-<div id="cookies" class="g-card">
-    <h2>10) Gestionnaire de cookies</h2>
-    <p>Cliquez sur <b>Cookies</b> dans la barre d'outils.</p>
-    <ul>
-        <li>Voir domaine, chemin, valeur, expiration, flags : HttpOnly · Secure · SameSite</li>
-        <li>Filtre en direct — par domaine, nom ou valeur</li>
-        <li>Édition inline, ajout, suppression</li>
-        <li><b>Export</b> : JSON ou Netscape <code>cookies.txt</code></li>
-        <li><b>Import</b> : JSON ou Netscape (max 10 Mo)</li>
-        <li><b>⇄ Partager vers onglet</b> — copier les cookies d'une session à une autre</li>
-    </ul>
-</div>
-
-<div id="isolated" class="g-card">
-    <h2>11) Sessions cookies isolées <span class="g-new">NOUVEAU</span></h2>
-    <p>Cliquez sur <b>+🔒</b> pour ouvrir un <b>onglet isolé</b>. Nouvelle session Chromium séparée — cookies, localStorage, cache et IndexedDB totalement indépendants.</p>
-    <ul>
-        <li>Icône 🔒 dans la barre d'onglets</li>
-        <li>Bannière <b>🔒 ISOLATED COOKIE SESSION</b> sur la page de nouvel onglet</li>
-        <li>Fermer l'onglet détruit la session et toutes ses données définitivement</li>
-        <li>Plusieurs onglets isolés peuvent coexister, chacun totalement indépendant</li>
-    </ul>
-    <div class="g-tip success">Idéal pour tester le même site avec différents comptes ou pour des flux d'inscription en session vierge.</div>
-    <div class="g-tip danger">⚠ Les cookies des onglets isolés ne sont pas sauvegardés — ils disparaissent à la fermeture.</div>
-</div>
-
-<div id="mitm" class="g-card">
-    <h2>12) Proxy MITM &amp; Certificat CA <span class="g-new">NOUVEAU</span></h2>
-    <p>CupNet fait tourner un <b>proxy Man-in-the-Middle sur le port 8877</b> pour déchiffrer et journaliser le trafic HTTPS.</p>
-    <h3>Installation du certificat CA</h3>
-    <ol>
-        <li>Ouvrir <b>⚙ Paramètres → MITM</b> → <b>Copier le certificat CA</b></li>
-        <li>Enregistrer sous <code>cupnet-ca.pem</code></li>
-        <li><b>macOS :</b> double-clic → Trousseau d'accès → <i>Toujours faire confiance</i></li>
-        <li><b>Windows :</b> clic droit → <i>Installer le certificat</i> → Ordinateur local → Autorités de certification racines</li>
-        <li>Redémarrer le navigateur / recharger les onglets</li>
-    </ol>
-    <span class="g-status warn">⚠ Installez uniquement sur des machines que vous contrôlez.</span>
-</div>
-
-<div id="newtab" class="g-card">
-    <h2>13) Page de nouvel onglet <span class="g-new">NOUVEAU</span></h2>
-    <h3>Liens rapides</h3>
-    <ul>
-        <li>Cliquez <b>+</b> pour ajouter un lien URL ou un raccourci de profil proxy</li>
-        <li>Un clic sur un lien proxy active instantanément ce profil</li>
-    </ul>
-    <h3>Barre de cookies 🍪</h3>
-    <p>Affiche le nombre de cookies de la session actuelle. <b>Effacer tout</b> supprime tous les cookies.</p>
-    <h3>Widget proxy / IP</h3>
-    <p>Affiche le statut de connexion, l'IP actuelle et la géolocalisation.</p>
-</div>
-
-<div id="settings" class="g-card">
-    <h2>14) Panneau de paramètres</h2>
-    <h3>Général</h3>
-    <ul>
-        <li><b>Intervalle de capture auto</b> — 0–60 s (défaut 5 s)</li>
-        <li><b>Filtres URL</b> — un glob par ligne (<code>*</code> wildcard)</li>
-        <li><b>Profil TLS</b> — empreinte AzureTLS globale</li>
-        <li><b>Page d'accueil</b> — URL chargée au clic sur ⌂</li>
-    </ul>
-    <h3>Performance</h3>
-    <p>Tableau en temps réel de tous les processus Electron/Chromium : type, PID, CPU %, RAM. Actualisation toutes les 3 s.</p>
-</div>
-
-<div id="issues" class="g-card">
-    <h2>15) Problèmes fréquents</h2>
-    <ul>
-        <li><b>Proxy non fonctionnel</b> — vérifier le format <code>protocole://user:pass@host:port</code>. Utiliser <b>⚡ Tester</b>.</li>
-        <li><b>Erreurs de certificat HTTPS</b> — installer le certificat CA MITM (section 12).</li>
-        <li><b>IP incorrecte</b> — cliquer <b>⟳ Vérifier l'IP</b> dans le Gestionnaire de proxies.</li>
-        <li><b>Règle d'interception non déclenchée</b> — vérifier que la règle est activée et que le pattern correspond.</li>
-        <li><b>L'application ne démarre pas (IDE)</b> — exécuter : <code>ELECTRON_RUN_AS_NODE= npm start</code></li>
-        <li><b>Erreur module natif</b> — reconstruire : <code>npm run rebuild:arm64</code></li>
-    </ul>
-</div>
-
-<div class="g-footer">© CupNet 2.0 — Tous droits réservés.</div>
-`,
-
-// ─────────────────────────── ESPAÑOL ─────────────────────────────────────────
-es: `
-<div class="g-hero">
-    <img src="img.png" class="g-hero-logo" alt="CupNet">
-    <div>
-        <h1 class="g-hero-title">CupNet — Guía de uso</h1>
-        <div class="g-hero-sub">Navegador antidetección · proxy MITM · spoofing TLS · registros de red SQLite</div>
-        <div style="margin-top:6px">
-            <span class="g-pill">v2.0</span><span class="g-pill">SQLite</span>
-            <span class="g-pill">CDP</span><span class="g-pill">AzureTLS</span>
-        </div>
-    </div>
-</div>
-
-<div class="g-card g-toc">
-    <h2>Contenido</h2>
-    <a href="#gs">1. Inicio rápido</a>
-    <a href="#proxy">2. Gestor de proxies</a>
-    <a href="#fingerprint">3. Huella digital &amp; Spoofing TLS</a>
-    <a href="#toolbar">4. Barra de herramientas</a>
-    <a href="#hotkeys">5. Atajos de teclado</a>
-    <a href="#logs">6. Registros de red &amp; Capturas</a>
-    <a href="#editor">7. Editor de solicitudes</a>
-    <a href="#rules">8. Motor de reglas</a>
-    <a href="#intercept">9. Interceptación de solicitudes</a>
-    <a href="#cookies">10. Gestor de cookies</a>
-    <a href="#isolated">11. Sesiones aisladas <span class="g-new">NUEVO</span></a>
-    <a href="#mitm">12. Proxy MITM &amp; Certificado CA <span class="g-new">NUEVO</span></a>
-    <a href="#newtab">13. Página de nueva pestaña <span class="g-new">NUEVO</span></a>
-    <a href="#settings">14. Panel de ajustes</a>
-    <a href="#issues">15. Problemas comunes</a>
-</div>
-
-<div id="gs" class="g-card">
-    <h2>1) Inicio rápido</h2>
-    <ol>
-        <li>Ejecute <code>ELECTRON_RUN_AS_NODE= npm start</code> en <code>node/cupnet2/</code>. La ventana se abre maximizada.</li>
-        <li>El registro de red comienza automáticamente — el badge en el botón <b>Log</b> muestra el n.° de sesión y el recuento de solicitudes.</li>
-        <li>Para usar un proxy: haga clic en la <b>pastilla de proxy</b> en la barra → se abre el Gestor de proxies.</li>
-        <li>Nueva pestaña: <kbd>Ctrl T</kbd> o botón <b>+</b>. Pestaña aislada: botón <b>+🔒</b>.</li>
-        <li>Para inspección HTTPS, instale el certificado CA MITM una vez (sección 12).</li>
-    </ol>
-    <div class="g-tip">El modo directo (sin proxy) funciona de inmediato. El proxy es opcional.</div>
-</div>
-
-<div id="proxy" class="g-card">
-    <h2>2) Gestor de proxies</h2>
-    <p>Haga clic en la <b>pastilla de proxy</b> o en el widget de esta página. Protocolos: <code>http</code>, <code>https</code>, <code>socks4</code>, <code>socks5</code>.</p>
-    <h3>Perfiles de proxy</h3>
-    <ul>
-        <li><b>Guardar</b> — nombre + URL, variables opcionales, país, notas</li>
-        <li><b>⚡ Probar</b> — verifica IP, geolocalización y latencia</li>
-        <li><b>▶ Conectar</b> — activa el proxy para todas las pestañas</li>
-        <li><b>Desconectar</b> — vuelve al modo directo</li>
-    </ul>
-    <h3>Variables de plantilla</h3>
-    <div class="g-tip">
-        <code>{RAND:min-max}</code> — entero aleatorio en cada conexión<br>
-        <code>{SID}</code> — ID de sesión efímero<br>
-        <code>{NOMBREVAR}</code> — variable guardada con el perfil
-    </div>
-    <span class="g-status ok">✓ Las credenciales nunca se almacenan en texto plano — solo en el llavero del SO.</span>
-</div>
-
-<div id="fingerprint" class="g-card">
-    <h2>3) Huella digital &amp; Spoofing TLS</h2>
-    <h3>Overrides del navegador (via CDP)</h3>
-    <ul>
-        <li><b>User-Agent</b> — preajustes: Chrome Win/Mac, Firefox, Safari, Móvil</li>
-        <li><b>Zona horaria</b> — modifica <code>Intl</code>, <code>Date</code>, <code>navigator.timezone</code></li>
-        <li><b>Accept-Language</b> — modifica cabecera HTTP y <code>navigator.language</code></li>
-    </ul>
-    <h3>Huella TLS (AzureTLS)</h3>
-    <p>CupNet usa un <b>worker AzureTLS</b> para enrutar tráfico HTTPS con un handshake TLS real de navegador.</p>
-    <ul>
-        <li>Perfiles: <code>chrome</code>, <code>firefox</code>, <code>safari</code>, <code>ios</code>, <code>edge</code>, <code>opera</code></li>
-        <li>Selección en <b>⚙ Ajustes → General → Perfil TLS</b></li>
-    </ul>
-    <div class="g-tip success">Todos los overrides se resetean al desconectar.</div>
-</div>
-
-<div id="toolbar" class="g-card">
-    <h2>4) Barra de herramientas</h2>
-    ${kbdRow('← → ↻ ⌂', 'Atrás / Adelante / Recargar / Inicio')}
-    ${kbdRow('Barra de dirección', 'URL o búsqueda → Enter para navegar')}
-    <hr class="g-hr" style="margin:10px 0">
-    ${kbdRow('<b>🔵 Pastilla proxy</b>', 'Estado proxy activo. Clic → Gestor de proxies')}
-    ${kbdRow('<b>⚙ Ajustes</b>', 'Panel inline: General + Rendimiento (CPU/RAM por proceso)')}
-    <hr class="g-hr" style="margin:10px 0">
-    ${kbdRow('<b>Log #N</b>', 'Abre el visor de actividad de red')}
-    ${kbdRow('<b>DevTools</b>', 'Chrome DevTools para la <i>pestaña activa</i>. También F12')}
-    ${kbdRow('<b>Cookies</b>', 'Gestor de cookies — ver, editar, importar/exportar')}
-    ${kbdRow('<b>📷 Captura</b>', 'Captura la pestaña activa ahora')}
-</div>
-
-<div id="hotkeys" class="g-card">
-    <h2>5) Atajos de teclado</h2>
-    <p>En macOS usa <kbd>⌘ Cmd</kbd> en lugar de <kbd>Ctrl</kbd>.</p>
-    <h3>Pestañas</h3>
-    ${kbdRow('<kbd>Ctrl T</kbd>', 'Nueva pestaña')}
-    ${kbdRow('<kbd>Ctrl ⇧T</kbd>', 'Pestaña aislada (cookies separadas)')}
-    ${kbdRow('<kbd>Ctrl W</kbd>', 'Cerrar pestaña activa')}
-    ${kbdRow('<kbd>Ctrl Tab</kbd>', 'Pestaña siguiente')}
-    ${kbdRow('<kbd>Ctrl ⇧Tab</kbd>', 'Pestaña anterior')}
-    ${kbdRow('<kbd>Ctrl 1-9</kbd>', 'Ir a pestaña N (9 = última)')}
-    <h3>Navegación</h3>
-    ${kbdRow('<kbd>Enter</kbd> en la barra', 'Navegar o buscar')}
-    ${kbdRow('<kbd>Ctrl L</kbd>', 'Foco en barra de dirección')}
-    ${kbdRow('<kbd>Ctrl R</kbd> / <kbd>F5</kbd>', 'Recargar pestaña activa')}
-    ${kbdRow('<kbd>Ctrl ⇧R</kbd>', 'Recarga forzada (limpiar caché)')}
-    ${kbdRow('<kbd>Alt ←</kbd> / <kbd>Alt →</kbd>', 'Atrás / Adelante')}
-    <h3>Herramientas</h3>
-    ${kbdRow('<kbd>Ctrl P</kbd>', 'Gestor de proxies')}
-    ${kbdRow('<kbd>Ctrl ⇧L</kbd>', 'Registros de red')}
-    ${kbdRow('<kbd>Ctrl ⇧C</kbd>', 'Gestor de cookies')}
-    ${kbdRow('<kbd>F2</kbd>', 'Captura de pantalla')}
-    ${kbdRow('<kbd>F12</kbd>', 'DevTools de la pestaña activa')}
-    ${kbdRow('<kbd>Ctrl ⇧I</kbd>', 'DevTools de la carcasa')}
-</div>
-
-<div id="logs" class="g-card">
-    <h2>6) Registros de red &amp; Capturas</h2>
-    <p>Cada solicitud HTTP/HTTPS/WebSocket es capturada via CDP y almacenada en SQLite.</p>
-    <ul>
-        <li><b>Solicitud:</b> URL, método, cabeceras, cuerpo</li>
-        <li><b>Respuesta:</b> estado, cabeceras, MIME, cuerpo, duración ms</li>
-        <li><b>WebSocket:</b> todos los frames (envío/recepción)</li>
-    </ul>
-    <h3>Visor de logs</h3>
-    ${kbdRow('Filtros', 'Método, estado, content-type, sesión, pestaña')}
-    ${kbdRow('Búsqueda FTS', 'Búsqueda de texto completo URL + cuerpo (SQLite FTS5)')}
-    ${kbdRow('Exportar HAR', 'Compatible con Charles, Fiddler, Wireshark')}
-    ${kbdRow('▶ Repetir', 'Abrir en el Editor de solicitudes')}
-</div>
-
-<div id="editor" class="g-card">
-    <h2>7) Editor de solicitudes</h2>
-    <p>Haga clic en <b>▶ Repetir</b> en cualquier entrada del log. Herramienta tipo Postman basada en <code>net.fetch</code> de Electron.</p>
-    <ul>
-        <li>Método, URL, parámetros de consulta, cabeceras, cuerpo</li>
-        <li>Perfil TLS por solicitud</li>
-        <li>Panel de respuesta: estado, cabeceras, cuerpo JSON formateado</li>
-        <li><b>Copiar como cURL</b> — genera el comando <code>curl</code> equivalente</li>
-    </ul>
-</div>
-
-<div id="rules" class="g-card">
-    <h2>8) Motor de reglas</h2>
-    <p>Abrir via <b>Herramientas → Reglas &amp; Interceptor</b>. Las reglas se ejecutan <i>después</i> de cada solicitud.</p>
-    <h3>Condiciones — coincidir con:</h3>
-    <p>URL · método · estado · content-type · duración · host · cuerpo solicitud/respuesta · error</p>
-    <h3>Acciones</h3>
-    <div class="g-tip"><b>highlight</b> — colorear la fila en el visor</div>
-    <div class="g-tip"><b>screenshot</b> — capturar la pestaña automáticamente</div>
-    <div class="g-tip"><b>notification</b> — notificación del sistema + toast en la app</div>
-    <div class="g-tip"><b>block</b> — marcar solicitudes coincidentes</div>
-</div>
-
-<div id="intercept" class="g-card">
-    <h2>9) Interceptación de solicitudes</h2>
-    <p>La pestaña <b>Interceptor</b> actúa <i>antes</i> de que las solicitudes lleguen a la red. Patrones con <code>*</code> wildcards.</p>
-    <div class="g-tip"><b>block</b> — cancelar la solicitud completamente</div>
-    <div class="g-tip"><b>modifyRequestHeaders</b> — modificar cabeceras antes de enviar</div>
-    <div class="g-tip"><b>modifyResponseHeaders</b> — modificar cabeceras de respuesta (ej: eliminar CSP)</div>
-    <div class="g-tip"><b>mock</b> — devolver una respuesta falsa sin contactar el servidor</div>
-</div>
-
-<div id="cookies" class="g-card">
-    <h2>10) Gestor de cookies</h2>
-    <p>Haga clic en <b>Cookies</b> en la barra de herramientas.</p>
-    <ul>
-        <li>Ver dominio, ruta, valor, vencimiento, flags: HttpOnly · Secure · SameSite</li>
-        <li>Filtro en tiempo real — por dominio, nombre o valor</li>
-        <li>Edición inline, añadir, eliminar</li>
-        <li><b>Exportar</b>: JSON o Netscape <code>cookies.txt</code></li>
-        <li><b>Importar</b>: JSON o Netscape (máx 10 MB)</li>
-        <li><b>⇄ Compartir a pestaña</b> — copiar cookies de una sesión a otra</li>
-    </ul>
-</div>
-
-<div id="isolated" class="g-card">
-    <h2>11) Sesiones cookies aisladas <span class="g-new">NUEVO</span></h2>
-    <p>Haga clic en <b>+🔒</b> para abrir una <b>pestaña aislada</b>. Nueva sesión Chromium separada — cookies, localStorage, caché e IndexedDB totalmente independientes.</p>
-    <ul>
-        <li>Icono 🔒 en la barra de pestañas</li>
-        <li>Banner <b>🔒 ISOLATED COOKIE SESSION</b> en la página de nueva pestaña</li>
-        <li>Cerrar la pestaña destruye la sesión y todos sus datos permanentemente</li>
-    </ul>
-    <div class="g-tip success">Ideal para probar el mismo sitio con diferentes cuentas.</div>
-    <div class="g-tip danger">⚠ Las cookies en pestañas aisladas no se guardan — desaparecen al cerrar.</div>
-</div>
-
-<div id="mitm" class="g-card">
-    <h2>12) Proxy MITM &amp; Certificado CA <span class="g-new">NUEVO</span></h2>
-    <p>CupNet ejecuta un <b>proxy Man-in-the-Middle en el puerto 8877</b> para descifrar y registrar tráfico HTTPS.</p>
-    <h3>Instalación del certificado CA</h3>
-    <ol>
-        <li>Abrir <b>⚙ Ajustes → MITM</b> → <b>Copiar certificado CA</b></li>
-        <li>Guardar como <code>cupnet-ca.pem</code></li>
-        <li><b>macOS:</b> doble clic → Acceso a Llavero → <i>Confiar siempre</i></li>
-        <li><b>Windows:</b> clic derecho → <i>Instalar certificado</i> → Equipo local → Entidades de certificación raíz</li>
-    </ol>
-    <span class="g-status warn">⚠ Instale solo en equipos que usted controle.</span>
-</div>
-
-<div id="newtab" class="g-card">
-    <h2>13) Página de nueva pestaña <span class="g-new">NUEVO</span></h2>
-    <h3>Enlaces rápidos</h3>
-    <ul>
-        <li>Haga clic en <b>+</b> para añadir un enlace URL o acceso directo a perfil proxy</li>
-        <li>Un clic en un enlace proxy activa ese perfil instantáneamente</li>
-    </ul>
-    <h3>Barra de cookies 🍪</h3>
-    <p>Muestra cuántas cookies tiene la sesión actual. <b>Borrar todo</b> elimina todas las cookies.</p>
-    <h3>Widget proxy / IP</h3>
-    <p>Muestra estado de conexión, IP actual y geolocalización.</p>
-</div>
-
-<div id="settings" class="g-card">
-    <h2>14) Panel de ajustes</h2>
-    <h3>General</h3>
-    <ul>
-        <li><b>Intervalo de captura auto</b> — 0–60 s (predeterminado 5 s)</li>
-        <li><b>Filtros de URL</b> — un glob por línea (<code>*</code> wildcard)</li>
-        <li><b>Perfil TLS</b> — huella AzureTLS global</li>
-        <li><b>Página de inicio</b> — URL cargada al hacer clic en ⌂</li>
-    </ul>
-    <h3>Rendimiento</h3>
-    <p>Tabla en tiempo real de todos los procesos Electron/Chromium: tipo, PID, CPU %, RAM. Actualización cada 3 s.</p>
-</div>
-
-<div id="issues" class="g-card">
-    <h2>15) Problemas comunes</h2>
-    <ul>
-        <li><b>Proxy no funciona</b> — verificar formato <code>protocolo://user:pass@host:port</code>. Usar <b>⚡ Probar</b>.</li>
-        <li><b>Errores de certificado HTTPS</b> — instalar el certificado CA MITM (sección 12).</li>
-        <li><b>IP incorrecta</b> — hacer clic en <b>⟳ Verificar IP</b> en el Gestor de proxies.</li>
-        <li><b>La app no inicia (IDE)</b> — ejecutar: <code>ELECTRON_RUN_AS_NODE= npm start</code></li>
-        <li><b>Error de módulo nativo</b> — reconstruir: <code>npm run rebuild:arm64</code></li>
-    </ul>
-</div>
-
-<div class="g-footer">© CupNet 2.0 — Todos los derechos reservados.</div>
-`,
-
-// ─────────────────────────── РУССКИЙ ─────────────────────────────────────────
-ru: `
-<div class="g-hero">
-    <img src="img.png" class="g-hero-logo" alt="CupNet">
-    <div>
-        <h1 class="g-hero-title">CupNet — Руководство</h1>
-        <div class="g-hero-sub">Антидетект-браузер · MITM-прокси · подмена TLS · SQLite-логи сети</div>
-        <div style="margin-top:6px">
-            <span class="g-pill">v2.0</span><span class="g-pill">SQLite</span>
-            <span class="g-pill">CDP</span><span class="g-pill">AzureTLS</span>
-        </div>
-    </div>
-</div>
-
-<div class="g-card g-toc">
-    <h2>Содержание</h2>
-    <a href="#gs">1. Быстрый старт</a>
-    <a href="#toolbar">2. Панель инструментов</a>
-    <a href="#proxy">3. Менеджер прокси</a>
-    <a href="#fingerprint">4. Отпечаток браузера и TLS</a>
-    <a href="#logs">5. Логирование сети</a>
-    <a href="#screenshots">6. Скриншоты</a>
-    <a href="#editor">7. Редактор запросов</a>
-    <a href="#rules">8. Правила и Перехватчик</a>
-    <a href="#cookies">9. Менеджер куки</a>
-    <a href="#isolated">10. Изолированные вкладки</a>
-    <a href="#newtab">11. Стартовая страница</a>
-    <a href="#hotkeys">12. Горячие клавиши</a>
-    <a href="#settings">13. Настройки</a>
-    <a href="#issues">14. Частые проблемы</a>
-</div>
-
-<div id="gs" class="g-card">
-    <h2>1) Быстрый старт</h2>
-    <ol>
-        <li>Запустите из терминала: <code>ELECTRON_RUN_AS_NODE= npm start</code> (из папки <code>node/cupnet2/</code>).</li>
-        <li>Сетевые логи пишутся автоматически с первого открытия. Кнопка <b>REC</b> в тулбаре показывает статус записи — нажмите чтобы переключить сессию.</li>
-        <li>Без прокси браузер работает в прямом режиме (Direct) — это нормально.</li>
-        <li>Новая вкладка: кнопка <b>+</b> в таб-баре или <kbd>Ctrl+T</kbd>.</li>
-        <li>Открыть Менеджер прокси: нажмите на таблетку статуса (слева от адресной строки, показывает «Direct» или имя профиля).</li>
-    </ol>
-    <div class="g-tip">Все данные (логи, профили, правила) хранятся локально в SQLite. Интернет-соединение используется только для трафика вкладок.</div>
-</div>
-
-<div id="toolbar" class="g-card">
-    <h2>2) Панель инструментов</h2>
-    <p>Верхняя строка — таб-бар. Нижняя — навигация и инструменты.</p>
-    ${kbdRow('← →', 'Назад / Вперёд')}
-    ${kbdRow('↻', 'Обновить страницу')}
-    ${kbdRow('⌂', 'На стартовую страницу')}
-    ${kbdRow('Таблетка прокси', 'Показывает «Direct» или имя активного профиля. Клик — открыть Менеджер прокси')}
-    ${kbdRow('Адресная строка', 'URL или поисковый запрос → Enter для перехода')}
-    <hr class="g-hr" style="margin:10px 0">
-    ${kbdRow('<b>REC / Log #N</b>', '<b>REC</b> — включить/выключить запись. <b>Log #N</b> — открыть просмотрщик логов. Цифра — счётчик запросов текущей сессии')}
-    ${kbdRow('<b>DevTools</b>', 'Chrome DevTools для <i>активной вкладки</i> (не оболочки браузера). Также <kbd>F12</kbd>')}
-    ${kbdRow('<b>Cookies</b>', 'Открыть Менеджер куки')}
-    ${kbdRow('<b>Screenshot</b>', 'Снять скриншот активной вкладки прямо сейчас. Счётчик рядом — обратный отсчёт до следующего авто-снимка')}
-    ${kbdRow('<b>Req Editor</b>', 'Открыть Редактор запросов')}
-    ${kbdRow('<b>Rules</b>', 'Открыть окно Правил и Перехватчика')}
-    ${kbdRow('<b>Settings</b>', 'Открыть панель настроек (раскрывается под тулбаром)')}
-    <hr class="g-hr" style="margin:10px 0">
-    <p>В <b>таб-баре</b> крайняя правая кнопка <b>+</b> — новая обычная вкладка, рядом <b>+🔒</b> — изолированная вкладка (отдельные куки).</p>
-</div>
-
-<div id="proxy" class="g-card">
-    <h2>3) Менеджер прокси</h2>
-    <p>Откройте кликом на таблетку в тулбаре или через виджет на стартовой странице.</p>
-    <h3>Профили</h3>
-    <p>Нажмите <b>+ New</b> чтобы создать профиль. URL прокси шифруется через OS-keychain (safeStorage) — в открытом виде не хранится.</p>
-    <ul>
-        <li><b>Profile Name</b> — произвольное название</li>
-        <li><b>Proxy URL / Template</b> — адрес прокси, поддерживает шаблоны с переменными</li>
-        <li><b>Notes</b> — заметки (опционально)</li>
-        <li>Раздел <b>🎭 Fingerprint / Identity</b> — настройки отпечатка, применяются при подключении</li>
-    </ul>
-    <h3>Действия с профилем</h3>
-    <ul>
-        <li><b>⚡ Test</b> — проверяет соединение, получает IP, гео и задержку через этот прокси</li>
-        <li><b>▶ Connect</b> — подключает прокси для всех вкладок, применяет настройки отпечатка</li>
-        <li><b>⧉ Copy</b> — создать дубликат профиля</li>
-        <li><b>✕ Delete</b> — удалить профиль</li>
-        <li><b>✕ Disconnect</b> — отключить прокси (кнопка в шапке окна, появляется когда прокси активен)</li>
-    </ul>
-    <h3>Шаблоны URL</h3>
-    <p>В поле URL можно использовать переменные:</p>
-    <div class="g-tip">
-        <code>{RAND:min-max}</code> — случайное число при каждом подключении<br>
-        <code>{SID}</code> — эфемерный ID сессии (не сохраняется в профиле, можно задать вручную)<br>
-        <code>{ИМЯПЕРЕМЕННОЙ}</code> — сохранённая переменная, задаётся в таблице под полем URL
-    </div>
-    <details><summary>Пример полного шаблона</summary>
-        <pre>http://user-{SID}:пароль@{COUNTRY}.proxy.com:{RAND:10000-19999}</pre>
-    </details>
-    <h3>Статистика AzureTLS</h3>
-    <p>В шапке Менеджера прокси отображается живая статистика MITM-воркера: req/s, среднее время ответа, pending-запросы, счётчик ошибок, активный TLS-профиль.</p>
-    <span class="g-status ok">✓ При подключении к прокси активная вкладка перезагружается автоматически.</span>
-</div>
-
-<div id="fingerprint" class="g-card">
-    <h2>4) Отпечаток браузера и TLS</h2>
-    <p>Настраивается в Менеджере прокси → раздел <b>🎭 Fingerprint / Identity</b> внутри редактируемого профиля. Применяется при нажатии <b>Connect</b>.</p>
-
-    <h3>HTTP / браузерная идентичность</h3>
-    <ul>
-        <li><b>User-Agent</b> — готовые пресеты: Chrome Win, Chrome Mac, Firefox, Safari Mac, Mobile. Подменяет и HTTP-заголовок, и <code>navigator.userAgent</code> в JS.</li>
-        <li><b>Timezone</b> — список временных зон (UTC, Москва, Берлин, Токио и т.д.). Подменяет <code>Intl</code>, <code>Date</code> и <code>navigator.timezone</code>.</li>
-        <li><b>Language</b> — список языков. Подменяет заголовок <code>Accept-Language</code> и <code>navigator.language</code>.</li>
-    </ul>
-    <div class="g-tip">Все overrides сбрасываются автоматически при нажатии <b>Disconnect</b>.</div>
-
-    <h3>🛡 TLS Fingerprint</h3>
-    <p>Управляет тем, как выглядит TLS-хендшейк для сервера (JA3-отпечаток). Cloudflare и антибот-системы используют это для детектирования.</p>
-    <p>Два режима:</p>
-    <ul>
-        <li><b>Template</b> — выбор из готовых профилей: Chrome 133, Firefox 138, Safari 18, iOS 18, Edge, Opera. Рекомендуется использовать Chrome.</li>
-        <li><b>Custom JA3</b> — ручной ввод строки JA3 для продвинутых случаев.</li>
-    </ul>
-    <div class="g-tip">TLS-профиль задаётся в каждом прокси-профиле отдельно. Если профиль не задан — используется системный Electron-клиент.</div>
-</div>
-
-<div id="logs" class="g-card">
-    <h2>5) Логирование сети</h2>
-    <p>Все HTTP/HTTPS/WebSocket-запросы перехватываются через Chrome DevTools Protocol (CDP) и сохраняются в SQLite.</p>
-    <p>Что записывается:</p>
-    <ul>
-        <li>URL, метод, заголовки запроса, тело (POST-данные)</li>
-        <li>Статус ответа, заголовки, MIME-тип, тело ответа, длительность (мс)</li>
-        <li>WebSocket-фреймы (отправка и получение с payload)</li>
-    </ul>
-    <h3>Управление записью</h3>
-    <p>Кнопка <b>REC</b> в тулбаре — переключатель. При нажатии показывает модальное окно с выбором:</p>
-    <ul>
-        <li><b>Continue in current session</b> — продолжить запись в ту же сессию</li>
-        <li><b>Start new session</b> — создать новую сессию (можно сразу переименовать старую)</li>
-    </ul>
-    <h3>Просмотрщик логов</h3>
-    <p>Открывается кнопкой <b>Log #N</b> в тулбаре. Виртуальный скролл — работает быстро даже с сотнями тысяч записей.</p>
-    ${kbdRow('Фильтры', 'По методу, статусу, content-type, вкладке, сессии')}
-    ${kbdRow('FTS-поиск', 'Полнотекстовый поиск по URL и телу ответа (SQLite FTS5)')}
-    ${kbdRow('Детали записи', 'Клик на строку — раскрыть полные заголовки, тело запроса и ответа')}
-    ${kbdRow('Экспорт HAR', 'Экспорт сессии в формат .har — совместим с Charles, Fiddler, Wireshark, Chrome DevTools')}
-    ${kbdRow('▶ Replay', 'Открыть запись в Редакторе запросов')}
-    ${kbdRow('Сессии', 'Переключение между сессиями; переименование; удаление')}
-    <div class="g-tip">Стартовая страница (эта вкладка) не логируется и не скриншотируется.</div>
-</div>
-
-<div id="screenshots" class="g-card">
-    <h2>6) Скриншоты</h2>
-    <p>Нажмите кнопку <b>Screenshot</b> в тулбаре чтобы сделать снимок активной вкладки прямо сейчас.</p>
-    <h3>Авто-скриншоты</h3>
-    <p>Включаются в <b>Settings → General → Auto screenshot interval</b>. По умолчанию — каждые 5 секунд. Значение <code>0</code> = отключено (макс. 60 с).</p>
-    <ul>
-        <li>Счётчик рядом с кнопкой Screenshot показывает обратный отсчёт до следующего снимка</li>
-        <li>Одинаковые последовательные кадры дедуплицируются — в базу не пишутся</li>
-        <li>Скриншоты отображаются в просмотрщике логов как строки 📷 с миниатюрой</li>
-    </ul>
-</div>
-
-<div id="editor" class="g-card">
-    <h2>7) Редактор запросов</h2>
-    <p>Открыть: кнопка <b>Req Editor</b> в тулбаре, или нажать <b>▶ Replay</b> на любой записи в просмотрщике логов.</p>
-    <p>Редактор работает через <code>net.fetch</code> Electron — часть браузерных ограничений снята.</p>
-    <ul>
-        <li><b>Метод</b> — GET, POST, PUT, PATCH, DELETE и т.д.</li>
-        <li><b>URL</b> — произвольный, с возможностью редактирования query-параметров в таблице</li>
-        <li><b>Headers</b> — добавить/изменить/удалить заголовки. Системные заголовки (Host, Content-Length и т.д.) отмечены ★</li>
-        <li><b>Body</b> — None / Raw / JSON / Form-urlencoded</li>
-        <li><b>Send</b> — отправить запрос и увидеть ответ (статус, заголовки, тело с JSON-форматированием)</li>
-        <li><b>Copy as cURL</b> — скопировать эквивалентную команду <code>curl</code> в буфер обмена</li>
-    </ul>
-</div>
-
-<div id="rules" class="g-card">
-    <h2>8) Правила и Перехватчик</h2>
-    <p>Открыть: кнопка <b>Rules</b> в тулбаре. Окно содержит две вкладки: <b>Rules</b> и <b>Interceptor</b>.</p>
-
-    <h3>Rules — постфактум-правила</h3>
-    <p>Срабатывают <i>после</i> того как запрос уже выполнен и записан в лог.</p>
-    <p><b>Условия</b> — совпадение по: URL, методу, статусу, content-type, длительности, хосту, телу запроса/ответа, тексту ошибки. Операторы: contains, equals, startsWith, matches (regex), gt/lt.</p>
-    <p><b>Действия при совпадении:</b></p>
-    <div class="g-tip"><b>highlight</b> — подсветить строку в логе выбранным цветом</div>
-    <div class="g-tip"><b>screenshot</b> — автоматически снять скриншот вкладки</div>
-    <div class="g-tip"><b>notification</b> — системное уведомление + всплывашка в браузере</div>
-    <div class="g-tip"><b>block</b> — пометить запись в логе как заблокированную</div>
-    <p>На каждой карточке правила отображается счётчик срабатываний. Правила можно включать и отключать по отдельности.</p>
-
-    <h3>Interceptor — правила перехвата</h3>
-    <p>Срабатывают <i>до</i> отправки запроса в сеть. Паттерн URL поддерживает <code>*</code> wildcards.</p>
-    <div class="g-tip"><b>block</b> — отменить запрос (браузер получит сетевую ошибку)</div>
-    <div class="g-tip"><b>modifyRequestHeaders</b> — добавить/изменить/удалить заголовки перед отправкой. Пустая строка значения = удалить заголовок</div>
-    <div class="g-tip"><b>modifyResponseHeaders</b> — изменить заголовки ответа сервера (например, удалить <code>Content-Security-Policy</code>)</div>
-    <div class="g-tip"><b>mock</b> — вернуть фиктивный ответ (статус + MIME + тело) без обращения к серверу</div>
-</div>
-
-<div id="cookies" class="g-card">
-    <h2>9) Менеджер куки</h2>
-    <p>Открыть: кнопка <b>Cookies</b> в тулбаре.</p>
-    <ul>
-        <li>Выбор вкладки в выпадающем списке — показывает куки её сессии</li>
-        <li>Переключатель <b>Current tab</b> — автоматически фильтровать по домену активной вкладки</li>
-        <li>Поиск в реальном времени — по домену, имени или значению</li>
-        <li>Редактирование любого поля inline; добавление новых кук; удаление выбранной или всех</li>
-        <li><b>Export JSON / Export Netscape</b> — скачать куки в файл (<code>cookies.txt</code> совместим с curl/wget)</li>
-        <li><b>Import</b> — загрузить куки из JSON или Netscape-файла (макс. 10 МБ)</li>
-        <li><b>Share cookies → Tab</b> — скопировать куки из сессии одной вкладки в другую (можно фильтровать по домену)</li>
-    </ul>
-    <div class="g-tip">У каждой вкладки отдельная Chromium-сессия — куки между вкладками не утекают автоматически.</div>
-</div>
-
-<div id="isolated" class="g-card">
-    <h2>10) Изолированные вкладки</h2>
-    <p>Нажмите кнопку <b>+🔒</b> в таб-баре (крайняя правая). Открывается вкладка с полностью чистой Chromium-сессией — куки, localStorage, кэш и IndexedDB полностью независимы от всех других вкладок.</p>
-    <ul>
-        <li>В таб-баре вкладка помечена иконкой 🔒</li>
-        <li>На стартовой странице этой вкладки показывается баннер <b>🔒 ISOLATED COOKIE SESSION</b></li>
-        <li>Можно открыть несколько изолированных вкладок одновременно — каждая независима от других</li>
-    </ul>
-    <div class="g-tip success">Удобно для тестирования регистрации, логина под разными аккаунтами, или любых сценариев где нужна чистая сессия.</div>
-    <div class="g-tip danger">⚠ При закрытии изолированной вкладки все её куки и данные уничтожаются. Если нужно сохранить куки — экспортируйте их через Менеджер куки до закрытия.</div>
-</div>
-
-<div id="newtab" class="g-card">
-    <h2>11) Стартовая страница</h2>
-    <p>Открывается при создании новой вкладки и при нажатии кнопки ⌂. Все настройки страницы хранятся в <code>localStorage</code>.</p>
-    <h3>Поиск</h3>
-    <p>Введите запрос или URL → Enter. Поисковик выбирается кнопками под строкой: <b>DDG</b>, <b>Google</b>, <b>Yandex</b>, <b>Bing</b>.</p>
-    <h3>Быстрые ссылки</h3>
-    <p>Нажмите <b>+</b> под иконками, чтобы добавить ярлык. Два типа:</p>
-    <ul>
-        <li><b>🌐 URL</b> — произвольная ссылка с иконкой и подписью</li>
-        <li><b>🛡 Proxy Profile</b> — ярлык прокси-профиля; клик по нему сразу подключает этот прокси</li>
-    </ul>
-    <p>Удалить ярлык — кнопка <b>✕</b> на нём.</p>
-    <h3>Статус-бар куки 🍪</h3>
-    <p>Показывает количество куки в текущей сессии. Кнопка <b>Clear all</b> — удалить все куки (удобно перед чистым запуском).</p>
-    <h3>Виджет прокси / IP</h3>
-    <p>Показывает статус прокси, текущий IP-адрес и геолокацию. Кнопка <b>Manage →</b> открывает Менеджер прокси.</p>
-</div>
-
-<div id="hotkeys" class="g-card">
-    <h2>12) Горячие клавиши</h2>
-    <p>На macOS вместо <kbd>Ctrl</kbd> используйте <kbd>⌘ Cmd</kbd>.</p>
-    <h3>Вкладки</h3>
-    ${kbdRow('<kbd>Ctrl T</kbd>', 'Новая вкладка')}
-    ${kbdRow('<kbd>Ctrl ⇧T</kbd>', 'Новая изолированная вкладка (отдельные куки)')}
-    ${kbdRow('<kbd>Ctrl W</kbd>', 'Закрыть активную вкладку')}
-    ${kbdRow('<kbd>Ctrl Tab</kbd>', 'Следующая вкладка')}
-    ${kbdRow('<kbd>Ctrl ⇧Tab</kbd>', 'Предыдущая вкладка')}
-    ${kbdRow('<kbd>Ctrl 1-9</kbd>', 'Перейти к вкладке N (9 = последняя)')}
-    <h3>Навигация</h3>
-    ${kbdRow('<kbd>Enter</kbd> в адресной строке', 'Перейти по URL или поиск')}
-    ${kbdRow('<kbd>Ctrl L</kbd>', 'Фокус на адресную строку')}
-    ${kbdRow('<kbd>Ctrl R</kbd> / <kbd>F5</kbd>', 'Обновить страницу')}
-    ${kbdRow('<kbd>Ctrl ⇧R</kbd>', 'Полная перезагрузка (без кэша)')}
-    ${kbdRow('<kbd>Alt ←</kbd> / <kbd>Alt →</kbd>', 'Назад / Вперёд')}
-    ${kbdRow('<kbd>Esc</kbd> в адресной строке', 'Отмена редактирования')}
-    <h3>Инструменты</h3>
-    ${kbdRow('<kbd>Ctrl P</kbd>', 'Открыть Менеджер прокси')}
-    ${kbdRow('<kbd>Ctrl ⇧L</kbd>', 'Открыть Сетевые логи')}
-    ${kbdRow('<kbd>Ctrl ⇧C</kbd>', 'Открыть Менеджер куки')}
-    ${kbdRow('<kbd>F2</kbd>', 'Снять скриншот прямо сейчас')}
-    ${kbdRow('<kbd>F12</kbd>', 'DevTools для активной вкладки')}
-    ${kbdRow('<kbd>Ctrl ⇧I</kbd>', 'DevTools оболочки браузера')}
-</div>
-
-<div id="settings" class="g-card">
-    <h2>13) Настройки</h2>
-    <p>Нажмите кнопку <b>Settings</b> в тулбаре — панель раскрывается прямо под панелью инструментов.</p>
-
-    <h3>Вкладка General</h3>
-    <ul>
-        <li><b>Auto screenshot interval</b> — интервал авто-скриншотов в секундах. <code>0</code> = отключено. Диапазон 0–60 с. По умолчанию 5 с.</li>
-        <li><b>Unblock copy / paste</b> — переключатель. Включён по умолчанию. Запрещает сайтам блокировать Ctrl+C, Ctrl+V и правую кнопку → Вставить.</li>
-        <li><b>URL filter patterns</b> — список glob-паттернов (один на строку, <code>*</code> wildcard). Запросы совпадающие с паттерном не записываются в лог. Нажмите <b>Save filters</b> чтобы применить.</li>
-    </ul>
-
-    <h3>Вкладка Performance</h3>
-    <p>Таблица всех процессов Electron/Chromium в реальном времени: тип (Browser, Renderer, GPU, Utility), PID, CPU %, RAM рабочий набор, приватная память, sandbox. Обновляется каждые 3 с.</p>
-</div>
-
-<div id="issues" class="g-card">
-    <h2>14) Частые проблемы</h2>
-    <ul>
-        <li><b>Прокси не подключается</b> — проверьте формат URL: <code>протокол://user:pass@host:port</code>. Поддерживаются: <code>http</code>, <code>https</code>, <code>socks4</code>, <code>socks5</code>. Используйте кнопку <b>⚡ Test</b> для диагностики.</li>
-        <li><b>В логах SSL-ошибки на HTTPS</b> — в норме при MITM: браузер доверяет сертификату автоматически, но AzureTLS-воркер может выдавать такие ошибки если upstream-прокси некорректен. Попробуйте переключить прокси или временно отключить его.</li>
-        <li><b>Неверный IP в виджете</b> — нажмите <b>⟳ Check IP</b> в Менеджере прокси. Виджет обновляется каждые 30 с.</li>
-        <li><b>Правило перехвата не срабатывает</b> — убедитесь что переключатель правила включён и паттерн URL верный (пробуйте <code>*example.com*</code> для широкого совпадения).</li>
-        <li><b>Лог не пишется</b> — проверьте что кнопка <b>REC</b> активна (светится). Стартовая страница не логируется намеренно.</li>
-        <li><b>Приложение не запускается из IDE (Cursor)</b> — IDE устанавливает <code>ELECTRON_RUN_AS_NODE=1</code>. Запускайте из внешнего терминала: <code>ELECTRON_RUN_AS_NODE= npm start</code></li>
-        <li><b>Ошибка нативного модуля при старте</b> — нужна пересборка под текущую версию Electron: <code>npm run rebuild:arm64</code> (Apple Silicon) или <code>npx electron-rebuild</code> (другие платформы).</li>
-    </ul>
-    <details><summary>Команды запуска</summary>
-        <pre>cd node/cupnet2
-npm install --ignore-scripts
-npm run rebuild:arm64      # Apple Silicon
-ELECTRON_RUN_AS_NODE= npm start</pre>
-    </details>
-</div>
-
-<div class="g-footer">© CupNet 2.0 — Все права защищены.</div>
-`
-
-    }; // end LANGS
-
-    // ── Render & switch ────────────────────────────────────────────────────
-    const content = document.getElementById('g-content');
-    const langBar = document.getElementById('g-lang-bar');
-
-    function attachGuideLinks() {
-        content.querySelectorAll('a[href^="#"]').forEach(a => {
-            a.addEventListener('click', e => {
-                e.preventDefault();
-                const target = content.querySelector(a.getAttribute('href'));
-                if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            });
-        });
-        content.querySelectorAll('a[href^="http"]').forEach(a => {
-            a.addEventListener('click', e => { e.preventDefault(); window.electronAPI?.navigateTo?.(a.href); });
-        });
-    }
-
-    function setLang(lang) {
-        if (!LANGS[lang]) return;
-        content.innerHTML = LANGS[lang];
-        langBar.querySelectorAll('.g-lang-btn').forEach(b => {
-            b.classList.toggle('active', b.dataset.lang === lang);
-        });
-        localStorage.setItem(LANG_KEY, lang);
-        attachGuideLinks();
-    }
-
-    langBar.addEventListener('click', e => {
-        const btn = e.target.closest('.g-lang-btn');
-        if (btn) setLang(btn.dataset.lang);
-    });
-
-    const saved = localStorage.getItem(LANG_KEY) || 'en';
-    let guideLoaded = false;
-    function ensureGuideLoaded() {
-        if (guideLoaded) return;
-        guideLoaded = true;
-        setLang(saved);
-    }
-    // Render heavy guide content only when panel is opened.
-    if (!document.body.classList.contains('guide-hidden')) {
-        setTimeout(() => runWhenIdle(ensureGuideLoaded), _startupSplashDelay);
-    } else {
-        window.addEventListener('guide-opened', ensureGuideLoaded, { once: true });
-    }
-})();
+    })
+    .finally(endInitialNoTransition);
 
 // ── Clock ──────────────────────────────────────────────────────────────────────
 const DAYS   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -3240,7 +1959,7 @@ function makeQuickLinkEl(item, onRemove) {
     el.addEventListener('click', e => {
         if (e.target.closest('.ql-remove')) return;
         if (item.type === 'proxy') activateProxyLink(item);
-        else if (item.type === 'guide') openGuidePanel();
+        else if (item.type === 'guide') window.electronAPI?.navigateTo?.('cupnet://guide');
         else if (isSafeUrl(item.url)) navigate(item.url);
     });
     if (onRemove) {
@@ -3881,16 +2600,23 @@ if (window.electronAPI) {
     const startBtn       = document.getElementById('epw-toggle');
     const stopBtn        = document.getElementById('epw-stop-btn');
     const sel            = document.getElementById('epw-port-select');
-    const copyBtn        = document.getElementById('epw-copy-curl');
+    const copyCurlBtn    = document.getElementById('epw-copy-curl');
     const activePortEl   = document.getElementById('epw-active-port');
-    const epLocalUrlEl   = document.getElementById('epw-endpoint-local');
-    const epLanUrlEl     = document.getElementById('epw-endpoint-lan');
-    const epLanWrap      = document.getElementById('epw-endpoint-lan-wrap');
+    const epUrlEl        = document.getElementById('epw-endpoint-url');
+    const epSubEl        = document.getElementById('epw-endpoint-sub');
+    const epTargetSeg    = document.getElementById('epw-target-seg');
+    const segLocalBtn    = document.getElementById('epw-seg-local');
+    const segLanBtn      = document.getElementById('epw-seg-lan');
+    const copyUrlBtn     = document.getElementById('epw-copy-url');
+    const copyUrlHeadBtn = document.getElementById('epw-copy-url-head');
     const epLanHint      = document.getElementById('epw-lan-firewall-hint');
     const epLanHintPort  = document.getElementById('epw-lan-hint-port');
-    const epLanHostLbl   = document.getElementById('epw-lan-host-label');
-    const copyLocalBtn   = document.getElementById('epw-copy-local-url');
-    const copyLanBtn     = document.getElementById('epw-copy-lan-url');
+    const urlToggle      = document.getElementById('epw-url-toggle');
+    const urlBody        = document.getElementById('epw-url-body');
+    const urlChevron     = document.getElementById('epw-url-chevron');
+    const curlToggle     = document.getElementById('epw-curl-toggle');
+    const curlBody       = document.getElementById('epw-curl-body');
+    const curlChevron    = document.getElementById('epw-curl-chevron');
 
     const EPW_START_LABEL = 'Start listening';
 
@@ -3898,6 +2624,9 @@ if (window.electronAPI) {
 
     let curlText = '';
     let busy = false;
+    /** @type {{ local: string, lan: string, hasLan: boolean, lanHost: string, port: number }} */
+    const epEndpoints = { local: '', lan: '', hasLan: false, lanHost: '', port: 0 };
+    let epActiveTarget = 'local';
 
     function flashCopyBtn(btn) {
         if (!btn) return;
@@ -3917,26 +2646,82 @@ if (window.electronAPI) {
         return `curl -k -x ${proxyUrl} https://httpbin.org/ip`;
     }
 
-    copyBtn?.addEventListener('click', () => {
+    function setEpTarget(target) {
+        if (!epEndpoints.hasLan && target === 'lan') return;
+        epActiveTarget = target;
+        const isLocal = target === 'local';
+        if (segLocalBtn) {
+            segLocalBtn.classList.toggle('active', isLocal);
+            segLocalBtn.setAttribute('aria-pressed', isLocal ? 'true' : 'false');
+        }
+        if (segLanBtn) {
+            segLanBtn.classList.toggle('active', !isLocal);
+            segLanBtn.setAttribute('aria-pressed', !isLocal ? 'true' : 'false');
+        }
+        syncEndpointDisplay();
+    }
+
+    function syncEndpointDisplay() {
+        if (!epUrlEl || !epSubEl) return;
+        if (!epEndpoints.hasLan) {
+            if (epTargetSeg) epTargetSeg.style.display = 'none';
+            epUrlEl.textContent = epEndpoints.local || '—';
+            epSubEl.textContent = '127.0.0.1 — this machine';
+        } else {
+            if (epTargetSeg) epTargetSeg.style.display = '';
+            if (epActiveTarget === 'lan') {
+                epUrlEl.textContent = epEndpoints.lan;
+                epSubEl.textContent = `${epEndpoints.lanHost} — LAN / other devices`;
+            } else {
+                epUrlEl.textContent = epEndpoints.local;
+                epSubEl.textContent = '127.0.0.1 — this machine';
+            }
+        }
+        if (epLanHint) {
+            const showFw = epEndpoints.hasLan && epActiveTarget === 'lan';
+            epLanHint.style.display = showFw ? '' : 'none';
+            if (showFw && epLanHintPort && epEndpoints.port) { epLanHintPort.textContent = String(epEndpoints.port); }
+        }
+    }
+
+    copyCurlBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
         if (!curlText) return;
         navigator.clipboard.writeText(curlText).catch(() => {});
-        const prev = copyBtn.textContent;
-        copyBtn.textContent = 'Copied';
-        setTimeout(() => { copyBtn.textContent = prev; }, 1400);
+        flashCopyBtn(copyCurlBtn);
     });
 
-    copyLocalBtn?.addEventListener('click', () => {
-        const t = epLocalUrlEl?.textContent?.trim();
+    function copyActiveProxyUrl(btn) {
+        const t = epUrlEl?.textContent?.trim();
         if (!t || t === '—') return;
         navigator.clipboard.writeText(t).catch(() => {});
-        flashCopyBtn(copyLocalBtn);
+        flashCopyBtn(btn || copyUrlBtn);
+    }
+
+    copyUrlBtn?.addEventListener('click', () => copyActiveProxyUrl(copyUrlBtn));
+
+    copyUrlHeadBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        copyActiveProxyUrl(copyUrlHeadBtn);
     });
 
-    copyLanBtn?.addEventListener('click', () => {
-        const t = epLanUrlEl?.textContent?.trim();
-        if (!t || t === '—') return;
-        navigator.clipboard.writeText(t).catch(() => {});
-        flashCopyBtn(copyLanBtn);
+    segLocalBtn?.addEventListener('click', () => setEpTarget('local'));
+    segLanBtn?.addEventListener('click', () => setEpTarget('lan'));
+
+    urlToggle?.addEventListener('click', () => {
+        if (!urlBody || !urlChevron) return;
+        const open = urlBody.style.display !== 'none';
+        urlBody.style.display = open ? 'none' : '';
+        urlToggle.setAttribute('aria-expanded', open ? 'false' : 'true');
+        urlChevron.className = open ? 'epw-url-chevron' : 'epw-url-chevron open';
+    });
+
+    curlToggle?.addEventListener('click', () => {
+        if (!curlBody || !curlChevron) return;
+        const open = curlBody.style.display !== 'none';
+        curlBody.style.display = open ? 'none' : '';
+        curlToggle.setAttribute('aria-expanded', open ? 'false' : 'true');
+        curlChevron.className = open ? 'epw-curl-chevron' : 'epw-curl-chevron open';
     });
 
     async function doStart() {
@@ -4023,27 +2808,17 @@ if (window.electronAPI) {
         metaEl.textContent = meta || '';
         metaEl.style.display = meta ? '' : 'none';
 
-        const localUrl = proxyHttpUrl('127.0.0.1', port, login, password);
-        epLocalUrlEl.textContent = localUrl;
+        epEndpoints.local = proxyHttpUrl('127.0.0.1', port, login, password);
+        epEndpoints.hasLan = !!(lanHost && lanHost !== '127.0.0.1');
+        epEndpoints.lanHost = epEndpoints.hasLan ? lanHost : '';
+        epEndpoints.lan = epEndpoints.hasLan ? proxyHttpUrl(lanHost, port, login, password) : '';
+        epEndpoints.port = port;
+        epActiveTarget = 'local';
+        setEpTarget('local');
 
-        const hasLan = lanHost && lanHost !== '127.0.0.1';
-        const lanUrl = hasLan ? proxyHttpUrl(lanHost, port, login, password) : '';
-        if (hasLan) {
-            epLanUrlEl.textContent = lanUrl;
-            if (epLanHostLbl) epLanHostLbl.textContent = lanHost;
-            epLanWrap.style.display = '';
-            epLanHint.style.display = '';
-            if (epLanHintPort) epLanHintPort.textContent = String(port);
-        } else {
-            epLanUrlEl.textContent = '—';
-            if (epLanHostLbl) epLanHostLbl.textContent = '—';
-            epLanWrap.style.display = 'none';
-            epLanHint.style.display = 'none';
-        }
-
-        const curlLocal = curlThroughProxy(localUrl);
-        if (hasLan) {
-            const curlLan = curlThroughProxy(lanUrl);
+        const curlLocal = curlThroughProxy(epEndpoints.local);
+        if (epEndpoints.hasLan) {
+            const curlLan = curlThroughProxy(epEndpoints.lan);
             curlText = `# Local (this machine)\n${curlLocal}\n\n# LAN — open TCP ${port} in firewall on this host\n${curlLan}`;
             curlEl.classList.remove('epw-curl-single');
         } else {

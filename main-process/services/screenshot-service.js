@@ -62,7 +62,9 @@ function createScreenshotService({
             const currentUrl = wc.getURL() || '';
             const newTabPath = path.join(cupnetRoot, 'new-tab.html').replace(/\\/g, '/');
             if (!currentUrl || currentUrl.startsWith('file://') && (
-                currentUrl.includes('new-tab.html') || currentUrl === `file://${newTabPath}`
+                currentUrl.includes('new-tab.html')
+                || currentUrl.includes('cupnet-guide.html')
+                || currentUrl === `file://${newTabPath}`
             )) {
                 return { success: false, skipped: true, reason: 'home' };
             }

@@ -5,6 +5,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
     <title>[CupNet]</title>
     <link rel="stylesheet" href="styles.css">
+    <script src="cookies-page-match.js"></script>
 </head>
 <body>
 
@@ -93,7 +94,7 @@
         </button>
 
         <!-- Cookie Manager -->
-        <button id="cookies-btn" class="tool-btn" title="Cookie Manager">
+        <button id="cookies-btn" class="tool-btn" title="Cookie Manager — badge: cookies for current page URL" style="position:relative">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="8" cy="8" r="5.5"/>
                 <circle cx="6" cy="6.5" r="0.9" fill="currentColor" stroke="none"/>
@@ -102,6 +103,7 @@
                 <circle cx="10.5" cy="10.5" r="0.7" fill="currentColor" stroke="none"/>
             </svg>
             <span class="tool-label">Cookies</span>
+            <span id="cookie-page-badge" class="rules-hit-badge rules-hit-badge--cookies" aria-hidden="true"></span>
         </button>
 
         <!-- DNS Manager -->
@@ -113,7 +115,7 @@
                 <path d="M8 2.5a8.2 8.2 0 0 0 0 11"/>
             </svg>
             <span class="tool-label">DNS</span>
-            <span id="dns-hit-badge" class="rules-hit-badge" style="display:none">0</span>
+            <span id="dns-hit-badge" class="rules-hit-badge" aria-hidden="true"></span>
         </button>
 
         <span class="tool-sep"></span>
@@ -135,7 +137,7 @@
                 <path d="M2 3.5h12l-4.5 5v4l-3-1.5V8.5L2 3.5z"/>
             </svg>
             <span class="tool-label">Rules</span>
-            <span id="rules-hit-badge" class="rules-hit-badge" style="display:none">0</span>
+            <span id="rules-hit-badge" class="rules-hit-badge" aria-hidden="true"></span>
         </button>
 
         <!-- Page Analyzer -->

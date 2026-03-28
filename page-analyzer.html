@@ -335,6 +335,17 @@ select:focus { border-color: var(--accent); }
 .meta-key { color: var(--dim); min-width: 120px; flex-shrink: 0; }
 .meta-val { color: var(--text); word-break: break-all; font-family: 'SF Mono',monospace; font-size: 11px; }
 
+.pa-captcha-notice {
+    font-size: 12px;
+    color: var(--dim);
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    background: var(--bg1);
+    line-height: 1.45;
+}
+
 .meta-storage-view { border-top: 1px solid var(--border); }
 
 .st-store-block {
@@ -591,6 +602,9 @@ select:focus { border-color: var(--accent); }
     <button class="atab" data-panel="meta">
         📄 Page Info <span class="atab-badge" id="badge-meta">—</span>
     </button>
+    <button class="atab" data-panel="storage">
+        💾 Storage <span class="atab-badge" id="badge-storage">0</span>
+    </button>
     <button class="atab" data-panel="scout">
         🎯 Endpoint Scout <span class="atab-badge" id="badge-scout">0</span>
     </button>
@@ -607,29 +621,18 @@ select:focus { border-color: var(--accent); }
     </div>
 
     <div class="panel" id="panel-captcha">
-        <div class="captcha-solver-card">
-            <div class="captcha-solver-row">
-                <span class="captcha-solver-label">CapMonster key</span>
-                <input id="captcha-api-key" class="captcha-solver-key" type="password" autocomplete="off" placeholder="API key">
-                <button class="btn btn-sm" id="captcha-save-key">Save</button>
-            </div>
-            <div class="captcha-solver-row">
-                <span class="captcha-solver-label">Sitekey override</span>
-                <input id="captcha-sitekey-override" class="captcha-solver-key" type="text" autocomplete="off" placeholder="0x4AAAA... (optional)">
-            </div>
-            <div class="captcha-solver-row">
-                <label class="captcha-solver-toggle"><input type="checkbox" id="captcha-auto-inject" checked>Auto inject</label>
-                <label class="captcha-solver-toggle"><input type="checkbox" id="captcha-auto-submit">Auto submit form</label>
-                <button class="btn btn-sm btn-primary" id="captcha-solve-turnstile">Solve Turnstile</button>
-                <button class="btn btn-sm" id="captcha-retry-last" disabled>Retry</button>
-            </div>
-            <div id="captcha-solver-status" class="captcha-solver-status">Idle</div>
+        <div class="pa-captcha-notice" style="margin-bottom:12px">
+            Автоопределение виджетов в разработке: возможны ложные срабатывания и пропуски. Решение капчи (сторонние сервисы) в Page Analyzer не поддерживается.
         </div>
         <div id="captcha-sections"></div>
     </div>
 
     <div class="panel" id="panel-meta">
         <div id="meta-content"></div>
+    </div>
+
+    <div class="panel" id="panel-storage">
+        <div id="storage-content"></div>
     </div>
 
     <div class="panel" id="panel-scout">

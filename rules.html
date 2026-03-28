@@ -261,6 +261,7 @@
         .act-type-mock { color: #f59e0b; }
         .act-type-block { color: #ef4444; }
         .act-type-modify { color: #3b82f6; }
+        .act-type-script { color: #a855f7; }
         .act-detail {
             font-size: 10px; color: #64748b;
             background: rgba(255,255,255,0.04);
@@ -304,40 +305,127 @@
             0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.35); border-color: rgba(59,130,246,0.8); }
             100% { box-shadow: 0 0 0 9px rgba(59,130,246,0); border-color: var(--border); }
         }
+
+        .badge-script { background: var(--purple-bg); color: var(--purple); }
+        .script-textarea { min-height: 140px; }
+
+        /* Large mock bodies: fixed viewport + internal scroll; avoids layout churn + spellchecker load */
+        #edit-mock-body {
+            min-height: 120px;
+            max-height: min(65vh, 520px);
+            overflow-y: auto;
+            resize: vertical;
+        }
+        #script-test-out {
+            display: none;
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 8px;
+            background: var(--bg3);
+            border: 1px solid var(--border2);
+            font-size: 11px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        #script-test-out.visible { display: block; }
+        #tab-intercept { padding-bottom: 0; }
+
+        .script-ai-panel {
+            background: var(--bg3);
+            border: 1px solid var(--border2);
+            border-radius: 10px;
+            padding: 12px 14px;
+            margin-bottom: 14px;
+        }
+        .script-ai-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: flex-start;
+            gap: 8px 12px;
+            margin-bottom: 10px;
+        }
+        .script-ai-badge {
+            flex-shrink: 0;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            padding: 3px 8px;
+            border-radius: 99px;
+            background: var(--purple-bg);
+            color: var(--purple);
+            border: 1px solid rgba(168,85,247,0.35);
+        }
+        .script-ai-lead {
+            flex: 1;
+            min-width: 200px;
+            margin: 0;
+            font-size: 11.5px;
+            color: var(--text-dim);
+            line-height: 1.55;
+        }
+        textarea.script-ai-prompt-text {
+            display: block;
+            width: 100%;
+            margin: 0;
+            min-height: 200px;
+            max-height: 480px;
+            resize: vertical;
+            box-sizing: border-box;
+            padding: 10px 12px;
+            background: rgba(0,0,0,0.22);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 11px;
+            line-height: 1.55;
+            font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+            color: var(--text-dim);
+        }
+        textarea.script-ai-prompt-text:read-only {
+            cursor: default;
+            opacity: 0.95;
+        }
+        .script-preset-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 14px;
+            padding: 10px 12px;
+            background: var(--bg2);
+            border: 1px solid var(--border2);
+            border-radius: 8px;
+        }
+        .script-preset-row label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-mute);
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            width: 100%;
+            margin: 0;
+        }
+        #script-snippet-preset {
+            flex: 1;
+            min-width: 180px;
+            background: var(--bg3);
+            color: var(--text);
+            border: 1px solid var(--border2);
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
 
 <!-- ── Header / tabs ──────────────────────────────────────────────────────── -->
 <div class="header">
-    <button class="tab-btn" data-tab="rules">Highlight &amp; Action Rules</button>
     <button class="tab-btn active" data-tab="intercept">Intercept Rules</button>
     <button class="tab-btn" data-tab="activity">Activity <span id="activity-count" style="font-size:10px;background:rgba(239,68,68,0.2);color:#f87171;padding:1px 6px;border-radius:99px;margin-left:4px;font-weight:700">0</span></button>
-</div>
-
-<!-- ══════════════════════ HIGHLIGHT RULES ══════════════════════════════════ -->
-<div id="tab-rules" class="tab-content">
-    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;text-align:center;gap:12px;color:var(--text-dim)">
-        <div style="font-size:48px;opacity:0.5">🚧</div>
-        <div style="font-size:16px;font-weight:700;color:var(--text)">In Development</div>
-        <div style="font-size:12px;max-width:320px;line-height:1.5;color:var(--text-mute)">
-            Highlight &amp; Action Rules are being redesigned.<br>
-            Use <b>Intercept Rules</b> tab for mock, block, and header modification.
-        </div>
-    </div>
-
-    <!-- hidden: preserved for future use -->
-    <div id="rule-edit-form" class="edit-form" style="display:none!important">
-        <input type="hidden" id="edit-rule-id">
-        <div class="form-row"><label>Rule name</label><input type="text" id="edit-rule-name"></div>
-        <div class="builder" id="conditions-builder"></div>
-        <div class="builder" id="actions-builder"></div>
-        <div class="form-actions">
-            <button class="btn-primary" id="btn-save-rule">Save</button>
-            <button class="btn-secondary" id="btn-cancel-rule">Cancel</button>
-        </div>
-    </div>
-    <div id="rules-list" class="rule-list" style="display:none"></div>
 </div>
 
 <!-- ══════════════════════ INTERCEPT RULES ══════════════════════════════════ -->
@@ -351,8 +439,8 @@
 
     <div class="description">
         Intercept rules modify or block requests <b>before</b> they reach the server.
-        По умолчанию: glob с <code>*</code>, напр. <code>*example.com/api*</code>.
-        Если задано <code>CUPNET_INTERCEPT_STRICT_URLS=1</code> — только префикс URL без <code>*</code>, напр. <code>https://api.example.com/v1/</code>.
+        By default use a glob with <code>*</code>, e.g. <code>*example.com/api*</code>.
+        If <code>CUPNET_INTERCEPT_STRICT_URLS=1</code> is set, use only a URL prefix without <code>*</code>, e.g. <code>https://api.example.com/v1/</code>.
     </div>
 
     <!-- Edit form -->
@@ -365,8 +453,8 @@
         </div>
 
         <div class="form-row">
-            <label>URL pattern (glob или строгий префикс — см. подсказку выше)</label>
-            <input type="text" id="edit-intercept-pattern" placeholder="https://example.com/api/ или *example.com/ads*">
+            <label>URL pattern (glob or strict prefix — see above)</label>
+            <input type="text" id="edit-intercept-pattern" placeholder="https://example.com/api/ or *example.com/ads*">
         </div>
 
         <div class="form-row">
@@ -375,6 +463,7 @@
                 <option value="block">Block request</option>
                 <option value="modifyHeaders">Modify headers</option>
                 <option value="mock">Mock response</option>
+                <option value="script">Dynamic script (before/after MITM)</option>
             </select>
         </div>
 
@@ -387,11 +476,11 @@
         <div id="intercept-params-headers" style="display:none">
             <div class="form-row" style="margin-top:10px">
                 <label>Request headers to set (JSON object)</label>
-                <textarea id="edit-req-headers" placeholder='{"X-Custom": "value"}'></textarea>
+                <textarea id="edit-req-headers" placeholder='{"X-Custom": "value"}' spellcheck="false" autocomplete="off"></textarea>
             </div>
             <div class="form-row">
                 <label>Response headers to set (JSON object)</label>
-                <textarea id="edit-resp-headers" placeholder='{"Access-Control-Allow-Origin": "*"}'></textarea>
+                <textarea id="edit-resp-headers" placeholder='{"Access-Control-Allow-Origin": "*"}' spellcheck="false" autocomplete="off"></textarea>
             </div>
         </div>
 
@@ -407,8 +496,40 @@
             </div>
             <div class="form-row">
                 <label>Response body</label>
-                <textarea id="edit-mock-body" placeholder='{"ok":true}'></textarea>
+                <textarea id="edit-mock-body" placeholder='{"ok":true}' rows="14" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
             </div>
+        </div>
+
+        <!-- script params -->
+        <div id="intercept-params-script" style="display:none">
+            <div class="script-ai-panel">
+                <div class="script-ai-toolbar">
+                    <span class="script-ai-badge" title="Prompt for ChatGPT, Claude, etc.">For LLM</span>
+                    <p class="script-ai-lead">This <b>LLM instruction</b> lives only in the textarea below (includes reference snippets). Copy it into your AI chat, describe the task, and ask for two bodies (before / after MITM) with <b>no</b> <code>function</code> wrapper. Use <b>Preset snippets</b> under the textarea to fill or copy examples.</p>
+                    <button type="button" class="btn-secondary btn-sm" id="btn-copy-intercept-ai-prompt">Copy prompt</button>
+                </div>
+                <textarea id="intercept-ai-prompt-editor" class="script-ai-prompt-text" readonly rows="18" spellcheck="false" aria-label="LLM prompt (read-only)"></textarea>
+            </div>
+            <div class="script-preset-row">
+                <label>Preset snippets</label>
+                <select id="script-snippet-preset" title="Insert or copy example before/after bodies">
+                    <option value="">— Choose preset —</option>
+                </select>
+                <button type="button" class="btn-secondary btn-sm" id="btn-script-preset-insert">Insert into fields</button>
+                <button type="button" class="btn-secondary btn-sm" id="btn-script-preset-copy">Copy snippet</button>
+            </div>
+            <div class="form-row" style="margin-top:10px">
+                <label>Before upstream (function body, argument <code>ctx</code>)</label>
+                <textarea id="edit-script-before" class="script-textarea" placeholder="// ctx.url, ctx.method, ctx.headers, ctx.orderedHeaders, ctx.body, ctx.bodyBase64&#10;ctx.headers['X-Demo'] = '1';" spellcheck="false" autocomplete="off"></textarea>
+            </div>
+            <div class="form-row">
+                <label>After server response (<code>ctx.response</code>: status, headers, body)</label>
+                <textarea id="edit-script-after" class="script-textarea" placeholder="// ctx.response.statusCode, ctx.response.headers, ctx.response.bodyBase64&#10;// ctx.request — request snapshot after the &quot;before&quot; phase" spellcheck="false" autocomplete="off"></textarea>
+            </div>
+            <div class="toolbar-row" style="margin-top:4px">
+                <button type="button" class="btn-secondary btn-sm" id="btn-test-script">Run script self-test</button>
+            </div>
+            <pre id="script-test-out" aria-live="polite"></pre>
         </div>
 
         <div class="form-actions">

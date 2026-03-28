@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { getExportWsFrameLimit } = require('./har-exporter');
+const { getSessionEgressMeta } = require('./session-egress-meta');
 
 /** Max rows per table for bundle export (`CUPNET_BUNDLE_MAX_ROWS`, default 50_000). `0` = use ceiling. */
 function getBundleMaxRows() {
@@ -231,6 +232,10 @@ function buildBundle({ db, sessionId, requestIds, protectionLevel = 'Raw', appVe
     const normalized = rows.map(normalizeRequestRow).filter(Boolean);
     const redacted = normalized.map(r => redactRequestRecord(r, level, report));
 
+    const egressSessionId = sessionId != null && sessionId !== ''
+        ? Number(sessionId)
+        : (normalized[0]?.session_id != null ? Number(normalized[0].session_id) : null);
+
     let traceEntries = [];
     try {
         if (db.getTraceEntriesBySession && sessionId) traceEntries = db.getTraceEntriesBySession(Number(sessionId), maxRows, 0);
@@ -242,6 +247,10 @@ function buildBundle({ db, sessionId, requestIds, protectionLevel = 'Raw', appVe
         websocketEvents = rawWs.map(ev => redactWsEventRecord(ev, level, report));
     } catch { /* ignore */ }
 
+    const egress = Number.isFinite(egressSessionId) && egressSessionId > 0
+        ? getSessionEgressMeta(db, egressSessionId)
+        : getSessionEgressMeta(db, null);
+
     return {
         schemaVersion: BUNDLE_SCHEMA_VERSION,
         meta: {
@@ -250,7 +259,16 @@ function buildBundle({ db, sessionId, requestIds, protectionLevel = 'Raw', appVe
             protectionLevel: level,
             redactionRulesVersion: 'v1',
             redactionReport: report,
-            sourceSessionId: sessionId ?? null,
+            sourceSessionId: sessionId != null && sessionId !== ''
+                ? Number(sessionId)
+                : (Number.isFinite(egressSessionId) && egressSessionId > 0 ? egressSessionId : null),
+            egress: {
+                ip: egress.ip,
+                country: egress.country,
+                location: egress.location || null,
+                profile: egress.profile || null,
+                sessionProxyInfo: egress.sessionProxyInfo || null,
+            },
         },
         traffic: {
             requests: redacted,

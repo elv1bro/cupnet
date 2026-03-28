@@ -71,6 +71,7 @@ function createMainWindowApi(d) {
                 d.interceptor.attachToSession(tab.tabSession, firstTabId);
                 d.currentSessionId = tab.sessionId;
             }
+            try { await d.bootstrapSessionTrafficMetaLog?.(); } catch (_) { /* optional geo */ }
             d.startLogStatusUpdater();
             try { d.db.deleteEmptySessions(d.currentSessionId); } catch (e) { d.sysLog('warn', 'db', 'deleteEmptySessions failed: ' + (e?.message || e)); }
 
@@ -82,6 +83,17 @@ function createMainWindowApi(d) {
             });
             d.notifyProxyProfilesList();
             d.notifyProxyStatus();
+
+            try {
+                const dnsReplay = d.ipcBatch?.getRecentDnsEventsSlice?.(100);
+                if (dnsReplay?.length) {
+                    d.mainWindow.webContents.send('dns-rule-matched-batch', dnsReplay);
+                }
+                const interceptReplay = d.ipcBatch?.getRecentInterceptEventsSlice?.(80);
+                if (interceptReplay?.length) {
+                    d.mainWindow.webContents.send('intercept-rule-matched-batch', interceptReplay);
+                }
+            } catch (_) { /* ignore replay IPC errors */ }
         });
 
         d.mainWindow.webContents.on('before-input-event', (event, input) => {
@@ -189,7 +201,7 @@ function createMainWindowApi(d) {
                     { type: 'separator' },
                     { label: 'Proxy Manager', accelerator: 'CmdOrCtrl+P', click: () => sub.createProxyManagerWindow() },
                     { label: 'Network Activity', accelerator: 'CmdOrCtrl+Shift+L', click: () => sub.createLogViewerWindow() },
-                    { label: 'Cookie Manager', accelerator: 'CmdOrCtrl+Shift+C', click: () => sub.createCookieManagerWindow(d.tabManager?.getActiveTabId()) },
+                    { label: 'Cookie Manager', accelerator: 'CmdOrCtrl+Alt+C', click: () => sub.createCookieManagerWindow(d.tabManager?.getActiveTabId()) },
                     { label: 'DNS Manager', accelerator: 'CmdOrCtrl+Shift+M', click: () => sub.createDnsManagerWindow() },
                     { label: 'Rules & Interceptor', click: () => sub.createRulesWindow() },
                     { label: 'System Console', accelerator: 'CmdOrCtrl+Shift+K', click: () => sub.createConsoleViewerWindow() },

@@ -62,6 +62,17 @@ function registerTabsIpc(ctx) {
             ctx.tabManager.navigate(ctx.getInternalPageUrl('settings'));
             return;
         }
+        if (alias === 'cupnet://guide' || alias === 'cupnet:guide') {
+            ctx.tabManager.navigate(ctx.getInternalPageUrl('guide'));
+            return;
+        }
+        if (alias === 'cupnet://home'
+            || alias === 'cupnet:home'
+            || alias === 'cupnet://new-tab'
+            || alias === 'cupnet:new-tab') {
+            ctx.tabManager.navigate(ctx.getNewTabUrl());
+            return;
+        }
         const url = ctx.resolveNavigationUrl(rawInput);
         if (!url) return;
         // Always load in active tab — avoids sender-id confusion (URL bar vs new-tab)

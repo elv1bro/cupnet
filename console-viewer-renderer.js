@@ -12,10 +12,12 @@ const autoscrollBtn = document.getElementById('cv-autoscroll');
 const pauseBtn    = document.getElementById('cv-pause');
 const copyBtn     = document.getElementById('cv-copy');
 const clearBtn    = document.getElementById('cv-clear');
+const debugMitmSelect = document.getElementById('cv-debug-mitm');
+const mitmToolbar = document.getElementById('cv-mitm-toolbar');
 const tabs        = document.querySelectorAll('.cv-tab');
 
 let allLines   = [];
-let activeTab  = 'all';
+let activeTab  = 'mitm';
 let autoScroll = true;
 let paused     = false;
 let searchTerm = '';
@@ -25,10 +27,18 @@ let countAll = 0, countMitm = 0, countSystem = 0;
 
 function classifyLine(text) {
     if (text.startsWith('[mitm]')) return 'mitm';
+    // [mitm-proxy] / [mitm-cors] are not "[mitm]" + "]" (hyphen after "mitm")
+    if (text.startsWith('[mitm-proxy]')) return 'mitm';
+    if (text.startsWith('[mitm-cors]')) return 'mitm';
+    if (text.startsWith('[ext-proxy]')) return 'mitm';
     return 'system';
 }
 
 function getLineClass(text) {
+    if (text.includes('CUPNET_DEBUG_MITM') && (text.startsWith('[mitm]') || text.startsWith('[mitm-proxy]'))) return 'cv-mitm-cfg';
+    if (text.startsWith('[mitm] dns') || text.startsWith('[mitm][dns]')) return 'cv-mitm-dns';
+    if (text.startsWith('[mitm]') && text.includes('DNS overrides')) return 'cv-mitm-dns';
+    if (text.startsWith('[mitm-cors]')) return 'cv-mitm-cfg';
     if (text.startsWith('[mitm] TCP'))     return 'cv-mitm-tcp';
     if (text.startsWith('[mitm] CONNECT')) return 'cv-mitm-conn';
     if (text.startsWith('[mitm] →'))       return 'cv-mitm-req';
@@ -142,6 +152,12 @@ function notifyInactiveTab(category) {
     }
 }
 
+function updateMitmToolbarVisibility() {
+    if (!mitmToolbar) return;
+    if (activeTab === 'mitm') mitmToolbar.removeAttribute('hidden');
+    else mitmToolbar.setAttribute('hidden', '');
+}
+
 // ── Tab switching ──
 for (const tab of tabs) {
     tab.addEventListener('click', () => {
@@ -149,9 +165,11 @@ for (const tab of tabs) {
         for (const t of tabs) t.classList.remove('active');
         tab.classList.add('active');
         tab.classList.remove('has-new');
+        updateMitmToolbarVisibility();
         rebuildDom();
     });
 }
+updateMitmToolbarVisibility();
 
 // ── Search ──
 let _searchTimer = null;
@@ -242,8 +260,29 @@ api.onConsoleLog?.((data) => {
     updateCount();
 });
 
+// ── Sync CUPNET_DEBUG_MITM selector ──
+async function syncDebugMitmSelect() {
+    if (!debugMitmSelect || !api.getDebugMitmLevel) return;
+    try {
+        const lvl = await api.getDebugMitmLevel();
+        const n = typeof lvl === 'number' && Number.isFinite(lvl) ? lvl : parseInt(String(lvl), 10);
+        const v = Number.isFinite(n) ? Math.max(0, Math.min(4, n)) : 1;
+        debugMitmSelect.value = String(v);
+    } catch {}
+}
+if (debugMitmSelect && api.setDebugMitmLevel) {
+    debugMitmSelect.addEventListener('change', async () => {
+        const raw = parseInt(debugMitmSelect.value, 10);
+        const v = Number.isFinite(raw) ? raw : 1;
+        try {
+            await api.setDebugMitmLevel(v);
+        } catch {}
+    });
+}
+
 // ── Request buffered history on load ──
 (async () => {
+    await syncDebugMitmSelect();
     try {
         const history = await api.getConsoleHistory?.();
         if (history?.length) {

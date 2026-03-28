@@ -31,18 +31,26 @@
             font-size: 13px;
         }
 
-        /* ── Top bar ── */
+        /* ── Top bar (compact — fits narrow windows) ── */
         .topbar {
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 10px 14px;
+            flex-wrap: wrap;
+            gap: 4px 6px;
+            row-gap: 4px;
+            padding: 5px 8px;
             background: var(--bg2);
             border-bottom: 1px solid var(--border);
             flex-shrink: 0;
         }
 
-        .topbar-title { font-weight: 600; font-size: 14px; margin-right: 4px; }
+        .topbar .lbl {
+            font-size: 10px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.02em;
+            flex-shrink: 0;
+        }
 
         select, input[type="text"], textarea {
             background: var(--bg3);
@@ -74,7 +82,13 @@
         .btn-ghost    { background: var(--bg3); border: 1px solid var(--border); color: var(--text); }
         .btn-sm       { padding: 3px 8px; font-size: 11px; }
 
-        .sep { width: 1px; height: 22px; background: var(--border); margin: 0 2px; flex-shrink: 0; }
+        .topbar .btn-sm {
+            padding: 2px 6px;
+            font-size: 10px;
+            gap: 3px;
+        }
+
+        .sep { width: 1px; height: 18px; background: var(--border); margin: 0 1px; flex-shrink: 0; }
         .spacer { flex: 1; }
 
         /* ── Filter bar ── */
@@ -92,6 +106,10 @@
             font-size: 11px; color: var(--muted);
             background: var(--bg3); border: 1px solid var(--border);
             padding: 2px 8px; border-radius: 10px; white-space: nowrap;
+        }
+        .count-badge--page {
+            color: var(--success);
+            border-color: rgba(34, 197, 94, 0.35);
         }
 
         /* ── Table ── */
@@ -294,34 +312,32 @@
 
 <!-- ── Top bar ─────────────────────────────────────────────────────────────── -->
 <div class="topbar">
-    <span class="topbar-title">Cookie Manager</span>
-
-    <label style="font-size:11px;color:var(--muted)">Group:</label>
-    <select id="cookie-group-select" style="min-width:120px"></select>
-    <button class="btn btn-ghost btn-sm" id="btn-new-group" title="Create new empty cookie group">+ New</button>
-    <button class="btn btn-ghost btn-sm" id="btn-copy-group" title="Copy cookies to a new group">Copy</button>
-    <button class="btn btn-ghost btn-sm" id="btn-rename-group" title="Rename selected group">Rename</button>
-    <button class="btn btn-danger btn-sm" id="btn-delete-group" title="Delete selected group" style="font-size:10px">Del</button>
+    <span class="lbl">Grp</span>
+    <select id="cookie-group-select" style="min-width:88px;max-width:140px;padding:3px 6px;font-size:11px"></select>
+    <button class="btn btn-ghost btn-sm" id="btn-new-group" title="Create new empty cookie group">+</button>
+    <button class="btn btn-ghost btn-sm" id="btn-copy-group" title="Copy cookies to a new group">Cp</button>
+    <button class="btn btn-ghost btn-sm" id="btn-rename-group" title="Rename selected group">Ren</button>
+    <button class="btn btn-danger btn-sm" id="btn-delete-group" title="Delete selected group">✕</button>
 
     <div class="sep"></div>
 
-    <label style="font-size:11px;color:var(--muted)">Tab:</label>
-    <select id="tab-select" style="min-width:180px"></select>
+    <span class="lbl">Tab</span>
+    <select id="tab-select" style="min-width:120px;max-width:220px;flex:1;padding:3px 6px;font-size:11px"></select>
 
     <div class="sep"></div>
 
-    <button class="btn btn-ghost btn-sm" id="btn-export-json"     title="Export as JSON">↓ JSON</button>
-    <button class="btn btn-ghost btn-sm" id="btn-export-netscape" title="Export as Netscape (cookies.txt)">↓ Netscape</button>
-    <button class="btn btn-ghost btn-sm" id="btn-import"         title="Import from JSON or Netscape">↑ Import</button>
+    <button class="btn btn-ghost btn-sm" id="btn-export-json"     title="Export as JSON">JSON</button>
+    <button class="btn btn-ghost btn-sm" id="btn-export-netscape" title="Export as Netscape (cookies.txt)">NS</button>
+    <button class="btn btn-ghost btn-sm" id="btn-import"         title="Import from JSON or Netscape">Imp</button>
 
     <div class="sep"></div>
 
-    <button class="btn btn-amber btn-sm"  id="btn-share"         title="Share cookies to another tab">⇄ Share to tab</button>
-    <button class="btn btn-danger btn-sm" id="btn-clear-all"     title="Delete all cookies for this tab">✕ Clear All</button>
+    <button class="btn btn-amber btn-sm"  id="btn-share"         title="Share cookies to another tab">Share</button>
+    <button class="btn btn-danger btn-sm" id="btn-clear-all"     title="Delete all cookies for this tab">Clear</button>
 
-    <div class="spacer"></div>
+    <div class="spacer" style="min-width:4px"></div>
 
-    <button class="btn btn-primary btn-sm" id="btn-add-new">+ New Cookie</button>
+    <button class="btn btn-primary btn-sm" id="btn-add-new" title="Add new cookie">+ Cookie</button>
 </div>
 
 <!-- ── Filter bar ──────────────────────────────────────────────────────────── -->
@@ -350,6 +366,8 @@
         <input type="checkbox" id="filter-session"> Session only
     </label>
     <div class="spacer"></div>
+    <span class="count-badge count-badge--page" id="page-url-match-label"
+          title="Cookies in this jar that match the active tab URL (domain, path, secure, not expired). Simplified, no SameSite.">—</span>
     <span class="count-badge" id="count-label">0 cookies</span>
 </div>
 
@@ -454,6 +472,7 @@
 
 <input type="file" id="import-file-input" accept=".json,.txt" style="display:none">
 
+<script src="cookies-page-match.js"></script>
 <script src="cookie-manager-renderer.js"></script>
 </body>
 </html>
