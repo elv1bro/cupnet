@@ -2,7 +2,16 @@
 
 const fs = require('fs');
 const path = require('path');
-const { app, BrowserWindow, ipcMain } = require('electron');
+
+/** Только в главном процессе Electron; azure-tls-worker на обычном Node — без electron (иначе MODULE_NOT_FOUND). */
+function _tryRequireElectron() {
+    if (!process.versions?.electron) return null;
+    try {
+        return require('electron');
+    } catch {
+        return null;
+    }
+}
 
 const MAX_LOG_ENTRIES = 2000;
 const MAX_CRITICAL_LOG_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -13,8 +22,14 @@ let _criticalLogPath = null;
 
 function getCriticalLogPath() {
     if (_criticalLogPath) return _criticalLogPath;
+    const electron = _tryRequireElectron();
+    const app = electron?.app;
     try {
-        _criticalLogPath = path.join(app.getPath('userData'), 'critical.log');
+        if (app && typeof app.getPath === 'function') {
+            _criticalLogPath = path.join(app.getPath('userData'), 'critical.log');
+        } else {
+            _criticalLogPath = path.join(process.cwd(), 'critical.log');
+        }
     } catch {
         _criticalLogPath = path.join(process.cwd(), 'critical.log');
     }
@@ -127,6 +142,9 @@ function flushOnExit() {
 }
 
 function initIPC() {
+    const electron = _tryRequireElectron();
+    const ipcMain = electron?.ipcMain;
+    if (!ipcMain?.handle) return;
     ipcMain.handle('get-sys-log', (_, level, limit) => getEntries(level, limit));
 }
 
