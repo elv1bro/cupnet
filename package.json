@@ -1,6 +1,6 @@
 {
   "name": "cupnet",
-  "version": "2026.3.28.3",
+  "version": "2026.3.28.4",
   "productName": "CupNet",
   "description": "An Electron browser with proxy selection and advanced network logging.",
   "main": "main.js",
@@ -65,11 +65,11 @@
     ],
     "asar": true,
     "asarUnpack": [
-      "azuretls/lib/*.dylib",
-      "azuretls/lib/*.dll",
-      "azuretls/lib/*.so",
-      "node_modules/better-sqlite3/**/*.node",
-      "node_modules/@2060.io/**/*.node"
+      "azure-tls-worker.js",
+      "network-policy.js",
+      "sys-log.js",
+      "azuretls/**",
+      "node_modules/**"
     ],
     "files": [
       "**/*",

@@ -428,6 +428,23 @@ function _resolveCupnetBundledNodeBinary() {
     return null;
 }
 
+/**
+ * Обычный Node (cupnet-node / PATH) не умеет require из `app.asar` — только из `app.asar.unpacked`.
+ * Electron с ELECTRON_RUN_AS_NODE по-прежнему может грузить скрипт из asar.
+ */
+function _resolveAzureTlsWorkerScriptForExternalNode(scriptPath) {
+    if (!scriptPath || typeof scriptPath !== 'string') return scriptPath;
+    const norm = path.normalize(scriptPath);
+    const asarInfix = `${path.sep}app.asar${path.sep}`;
+    const i = norm.indexOf(asarInfix);
+    if (i < 0) return scriptPath;
+    const unpacked = norm.slice(0, i) + `${path.sep}app.asar.unpacked${path.sep}` + norm.slice(i + asarInfix.length);
+    try {
+        if (fs.existsSync(unpacked)) return unpacked;
+    } catch { /* ignore */ }
+    return scriptPath;
+}
+
 class AzureTLSWorker extends EventEmitter {
     constructor(workerPath) {
         super();
@@ -484,7 +501,11 @@ class AzureTLSWorker extends EventEmitter {
             delete env.ELECTRON_RUN_AS_NODE;
         }
 
-        this.proc = spawn(nodeBin, [this.workerPath], {
+        const scriptPath = nodeBin === process.execPath
+            ? this.workerPath
+            : _resolveAzureTlsWorkerScriptForExternalNode(this.workerPath);
+
+        this.proc = spawn(nodeBin, [scriptPath], {
             stdio: ['pipe', 'pipe', 'pipe'],
             env,
         });
@@ -2219,6 +2240,8 @@ module.exports = {
     loadOrGenerateCA,
     getDebugMitmLevel,
     setDebugMitmLevel,
+    /** @internal app.asar → app.asar.unpacked for child Node */
+    _resolveAzureTlsWorkerScriptForExternalNode,
     /** @internal used by tests/test-dns-mitm.js */
     _testApplyMitmCorsToResponse: applyMitmCorsToResponse,
     _testShouldSkipMitmCorsForUrl: shouldSkipMitmCorsForUrl,
