@@ -10,6 +10,10 @@ log
 # Playwright / local e2e output (not for VCS)
 test-results/
 
+# Bundled Node for AzureTLS worker (from scripts/ensure-cupnet-node.mjs before electron-builder)
+resources/cupnet-node/
+resources/.cupnet-node-tmp/
+
 # Local debug dumps (HTML/JSON captures, gitleaks noise, IVAC, stability baselines — not for VCS)
 _debug/
 

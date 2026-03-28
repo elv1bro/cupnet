@@ -1,6 +1,6 @@
 {
   "name": "cupnet",
-  "version": "2026.3.28.2",
+  "version": "2026.3.28.3",
   "productName": "CupNet",
   "description": "An Electron browser with proxy selection and advanced network logging.",
   "main": "main.js",
@@ -28,13 +28,13 @@
     "test:db": "ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/Electron.app/Contents/MacOS/Electron tests/test-db.js",
     "chaos:proxy-sim": "node scripts/chaos-proxy-sim.js",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder",
-    "dist:mac": "electron-builder --mac dmg",
-    "dist:mac:local": "electron-builder --mac dmg --publish never",
-    "dist:win": "electron-builder --win nsis",
-    "dist:win:local": "electron-builder --win nsis --publish never",
-    "dist:linux": "electron-builder --linux AppImage",
-    "dist:linux:local": "electron-builder --linux AppImage --publish never",
+    "dist": "node scripts/ensure-cupnet-node.mjs && electron-builder",
+    "dist:mac": "node scripts/ensure-cupnet-node.mjs && electron-builder --mac dmg",
+    "dist:mac:local": "node scripts/ensure-cupnet-node.mjs && electron-builder --mac dmg --publish never",
+    "dist:win": "node scripts/ensure-cupnet-node.mjs && electron-builder --win nsis",
+    "dist:win:local": "node scripts/ensure-cupnet-node.mjs && electron-builder --win nsis --publish never",
+    "dist:linux": "node scripts/ensure-cupnet-node.mjs && electron-builder --linux AppImage",
+    "dist:linux:local": "node scripts/ensure-cupnet-node.mjs && electron-builder --linux AppImage --publish never",
     "icons:build": "icon-gen -i img.png -o icons --ico --ico-name icon --icns --icns-name icon -r && node -e \"require('fs').copyFileSync('img.png','icons/icon.png')\""
   },
   "author": "Elvi",
@@ -76,6 +76,15 @@
       "!dist",
       "!node_modules/.cache",
       "!azuretls/node_modules/.cache"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/cupnet-node",
+        "to": "cupnet-node",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "mac": {
       "icon": "icons/icon.icns",

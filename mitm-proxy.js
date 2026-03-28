@@ -416,6 +416,18 @@ function _fmtBody(body, bodyBase64, label, maxLen = 4096) {
     return `  [${label}]\n${text}\n`;
 }
 
+/** Node из extraResources (релиз) или `resources/cupnet-node` в корне репозитория (dev после ensure). */
+function _resolveCupnetBundledNodeBinary() {
+    const name = process.platform === 'win32' ? 'node.exe' : 'node';
+    if (process.resourcesPath) {
+        const packaged = path.join(process.resourcesPath, 'cupnet-node', name);
+        if (fs.existsSync(packaged)) return packaged;
+    }
+    const dev = path.join(__dirname, 'resources', 'cupnet-node', name);
+    if (fs.existsSync(dev)) return dev;
+    return null;
+}
+
 class AzureTLSWorker extends EventEmitter {
     constructor(workerPath) {
         super();
@@ -450,12 +462,8 @@ class AzureTLSWorker extends EventEmitter {
         if (process.env.CUPNET_AZURETLS_NODE) {
             nodeBin = process.env.CUPNET_AZURETLS_NODE;
         } else if (isElectron) {
-            const bundledNode = path.join(
-                process.resourcesPath || '',
-                'cupnet-node',
-                process.platform === 'win32' ? 'node.exe' : 'node'
-            );
-            if (isPackaged && fs.existsSync(bundledNode)) {
+            const bundledNode = _resolveCupnetBundledNodeBinary();
+            if (bundledNode) {
                 nodeBin = bundledNode;
             } else if (isPackaged) {
                 console.warn(
@@ -468,7 +476,8 @@ class AzureTLSWorker extends EventEmitter {
                 nodeBin = process.platform === 'win32' ? 'node.exe' : 'node';
             }
         } else {
-            nodeBin = process.platform === 'win32' ? 'node.exe' : 'node';
+            const bundledNode = _resolveCupnetBundledNodeBinary();
+            nodeBin = bundledNode || (process.platform === 'win32' ? 'node.exe' : 'node');
         }
 
         if (nodeBin !== process.execPath) {
@@ -481,6 +490,20 @@ class AzureTLSWorker extends EventEmitter {
         });
         this._stdinQueue = [];
         this._stdinDraining = false;
+
+        this.proc.on('error', (err) => {
+            const hint = err && err.code === 'ENOENT'
+                ? ' Нет бинарника: выполните `node scripts/ensure-cupnet-node.mjs`, задайте CUPNET_AZURETLS_NODE или установите Node в PATH.'
+                : '';
+            console.error(`[azure-worker] spawn failed (${nodeBin}): ${err.message || err}.${hint}`);
+            try {
+                safeCatch(
+                    { module: 'mitm-proxy', eventCode: 'worker.spawn.failed', context: { nodeBin } },
+                    err,
+                    'error',
+                );
+            } catch { /* ignore */ }
+        });
 
         // Redirect worker stderr only in debug mode (very noisy in production)
         this.proc.stderr.on('data', d => { if (debugMitmLevel) process.stderr.write('[azure-worker] ' + d); });
@@ -656,9 +679,28 @@ class AzureTLSWorker extends EventEmitter {
         }
     }
 
-    waitReady() {
+    /**
+     * @param {number} [timeoutMs] — packaged builds without `resources/cupnet-node` may hang in ffi;
+     *   default 120s then reject with a actionable error.
+     */
+    waitReady(timeoutMs = 120_000) {
         if (this.ready) return Promise.resolve();
-        return new Promise(resolve => this.once('ready', resolve));
+        return new Promise((resolve, reject) => {
+            const onReady = () => {
+                clearTimeout(timer);
+                resolve();
+            };
+            const timer = setTimeout(() => {
+                this.off('ready', onReady);
+                reject(new Error(
+                    `AzureTLS worker did not become ready within ${timeoutMs}ms. `
+                    + 'If this is a packaged app, ensure `electron-builder` bundles Node into '
+                    + '`resources/cupnet-node` (run `node scripts/ensure-cupnet-node.mjs` before build). '
+                    + 'Or set env `CUPNET_AZURETLS_NODE` to a full Node binary path.',
+                ));
+            }, timeoutMs);
+            this.once('ready', onReady);
+        });
     }
 }
 
