@@ -20,7 +20,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --foreground-scripts
 
       - name: Capture stability baseline
         run: npm run baseline:stability
