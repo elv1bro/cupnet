@@ -658,6 +658,7 @@ function calcWindow() {
 }
 
 function renderVirtual() {
+    const preservedScrollTop = lvScroll.scrollTop;
     calcWindow();
     const tot = filteredEntries.length;
     spacerTop.style.height    = `${renderStart * ROW_HEIGHT}px`;
@@ -665,6 +666,13 @@ function renderVirtual() {
     lvRows.innerHTML = '';
     for (let i = renderStart; i < renderEnd; i++) {
         lvRows.appendChild(buildRow(filteredEntries[i], i));
+    }
+    // Подмена узлов внутри скролла на Windows часто даёт сбой scrollTop / scroll anchoring
+    // (рвань в начало или в конец). Восстанавливаем позицию явно.
+    const maxSt = Math.max(0, lvScroll.scrollHeight - lvScroll.clientHeight);
+    const clamped = Math.min(Math.max(0, preservedScrollTop), maxSt);
+    if (Math.abs(lvScroll.scrollTop - clamped) > 1) {
+        lvScroll.scrollTop = clamped;
     }
 }
 
