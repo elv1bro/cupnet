@@ -74,10 +74,11 @@ function getLibraryPath() {
 
     const libName = `libazuretls_${platform}_${libArch}.${ext}`;
 
-    // In packaged Electron, asarUnpack extracts native libs to app.asar.unpacked/
     let libDir = path.join(__dirname, 'lib');
-    if (libDir.includes('app.asar')) {
-        libDir = libDir.replace('app.asar', 'app.asar.unpacked');
+    const asarInfix = `${path.sep}app.asar${path.sep}`;
+    const idx = libDir.indexOf(asarInfix);
+    if (idx !== -1) {
+        libDir = libDir.slice(0, idx) + `${path.sep}app.asar.unpacked${path.sep}` + libDir.slice(idx + asarInfix.length);
     }
     return path.join(libDir, libName);
 }
