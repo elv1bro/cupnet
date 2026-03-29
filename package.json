@@ -1,6 +1,6 @@
 {
   "name": "cupnet",
-  "version": "2026.3.29-3",
+  "version": "2026.3.29-4",
   "productName": "CupNet",
   "description": "An Electron browser with proxy selection and advanced network logging.",
   "main": "main.js",
