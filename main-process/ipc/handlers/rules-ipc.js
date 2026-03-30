@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('node:fs');
 const requestInterceptor = require('../../../request-interceptor');
 
 /**
@@ -33,6 +34,23 @@ function registerRulesIpc(ctx) {
             ctx.reattachInterceptorToAllTabs();
         }
         return true;
+    });
+
+    ctx.ipcMain.handle('select-mock-file', async () => {
+        const parent = ctx.rulesWindow && !ctx.rulesWindow.isDestroyed() ? ctx.rulesWindow : ctx.mainWindow;
+        const { canceled, filePaths } = await ctx.dialog.showOpenDialog(parent, {
+            title: 'Select Mock Response File',
+            properties: ['openFile'],
+            filters: [{ name: 'All Files', extensions: ['*'] }],
+        });
+        if (canceled || !filePaths.length) return null;
+        const filePath = filePaths[0];
+        try {
+            const stat = fs.statSync(filePath);
+            return { filePath, size: stat.size };
+        } catch {
+            return { filePath, size: null };
+        }
     });
 
     ctx.ipcMain.handle('test-intercept-notification', async () => {

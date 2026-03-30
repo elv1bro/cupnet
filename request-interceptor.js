@@ -1,6 +1,7 @@
 'use strict';
 
 const vm = require('node:vm');
+const fs = require('node:fs');
 const db = require('./db');
 const { networkPolicy } = require('./network-policy');
 const { safeCatch, sysLog } = require('./sys-log');
@@ -486,24 +487,43 @@ function planMitmIntercept(opts, planOptions) {
         }
 
         if (rule.type === 'mock') {
-            const body = rule.params.body ?? '';
             const mimeType = rule.params.mimeType || 'text/plain';
             const statusCode = rule.params.status || 200;
+            let bodyBase64;
+            let bodyPreview;
+            let isFile = rule.params.mockSource === 'file';
+
+            if (isFile) {
+                const filePath = rule.params.mockFilePath || '';
+                try {
+                    const buf = fs.readFileSync(filePath);
+                    bodyBase64 = buf.toString('base64');
+                    bodyPreview = `[file: ${filePath}] ${(buf.length / 1024).toFixed(1)} KB`;
+                } catch (fileErr) {
+                    safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.mock.file_read_failed', context: { filePath, ruleName: rule.name } }, fileErr, 'warn');
+                    bodyBase64 = Buffer.from(`CupNet mock: file read error — ${fileErr.message}`, 'utf8').toString('base64');
+                    bodyPreview = `[file error: ${fileErr.message}]`;
+                }
+            } else {
+                const body = rule.params.body ?? '';
+                bodyBase64 = Buffer.from(String(body), 'utf8').toString('base64');
+                bodyPreview = typeof body === 'string' && body.length > 0
+                    ? body.substring(0, 120) + (body.length > 120 ? '…' : '') : '(empty)';
+            }
+
             _logRuleApplied('mitm', {
                 type: 'mock', ruleName: rule.name, url: matchUrl,
                 tabId: null, method: opts.method || 'GET',
-                status: statusCode, detail: `${statusCode} ${mimeType}`,
+                status: statusCode, detail: `${statusCode} ${mimeType}${isFile ? ' [file]' : ''}`,
             });
             if (_onRuleMatch) {
-                const bodyPreview = typeof body === 'string' && body.length > 0
-                    ? body.substring(0, 120) + (body.length > 120 ? '…' : '') : '(empty)';
                 try {
                     _onRuleMatch({
                         type: 'mock', ruleName: rule.name, url: matchUrl,
                         tabId: null, method: opts.method || 'GET',
                         status: statusCode, mimeType,
-                        body: typeof body === 'string' ? body : String(body ?? ''),
-                        detail: `${statusCode} ${mimeType}`, bodyPreview,
+                        body: isFile ? `[file: ${rule.params.mockFilePath}]` : String(rule.params.body ?? ''),
+                        detail: `${statusCode} ${mimeType}${isFile ? ' [file]' : ''}`, bodyPreview,
                     });
                 } catch (err) {
                     safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'mock', stage: 'mitm' } }, err);
@@ -514,7 +534,7 @@ function planMitmIntercept(opts, planOptions) {
                 response: {
                     statusCode,
                     headers: { 'Content-Type': mimeType },
-                    bodyBase64: Buffer.from(String(body), 'utf8').toString('base64'),
+                    bodyBase64,
                     dnsOverride: opts.dnsOverride || null,
                 },
             };

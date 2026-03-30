@@ -147,6 +147,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deleteInterceptRule:     (id)      => ipcRenderer.invoke('delete-intercept-rule', id),
     testInterceptNotification: ()     => ipcRenderer.invoke('test-intercept-notification'),
     testInterceptScript:       (p)    => ipcRenderer.invoke('test-intercept-script', p || {}),
+    selectMockFile:            ()     => ipcRenderer.invoke('select-mock-file'),
 
     // ── Proxy profiles ─────────────────────────────────────────────────────
     getProxyProfiles:        ()        => ipcRenderer.invoke('get-proxy-profiles'),

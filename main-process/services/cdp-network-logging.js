@@ -21,6 +21,8 @@ function createCdpNetworkLogging({
 }) {
     const _cdpAttachedWc = new WeakSet();
     const _trackingLoadAttachedWc = new WeakSet();
+    /** DevTools и debugger API на одном webContents в Electron конфликтуют; Network может показывать запросы не той вкладки. */
+    const _devtoolsCdpBridgeWc = new WeakSet();
     /** Per webContents: один набор Map/таймер/очереди — повторный setupNetworkLogging не дублирует интервалы и destroyed */
     const _wcLogState = new WeakMap();
 
@@ -117,6 +119,34 @@ function createCdpNetworkLogging({
             state.extraInfoQueue.clear();
         }
         const { ongoingRequests, ongoingWebsockets, extraInfoQueue } = state;
+
+        if (!_devtoolsCdpBridgeWc.has(webContents)) {
+            _devtoolsCdpBridgeWc.add(webContents);
+            webContents.on('devtools-opened', () => {
+                if (webContents.isDestroyed()) return;
+                try {
+                    const dbg = webContents.debugger;
+                    dbg.removeAllListeners('message');
+                    dbg.removeAllListeners('detach');
+                    if (dbg.isAttached()) dbg.detach();
+                } catch (err) {
+                    safeCatch({ module: 'main', eventCode: 'cdp.detach.failed', context: { phase: 'devtools-opened' } }, err, 'info');
+                }
+                _cdpAttachedWc.delete(webContents);
+            });
+            webContents.on('devtools-closed', () => {
+                if (webContents.isDestroyed()) return;
+                const st = _wcLogState.get(webContents);
+                if (!st) return;
+                const le = getIsLoggingEnabled();
+                const activeFp = typeof getActiveFingerprint === 'function' ? getActiveFingerprint() : null;
+                if (!le && !activeFp) return;
+                setupNetworkLogging(webContents, st.tabId, st.sessionId).catch((err) => {
+                    safeCatch({ module: 'main', eventCode: 'cdp.reattach.failed', context: { phase: 'devtools-closed' } }, err, 'info');
+                });
+            });
+        }
+
         const cdp = webContents.debugger;
 
         if (!_trackingLoadAttachedWc.has(webContents)) {

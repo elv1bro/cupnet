@@ -193,6 +193,11 @@
         .badge-hl       { background: var(--purple-bg); color: var(--purple); }
         .badge-default  { background: var(--accent-bg); color: var(--accent); }
 
+        /* ── Mock source toggle ────────────────────────────────────────────── */
+        .mock-source-toggle { display: flex; gap: 16px; align-items: center; }
+        .radio-label { display: flex; align-items: center; gap: 5px; cursor: pointer; color: var(--text); font-size: 13px; }
+        .radio-label input[type="radio"] { accent-color: var(--accent); }
+
         /* ── Toggle switch ──────────────────────────────────────────────────── */
         .toggle { position: relative; width: 34px; height: 18px; display: inline-block; flex-shrink: 0; }
         .toggle input { display: none; }
@@ -492,11 +497,30 @@
             </div>
             <div class="form-row">
                 <label>MIME type</label>
-                <input type="text" id="edit-mock-mime" value="application/json">
+                <select id="edit-mock-mime-select" class="mock-mime-select" title="Common Content-Type values; pick Custom to type your own"></select>
+            </div>
+            <div class="form-row" id="edit-mock-mime-custom-row" style="display:none">
+                <label>Custom MIME type</label>
+                <input type="text" id="edit-mock-mime-custom" placeholder="e.g. application/vnd.api+json" spellcheck="false" autocomplete="off">
             </div>
             <div class="form-row">
+                <label>Body source</label>
+                <div class="mock-source-toggle">
+                    <label class="radio-label"><input type="radio" name="mock-body-source" value="text" checked> Inline text</label>
+                    <label class="radio-label"><input type="radio" name="mock-body-source" value="file"> File path</label>
+                </div>
+            </div>
+            <div class="form-row" id="mock-body-text-row">
                 <label>Response body</label>
                 <textarea id="edit-mock-body" placeholder='{"ok":true}' rows="14" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+            </div>
+            <div class="form-row" id="mock-body-file-row" style="display:none">
+                <label>File path <span style="font-weight:normal;color:var(--text-dim)">(read fresh on every request)</span></label>
+                <div style="display:flex;gap:8px;align-items:center">
+                    <input type="text" id="edit-mock-file-path" placeholder="/path/to/response.json or .wasm" spellcheck="false" autocomplete="off" style="flex:1">
+                    <button type="button" class="btn-secondary btn-sm" id="btn-browse-mock-file">Browse…</button>
+                </div>
+                <div id="mock-file-info" class="description" style="margin-top:4px"></div>
             </div>
         </div>
 

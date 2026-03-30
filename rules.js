@@ -386,6 +386,83 @@ function onChange(id, handler) {
 
 let editingInterceptId = null;
 
+/** Preset MIME types for mock Content-Type (order matches UI select). */
+const MOCK_MIME_CUSTOM = '__custom__';
+const MOCK_MIME_PRESETS = [
+    'application/json',
+    'text/html',
+    'text/plain',
+    'text/css',
+    'text/javascript',
+    'application/javascript',
+    'application/xml',
+    'text/xml',
+    'application/x-www-form-urlencoded',
+    'multipart/form-data',
+    'image/png',
+    'image/jpeg',
+    'image/svg+xml',
+    'image/gif',
+    'image/webp',
+    'application/pdf',
+    'application/wasm',
+    'application/octet-stream',
+    'video/mp4',
+    'audio/mpeg',
+];
+
+function initMockMimeSelect() {
+    const sel = document.getElementById('edit-mock-mime-select');
+    if (!sel || sel.dataset.cupnetMockMimeInit) return;
+    sel.dataset.cupnetMockMimeInit = '1';
+    sel.innerHTML = '';
+    for (const m of MOCK_MIME_PRESETS) {
+        const opt = document.createElement('option');
+        opt.value = m;
+        opt.textContent = m;
+        sel.appendChild(opt);
+    }
+    const optC = document.createElement('option');
+    optC.value = MOCK_MIME_CUSTOM;
+    optC.textContent = 'Custom…';
+    sel.appendChild(optC);
+    onChange('edit-mock-mime-select', () => updateMockMimeCustomRowVisibility());
+}
+
+function updateMockMimeCustomRowVisibility() {
+    const sel = document.getElementById('edit-mock-mime-select');
+    const row = document.getElementById('edit-mock-mime-custom-row');
+    if (!sel || !row) return;
+    row.style.display = sel.value === MOCK_MIME_CUSTOM ? '' : 'none';
+}
+
+function setMockMimeUiValue(mime) {
+    initMockMimeSelect();
+    const sel = document.getElementById('edit-mock-mime-select');
+    const customIn = document.getElementById('edit-mock-mime-custom');
+    if (!sel || !customIn) return;
+    const raw = (mime == null || mime === '') ? 'application/json' : String(mime).trim();
+    if (MOCK_MIME_PRESETS.includes(raw)) {
+        sel.value = raw;
+        customIn.value = '';
+    } else {
+        sel.value = MOCK_MIME_CUSTOM;
+        customIn.value = raw;
+    }
+    updateMockMimeCustomRowVisibility();
+}
+
+function getMockMimeValue() {
+    const sel = document.getElementById('edit-mock-mime-select');
+    const customIn = document.getElementById('edit-mock-mime-custom');
+    if (!sel || !customIn) return 'application/json';
+    if (sel.value === MOCK_MIME_CUSTOM) {
+        const t = customIn.value.trim();
+        return t || 'application/json';
+    }
+    return sel.value;
+}
+
 /** Chromium spellcheck + synchronous multi‑MB .value assignment can freeze the window; defer huge payloads. */
 const _MOCK_BODY_DEFER_CHARS = 96 * 1024;
 let _mockBodyDeferredTimer = null;
@@ -408,6 +485,44 @@ function setInterceptMockBodyValue(raw) {
         el.value = text;
     }, 0);
 }
+
+// ── Mock body source toggle (text vs file) ─────────────────────────────────
+
+function getMockBodySource() {
+    const checked = document.querySelector('input[name="mock-body-source"]:checked');
+    return checked ? checked.value : 'text';
+}
+
+function setMockBodySource(src) {
+    const radio = document.querySelector(`input[name="mock-body-source"][value="${src === 'file' ? 'file' : 'text'}"]`);
+    if (radio) radio.checked = true;
+    syncMockBodySourceVisibility();
+}
+
+function syncMockBodySourceVisibility() {
+    const isFile = getMockBodySource() === 'file';
+    const textRow = document.getElementById('mock-body-text-row');
+    const fileRow = document.getElementById('mock-body-file-row');
+    if (textRow) textRow.style.display = isFile ? 'none' : '';
+    if (fileRow) fileRow.style.display = isFile ? '' : 'none';
+}
+
+document.querySelectorAll('input[name="mock-body-source"]').forEach(r => {
+    r.addEventListener('change', syncMockBodySourceVisibility);
+});
+
+onClick('btn-browse-mock-file', async () => {
+    if (!api.selectMockFile) return;
+    const result = await api.selectMockFile();
+    if (result && result.filePath) {
+        document.getElementById('edit-mock-file-path').value = result.filePath;
+        const info = document.getElementById('mock-file-info');
+        if (info) {
+            const sizeKb = result.size != null ? `${(result.size / 1024).toFixed(1)} KB` : '';
+            info.textContent = sizeKb ? `File size: ${sizeKb}` : '';
+        }
+    }
+});
 
 function showInterceptParamsFor(type) {
     document.getElementById('intercept-params-block').style.display   = type === 'block'         ? 'block' : 'none';
@@ -433,8 +548,12 @@ function showInterceptForm(rule = null) {
     document.getElementById('edit-req-headers').value  = rule?.type === 'modifyHeaders' ? JSON.stringify(rule.params?.requestHeaders  || {}, null, 2) : '';
     document.getElementById('edit-resp-headers').value = rule?.type === 'modifyHeaders' ? JSON.stringify(rule.params?.responseHeaders || {}, null, 2) : '';
     document.getElementById('edit-mock-status').value  = rule?.type === 'mock' ? (rule.params?.status   || 200)              : 200;
-    document.getElementById('edit-mock-mime').value    = rule?.type === 'mock' ? (rule.params?.mimeType || 'application/json') : 'application/json';
+    setMockMimeUiValue(rule?.type === 'mock' ? (rule.params?.mimeType || 'application/json') : 'application/json');
+    setMockBodySource(rule?.type === 'mock' ? (rule.params?.mockSource || 'text') : 'text');
     setInterceptMockBodyValue(rule?.type === 'mock' ? (rule.params?.body ?? '') : '');
+    document.getElementById('edit-mock-file-path').value = rule?.type === 'mock' ? (rule.params?.mockFilePath || '') : '';
+    const mockFileInfo = document.getElementById('mock-file-info');
+    if (mockFileInfo) mockFileInfo.textContent = '';
     const sb = document.getElementById('edit-script-before');
     const sa = document.getElementById('edit-script-after');
     if (sb) sb.value = rule?.type === 'script' ? (rule.params?.beforeSource || '') : '';
@@ -559,8 +678,14 @@ onClick('btn-save-intercept', async () => {
         catch { showMsg('Invalid JSON for response headers', true); return; }
     } else if (type === 'mock') {
         params.status   = parseInt(document.getElementById('edit-mock-status').value, 10);
-        params.mimeType = document.getElementById('edit-mock-mime').value.trim();
-        params.body     = document.getElementById('edit-mock-body').value;
+        params.mimeType = getMockMimeValue();
+        params.mockSource = getMockBodySource();
+        if (params.mockSource === 'file') {
+            params.mockFilePath = document.getElementById('edit-mock-file-path').value.trim();
+            if (!params.mockFilePath) { showMsg('File path is required for file-based mock', true); return; }
+        } else {
+            params.body = document.getElementById('edit-mock-body').value;
+        }
     } else if (type === 'script') {
         params.beforeSource = document.getElementById('edit-script-before').value;
         params.afterSource  = document.getElementById('edit-script-after').value;
@@ -720,6 +845,7 @@ onClick('btn-clear-activity', () => {
 });
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
+initMockMimeSelect();
 populateScriptPresetSelect();
 syncInterceptAiPromptElements();
 loadInterceptRules();

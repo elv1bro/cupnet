@@ -324,7 +324,36 @@ function registerCookiesDnsIpc(ctx) {
     ctx.ipcMain.handle('open-devtools', async () => {
         const tab = ctx.tabManager?.getActiveTab();
         if (tab && !tab.view.webContents.isDestroyed()) {
-            tab.view.webContents.openDevTools();
+            const wc = tab.view.webContents;
+            const { app, BrowserWindow } = require('electron');
+
+            const focusDevTools = () => {
+                const dt = wc.devToolsWebContents;
+                if (!dt || dt.isDestroyed()) return false;
+                try { dt.focus(); } catch (_) { /* ignore focus errors */ }
+                try {
+                    const win = BrowserWindow.fromWebContents(dt);
+                    if (win && !win.isDestroyed()) {
+                        if (win.isMinimized()) win.restore();
+                        win.show();
+                        try { win.moveTop(); } catch (_) { /* optional */ }
+                        win.focus();
+                        return true;
+                    }
+                } catch (_) { /* ignore focus errors */ }
+                return false;
+            };
+
+            try { app.focus({ steal: true }); } catch (_) { /* ignore focus errors */ }
+            if (wc.isDevToolsOpened()) {
+                focusDevTools();
+                setTimeout(focusDevTools, 50);
+                return true;
+            }
+
+            wc.openDevTools({ activate: true, mode: 'detach' });
+            setTimeout(focusDevTools, 50);
+            setTimeout(focusDevTools, 140);
             return true;
         }
         return false;
