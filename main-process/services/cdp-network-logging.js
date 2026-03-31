@@ -221,6 +221,26 @@ function createCdpNetworkLogging({
             }
         }
 
+        function _cupnetRidFromHeaders(headers) {
+            if (!headers || typeof headers !== 'object') return null;
+            for (const k of Object.keys(headers)) {
+                if (k.toLowerCase() === 'x-cupnet-rid') {
+                    const v = String(headers[k] || '').trim();
+                    return v || null;
+                }
+            }
+            return null;
+        }
+
+        function _requestHeadersWithoutCupnetRid(headers) {
+            if (!headers || typeof headers !== 'object') return null;
+            const o = { ...headers };
+            for (const k of Object.keys(o)) {
+                if (k.toLowerCase() === 'x-cupnet-rid') delete o[k];
+            }
+            return o;
+        }
+
         const _processLogQueue = async () => {
             state.logQueueScheduled = false;
             const batch = state.logQueue.splice(0, 50);
@@ -249,20 +269,39 @@ function createCdpNetworkLogging({
                     } else if (logEntry.type === 'screenshot') {
                         await getDb().insertScreenshotAsync(sid, tid, logEntry.path, logEntry.imageData || null, logEntry.screenshotMeta || null);
                     } else {
-                        const dbId = await getDb().insertRequestAsync(sid, tid, {
-                            requestId: logEntry.id,
-                            url: logEntry.url,
-                            method: logEntry.method,
-                            status: logEntry.response?.statusCode || null,
-                            type: logEntry.type,
-                            duration: logEntry.duration || null,
-                            requestHeaders: logEntry.request?.headers || null,
-                            responseHeaders: logEntry.response?.headers || null,
-                            requestBody: logEntry.request?.body || null,
-                            responseBody: logEntry.responseBody || null,
-                            error: logEntry.error || null
-                        });
+                        let dbId;
+                        try {
+                            dbId = await getDb().insertRequestAsync(sid, tid, {
+                                requestId: logEntry.id,
+                                url: logEntry.url,
+                                method: logEntry.method,
+                                status: logEntry.response?.statusCode || null,
+                                type: logEntry.type,
+                                duration: logEntry.duration || null,
+                                requestHeaders: _requestHeadersWithoutCupnetRid(logEntry.request?.headers),
+                                responseHeaders: logEntry.response?.headers || null,
+                                requestBody: logEntry.request?.body || null,
+                                responseBody: logEntry.responseBody || null,
+                                error: logEntry.error || null
+                            });
+                        } catch (insErr) {
+                            const rid = logEntry._cupnetRid || _cupnetRidFromHeaders(logEntry.request?.headers);
+                            if (rid) {
+                                try {
+                                    const { releaseRid } = require('./mitm-cdp-dedup');
+                                    releaseRid(rid);
+                                } catch (_) { /* ignore */ }
+                            }
+                            throw insErr;
+                        }
                         if (dbId) logEntry.id = dbId;
+                        try {
+                            if (!logEntry._cupnetRid) {
+                                const { markCdpLogged } = require('./mitm-cdp-dedup');
+                                const st = logEntry.response?.statusCode ?? null;
+                                markCdpLogged(tid, logEntry.url, logEntry.method, st);
+                            }
+                        } catch (_) { /* ignore */ }
 
                         const re = getRulesEngine(); if (re) {
                             try {
@@ -313,7 +352,17 @@ function createCdpNetworkLogging({
         const finalizeLog = (logEntry) => {
             logEntry._cupnetLogSid = state.sessionId;
             logEntry._cupnetLogTid = state.tabId;
-            if (logEntry._mitmCdpShadow) {
+            const rid = logEntry._cupnetRid || _cupnetRidFromHeaders(logEntry.request?.headers);
+            if (rid) logEntry._cupnetRid = rid;
+            if (rid) {
+                try {
+                    const { tryClaimRid } = require('./mitm-cdp-dedup');
+                    if (tryClaimRid(rid) === false) {
+                        delete logEntry._mitmCdpShadow;
+                        return;
+                    }
+                } catch (_) { /* ignore */ }
+            } else if (logEntry._mitmCdpShadow) {
                 try {
                     const { shouldSkipCdpShadowAsMitmDuplicate } = require('./mitm-cdp-dedup');
                     const st = logEntry.response?.statusCode;
@@ -324,6 +373,9 @@ function createCdpNetworkLogging({
                 } catch (_) { /* ignore */ }
             }
             delete logEntry._mitmCdpShadow;
+            if (logEntry.request && logEntry.request.headers) {
+                logEntry.request.headers = _requestHeadersWithoutCupnetRid(logEntry.request.headers) || logEntry.request.headers;
+            }
             state.logQueue.push(logEntry);
             if (!state.logQueueScheduled) {
                 state.logQueueScheduled = true;
@@ -400,6 +452,7 @@ function createCdpNetworkLogging({
                     request: { headers: request.headers, body: request.postData || null },
                     response: null, responseBody: null,
                     _mitmCdpShadow: true,
+                    _cupnetRid: _cupnetRidFromHeaders(request.headers || {}),
                     _addedAt: Date.now(),
                 });
                 return;
@@ -449,6 +502,7 @@ function createCdpNetworkLogging({
                     startTime: timestamp, type,
                     request: { headers: request.headers, body: request.postData || null },
                     response: null, responseBody: null,
+                    _cupnetRid: _cupnetRidFromHeaders(request.headers || {}),
                     _addedAt: Date.now(),
                 });
             }

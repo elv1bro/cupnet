@@ -1,21 +1,65 @@
 'use strict';
 
+const { getNoteDomainFromUrl } = require('../../note-domain-utils.js');
+
 /**
  * Secondary BrowserWindows, compare helpers, IVAC scout, DNS/cookie/modal/proxy/rules windows.
  * @param {object} d — runtime handles (getters/setters + shared arrays/maps). Built in cupnet-runtime.js.
  */
 function createSubWindowsApi(d) {
-    function createRequestEditorWindow(data) {
+    function _spawnRequestEditorBrowserWindow(title) {
         const win = new d.BrowserWindow({
             width: 1250, height: 780, minWidth: 760, minHeight: 540,
-            title: 'Request Editor', icon: d.iconPath,
+            title: title || 'Request Editor', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false },
         });
-        win.loadFile(d.getAssetPath('request-editor.html'));
+        return win;
+    }
+
+    /** Основное окно: тулбар, open-request-editor из Log — фокус и тот же инстанс. */
+    function openRequestEditorWindow(data) {
+        const payload = data != null ? data : { method: 'GET', url: '', headers: {}, body: '' };
+        if (d.requestEditorWindow && !d.requestEditorWindow.isDestroyed()) {
+            d.requestEditorWindow.show();
+            d.requestEditorWindow.focus();
+            const wc = d.requestEditorWindow.webContents;
+            const send = () => {
+                try { wc.send('request-editor-init', payload); } catch (_) { /* ignore */ }
+            };
+            if (wc.isLoading()) wc.once('did-finish-load', send);
+            else send();
+            return;
+        }
+        const win = _spawnRequestEditorBrowserWindow('Request Editor');
+        d.requestEditorWindow = win;
         win.webContents.once('did-finish-load', () => {
-            win.webContents.send('request-editor-init', data);
+            try { win.webContents.send('request-editor-init', payload); } catch (_) { /* ignore */ }
+        });
+        win.loadFile(d.getAssetPath('request-editor.html'));
+        win.on('closed', () => {
+            if (d.requestEditorWindow === win) d.requestEditorWindow = null;
         });
     }
+
+    /** Дополнительное окно — только через «+ New window» в UI. */
+    function openRequestEditorNewWindow(data) {
+        const payload = data != null ? data : { method: 'GET', url: '', headers: {}, body: '' };
+        const n = (d.requestEditorExtraWindows?.length || 0) + 2;
+        const title = n <= 2 ? 'Request Editor (2)' : `Request Editor (${n})`;
+        const win = _spawnRequestEditorBrowserWindow(title);
+        d.requestEditorExtraWindows.push(win);
+        win.webContents.once('did-finish-load', () => {
+            try { win.webContents.send('request-editor-init', payload); } catch (_) { /* ignore */ }
+        });
+        win.loadFile(d.getAssetPath('request-editor.html'));
+        win.on('closed', () => {
+            const idx = d.requestEditorExtraWindows.indexOf(win);
+            if (idx !== -1) d.requestEditorExtraWindows.splice(idx, 1);
+        });
+    }
+
+    /** Совместимость IPC: открыть ещё одно окно (как раньше createRequestEditorWindow). */
+    const createRequestEditorWindow = openRequestEditorNewWindow;
 
     function createLogViewerWindow(sessionId = null) {
         // Cascade offset: each new window is shifted so it's visibly separate
@@ -271,6 +315,48 @@ function createSubWindowsApi(d) {
         d.pageAnalyzerWindow.loadFile(d.getAssetPath('page-analyzer.html'));
         d.pageAnalyzerWindow.webContents.on('did-finish-load', () => _sendAnalyzerTabs());
         d.pageAnalyzerWindow.on('closed', () => { d.pageAnalyzerWindow = null; });
+    }
+
+    function createNotesWindow() {
+        let pageUrl = '';
+        let domain = '';
+        try {
+            const active = d.tabManager?.getActiveTab?.();
+            const u = active?.url && /^https?:\/\//i.test(String(active.url)) ? String(active.url) : '';
+            pageUrl = u;
+            domain = u ? getNoteDomainFromUrl(u) : '';
+        } catch { /* ignore */ }
+        if (d.notesWindow && !d.notesWindow.isDestroyed()) {
+            d.notesWindow.focus();
+            d.notesWindow.webContents.send('notes-init', { pageUrl, domain });
+            return;
+        }
+        d.notesWindow = new d.BrowserWindow({
+            width: 920, height: 640, minWidth: 560, minHeight: 400,
+            title: 'Notes', icon: d.iconPath,
+            webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+        });
+        d.notesWindow.loadFile(d.getAssetPath('notes.html'));
+        d.notesWindow.webContents.once('did-finish-load', () => {
+            d.notesWindow.webContents.send('notes-init', { pageUrl, domain });
+        });
+        d.notesWindow.on('closed', () => { d.notesWindow = null; });
+    }
+
+    /** Пуш контекста активной вкладки в открытое окно заметок (смена URL / вкладки). */
+    function broadcastNotesWindowContext() {
+        if (!d.notesWindow || d.notesWindow.isDestroyed()) return;
+        let pageUrl = '';
+        let domain = '';
+        try {
+            const active = d.tabManager?.getActiveTab?.();
+            const u = active?.url && /^https?:\/\//i.test(String(active.url)) ? String(active.url) : '';
+            pageUrl = u;
+            domain = u ? getNoteDomainFromUrl(u) : '';
+        } catch { /* ignore */ }
+        try {
+            d.notesWindow.webContents.send('notes-context-update', { pageUrl, domain });
+        } catch { /* ignore */ }
     }
 
     function createIvacScoutWindow() {
@@ -595,7 +681,7 @@ function createSubWindowsApi(d) {
             d.proxyManagerWindow.focus(); return;
         }
         d.proxyManagerWindow = new d.BrowserWindow({
-            width: 1060, height: 700, minWidth: 720, minHeight: 480,
+            width: 920, height: 620, minWidth: 680, minHeight: 440,
             title: 'Proxy Manager', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false }
         });
@@ -611,7 +697,7 @@ function createSubWindowsApi(d) {
         if (d.rulesWindow) { d.rulesWindow.focus(); return; }
         d.rulesWindow = new d.BrowserWindow({
             width: 900, height: 700, minWidth: 640, minHeight: 480,
-            parent: d.mainWindow, title: 'Rules & Interceptor', icon: d.iconPath,
+            title: 'Rules & Interceptor', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false }
         });
         d.rulesWindow.loadFile(d.getAssetPath('rules.html'));
@@ -625,6 +711,8 @@ function createSubWindowsApi(d) {
     }
 
     return {
+        openRequestEditorWindow,
+        openRequestEditorNewWindow,
         createRequestEditorWindow,
         createLogViewerWindow,
         _serializeCompareRowRequest,
@@ -646,6 +734,8 @@ function createSubWindowsApi(d) {
         createTraceViewerWindow,
         createConsoleViewerWindow,
         createPageAnalyzerWindow,
+        createNotesWindow,
+        broadcastNotesWindowContext,
         createIvacScoutWindow,
         sendIvacScoutLog,
         getIvacScoutContext,

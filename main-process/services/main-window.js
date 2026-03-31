@@ -1,5 +1,7 @@
 'use strict';
 
+const { confirmOpenAnotherTab } = require('./tab-open-confirm');
+
 /**
  * Главное окно браузера и application menu.
  * @param {object} d — runtime handles + `sub` (результат createSubWindowsApi).
@@ -127,6 +129,7 @@ function createMainWindowApi(d) {
 
         d.tabManager.init(d.mainWindow, async (event, tabId, data) => {
             if (event === 'open-in-new-tab') {
+                if (!(await confirmOpenAnotherTab(d))) return;
                 const newTabId = await d.tabManager.createTab(d.persistentAnonymizedProxyUrl || null, data.url, false, d.currentSessionId);
                 d.tabManager.switchTab(newTabId);
                 const newTab = d.tabManager.getTab(newTabId);
@@ -149,6 +152,9 @@ function createMainWindowApi(d) {
                     d.cookieManagerWindow.webContents.send('set-active-tab', tabId);
                 }
             }
+            if (event === 'tab-url-changed' || event === 'tab-switched') {
+                sub.broadcastNotesWindowContext?.();
+            }
         });
 
         buildMenu();
@@ -162,6 +168,7 @@ function createMainWindowApi(d) {
                 label: 'File', submenu: [
                     { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: async () => {
                         if (!d.tabManager || !d.mainWindow) return;
+                        if (!(await confirmOpenAnotherTab(d))) return;
                         const id = await d.tabManager.createTab(d.persistentAnonymizedProxyUrl || null, d.getNewTabUrl(), false, d.currentSessionId);
                         d.tabManager.switchTab(id);
                         const tab = d.tabManager.getTab(id);
@@ -170,6 +177,7 @@ function createMainWindowApi(d) {
                     }},
                     { label: 'New Isolated Tab', accelerator: 'CmdOrCtrl+Shift+T', click: async () => {
                         if (!d.tabManager || !d.mainWindow) return;
+                        if (!(await confirmOpenAnotherTab(d))) return;
                         const id = await d.tabManager.createTab(d.persistentAnonymizedProxyUrl || null, d.getNewTabUrl(), true, null);
                         d.tabManager.switchTab(id);
                         const tab = d.tabManager.getTab(id);
@@ -185,6 +193,7 @@ function createMainWindowApi(d) {
                     }},
                     { label: 'New Tab', accelerator: 'CmdOrCtrl+Shift+D', click: async () => {
                         if (!d.tabManager || !d.mainWindow) return;
+                        if (!(await confirmOpenAnotherTab(d))) return;
                         const id = await d.tabManager.createTab({ url: d.getNewTabUrl() || null, cookieGroupId: 1 });
                         d.tabManager.switchTab(id);
                         sub.notifyCookieManagerTabs();
@@ -206,6 +215,7 @@ function createMainWindowApi(d) {
                     { label: 'Rules & Interceptor', click: () => sub.createRulesWindow() },
                     { label: 'System Console', accelerator: 'CmdOrCtrl+Shift+K', click: () => sub.createConsoleViewerWindow() },
                     { label: 'Page Analyzer', accelerator: 'CmdOrCtrl+Shift+A', click: () => sub.createPageAnalyzerWindow() },
+                    { label: 'Notes', accelerator: 'CmdOrCtrl+Shift+N', click: () => sub.createNotesWindow() },
                     { label: 'API Scout', click: () => sub.createIvacScoutWindow() },
                     { type: 'separator' },
                     { label: 'Enable Logging', type: 'checkbox', checked: d.isLoggingEnabled,

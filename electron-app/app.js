@@ -324,6 +324,8 @@ function confirmExitDialog(win) {
     return choice === 1;
 }
 let loggingModalWindow         = null;
+let requestEditorWindow        = null;
+const requestEditorExtraWindows = [];
 let ivacScoutProcess           = null;
 let persistentAnonymizedProxyUrl = null;
 let connectedProfileId           = null;
@@ -2120,16 +2122,57 @@ function createMainWindow() {
 }
 
 
-function createRequestEditorWindow(data) {
-    const win = new BrowserWindow({
+function _spawnRequestEditorBrowserWindow(title) {
+    return new BrowserWindow({
         width: 1250, height: 780, minWidth: 760, minHeight: 540,
-        title: 'Request Editor', icon: iconPath,
+        title: title || 'Request Editor', icon: iconPath,
         webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
     });
-    win.loadFile(getAssetPath('request-editor.html'));
+}
+
+function openRequestEditorWindow(data) {
+    const payload = data != null ? data : { method: 'GET', url: '', headers: {}, body: '' };
+    if (requestEditorWindow && !requestEditorWindow.isDestroyed()) {
+        requestEditorWindow.show();
+        requestEditorWindow.focus();
+        const wc = requestEditorWindow.webContents;
+        const send = () => {
+            try { wc.send('request-editor-init', payload); } catch (_) { /* ignore */ }
+        };
+        if (wc.isLoading()) wc.once('did-finish-load', send);
+        else send();
+        return;
+    }
+    const win = _spawnRequestEditorBrowserWindow('Request Editor');
+    requestEditorWindow = win;
     win.webContents.once('did-finish-load', () => {
-        win.webContents.send('request-editor-init', data);
+        try { win.webContents.send('request-editor-init', payload); } catch (_) { /* ignore */ }
     });
+    win.loadFile(getAssetPath('request-editor.html'));
+    win.on('closed', () => {
+        if (requestEditorWindow === win) requestEditorWindow = null;
+    });
+}
+
+function openRequestEditorNewWindow(data) {
+    const payload = data != null ? data : { method: 'GET', url: '', headers: {}, body: '' };
+    const n = requestEditorExtraWindows.length + 2;
+    const title = n <= 2 ? 'Request Editor (2)' : `Request Editor (${n})`;
+    const win = _spawnRequestEditorBrowserWindow(title);
+    requestEditorExtraWindows.push(win);
+    win.webContents.once('did-finish-load', () => {
+        try { win.webContents.send('request-editor-init', payload); } catch (_) { /* ignore */ }
+    });
+    win.loadFile(getAssetPath('request-editor.html'));
+    win.on('closed', () => {
+        const idx = requestEditorExtraWindows.indexOf(win);
+        if (idx !== -1) requestEditorExtraWindows.splice(idx, 1);
+    });
+}
+
+/** @deprecated используйте openRequestEditorNewWindow — только для совместимости */
+function createRequestEditorWindow(data) {
+    openRequestEditorNewWindow(data);
 }
 
 function createLogViewerWindow(sessionId = null) {
@@ -3112,7 +3155,7 @@ function createProxyManagerWindow() {
         proxyManagerWindow.focus(); return;
     }
     proxyManagerWindow = new BrowserWindow({
-        width: 1060, height: 700, minWidth: 720, minHeight: 480,
+        width: 920, height: 620, minWidth: 680, minHeight: 440,
         title: 'Proxy Manager', icon: iconPath,
         webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
     });
@@ -3128,7 +3171,7 @@ function createRulesWindow() {
     if (rulesWindow) { rulesWindow.focus(); return; }
     rulesWindow = new BrowserWindow({
         width: 900, height: 700, minWidth: 640, minHeight: 480,
-        parent: mainWindow, title: 'Rules & Interceptor', icon: iconPath,
+        title: 'Rules & Interceptor', icon: iconPath,
         webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false }
     });
     rulesWindow.loadFile(getAssetPath('rules.html'));
@@ -3890,10 +3933,14 @@ app.whenReady().then(async () => {
                 if (!FORBIDDEN.has(k.toLowerCase())) safeHeaders[k] = v;
             }
             const isBodyless = ['GET', 'HEAD', 'OPTIONS'].includes((req.method || 'GET').toUpperCase());
+            let replayBody = req.request_body || undefined;
+            if (replayBody && typeof replayBody === 'string' && replayBody.startsWith('__b64__:')) {
+                replayBody = Buffer.from(replayBody.slice(8), 'base64');
+            }
             const resp = await netFetchWithTimeout(req.url, {
                 method: req.method || 'GET',
                 headers: safeHeaders,
-                body: isBodyless ? undefined : (req.request_body || undefined)
+                body: isBodyless ? undefined : replayBody
             }, networkPolicy.timeouts.replayMs);
             const text = await resp.text();
             return { success: true, status: resp.status, body: text, original: req.response_body };
@@ -4505,7 +4552,10 @@ app.whenReady().then(async () => {
         }
         if (!template) return { success: false, error: 'Cannot decrypt template' };
 
-        const savedVars  = row.variables ? JSON.parse(row.variables) : {};
+        let savedVars = {};
+        if (row.variables) {
+            try { savedVars = JSON.parse(row.variables); } catch (e) { sysLog('warn', 'proxy', 'parse profile variables failed: ' + (e?.message || e)); }
+        }
         const mergedVars = { ...savedVars, ...(ephemeralVars || {}) };
         const resolvedVars = {};
         const resolvedUrl = parseProxyTemplate(template, mergedVars, resolvedVars);
@@ -4684,6 +4734,9 @@ app.whenReady().then(async () => {
                 user_agent:    profile.user_agent || null,
                 timezone:      profile.timezone   || null,
                 language:      profile.language   || null,
+                tls_profile:   profile.tls_profile    || 'chrome',
+                tls_ja3_mode:  profile.tls_ja3_mode   || 'template',
+                tls_ja3_custom: profile.tls_ja3_custom || null,
             });
             notifyProxyProfilesList();
             return { success: true, id: profile.id };
@@ -4698,6 +4751,9 @@ app.whenReady().then(async () => {
             user_agent: profile.user_agent || null,
             timezone:   profile.timezone   || null,
             language:   profile.language   || null,
+            tls_profile:   profile.tls_profile    || 'chrome',
+            tls_ja3_mode:  profile.tls_ja3_mode   || 'template',
+            tls_ja3_custom: profile.tls_ja3_custom || null,
         });
         notifyProxyProfilesList();
         return { success: true, id };
@@ -4711,7 +4767,10 @@ app.whenReady().then(async () => {
             try { template = safeStorage.decryptString(row.url_encrypted); } catch (e) { sysLog('warn', 'proxy', 'decrypt test proxy template failed: ' + (e?.message || e)); }
         }
         if (!template) return { success: false, error: 'Cannot decrypt' };
-        const savedVars  = row.variables ? JSON.parse(row.variables) : {};
+        let savedVars = {};
+        if (row.variables) {
+            try { savedVars = JSON.parse(row.variables); } catch (e) { sysLog('warn', 'proxy', 'parse profile variables failed: ' + (e?.message || e)); }
+        }
         const resolved   = parseProxyTemplate(template, { ...savedVars, ...(ephemeralVars || {}) });
         const start      = Date.now();
         const result     = await testProxy(resolved);
@@ -5006,37 +5065,12 @@ app.whenReady().then(async () => {
     });
 
     // ── DevTools for active tab ──────────────────────────────────────────────
+    // NOTE: this file is legacy (not loaded at runtime); active handler is in
+    // main-process/ipc/handlers/cookies-dns-ipc.js with managed BrowserWindow.
     ipcMain.handle('open-devtools', async () => {
         const tab = tabManager?.getActiveTab();
         if (tab && !tab.view.webContents.isDestroyed()) {
-            const wc = tab.view.webContents;
-            const focusDevTools = () => {
-                const dt = wc.devToolsWebContents;
-                if (!dt || dt.isDestroyed()) return false;
-                try { dt.focus(); } catch (_) { /* ignore focus errors */ }
-                try {
-                    const win = BrowserWindow.fromWebContents(dt);
-                    if (win && !win.isDestroyed()) {
-                        if (win.isMinimized()) win.restore();
-                        win.show();
-                        try { win.moveTop(); } catch (_) { /* optional */ }
-                        win.focus();
-                        return true;
-                    }
-                } catch (_) { /* ignore focus errors */ }
-                return false;
-            };
-
-            try { app.focus({ steal: true }); } catch (_) { /* ignore focus errors */ }
-            if (wc.isDevToolsOpened()) {
-                focusDevTools();
-                setTimeout(focusDevTools, 50);
-                return true;
-            }
-
-            wc.openDevTools({ activate: true, mode: 'detach' });
-            setTimeout(focusDevTools, 50);
-            setTimeout(focusDevTools, 140);
+            tab.view.webContents.openDevTools({ activate: true, mode: 'detach' });
             return true;
         }
         return false;
@@ -5258,19 +5292,32 @@ app.whenReady().then(async () => {
             try {
                 const req = db.getRequest(entryId);
                 if (req) {
+                    let editorBody = req.request_body || '';
+                    if (typeof editorBody === 'string' && editorBody.startsWith('__b64__:')) {
+                        editorBody = '[Binary body, base64 in DB]';
+                    }
                     data = {
                         method:  req.method  || 'GET',
                         url:     req.url     || '',
                         headers: req.request_headers  ? JSON.parse(req.request_headers)  : {},
-                        body:    req.request_body     || '',
+                        body:    editorBody,
                     };
                 }
             } catch (err) {
                 safeCatch({ module: 'main', eventCode: 'request-editor.prefill.failed', context: { entryId } }, err, 'info');
             }
         }
-        createRequestEditorWindow(data);
+        openRequestEditorWindow(data);
         return true;
+    });
+
+    ipcMain.handle('open-request-editor-new-window', () => {
+        try {
+            openRequestEditorNewWindow({ method: 'GET', url: '', headers: {}, body: '' });
+            return true;
+        } catch (_) {
+            return false;
+        }
     });
 
     const EXEC_FORBIDDEN = new Set([

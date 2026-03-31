@@ -225,6 +225,11 @@ function migrateSchema() {
             INSERT INTO cookie_groups (id, name) VALUES (1, 'Default');
         `);
     }
+    const noteCols = db.pragma('table_info(user_notes)').map(c => c.name);
+    if (noteCols.length && !noteCols.includes('url_match')) {
+        db.exec(`ALTER TABLE user_notes ADD COLUMN url_match TEXT NOT NULL DEFAULT ''`);
+        db.exec(`UPDATE user_notes SET url_match = domain WHERE url_match = '' OR url_match IS NULL`);
+    }
 }
 
 function createSchema() {
@@ -366,6 +371,21 @@ function createSchema() {
         );
         CREATE INDEX IF NOT EXISTS idx_trace_created ON trace_entries(created_at);
         CREATE INDEX IF NOT EXISTS idx_trace_session ON trace_entries(session_id);
+
+        CREATE TABLE IF NOT EXISTS user_notes (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain          TEXT    NOT NULL,
+            url_match       TEXT    NOT NULL DEFAULT '',
+            page_url        TEXT    NOT NULL,
+            title           TEXT    NOT NULL DEFAULT '',
+            body_plain      TEXT,
+            body_encrypted  BLOB,
+            is_encrypted    INTEGER NOT NULL DEFAULT 0 CHECK(is_encrypted IN (0, 1)),
+            created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            updated_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_notes_domain ON user_notes(domain);
+        CREATE INDEX IF NOT EXISTS idx_user_notes_created ON user_notes(created_at);
 
         CREATE VIRTUAL TABLE IF NOT EXISTS requests_fts USING fts5(
             url,
@@ -1298,6 +1318,93 @@ function deleteCookieGroupAsync(id) {
     return enqueueWrite(() => deleteCookieGroup(id), 'high');
 }
 
+// ─── User notes (CupNet) ───────────────────────────────────────────────────
+
+function _escapeLikeFragment(s) {
+    return String(s || '').replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+}
+
+function listUserNotes(filter = {}) {
+    const limit = Math.min(Math.max(Number(filter.limit) || 500, 1), 2000);
+    const domain = filter.domain != null ? String(filter.domain).trim().toLowerCase() : '';
+    const searchRaw = filter.search != null ? String(filter.search).trim() : '';
+    const hasSearch = searchRaw.length > 0;
+    const likePat = hasSearch ? `%${_escapeLikeFragment(searchRaw)}%` : null;
+
+    let sqlList = `
+        SELECT id, domain, url_match, page_url, title, is_encrypted, created_at, updated_at,
+               CASE WHEN is_encrypted = 1 THEN NULL ELSE substr(COALESCE(body_plain,''), 1, 240) END AS preview
+        FROM user_notes
+        WHERE 1=1`;
+    const params = [];
+    if (domain) {
+        sqlList += ` AND domain = ?`;
+        params.push(domain);
+    }
+    if (hasSearch) {
+        sqlList += ` AND (title LIKE ? ESCAPE '\\' OR (is_encrypted = 0 AND body_plain LIKE ? ESCAPE '\\'))`;
+        params.push(likePat, likePat);
+    }
+    sqlList += ` ORDER BY datetime(updated_at) DESC LIMIT ?`;
+    params.push(limit);
+    return db.prepare(sqlList).all(...params);
+}
+
+function getUserNote(id) {
+    return db.prepare(`SELECT * FROM user_notes WHERE id = ?`).get(Number(id)) || null;
+}
+
+function saveUserNote(rec) {
+    const domain = String(rec.domain || '').trim() || '(no site)';
+    const urlMatch = String(rec.url_match ?? '');
+    const pageUrl = String(rec.page_url || '');
+    const isEnc = rec.is_encrypted ? 1 : 0;
+    const title = String(rec.title ?? '');
+    if (rec.id) {
+        const nid = Number(rec.id);
+        if (isEnc) {
+            db.prepare(`
+                UPDATE user_notes SET domain = ?, url_match = ?, title = ?, body_plain = NULL,
+                    body_encrypted = ?, is_encrypted = 1,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                WHERE id = ?
+            `).run(domain, urlMatch, title, rec.body_encrypted, nid);
+        } else {
+            db.prepare(`
+                UPDATE user_notes SET domain = ?, url_match = ?, title = ?, body_plain = ?,
+                    body_encrypted = NULL, is_encrypted = 0,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                WHERE id = ?
+            `).run(domain, urlMatch, title, rec.body_plain ?? '', nid);
+        }
+        return nid;
+    }
+    if (isEnc) {
+        const r = db.prepare(`
+            INSERT INTO user_notes (domain, url_match, page_url, title, body_plain, body_encrypted, is_encrypted)
+            VALUES (?, ?, ?, ?, NULL, ?, 1)
+        `).run(domain, urlMatch, pageUrl, title, rec.body_encrypted);
+        return Number(r.lastInsertRowid);
+    }
+    const r = db.prepare(`
+        INSERT INTO user_notes (domain, url_match, page_url, title, body_plain, body_encrypted, is_encrypted)
+        VALUES (?, ?, ?, ?, ?, NULL, 0)
+    `).run(domain, urlMatch, pageUrl, title, rec.body_plain ?? '');
+    return Number(r.lastInsertRowid);
+}
+
+function deleteUserNote(id) {
+    db.prepare(`DELETE FROM user_notes WHERE id = ?`).run(Number(id));
+}
+
+function saveUserNoteAsync(rec) {
+    return enqueueWrite(() => saveUserNote(rec), 'high');
+}
+
+function deleteUserNoteAsync(id) {
+    return enqueueWrite(() => deleteUserNote(id), 'high');
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function parseJsonFields(...fields) {
@@ -1381,4 +1488,6 @@ module.exports = {
     // trace
     insertTraceEntry, insertTraceEntryAsync, insertTraceEntryQueued, queryTraceEntries, getTraceEntriesBySession, getTraceEntry, countTraceEntries, clearTraceEntries, clearTraceEntriesAsync,
     getWriteQueueStats,
+    // user notes
+    listUserNotes, getUserNote, saveUserNote, deleteUserNote, saveUserNoteAsync, deleteUserNoteAsync,
 };

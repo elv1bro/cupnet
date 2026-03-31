@@ -222,19 +222,32 @@ function registerLogCompareExecuteIpc(ctx) {
             try {
                 const req = ctx.db.getRequest(entryId);
                 if (req) {
+                    let editorBody = req.request_body || '';
+                    if (typeof editorBody === 'string' && editorBody.startsWith('__b64__:')) {
+                        editorBody = '[Binary body, base64 in DB]';
+                    }
                     data = {
                         method:  req.method  || 'GET',
                         url:     req.url     || '',
                         headers: req.request_headers  ? JSON.parse(req.request_headers)  : {},
-                        body:    req.request_body     || '',
+                        body:    editorBody,
                     };
                 }
             } catch (err) {
                 ctx.safeCatch({ module: 'main', eventCode: 'request-editor.prefill.failed', context: { entryId } }, err, 'info');
             }
         }
-        ctx.createRequestEditorWindow(data);
+        ctx.openRequestEditorWindow(data);
         return true;
+    });
+
+    ctx.ipcMain.handle('open-request-editor-new-window', () => {
+        try {
+            ctx.openRequestEditorNewWindow({ method: 'GET', url: '', headers: {}, body: '' });
+            return true;
+        } catch (_) {
+            return false;
+        }
     });
 
     const EXEC_FORBIDDEN = new Set([

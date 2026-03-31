@@ -139,6 +139,25 @@ function sanitizeSegment(seg) {
         .replace(/^\.+/, '_');
 }
 
+/** Папка верхнего уровня в ZIP при экспорте нескольких origin (имя хоста). */
+function sanitizeHostnameForZip(hostname) {
+    const s = String(hostname || '')
+        .replace(/[^a-z0-9._-]+/gi, '_')
+        .replace(/_+/g, '_')
+        .replace(/^\.+|_+$/g, '');
+    return s || 'host';
+}
+
+/**
+ * @param {string} relPath из zipEntryNameFromUrl
+ * @param {string} hostname
+ * @param {boolean} multiOrigin
+ */
+function zipPathInArchive(relPath, hostname, multiOrigin) {
+    if (!multiOrigin) return relPath;
+    return `${sanitizeHostnameForZip(hostname)}/${relPath}`;
+}
+
 /**
  * Относительный путь внутри ZIP из URL (без ведущего слэша).
  * @param {string} url
@@ -179,12 +198,67 @@ function listOriginsFromSession(sqliteDb, sessionId) {
 }
 
 /**
+ * @param {object} row
+ * @param {Set<string>} originsSet
+ * @returns {{ relPath: string, hostname: string } | null}
+ */
+function siteExportRowInfo(row, originsSet) {
+    if ((row.method || 'GET').toUpperCase() !== 'GET') return null;
+    const st = Number(row.status);
+    if (st !== 200) return null;
+    if (!row.response_body) return null;
+    let u;
+    try {
+        u = new URL(row.url);
+    } catch {
+        return null;
+    }
+    if (!originsSet.has(u.origin)) return null;
+    const pathname = u.pathname || '/';
+    const ct = getContentType(row.response_headers);
+    if (!isWebAssetContentType(ct, pathname)) return null;
+    const relPath = zipEntryNameFromUrl(row.url);
+    if (!relPath) return null;
+    return { relPath, hostname: u.hostname };
+}
+
+/**
  * @param {import('better-sqlite3').Database} sqliteDb
  * @param {number} sessionId
- * @param {string} origin
+ * @param {string[]} origins
+ * @returns {string[]}
+ */
+function listSitePathsForExport(sqliteDb, sessionId, origins) {
+    const originList = [...new Set((origins || []).map((o) => String(o).trim()).filter(Boolean))];
+    if (!originList.length) return [];
+    const originsSet = new Set(originList);
+    const multiOrigin = originList.length > 1;
+    const names = new Set();
+    const stmt = sqliteDb.prepare(`
+        SELECT url, method, status, response_body, response_headers
+        FROM requests
+        WHERE session_id = ?
+        ORDER BY id ASC
+    `);
+    for (const row of stmt.iterate(sessionId)) {
+        const info = siteExportRowInfo(row, originsSet);
+        if (!info) continue;
+        names.add(zipPathInArchive(info.relPath, info.hostname, multiOrigin));
+    }
+    return [...names].sort();
+}
+
+/**
+ * @param {import('better-sqlite3').Database} sqliteDb
+ * @param {number} sessionId
+ * @param {string[]} origins
  * @returns {{ pathToBuffer: Map<string, Buffer>, skipped: number }}
  */
-function collectSiteFilesByPath(sqliteDb, sessionId, origin) {
+function collectSiteFilesByPath(sqliteDb, sessionId, origins) {
+    const originList = [...new Set((origins || []).map((o) => String(o).trim()).filter(Boolean))];
+    if (!originList.length) return { pathToBuffer: new Map(), skipped: 0 };
+    const originsSet = new Set(originList);
+    const multiOrigin = originList.length > 1;
     const pathToBuffer = new Map();
     let skipped = 0;
     const stmt = sqliteDb.prepare(`
@@ -194,47 +268,18 @@ function collectSiteFilesByPath(sqliteDb, sessionId, origin) {
         ORDER BY id ASC
     `);
     for (const row of stmt.iterate(sessionId)) {
-        if ((row.method || 'GET').toUpperCase() !== 'GET') {
+        const info = siteExportRowInfo(row, originsSet);
+        if (!info) {
             skipped++;
             continue;
         }
-        const st = Number(row.status);
-        if (st !== 200) {
-            skipped++;
-            continue;
-        }
-        if (!row.response_body) {
-            skipped++;
-            continue;
-        }
-        let u;
-        try {
-            u = new URL(row.url);
-        } catch {
-            skipped++;
-            continue;
-        }
-        if (u.origin !== origin) {
-            skipped++;
-            continue;
-        }
-        const pathname = u.pathname || '/';
-        const ct = getContentType(row.response_headers);
-        if (!isWebAssetContentType(ct, pathname)) {
-            skipped++;
-            continue;
-        }
+        const archivePath = zipPathInArchive(info.relPath, info.hostname, multiOrigin);
         const buf = decodeResponseBody(row.response_body);
         if (!buf || !buf.length) {
             skipped++;
             continue;
         }
-        const name = zipEntryNameFromUrl(row.url);
-        if (!name) {
-            skipped++;
-            continue;
-        }
-        pathToBuffer.set(name, buf);
+        pathToBuffer.set(archivePath, buf);
     }
     return { pathToBuffer, skipped };
 }
@@ -244,15 +289,23 @@ function collectSiteFilesByPath(sqliteDb, sessionId, origin) {
  * @param {object} opts
  * @param {import('better-sqlite3').Database} opts.sqliteDb
  * @param {number} opts.sessionId
- * @param {string} opts.origin
+ * @param {string[]|undefined} opts.origins приоритет над legacy opts.origin
+ * @param {string|undefined} opts.origin один origin (совместимость)
  * @param {import('fs').WriteStream} opts.outputStream
  * @param {typeof import('archiver')} opts.archiverFactory
- * @returns {Promise<{ files: number, skipped: number, origin: string }>}
+ * @returns {Promise<{ files: number, skipped: number, origins: string[] }>}
  */
 async function exportSiteZipToStream(opts) {
-    const { sqliteDb, sessionId, origin, outputStream, archiverFactory } = opts;
+    const { sqliteDb, sessionId, outputStream, archiverFactory } = opts;
+    let originList = [];
+    if (Array.isArray(opts.origins) && opts.origins.length) {
+        originList = [...new Set(opts.origins.map((o) => String(o).trim()).filter(Boolean))];
+    } else if (opts.origin) {
+        const o = String(opts.origin).trim();
+        if (o) originList = [o];
+    }
     const archive = archiverFactory('zip', { zlib: { level: 9 } });
-    const { pathToBuffer, skipped } = collectSiteFilesByPath(sqliteDb, sessionId, origin);
+    const { pathToBuffer, skipped } = collectSiteFilesByPath(sqliteDb, sessionId, originList);
 
     const done = new Promise((resolve, reject) => {
         outputStream.on('close', resolve);
@@ -273,14 +326,17 @@ async function exportSiteZipToStream(opts) {
     return {
         files: pathToBuffer.size,
         skipped,
-        origin,
+        origins: originList,
     };
 }
 
 module.exports = {
     listOriginsFromSession,
+    listSitePathsForExport,
     exportSiteZipToStream,
     collectSiteFilesByPath,
     decodeResponseBody,
     zipEntryNameFromUrl,
+    sanitizeHostnameForZip,
+    zipPathInArchive,
 };

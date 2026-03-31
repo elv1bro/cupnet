@@ -1260,6 +1260,141 @@ select:focus { border-color: var(--accent); }
     justify-content: flex-end;
     margin-top: 10px;
 }
+
+/* Export site (ZIP): слева фильтры, справа host + превью путей */
+.site-export-dialog {
+    width: min(920px, calc(100vw - 24px));
+    max-height: min(92vh, 760px);
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    flex: 0 1 auto;
+    min-height: 0;
+}
+.site-export-body {
+    display: flex;
+    gap: 14px;
+    flex: 1 1 auto;
+    min-height: 360px;
+    max-height: min(62vh, 560px);
+    margin-top: 4px;
+    overflow: hidden;
+}
+.site-export-left {
+    flex: 0 0 min(300px, 38%);
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.site-export-filter-hint {
+    font-size: 11px;
+    color: var(--text-dim);
+    line-height: 1.4;
+}
+.site-export-pattern-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    max-height: min(42vh, 320px);
+    padding-right: 2px;
+}
+.site-export-pattern-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+.site-export-pattern-input {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 10px;
+    font-size: 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.site-export-pattern-remove {
+    flex-shrink: 0;
+    padding: 4px 8px;
+    min-width: 28px;
+    font-size: 14px;
+    line-height: 1;
+}
+#site-export-add-pattern {
+    align-self: flex-start;
+}
+.site-export-right {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow: hidden;
+}
+.site-export-hosts-title {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-weight: 600;
+}
+.site-export-host-list {
+    flex: 0 1 auto;
+    min-height: 100px;
+    max-height: min(28vh, 220px);
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 6px 8px;
+    background: var(--bg0);
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    line-height: 1.5;
+}
+.site-export-host-line {
+    padding: 4px 6px;
+    border-radius: 4px;
+    margin-bottom: 2px;
+    word-break: break-all;
+}
+.site-export-host-line:last-child {
+    margin-bottom: 0;
+}
+.site-export-host-line.hit {
+    background: rgba(34, 197, 94, 0.22);
+    color: #86efac;
+}
+.site-export-host-line.miss {
+    background: rgba(248, 113, 113, 0.15);
+    color: #fca5a5;
+}
+.site-export-paths-title {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-weight: 600;
+    margin-top: 2px;
+}
+.site-export-path-list {
+    flex: 1 1 auto;
+    min-height: 100px;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 6px 8px;
+    background: var(--bg0);
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    line-height: 1.45;
+}
+.site-export-path-line {
+    padding: 2px 4px;
+    border-radius: 3px;
+    word-break: break-all;
+    color: var(--text-dim);
+}
 .lv-radio-grid {
     display: grid;
     gap: 8px;
@@ -1656,12 +1791,21 @@ select:focus { border-color: var(--accent); }
 </div>
 
 <div id="site-export-modal" class="lv-overlay">
-    <div class="lv-dialog">
+    <div class="lv-dialog site-export-dialog">
         <div class="lv-dialog-title">Export site (ZIP)</div>
-        <div class="lv-dialog-note">GET responses with bodies from this session, one origin. Paths inside the archive follow URL pathnames (latest response wins if the same path was requested multiple times).</div>
-        <div style="padding:8px 0 14px">
-            <label for="site-export-origin" style="display:block;font-size:12px;color:var(--text-dim);margin-bottom:6px">Origin</label>
-            <select id="site-export-origin" style="width:100%;padding:8px 10px;font-size:13px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text)"></select>
+        <div class="lv-dialog-note">GET 200 responses with bodies from this session. Host filter: exact match on host (no scheme) unless the field contains <code>*</code> or <code>?</code> — then glob. Green hosts are exported. Pathnames follow URLs (latest wins).</div>
+        <div class="site-export-body">
+            <div class="site-export-left">
+                <div class="site-export-filter-hint">Up to 10 fields, OR across fields. Empty fields ignored; if all empty, every host is included. Plain text = exact host (e.g. <code>cdn.example.com</code>); use <code>*</code> / <code>?</code> for wildcards (e.g. <code>*.example.com</code>).</div>
+                <div id="site-export-pattern-rows" class="site-export-pattern-rows" aria-label="Host filters"></div>
+                <button type="button" class="lv-btn" id="site-export-add-pattern" title="Add filter field (max 10)">+ field</button>
+            </div>
+            <div class="site-export-right">
+                <div class="site-export-hosts-title">Hosts in this session (no scheme)</div>
+                <div id="site-export-host-list" class="site-export-host-list" aria-live="polite" aria-label="Session hosts"></div>
+                <div class="site-export-paths-title">Paths in ZIP (preview, matched hosts only)</div>
+                <div id="site-export-path-list" class="site-export-path-list"></div>
+            </div>
         </div>
         <div class="lv-dialog-actions">
             <button class="lv-btn" id="site-export-cancel-btn">Cancel</button>

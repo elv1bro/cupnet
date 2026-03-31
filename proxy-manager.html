@@ -10,9 +10,10 @@
 :root {
     --bg0:    #0d1117;  --bg1:    #141923;  --bg2:    #1c2236;  --bg3:    #222840;
     --border: #2a3350;  --b2:     #1e2a40;
-    --text:   #c9d3e8;  --dim:    #5c6b8a;  --hi:     #e8eef8;
+    --text:   #c9d3e8;  --dim:    #7b8db0;  --hi:     #e8eef8;
     --accent: #3b7ef8;  --green:  #22c55e;  --red:    #ef4444;
     --amber:  #f59e0b;  --purple: #a78bfa;
+    --space-1: 4px;  --space-2: 8px;  --space-3: 12px;  --space-4: 16px;  --space-5: 20px;  --space-6: 24px;
 }
 
 html, body { height: 100%; overflow: hidden; }
@@ -20,8 +21,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
 
 /* ── Topbar ── */
 .topbar {
-    display: flex; align-items: center; gap: 8px;
-    padding: 9px 14px; background: var(--bg1); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-3) var(--space-4); background: var(--bg1); border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 .topbar-title { font-size: 15px; font-weight: 700; color: var(--hi); }
@@ -54,20 +55,121 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
 .mitm-stat-dot.error  { background: var(--red);   box-shadow: 0 0 5px rgba(239,68,68,0.5); }
 .mitm-stat-item { display: flex; align-items: baseline; gap: 2px; }
 .mitm-stat-val  { font-weight: 700; color: var(--hi); font-size: 11px; }
-.mitm-stat-lbl  { color: var(--dim); font-size: 10px; font-weight: 400; }
-.mitm-stat-sep  { color: var(--border); font-size: 10px; }
+.mitm-stat-lbl  { color: var(--dim); font-size: 11px; font-weight: 400; }
+.mitm-stat-sep  { color: var(--border); font-size: 11px; }
+
+/* Collapsible MITM stats (progressive disclosure) */
+.mitm-stats-wrap {
+    flex-shrink: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg2);
+    overflow: hidden;
+}
+.mitm-stats-wrap summary {
+    list-style: none;
+    cursor: pointer;
+    padding: 4px var(--space-3);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--dim);
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.mitm-stats-wrap summary::-webkit-details-marker { display: none; }
+.mitm-stats-wrap summary:hover { color: var(--hi); background: rgba(255,255,255,0.03); }
+.mitm-stats-wrap[open] summary { border-bottom: 1px solid var(--border); }
+.mitm-stats-inner {
+    padding: var(--space-2) var(--space-3);
+}
+.mitm-stats-inner .mitm-stats {
+    border: none;
+    background: transparent;
+    padding: 0;
+}
+.status-pill-btn {
+    display: inline-flex;
+    align-items: center;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    border-radius: 20px;
+}
+.status-pill-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+.btn-disconnect-top {
+    border-color: rgba(239,68,68,0.45);
+    color: #fca5a5;
+}
+.btn-disconnect-top:hover {
+    border-color: var(--red);
+    background: rgba(239,68,68,0.12);
+    color: #fff;
+}
 
 /* ── Layout ── */
 .layout { display: flex; flex: 1; overflow: hidden; }
 
 /* ── Left: profile list ── */
 .left-pane {
-    width: 300px; flex-shrink: 0; display: flex; flex-direction: column;
+    width: 340px; flex-shrink: 0; display: flex; flex-direction: column;
     border-right: 1px solid var(--border); background: var(--bg1); overflow: hidden;
+    min-height: 0;
 }
+/* Single built-in row (Direct): keep block short; My profiles gets the rest */
+.sidebar-built-in-block {
+    flex-shrink: 0;
+    max-height: 100px;
+    overflow: hidden;
+}
+.sidebar-built-in-block .sidebar-section-label {
+    padding-top: var(--space-1);
+    padding-bottom: 2px;
+    font-size: 10px;
+}
+.profile-list-built-in {
+    flex-shrink: 0;
+    max-height: 76px;
+    overflow: hidden;
+}
+.profile-list-built-in .profile-item {
+    padding: 6px 10px;
+    margin: 2px var(--space-2) 4px;
+}
+.profile-list-built-in .pi-host {
+    font-size: 10px;
+    margin-top: 1px;
+    line-height: 1.25;
+}
+.sidebar-my-profiles-label {
+    flex-shrink: 0;
+    padding: var(--space-2) var(--space-3) var(--space-1);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--dim);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+#profile-list { flex: 1; min-height: 0; }
 .left-header {
-    display: flex; align-items: center; gap: 6px;
-    padding: 8px 10px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.sidebar-section-label {
+    padding: var(--space-2) var(--space-3) var(--space-1);
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--dim);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
 }
 .left-search {
     flex: 1; display: flex; align-items: center;
@@ -91,22 +193,39 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
 
 .profile-list { flex: 1; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 .profile-item {
-    padding: 10px 12px; border-bottom: 1px solid var(--b2); cursor: pointer;
-    transition: background 0.08s; position: relative;
+    padding: var(--space-2) var(--space-3); margin: 2px var(--space-2) 4px;
+    border-radius: 8px; border-bottom: none; cursor: pointer;
+    transition: background 0.15s ease; position: relative;
 }
-.profile-item:hover { background: rgba(255,255,255,0.03); }
-.profile-item.active-profile { background: rgba(59,126,248,0.12); border-left: 2px solid var(--accent); }
-.profile-item.connected { background: rgba(34,197,94,0.08); border-left: 2px solid var(--green); }
+.profile-item:hover { background: rgba(255,255,255,0.05); }
+.profile-item.active-profile {
+    background: rgba(59,126,248,0.18);
+    box-shadow: inset 0 0 0 1px rgba(59,126,248,0.35);
+}
+.profile-item.connected:not(.active-profile) {
+    background: rgba(34,197,94,0.1);
+    box-shadow: inset 0 0 0 1px rgba(34,197,94,0.25);
+}
+.profile-item.connected.active-profile {
+    background: rgba(59,126,248,0.2);
+    box-shadow: inset 0 0 0 1px rgba(59,126,248,0.45);
+}
 .profile-item-direct {
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 4px;
+    border-bottom: none;
+    margin-bottom: var(--space-1);
 }
 .profile-item-direct .pi-name { color: #86efac; }
 .pi-name { font-size: 13px; font-weight: 600; color: var(--hi); margin-bottom: 3px; }
 .pi-host { font-size: 11px; color: var(--dim); font-family: 'SF Mono','Fira Code',monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pi-meta { display: flex; align-items: center; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
-.pi-badge { font-size: 10px; padding: 1px 6px; border-radius: 10px; font-weight: 600; }
-.pi-badge.tmpl  { background: rgba(167,139,250,0.15); color: #c4b5fd; border: 1px solid rgba(167,139,250,0.3); }
+.pi-badge { font-size: 11px; padding: 2px 6px; border-radius: 10px; font-weight: 600; }
+.pi-flag {
+    display: inline;
+    margin-right: 3px;
+    font-size: 12px;
+    line-height: 1;
+    vertical-align: -1px;
+}
 .pi-badge.geo   { background: rgba(59,126,248,0.12);  color: #93c5fd; border: 1px solid rgba(59,126,248,0.2); }
 .pi-badge.lat   { background: rgba(34,197,94,0.1);   color: #86efac; border: 1px solid rgba(34,197,94,0.2); }
 .pi-badge.err   { background: rgba(239,68,68,0.1);   color: #fca5a5; border: 1px solid rgba(239,68,68,0.2); }
@@ -189,7 +308,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
 }
 .tls-tpl-btn:hover { border-color: var(--accent); background: rgba(59,126,248,0.08); }
 .tls-tpl-btn.active { border-color: var(--accent); background: rgba(59,126,248,0.15); }
-.tls-tpl-icon { font-size: 16px; line-height: 1; }
+.tls-tpl-icon {
+    font-size: 11px; font-weight: 800; line-height: 1;
+    width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+    border-radius: 6px; background: var(--bg3); color: var(--hi);
+}
 .tls-tpl-name { font-size: 10px; font-weight: 600; color: var(--hi); }
 .tls-tpl-ver { font-size: 9px; color: var(--dim); }
 .tls-tpl-desc {
@@ -248,13 +371,96 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
 .editor-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
 .editor-header {
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    padding: 10px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+    display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+    padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); flex-shrink: 0;
     background: var(--bg1);
 }
-.editor-title { font-size: 15px; font-weight: 700; color: var(--hi); flex: 1; }
+.editor-title { font-size: 15px; font-weight: 700; color: var(--hi); flex: 1; min-width: 120px; }
+.editor-title-wrap { display: flex; align-items: center; gap: 6px; flex: 1; }
+.unsaved-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--amber);
+    flex-shrink: 0;
+    display: none;
+}
+.unsaved-dot.visible { display: inline-block; }
 
-.editor-body { flex: 1; overflow-y: auto; padding: 16px; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.editor-tabs {
+    display: flex; gap: 4px;
+    padding: 0 var(--space-4);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg1);
+    flex-shrink: 0;
+}
+.editor-tab {
+    padding: var(--space-2) var(--space-3);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--dim);
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    margin-bottom: -1px;
+    transition: color 0.12s, border-color 0.12s;
+}
+.editor-tab:hover { color: var(--hi); }
+.editor-tab[aria-selected="true"] {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+.editor-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+    padding: 0;
+}
+.tab-panel {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: var(--space-4);
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+    display: none;
+}
+.tab-panel.active { display: block; }
+
+.icon-svg {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    vertical-align: -3px;
+    flex-shrink: 0;
+}
+.icon-svg.lg { width: 40px; height: 40px; opacity: 0.35; }
+
+.toast-proxy {
+    position: fixed;
+    top: var(--space-4);
+    left: 50%;
+    transform: translateX(-50%) translateY(-120%);
+    z-index: 1000;
+    padding: var(--space-2) var(--space-4);
+    border-radius: 8px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--hi);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s, transform 0.25s ease;
+}
+.toast-proxy.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+    pointer-events: auto;
+}
+.toast-proxy.ok { border-color: rgba(34,197,94,0.45); }
+.toast-proxy.err { border-color: rgba(239,68,68,0.45); color: #fca5a5; }
 
 /* Form fields */
 .form-row { margin-bottom: 14px; }
@@ -407,15 +613,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
 .test-result.err { border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.07); }
 .test-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .test-row:last-child { margin-bottom: 0; }
-.test-label { font-size: 10px; font-weight: 700; color: var(--dim); text-transform: uppercase; min-width: 64px; }
+.test-label { font-size: 11px; font-weight: 700; color: var(--dim); text-transform: uppercase; min-width: 64px; }
 .test-val { font-family: 'SF Mono','Fira Code',monospace; color: var(--hi); font-size: 12px; }
 .flag-emoji { font-size: 16px; }
 
 /* Action bar */
 .action-bar {
-    display: flex; align-items: center; gap: 8px;
-    padding: 10px 16px; border-top: 1px solid var(--border); background: var(--bg1); flex-shrink: 0;
+    display: flex; align-items: center; gap: var(--space-2);
+    padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border); background: var(--bg1); flex-shrink: 0;
 }
+.action-bar .action-bar-left { display: flex; align-items: center; gap: var(--space-2); }
 
 /* Recent list */
 .recents-section { margin-top: 14px; }
@@ -433,50 +640,70 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
 
 <!-- ── Top bar ── -->
 <div class="topbar">
-    <span class="topbar-title">🛡 Proxy Manager</span>
-    <div class="proxy-status-pill" id="status-pill">
-        <div class="status-dot inactive" id="status-dot"></div>
-        <span id="status-label">No proxy</span>
-        <span class="status-ip" id="status-ip"></span>
-    </div>
+    <span class="topbar-title">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        Proxy Manager
+    </span>
+    <button type="button" class="status-pill-btn" id="status-pill-btn" title="Click to refresh IP / geo">
+        <div class="proxy-status-pill" id="status-pill">
+            <div class="status-dot inactive" id="status-dot"></div>
+            <span id="status-label">No proxy</span>
+            <span class="status-ip" id="status-ip"></span>
+        </div>
+    </button>
     <div class="spacer"></div>
 
-    <!-- AzureTLS live stats -->
-    <div class="mitm-stats" id="mitm-stats" title="AzureTLS MITM proxy statistics">
-        <span class="mitm-stat-dot" id="mitm-dot" title="Worker status"></span>
-        <span class="mitm-stat-item" title="Requests per second">
-            <span class="mitm-stat-val" id="ms-rps">—</span>
-            <span class="mitm-stat-lbl">req/s</span>
-        </span>
-        <span class="mitm-stat-sep">·</span>
-        <span class="mitm-stat-item" title="Average response time">
-            <span class="mitm-stat-val" id="ms-avg">—</span>
-            <span class="mitm-stat-lbl">avg</span>
-        </span>
-        <span class="mitm-stat-sep">·</span>
-        <span class="mitm-stat-item" title="In-flight requests">
-            <span class="mitm-stat-val" id="ms-pend">0</span>
-            <span class="mitm-stat-lbl">pending</span>
-        </span>
-        <span class="mitm-stat-sep">·</span>
-        <span class="mitm-stat-item" title="Total / errors">
-            <span class="mitm-stat-val" id="ms-total">0</span>
-            <span class="mitm-stat-lbl">total</span>
-        </span>
-        <span class="mitm-stat-sep">·</span>
-        <span class="mitm-stat-item" title="Error count">
-            <span class="mitm-stat-val" id="ms-err" style="color:var(--red)">0</span>
-            <span class="mitm-stat-lbl">err</span>
-        </span>
-        <span class="mitm-stat-sep">·</span>
-        <span class="mitm-stat-item" title="TLS profile">
-            <span class="mitm-stat-val" id="ms-browser" style="color:var(--accent)">chrome</span>
-        </span>
-    </div>
+    <details class="mitm-stats-wrap" id="mitm-stats-wrap">
+        <summary>
+            <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            MITM stats
+        </summary>
+        <div class="mitm-stats-inner">
+            <div class="mitm-stats" id="mitm-stats" title="AzureTLS MITM proxy statistics">
+                <span class="mitm-stat-dot" id="mitm-dot" title="Worker status"></span>
+                <span class="mitm-stat-item" title="Requests per second">
+                    <span class="mitm-stat-val" id="ms-rps">—</span>
+                    <span class="mitm-stat-lbl">req/s</span>
+                </span>
+                <span class="mitm-stat-sep">·</span>
+                <span class="mitm-stat-item" title="Average response time">
+                    <span class="mitm-stat-val" id="ms-avg">—</span>
+                    <span class="mitm-stat-lbl">avg</span>
+                </span>
+                <span class="mitm-stat-sep">·</span>
+                <span class="mitm-stat-item" title="In-flight requests">
+                    <span class="mitm-stat-val" id="ms-pend">0</span>
+                    <span class="mitm-stat-lbl">pending</span>
+                </span>
+                <span class="mitm-stat-sep">·</span>
+                <span class="mitm-stat-item" title="Total / errors">
+                    <span class="mitm-stat-val" id="ms-total">0</span>
+                    <span class="mitm-stat-lbl">total</span>
+                </span>
+                <span class="mitm-stat-sep">·</span>
+                <span class="mitm-stat-item" title="Error count">
+                    <span class="mitm-stat-val" id="ms-err" style="color:var(--red)">0</span>
+                    <span class="mitm-stat-lbl">err</span>
+                </span>
+                <span class="mitm-stat-sep">·</span>
+                <span class="mitm-stat-item" title="TLS profile">
+                    <span class="mitm-stat-val" id="ms-browser" style="color:var(--accent)">chrome</span>
+                </span>
+            </div>
+        </div>
+    </details>
 
-    <button class="btn" id="btn-check-ip" title="Check current IP / geo">⟳ Check IP</button>
-    <button class="btn" id="btn-disconnect" title="Disconnect proxy" style="display:none">✕ Disconnect</button>
+    <button class="btn" id="btn-check-ip" title="Check current IP / geo">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        Check IP
+    </button>
+    <button class="btn btn-disconnect-top" id="btn-disconnect" title="Disconnect proxy" style="display:none">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        Disconnect
+    </button>
 </div>
+
+<div class="toast-proxy" id="toast-proxy" role="status" aria-live="polite"></div>
 
 <!-- ── Layout ── -->
 <div class="layout">
@@ -485,12 +712,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
     <div class="left-pane">
         <div class="left-header">
             <div class="left-search">
-                <input type="text" id="search-profiles" placeholder="Search profiles…">
+                <input type="text" id="search-profiles" placeholder="Search profiles…" autocomplete="off">
             </div>
-            <button class="btn primary sm" id="btn-add-profile">+ New</button>
+            <button class="btn primary sm" id="btn-add-profile" title="New profile (⌘N)">
+                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                New
+            </button>
         </div>
+        <div class="sidebar-built-in-block">
+            <div class="sidebar-section-label" id="sidebar-label-built-in">Default</div>
+            <div class="profile-list profile-list-built-in" id="profile-list-built-in"></div>
+        </div>
+        <div class="sidebar-my-profiles-label">My profiles</div>
         <div class="profile-list" id="profile-list">
-            <div class="empty-list">No profiles yet.<br>Click "+ New" to add one.</div>
+            <div class="empty-list">No profiles yet.<br>Click “New” to add one.</div>
         </div>
     </div>
 
@@ -499,23 +734,40 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
 
         <!-- Empty state -->
         <div class="editor-empty" id="editor-empty">
-            <div class="icon">🛡</div>
+            <svg class="icon-svg lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
             <p>Select a profile to edit,<br>or create a new one.</p>
+            <button type="button" class="btn primary" id="btn-empty-new">Create profile</button>
         </div>
 
         <!-- Editor -->
         <div class="editor-wrap" id="editor-wrap" style="display:none">
 
             <div class="editor-header">
-                <span class="editor-title" id="editor-title">New Profile</span>
-                <button class="btn sm" id="btn-test">⚡ Test</button>
-                <button class="btn sm" id="btn-duplicate" style="display:none" title="Duplicate this profile">⧉ Copy</button>
-                <button class="btn sm" id="btn-apply-tab" title="Use saved profile + variables from this form (SID etc.) for the browser tab that is active in the main window">Apply to active tab</button>
-                <button class="btn success sm" id="btn-apply-global">Apply globally</button>
-                <button class="btn danger sm" id="btn-delete" style="display:none">✕ Delete</button>
+                <div class="editor-title-wrap">
+                    <span class="unsaved-dot" id="unsaved-dot" title="Unsaved changes"></span>
+                    <span class="editor-title" id="editor-title">New Profile</span>
+                </div>
+                <button class="btn sm" id="btn-test" title="Test proxy (⌘⇧T)">
+                    <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                    Test
+                </button>
+                <button class="btn sm" id="btn-duplicate" style="display:none" title="Duplicate this profile">
+                    <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    Copy
+                </button>
+                <button class="btn success sm" id="btn-connect-global" title="Connect selected profile for all tabs">Connect</button>
+                <button class="btn sm" id="btn-disconnect-global" title="Disconnect global proxy / upstream">Disconnect</button>
+            </div>
+
+            <div class="editor-tabs" role="tablist" aria-label="Profile sections">
+                <button type="button" class="editor-tab" role="tab" id="tab-btn-connection" aria-selected="true" aria-controls="tab-panel-connection">Connection</button>
+                <button type="button" class="editor-tab" role="tab" id="tab-btn-identity" aria-selected="false" aria-controls="tab-panel-identity">Identity</button>
+                <button type="button" class="editor-tab" role="tab" id="tab-btn-optimization" aria-selected="false" aria-controls="tab-panel-optimization">Optimization</button>
             </div>
 
             <div class="editor-body">
+
+            <div class="tab-panel active" role="tabpanel" id="tab-panel-connection" aria-labelledby="tab-btn-connection">
 
                 <!-- Name -->
                 <div class="form-row">
@@ -592,10 +844,23 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                     <input type="text" id="f-notes" placeholder="e.g. SmartProxy rotating — Russia">
                 </div>
 
+                <!-- Test result -->
+                <div class="test-result" id="test-result">
+                    <div class="test-row"><span class="test-label">IP</span><span class="test-val" id="tr-ip">—</span></div>
+                    <div class="test-row"><span class="test-label">Location</span><span class="test-val" id="tr-geo">—</span></div>
+                    <div class="test-row"><span class="test-label">Org</span><span class="test-val" id="tr-org">—</span></div>
+                    <div class="test-row"><span class="test-label">Latency</span><span class="test-val" id="tr-lat">—</span></div>
+                    <div class="test-row"><span class="test-label">URL used</span><span class="test-val" id="tr-url" style="word-break:break-all;font-size:10.5px">—</span></div>
+                </div>
+
+            </div><!-- /tab-panel-connection -->
+
+            <div class="tab-panel" role="tabpanel" id="tab-panel-identity" aria-labelledby="tab-btn-identity">
+
                 <!-- Fingerprint / Identity -->
-                <details class="fp-section" id="fp-section">
+                <details class="fp-section" id="fp-section" open>
                     <summary>
-                        <span class="fp-summary-title">🎭 Fingerprint / Identity</span>
+                        <span class="fp-summary-title">Fingerprint / Identity</span>
                         <span class="fp-active-badge" id="fp-active-badge" style="display:none">custom</span>
                         <span class="fp-hint-inline">applied on Connect</span>
                     </summary>
@@ -611,7 +876,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                                 <button class="btn sm fp-preset" data-ua="firefox">Firefox</button>
                                 <button class="btn sm fp-preset" data-ua="safari">Safari Mac</button>
                                 <button class="btn sm fp-preset" data-ua="mobile">Mobile</button>
-                                <button class="btn sm fp-preset fp-preset-clear" data-ua="">✕ System default</button>
+                                <button class="btn sm fp-preset fp-preset-clear" data-ua="" type="button">System default</button>
                             </div>
                             <textarea id="f-ua" rows="2" placeholder="Leave empty to use system default (no spoofing)"></textarea>
                         </div>
@@ -670,7 +935,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
 
                         <!-- ── TLS Fingerprint ── -->
                         <div class="fp-sub-title" style="margin-top:14px">
-                            🛡 TLS Fingerprint
+                            TLS fingerprint
                             <span class="fp-tls-badge" id="fp-tls-badge" style="display:none">custom JA3</span>
                         </div>
                         <div class="form-hint" style="margin-bottom:8px">
@@ -693,32 +958,32 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                         <div id="tls-template-block">
                             <div class="tls-template-grid">
                                 <button class="tls-tpl-btn active" data-tls="chrome" title="Chrome 133 — latest desktop Chrome (default)">
-                                    <span class="tls-tpl-icon">🌐</span>
+                                    <span class="tls-tpl-icon">Ch</span>
                                     <span class="tls-tpl-name">Chrome</span>
                                     <span class="tls-tpl-ver">133</span>
                                 </button>
                                 <button class="tls-tpl-btn" data-tls="firefox" title="Firefox 138 — unique cipher order, no GREASE">
-                                    <span class="tls-tpl-icon">🦊</span>
+                                    <span class="tls-tpl-icon">Ff</span>
                                     <span class="tls-tpl-name">Firefox</span>
                                     <span class="tls-tpl-ver">138</span>
                                 </button>
                                 <button class="tls-tpl-btn" data-tls="safari" title="Safari 18 — Apple TLS stack, macOS">
-                                    <span class="tls-tpl-icon">🧭</span>
+                                    <span class="tls-tpl-icon">Sf</span>
                                     <span class="tls-tpl-name">Safari</span>
                                     <span class="tls-tpl-ver">18</span>
                                 </button>
                                 <button class="tls-tpl-btn" data-tls="ios" title="Mobile Safari — iOS 18, iPhone fingerprint">
-                                    <span class="tls-tpl-icon">📱</span>
+                                    <span class="tls-tpl-icon">iOS</span>
                                     <span class="tls-tpl-name">iOS</span>
                                     <span class="tls-tpl-ver">18</span>
                                 </button>
                                 <button class="tls-tpl-btn" data-tls="edge" title="Edge 133 (Chromium) — Chrome TLS + Edge UA">
-                                    <span class="tls-tpl-icon">🔷</span>
+                                    <span class="tls-tpl-icon">Ed</span>
                                     <span class="tls-tpl-name">Edge</span>
                                     <span class="tls-tpl-ver">133</span>
                                 </button>
                                 <button class="tls-tpl-btn" data-tls="opera" title="Opera 119 (Chromium) — Chrome TLS + Opera UA">
-                                    <span class="tls-tpl-icon">🎭</span>
+                                    <span class="tls-tpl-icon">Op</span>
                                     <span class="tls-tpl-name">Opera</span>
                                     <span class="tls-tpl-ver">119</span>
                                 </button>
@@ -761,7 +1026,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                         <!-- Deep Customization — Coming Soon -->
                         <details class="deep-custom-section" disabled>
                             <summary class="deep-custom-summary">
-                                <span>🔬 Deep Customization</span>
+                                <span>Deep customization</span>
                                 <span class="coming-soon-badge">Coming Soon</span>
                             </summary>
                             <div class="deep-custom-body">
@@ -772,12 +1037,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                     </div>
                 </details>
 
-                <div class="section-divider"></div>
+            </div><!-- /tab-panel-identity -->
+
+            <div class="tab-panel" role="tabpanel" id="tab-panel-optimization" aria-labelledby="tab-btn-optimization">
 
                 <!-- Traffic Optimization -->
-                <details class="fp-section" id="traffic-section">
+                <details class="fp-section" id="traffic-section" open>
                     <summary>
-                        <span class="fp-summary-title">⚡ Traffic Optimization</span>
+                        <span class="fp-summary-title">Traffic optimization</span>
                         <span class="fp-active-badge" id="traffic-active-badge" style="display:none">active</span>
                         <span class="fp-hint-inline">block resource types to speed up browsing</span>
                     </summary>
@@ -800,7 +1067,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                                     <input type="checkbox" class="sp-toggle-input traffic-opt" data-opt="blockImages">
                                     <span class="sp-toggle-slider"></span>
                                 </span>
-                                <span class="traffic-label">🖼 Block images</span>
+                                <span class="traffic-label">Block images</span>
                                 <span class="traffic-hint">Speeds up page loading significantly</span>
                             </label>
 
@@ -809,7 +1076,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                                     <input type="checkbox" class="sp-toggle-input traffic-opt" data-opt="blockCSS">
                                     <span class="sp-toggle-slider"></span>
                                 </span>
-                                <span class="traffic-label">🎨 Block CSS stylesheets</span>
+                                <span class="traffic-label">Block CSS stylesheets</span>
                                 <span class="traffic-hint">Raw HTML view, minimal bandwidth</span>
                             </label>
 
@@ -818,7 +1085,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                                     <input type="checkbox" class="sp-toggle-input traffic-opt" data-opt="blockFonts">
                                     <span class="sp-toggle-slider"></span>
                                 </span>
-                                <span class="traffic-label">🔤 Block web fonts</span>
+                                <span class="traffic-label">Block web fonts</span>
                                 <span class="traffic-hint">Uses system fonts, saves 200–500 KB per page</span>
                             </label>
 
@@ -827,7 +1094,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                                     <input type="checkbox" class="sp-toggle-input traffic-opt" data-opt="blockMedia">
                                     <span class="sp-toggle-slider"></span>
                                 </span>
-                                <span class="traffic-label">🔊 Block media (audio/video)</span>
+                                <span class="traffic-label">Block media (audio/video)</span>
                                 <span class="traffic-hint">No autoplay, no streaming, less bandwidth</span>
                             </label>
 
@@ -836,7 +1103,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                                     <input type="checkbox" class="sp-toggle-input traffic-opt" data-opt="blockWebSocket">
                                     <span class="sp-toggle-slider"></span>
                                 </span>
-                                <span class="traffic-label">🔌 Block WebSocket connections</span>
+                                <span class="traffic-label">Block WebSocket connections</span>
                                 <span class="traffic-hint">Prevents real-time tracking and chat widgets</span>
                             </label>
                         </div>
@@ -856,20 +1123,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                     </div>
                 </details>
 
-                <!-- Test result -->
-                <div class="test-result" id="test-result">
-                    <div class="test-row"><span class="test-label">IP</span><span class="test-val" id="tr-ip">—</span></div>
-                    <div class="test-row"><span class="test-label">Location</span><span class="test-val" id="tr-geo">—</span></div>
-                    <div class="test-row"><span class="test-label">Org</span><span class="test-val" id="tr-org">—</span></div>
-                    <div class="test-row"><span class="test-label">Latency</span><span class="test-val" id="tr-lat">—</span></div>
-                    <div class="test-row"><span class="test-label">URL used</span><span class="test-val" id="tr-url" style="word-break:break-all;font-size:10.5px">—</span></div>
-                </div>
+            </div><!-- /tab-panel-optimization -->
 
-            </div>
+            </div><!-- /editor-body -->
 
             <!-- Action bar -->
             <div class="action-bar">
-                <button class="btn primary" id="btn-save">💾 Save Profile</button>
+                <div class="action-bar-left">
+                    <button class="btn danger sm" id="btn-delete" style="display:none" title="Delete profile">
+                        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        Delete
+                    </button>
+                </div>
+                <button class="btn primary" id="btn-save" title="Save profile (⌘S)">
+                    <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    Save Profile
+                </button>
                 <button class="btn" id="btn-cancel">Cancel</button>
                 <div class="spacer"></div>
                 <span id="save-status" style="font-size:11px;color:var(--dim)"></span>

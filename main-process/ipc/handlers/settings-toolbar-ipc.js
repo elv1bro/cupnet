@@ -17,6 +17,7 @@ function registerSettingsToolbarIpc(ctx) {
             tracking:        ctx.getTrackingSettings(),
             capmonster:      ctx.getCapmonsterSettings(),
             devicePermissions: ctx.settingsStore.normalizeDevicePermissions(s.devicePermissions),
+            maxTabsBeforeWarning: ctx.settingsStore.normalizeMaxTabsBeforeWarning(s),
         };
     });
 
@@ -26,6 +27,13 @@ function registerSettingsToolbarIpc(ctx) {
         ctx.saveSettings(s);
         ctx.tabManager.setPasteUnlock(s.pasteUnlock);
         return { success: true, pasteUnlock: s.pasteUnlock };
+    });
+
+    ctx.ipcMain.handle('set-max-tabs-before-warning', (_, value) => {
+        const s = ctx.loadSettings();
+        s.maxTabsBeforeWarning = ctx.settingsStore.normalizeMaxTabsBeforeWarning({ maxTabsBeforeWarning: value });
+        ctx.saveSettings(s);
+        return { success: true, maxTabsBeforeWarning: s.maxTabsBeforeWarning };
     });
 
     // Adjust BrowserView y-offset to reveal HTML overlay panels (e.g. settings)

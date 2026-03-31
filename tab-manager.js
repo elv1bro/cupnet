@@ -1,11 +1,12 @@
 'use strict';
 
+const crypto = require('crypto');
 const { BrowserView, session } = require('electron');
 const path = require('path');
+const { attachWindowSwitcherHotkeyToTabWebContents } = require('./main-process/services/window-switcher-hotkey.js');
 const db = require('./db');
 const { networkPolicy } = require('./network-policy');
 const settingsStore = require('./main-process/services/settings-store');
-
 let mainWindow = null;
 let onTabEventCb = null;
 
@@ -30,6 +31,8 @@ function displayUrl(url) {
 
 const tabs = new Map();
 let activeTabId = null;
+/** True while window-switcher overlay is open: active tab's BrowserView is detached so shell HTML is visible above content area. */
+let _windowSwitcherOverlayHidesBrowserView = false;
 let nextTabNumber = 1;
 let extraTopOffset = 0;
 let _broadcastTimer = null;
@@ -233,6 +236,8 @@ function attachTabListeners(tab) {
     view.webContents.on('did-finish-load', () => {
         injectPasteUnlock(view.webContents);
     });
+
+    attachWindowSwitcherHotkeyToTabWebContents(view.webContents, () => mainWindow);
 }
 
 /**
@@ -428,6 +433,7 @@ async function createTab(opts = {}) {
     if (_trustMitmCA) _trustMitmCA(tabSession);
     await tabSession.setProxy(getProxyOptsForTab({ id: tabId })).catch(e => console.error('[tab] setProxy', e?.message));
     applyTrafficFiltersToSession(tabSession);
+    applyCupNetRidHeaderToSession(tabSession, tabId);
     installMediaPermissionHandlers(tabSession, settingsStore.normalizeDevicePermissions(settingsStore.loadSettings().devicePermissions).cameraMode);
 
     const view = new BrowserView({ webPreferences: buildTabViewWebPreferences(tabSession) });
@@ -470,8 +476,10 @@ async function createTab(opts = {}) {
     }
 
     if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.addBrowserView(view);
-        resizeActiveView();
+        if (!_windowSwitcherOverlayHidesBrowserView) {
+            mainWindow.addBrowserView(view);
+            resizeActiveView();
+        }
     }
 
     return tabId;
@@ -515,6 +523,7 @@ async function setTabCookieGroup(tabId, cookieGroupId) {
     if (_trustMitmCA) _trustMitmCA(newSession);
     await newSession.setProxy(getProxyOptsForTab(tab)).catch(() => {});
     applyTrafficFiltersToSession(newSession);
+    applyCupNetRidHeaderToSession(newSession, tid);
     installMediaPermissionHandlers(newSession, settingsStore.normalizeDevicePermissions(settingsStore.loadSettings().devicePermissions).cameraMode);
 
     const newView = new BrowserView({ webPreferences: buildTabViewWebPreferences(newSession) });
@@ -535,7 +544,9 @@ async function setTabCookieGroup(tabId, cookieGroupId) {
     newView.webContents.session.setProxy(getProxyOptsForTab(tab)).catch(() => {});
 
     if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.addBrowserView(newView);
+        if (!_windowSwitcherOverlayHidesBrowserView) {
+            mainWindow.addBrowserView(newView);
+        }
         if (tid === activeTabId) resizeActiveView();
     }
 
@@ -579,8 +590,10 @@ function switchTab(tabId) {
     activeTabId = tabId;
 
     if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.addBrowserView(tab.view);
-        resizeActiveView();
+        if (!_windowSwitcherOverlayHidesBrowserView) {
+            mainWindow.addBrowserView(tab.view);
+            resizeActiveView();
+        }
         mainWindow.webContents.send('url-updated', displayUrl(tab.url));
         mainWindow.webContents.send('set-loading-state', tab.view.webContents.isLoading());
     }
@@ -711,6 +724,32 @@ async function setProxyAll(proxyRules) {
     }
 }
 
+/**
+ * Detach/reattach the active tab BrowserView so HTML overlays (window switcher) can paint over the content area.
+ * Electron draws BrowserView above the window's webContents, not below z-index in the page.
+ */
+function setWindowSwitcherOverlayVisible(visible) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (visible) {
+        if (_windowSwitcherOverlayHidesBrowserView) return;
+        const tab = activeTabId ? tabs.get(activeTabId) : null;
+        if (!tab?.view) return;
+        try {
+            mainWindow.removeBrowserView(tab.view);
+            _windowSwitcherOverlayHidesBrowserView = true;
+        } catch (_) { /* ignore */ }
+    } else {
+        if (!_windowSwitcherOverlayHidesBrowserView) return;
+        _windowSwitcherOverlayHidesBrowserView = false;
+        const tab = activeTabId ? tabs.get(activeTabId) : null;
+        if (!tab?.view || tab.view.webContents.isDestroyed()) return;
+        try {
+            mainWindow.addBrowserView(tab.view);
+            resizeActiveView();
+        } catch (_) { /* ignore */ }
+    }
+}
+
 function resizeActiveView() {
     if (!mainWindow || mainWindow.isDestroyed() || !activeTabId) return;
     const tab = tabs.get(activeTabId);
@@ -757,6 +796,7 @@ function broadcastTabList(immediate = false) {
 }
 
 function destroyAll() {
+    _windowSwitcherOverlayHidesBrowserView = false;
     if (_relayoutTimer) { clearTimeout(_relayoutTimer); _relayoutTimer = null; }
     if (_broadcastTimer) { clearTimeout(_broadcastTimer); _broadcastTimer = null; }
     for (const tab of tabs.values()) {
@@ -802,6 +842,46 @@ const PLACEHOLDER_IMG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000
 const SKIP_PROTOCOLS = ['file:', 'devtools:', 'chrome-devtools:', 'chrome-extension:', 'chrome:', 'data:'];
 
 const _TRAFFIC_FILTER_LOG = process.env.CUPNET_TRAFFIC_FILTER_LOG === '1';
+
+/** Internal header for deterministic MITM vs CDP log dedup; stripped in mitm-proxy before upstream. */
+const CUPNET_RID_HEADER = 'X-CupNet-Rid';
+
+/**
+ * Inject a unique request id on every http(s) request so MITM and CDP log the same wire request once.
+ * Chromium always routes tab traffic through local MITM (see traffic-mode-router); header is stripped before origin.
+ */
+function applyCupNetRidHeaderToSession(sess, tabId) {
+    if (!sess) return;
+    if (process.env.CUPNET_DISABLE_CUPNET_RID === '1') {
+        try {
+            sess.webRequest.onBeforeSendHeaders(null);
+        } catch {
+            /* ignore */
+        }
+        return;
+    }
+    try {
+        sess.webRequest.onBeforeSendHeaders(null);
+    } catch {
+        /* ignore */
+    }
+    const tid = String(tabId || 'unknown');
+    sess.webRequest.onBeforeSendHeaders({ urls: ['http://*/*', 'https://*/*'] }, (details, callback) => {
+        try {
+            const base = details.requestHeaders || {};
+            for (const p of SKIP_PROTOCOLS) {
+                if (details.url.startsWith(p)) {
+                    return callback({ requestHeaders: base });
+                }
+            }
+            const headers = { ...base };
+            headers[CUPNET_RID_HEADER] = `${tid}_${crypto.randomUUID()}`;
+            callback({ requestHeaders: headers });
+        } catch {
+            callback({ requestHeaders: details.requestHeaders || {} });
+        }
+    });
+}
 
 function _cfChallengePathOrQuery(path, search) {
     const p = path || '';
@@ -911,6 +991,7 @@ module.exports = {
     applyWebRtcPolicy, resetWebRtcPolicy,
     // New per-tab controls
     setTabProxy, setTabCookieGroup,
+    setWindowSwitcherOverlayVisible,
     partitionForGroup,
     SHARED_PARTITION,
     applyDevicePermissions,

@@ -1,4 +1,5 @@
 'use strict';
+
 /**
  * Fingerprint service: applies UA/language/timezone from proxy profiles to tabs.
  *

@@ -15,6 +15,9 @@
  *
  * All outbound requests go through AzureTLS (TLS fingerprint = Chrome/Firefox profile).
  * Supports upstream proxy chaining.
+ *
+ * Outbound User-Agent: CupNet/Electron tokens stripped in _doRequest (see user-agent-utils
+ * applyOutboundUserAgentToMitmHeaders) before the worker — not via Chromium session.
  */
 
 const net              = require('net');
@@ -23,6 +26,29 @@ const crypto           = require('crypto');
 const { EventEmitter } = require('events');
 const { safeCatch } = require('./sys-log');
 const { networkPolicy } = require('./network-policy');
+const { applyOutboundUserAgentToMitmHeaders } = require('./user-agent-utils');
+
+/**
+ * Strip internal CupNet request id before upstream; value is used for MITM vs CDP log dedup.
+ * @returns {{ cupnetRid: string|null, headers: object, orderedHeaders: Array<[string,string]> }}
+ */
+function _stripCupnetRidFromParsedRequest(headers, orderedHeaders) {
+    let cupnetRid = null;
+    if (headers && typeof headers === 'object') {
+        for (const k of Object.keys(headers)) {
+            if (k.toLowerCase() === 'x-cupnet-rid') {
+                cupnetRid = String(headers[k] || '').trim() || null;
+                delete headers[k];
+                break;
+            }
+        }
+    }
+    let oh = orderedHeaders;
+    if (Array.isArray(orderedHeaders)) {
+        oh = orderedHeaders.filter(([k]) => String(k).toLowerCase() !== 'x-cupnet-rid');
+    }
+    return { cupnetRid, headers, orderedHeaders: oh };
+}
 
 // ── Pure Node.js CA + cert generation (no openssl binary needed) ──────────────
 // Works on macOS, Windows, Linux without any system dependencies.
@@ -795,6 +821,21 @@ function _isBinaryContentType(ct) {
     return true;
 }
 
+/**
+ * Prepare request body for DB logging.
+ * Binary bodies (multipart, gzip, binary CT) are stored with `__b64__:` prefix
+ * so that the raw bytes survive TEXT column round-trip (same convention as response_body).
+ */
+function _reqBodyForLog(req) {
+    if (req.body) return req.body;
+    if (!req.bodyBase64) return null;
+    const ct = (req.headers && (req.headers['content-type'] || '')) || '';
+    if (_isBinaryContentType(ct) || ct.toLowerCase().startsWith('multipart/')) {
+        return '__b64__:' + req.bodyBase64;
+    }
+    try { return Buffer.from(req.bodyBase64, 'base64').toString('utf8'); } catch { return '__b64__:' + req.bodyBase64; }
+}
+
 // ── MITM Proxy Server ─────────────────────────────────────────────────────────
 
 // AzureTLS/Go sets these from actual body — passing browser values can cause Content-Length mismatch → 400
@@ -1073,6 +1114,7 @@ class MitmProxy {
                 if (hasBody && SKIP_WHEN_BODY.includes(kl)) return false;
                 return true;
             });
+            const { cupnetRid, orderedHeaders: orderedHeadersStripped } = _stripCupnetRidFromParsedRequest(headers, orderedHeaders);
             dbg(`[mitm] → ${req.method} ${url}${ctag}\n`);
             if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(headers));
             if (debugMitmLevel >= 3) mitmUserLog(_fmtBody(req.body, req.bodyBase64, 'req body'));
@@ -1080,7 +1122,7 @@ class MitmProxy {
             const entry = { done: false, data: null };
             pipeline.push(entry);
             const t0 = Date.now();
-            this._doRequest({ method: req.method, url, headers, orderedHeaders, body: req.body, bodyBase64: req.bodyBase64, requestId, tabId })
+            this._doRequest({ method: req.method, url, headers, orderedHeaders: orderedHeadersStripped, body: req.body, bodyBase64: req.bodyBase64, requestId, tabId })
                 .then(res  => {
                     dbg(`[mitm] ← ${url} status=${res.statusCode}${ctag}\n`);
                     if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(res.headers));
@@ -1097,14 +1139,17 @@ class MitmProxy {
                                 try { logBody = Buffer.from(resOut.bodyBase64, 'base64').toString('utf8'); } catch {}
                             }
                         }
-                        const reqBodyForLog = req.body || (req.bodyBase64 ? Buffer.from(req.bodyBase64, 'base64').toString('utf8') : null);
+                        const reqBodyForLog = _reqBodyForLog(req);
                         const dnsCorsMatch = !res.dnsOverride ? this._mitmCorsMatchDetail(url) : null;
+                        const requestHeadersForLog = { ...headers };
+                        applyOutboundUserAgentToMitmHeaders(requestHeadersForLog, null);
                         this.onRequestLogged({
                             url, method: req.method, tabId, sessionId, requestId,
-                            status: resOut.statusCode, requestHeaders: headers,
+                            cupnetRid: cupnetRid || null,
+                            status: resOut.statusCode, requestHeaders: requestHeadersForLog,
                             responseHeaders: resOut.headers, requestBody: reqBodyForLog,
                             responseBody: logBody, duration: Date.now() - t0,
-                            type: inferMitmResourceType(url, req.method, headers, resOut.headers),
+                            type: inferMitmResourceType(url, req.method, requestHeadersForLog, resOut.headers),
                             dnsOverride: res.dnsOverride || null,
                             dnsCorsMatch,
                         });
@@ -1147,7 +1192,10 @@ class MitmProxy {
                     const bodyBuf = inBuf.subarray(consumed, consumed + cl);
                     const isGzip = bodyBuf[0] === 0x1f && bodyBuf[1] === 0x8b;
                     const ce = (req.headers['content-encoding'] || '').toLowerCase();
-                    if (isGzip || ce === 'gzip' || ce === 'br' || ce === 'deflate') {
+                    const ct = (req.headers['content-type'] || '').toLowerCase();
+                    if (isGzip || ce === 'gzip' || ce === 'br' || ce === 'deflate'
+                        || ct.startsWith('multipart/')
+                        || _isBinaryContentType(ct)) {
                         req.bodyBase64 = bodyBuf.toString('base64');
                     } else {
                         req.body = bodyBuf.toString('utf8');
@@ -1276,6 +1324,7 @@ class MitmProxy {
             if (hasBody && SKIP_WHEN_BODY.includes(kl)) return false;
             return true;
         });
+        const { orderedHeaders: orderedHeadersPlain } = _stripCupnetRidFromParsedRequest(headers, orderedHeaders);
 
         const ctagPlain = _clientTag(socket);
         dbg(`[mitm] → ${req.method} ${url}${ctagPlain}\n`);
@@ -1286,7 +1335,7 @@ class MitmProxy {
             method: req.method,
             url,
             headers,
-            orderedHeaders,
+            orderedHeaders: orderedHeadersPlain,
             body: req.body,
             bodyBase64: req.bodyBase64,
             requestId: `mitm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -1357,6 +1406,8 @@ class MitmProxy {
             }
 
             const up = plan.opts;
+            if (!up.headers) up.headers = {};
+            applyOutboundUserAgentToMitmHeaders(up.headers, up.orderedHeaders);
             const noBodyUp = /^(GET|HEAD)$/i.test(up.method || '');
             const retryCountUp = /^(GET|HEAD|OPTIONS)$/i.test(up.method || '')
                 ? networkPolicy.retry.maxRetries
@@ -1567,6 +1618,8 @@ class MitmProxy {
             return;
         }
         const up = plan.opts;
+        if (!up.headers) up.headers = {};
+        applyOutboundUserAgentToMitmHeaders(up.headers, up.orderedHeaders);
         const wire = _buildWireHttpRequest(up);
         const t0 = Date.now();
         const requestId = `mitm_ws_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -2121,7 +2174,7 @@ class ExternalProxyPort {
                             if (_isBinaryContentType(ct)) logBody = '__b64__:' + resOut.bodyBase64;
                             else { try { logBody = Buffer.from(resOut.bodyBase64, 'base64').toString('utf8'); } catch {} }
                         }
-                        const reqBody = r.body || (r.bodyBase64 ? Buffer.from(r.bodyBase64, 'base64').toString('utf8') : null);
+                        const reqBody = _reqBodyForLog(r);
                         const dnsCorsMatch = !res.dnsOverride ? this.parent._mitmCorsMatchDetail(url) : null;
                         this._logRequest({
                             url, method: r.method, status: resOut.statusCode,
@@ -2165,7 +2218,10 @@ class ExternalProxyPort {
                         const bodyBuf = inBuf.subarray(consumed, consumed + cl);
                         const isGzip = bodyBuf[0] === 0x1f && bodyBuf[1] === 0x8b;
                         const ce = (r.headers['content-encoding'] || '').toLowerCase();
-                        if (isGzip || ce === 'gzip' || ce === 'br' || ce === 'deflate') r.bodyBase64 = bodyBuf.toString('base64');
+                        const ct = (r.headers['content-type'] || '').toLowerCase();
+                        if (isGzip || ce === 'gzip' || ce === 'br' || ce === 'deflate'
+                            || ct.startsWith('multipart/')
+                            || _isBinaryContentType(ct)) r.bodyBase64 = bodyBuf.toString('base64');
                         else r.body = bodyBuf.toString('utf8');
                         consumed += cl;
                     }
@@ -2213,7 +2269,7 @@ class ExternalProxyPort {
                 this._logRequest({
                     url, method: req.method, status: resOut.statusCode,
                     requestHeaders: headers, responseHeaders: resOut.headers,
-                    requestBody: req.body || null, responseBody: logBody,
+                    requestBody: _reqBodyForLog(req), responseBody: logBody,
                     duration: Date.now() - t0,
                     type: inferMitmResourceType(url, req.method, headers, resOut.headers),
                     dnsOverride: res.dnsOverride || null,

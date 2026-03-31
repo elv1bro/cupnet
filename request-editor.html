@@ -68,6 +68,12 @@
             font-size: 12px; white-space: nowrap;
         }
         #copy-curl-btn:hover { color: var(--text); background: var(--bg-light); }
+        #new-window-btn {
+            padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px;
+            background: var(--bg-mid); color: var(--dim); cursor: pointer;
+            font-size: 12px; white-space: nowrap;
+        }
+        #new-window-btn:hover { color: var(--text); background: var(--bg-light); border-color: var(--accent); color: var(--accent); }
         #history-toggle-btn {
             padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px;
             background: var(--bg-mid); color: var(--dim); cursor: pointer;
@@ -322,7 +328,7 @@
             gap: 10px;
             padding: 12px 14px;
         }
-        #method-select, #url-input, #proxy-info-wrap, #copy-curl-btn {
+        #method-select, #url-input, #proxy-info-wrap, #copy-curl-btn, #new-window-btn {
             border-color: #2a3550;
             background: #111827;
         }
@@ -531,6 +537,7 @@
             <span id="proxy-info-name">—</span>
         </div>
         <button id="history-toggle-btn" title="Toggle request history">History</button>
+        <button type="button" id="new-window-btn" title="Open another Request Editor window">+ New window</button>
         <button id="copy-curl-btn" title="Copy as cURL">cURL</button>
         <div id="resp-pill"></div>
     </div>

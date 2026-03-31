@@ -24,6 +24,7 @@ const reqEditorBtn   = document.getElementById('req-editor-btn');
 const rulesBtn       = document.getElementById('rules-btn');
 const consoleBtn     = document.getElementById('console-btn');
 const analyzerBtn    = document.getElementById('analyzer-btn');
+const notesBtn       = document.getElementById('notes-btn');
 
 // ─── Proxy pill refs ──────────────────────────────────────────────────────────
 const pbStatusBtn    = document.getElementById('pb-status-btn');
@@ -506,6 +507,12 @@ if (analyzerBtn) {
     });
 }
 
+if (notesBtn) {
+    notesBtn.addEventListener('click', () => {
+        api.openNotesWindow();
+    });
+}
+
 // ─── Favicon support ──────────────────────────────────────────────────────────
 function getFaviconHtml(tab) {
     if (tab.faviconUrl) {
@@ -567,6 +574,8 @@ function _renderPill() {
     } else if (!active && _directIpGeo && _directIpGeo.ip) {
         const loc = [_directIpGeo.city, _directIpGeo.country].filter(Boolean).join(', ');
         pbDetail.textContent = _directIpGeo.ip + (loc ? ' · ' + loc : '');
+    } else if (!active && _directIpGeo && _directIpGeo._tried) {
+        pbDetail.textContent = '—';
     } else if (!active) {
         pbDetail.textContent = 'checking…';
         _fetchDirectIpGeo();
@@ -581,11 +590,10 @@ function _renderPill() {
     _renderModeBadge(info);
 }
 
-function _renderModeBadge(info) {
+function _renderModeBadge(_info) {
     if (!pbModeBadge) return;
-    pbModeBadge.textContent = 'MITM';
-    pbModeBadge.className = 'pb-mode-badge mode-mitm';
-    pbModeBadge.style.display = '';
+    pbModeBadge.textContent = '';
+    pbModeBadge.style.display = 'none';
 }
 
 function updateProxyStatus(info) {
@@ -610,13 +618,19 @@ function _fetchProxyIpGeo() {
 }
 
 function _fetchDirectIpGeo() {
-    if (_directIpGeo) return;
-    api.getDirectIp?.().then(geo => {
+    if (_directIpGeo && (_directIpGeo.ip || _directIpGeo._tried)) return;
+    const tid = _activeTabIdForIpGeo();
+    api.checkIpGeo(tid).then(geo => {
         if (geo && geo.ip && geo.ip !== 'unknown') {
             _directIpGeo = geo;
-            _renderPill();
+        } else {
+            _directIpGeo = { _tried: true };
         }
-    }).catch(() => {});
+        _renderPill();
+    }).catch(() => {
+        _directIpGeo = { _tried: true };
+        _renderPill();
+    });
 }
 
 function _onActiveTabChanged(tabData) {
@@ -633,6 +647,7 @@ function _onActiveTabChanged(tabData) {
     if (pillSig !== _lastPillTabSig) {
         _lastPillTabSig = pillSig;
         _proxyIpGeo = null;
+        _directIpGeo = null;
         api.getCurrentProxy().then((info) => {
             updateProxyStatus(info);
             if (info?.active) _fetchProxyIpGeo();
@@ -650,6 +665,7 @@ if (pbStatusBtn) {
 // Live updates
 api.onProxyStatusChanged((info) => {
     _proxyIpGeo = null;
+    _directIpGeo = null;
     updateProxyStatus(info);
     if (info?.active) _fetchProxyIpGeo();
 });
@@ -777,6 +793,7 @@ api.onTakeScreenshotNow?.(() => {
 
 // Ctrl+1..9 — switch to tab by index
 document.addEventListener('keydown', (e) => {
+    if (document.getElementById('win-switcher-overlay')?.classList.contains('win-switcher-overlay--open')) return;
     if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
     const n = parseInt(e.key, 10);
     if (n >= 1 && n <= 9 && tabs.length > 0) {
@@ -797,3 +814,438 @@ document.addEventListener('mousemove', () => {
 
 // ─── Init: fetch current tabs ─────────────────────────────────────────────────
 api.getTabs().then(td => { renderTabs(td); _onActiveTabChanged(td); scheduleCookiePageBadgeRefresh(); }).catch(() => {});
+
+// ─── Window switcher overlay (Ctrl+` from main) ─────────────────────────────
+const winSwitcherOverlay = document.getElementById('win-switcher-overlay');
+const winSwitcherList = document.getElementById('win-switcher-list');
+let _winSwitcherCache = [];
+/** First window index shown on the current grid page (0, 11, 22, … when >12 windows). */
+let _winSwitcherPageOffset = 0;
+let _lastWinSwitcherOpenedAt = 0;
+/** Refresh window list while switcher is open (tab titles, DevTools #N, previews). */
+let _winSwitcherRefreshTimer = null;
+const WIN_SWITCHER_REFRESH_MS = 10000;
+/** Bumps when switcher closes — ignore stale async preview loads. */
+let _winSwitcherPreviewLoadGen = 0;
+/** Ignore toggle-close right after open (duplicate IPC after tab → shell focus). */
+const WIN_SWITCHER_TOGGLE_CLOSE_GRACE_MS = 220;
+
+/** Physical keyboard left block: row1 1–3, then QWE, ASD, ZXC (`KeyboardEvent.code`). */
+const WIN_SWITCHER_KEY_CODES = [
+    'Digit1', 'Digit2', 'Digit3',
+    'KeyQ', 'KeyW', 'KeyE',
+    'KeyA', 'KeyS', 'KeyD',
+    'KeyZ', 'KeyX', 'KeyC',
+];
+const WIN_SWITCHER_KEY_LABELS = ['1', '2', '3', 'Q', 'W', 'E', 'A', 'S', 'D', 'Z', 'X', 'C'];
+const WIN_SWITCHER_CODE_TO_SLOT = new Map(WIN_SWITCHER_KEY_CODES.map((c, i) => [c, i]));
+
+const WIN_SWITCHER_HINT_LINE1 =
+    '4×3 grid: 1–3 / QWE / ASD / ZXC — pick a window; More… on the last key when needed';
+const WIN_SWITCHER_HINT_LINE2 =
+    'Esc: back from More, or close on the first page · Ctrl+` — open from any CupNet window';
+
+const CUPNET_LOGO_FALLBACK_SVG =
+    '<svg viewBox="0 0 32 32" class="win-switcher-cupnet-fallback" aria-hidden="true"><defs><linearGradient id="wscg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#60a5fa"/><stop offset="100%" stop-color="#3b82f6"/></linearGradient></defs><rect width="32" height="32" rx="8" fill="url(#wscg)"/><path fill="#fff" d="M9 10.5c0-1.1.9-2 2-2h6.5c2.5 0 4.5 2 4.5 4.5S20 17.5 17.5 17.5H13v3h7v2.5H12c-1.1 0-2-.9-2-2v-5c0-1.1.9-2 2-2h4.5c1.4 0 2.5-1.1 2.5-2.5S18.4 9 17 9H11v1.5z"/></svg>';
+
+/** Short English labels for window type (first line under each tile). */
+const WIN_SWITCHER_KIND_LABELS = {
+    'cupnet-main': 'CupNet',
+    devtools: 'DevTools',
+    'log-viewer': 'Log viewer',
+    'trace-viewer': 'Trace viewer',
+    'cookie-manager': 'Cookie manager',
+    'dns-manager': 'DNS manager',
+    'proxy-manager': 'Proxy manager',
+    rules: 'Rules',
+    console: 'Console',
+    'page-analyzer': 'Page analyzer',
+    notes: 'Notes',
+    'request-editor': 'Request editor',
+    'compare-viewer': 'Compare viewer',
+    'ivac-scout': 'IVAC scout',
+    'logging-modal': 'Logging',
+    unknown: 'Window',
+};
+
+/** Window title from main process (always show when present). */
+function getSwitcherWindowTitle(w) {
+    const t = (w.title && String(w.title).trim()) ? String(w.title).trim() : '';
+    if (t) return t;
+    if (w.type === 'cupnet-main') return 'CupNet';
+    if (w.type === 'devtools' && w.devtoolsTabNum != null) return `DevTools #${w.devtoolsTabNum}`;
+    return WIN_SWITCHER_KIND_LABELS[w.type] || w.type || 'Window';
+}
+
+/** Top title bar (like a window): text left, shortcut keycap right. */
+function appendSwitcherTitleBar(row, w, keyLabel) {
+    const kind = WIN_SWITCHER_KIND_LABELS[w.type] || w.type;
+    const bar = document.createElement('div');
+    bar.className = 'win-switcher-titlebar';
+
+    const textCol = document.createElement('div');
+    textCol.className = 'win-switcher-titlebar-text';
+
+    const primary = document.createElement('span');
+    primary.className = 'win-switcher-title-primary';
+    primary.textContent = getSwitcherWindowTitle(w);
+    primary.title = primary.textContent;
+    textCol.appendChild(primary);
+
+    if (w.type === 'devtools') {
+        const n = w.devtoolsTabNum != null ? String(w.devtoolsTabNum) : '?';
+        const tt = (w.tabTitle && String(w.tabTitle).trim()) ? String(w.tabTitle).trim() : '';
+        const sub = document.createElement('span');
+        sub.className = 'win-switcher-subtitle';
+        sub.textContent = tt ? `Inspected · tab ${n} · ${tt}` : `Inspected · tab ${n}`;
+        if (!tt) sub.classList.add('win-switcher-subtitle--dim');
+        textCol.appendChild(sub);
+    } else {
+        const titleText = getSwitcherWindowTitle(w);
+        if (kind && titleText.toLowerCase() !== kind.toLowerCase()) {
+            const kindEl = document.createElement('span');
+            kindEl.className = 'win-switcher-kind';
+            kindEl.textContent = kind;
+            textCol.appendChild(kindEl);
+        }
+    }
+
+    const cap = document.createElement('span');
+    cap.className = 'win-switcher-keycap';
+    cap.textContent = keyLabel;
+
+    bar.appendChild(textCol);
+    bar.appendChild(cap);
+    row.appendChild(bar);
+}
+
+const WIN_SWITCHER_ICONS = {
+    'cupnet-main': '',
+    devtools: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 4.5L2 8l3.5 3.5"/><path d="M10.5 4.5L14 8l-3.5 3.5"/><path d="M9.5 2.5l-3 11"/></svg>',
+    'log-viewer': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 4h12"/><path d="M2 8h7"/><path d="M2 12h10"/></svg>',
+    'trace-viewer': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h2l2-6 2 6h2l2-8 2 8h2"/></svg>',
+    'cookie-manager': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><circle cx="6" cy="6.5" r="0.9" fill="currentColor" stroke="none"/><circle cx="10" cy="7" r="0.9" fill="currentColor" stroke="none"/><circle cx="7" cy="10.5" r="0.9" fill="currentColor" stroke="none"/><circle cx="10.5" cy="10.5" r="0.7" fill="currentColor" stroke="none"/></svg>',
+    'dns-manager': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11"/><path d="M8 2.5a8.2 8.2 0 0 1 0 11"/><path d="M8 2.5a8.2 8.2 0 0 0 0 11"/></svg>',
+    'proxy-manager': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5" cy="8" r="2.5"/><circle cx="11" cy="8" r="2.5"/><path d="M7.3 8h1.4"/></svg>',
+    rules: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3.5h12l-4.5 5v4l-3-1.5V8.5L2 3.5z"/></svg>',
+    console: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4.5 6l2.5 2-2.5 2"/><path d="M8.5 10.5h3"/></svg>',
+    'page-analyzer': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="5"/><path d="M11 11l3 3"/><path d="M5 7h4"/><path d="M7 5v4"/></svg>',
+    notes: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h8a1 1 0 0 1 1 1v10l-2.5-2H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z"/><path d="M5 6h6M5 9h4"/></svg>',
+    'request-editor': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12"/><path d="M2 8h7"/><path d="M2 12h5"/><path d="M11 10l3 2-3 2"/></svg>',
+    'compare-viewer': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="3" width="5" height="10" rx="1"/><rect x="9" y="3" width="5" height="10" rx="1"/></svg>',
+    'ivac-scout': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5" cy="8" r="2.5"/><circle cx="11" cy="8" r="2.5"/><path d="M7.5 8h1"/></svg>',
+    'logging-modal': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 4.5v4"/><path d="M8 11v.5"/></svg>',
+    unknown: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="3" width="12" height="10" rx="1"/><path d="M2 5.5h12"/></svg>',
+};
+
+function _winSwitcherIconSvg(type) {
+    return WIN_SWITCHER_ICONS[type] || WIN_SWITCHER_ICONS.unknown;
+}
+
+function _winSwitcherFillIcon(iconWrap, w) {
+    iconWrap.innerHTML = '';
+    iconWrap.className = 'win-switcher-icon';
+    iconWrap.innerHTML = _winSwitcherIconSvg(w.type);
+}
+
+function getValidWinSwitcherOffsets(total) {
+    if (total <= 12) return [0];
+    const out = [];
+    let off = 0;
+    while (off < total) {
+        out.push(off);
+        const rem = total - off;
+        if (rem <= 12) break;
+        off += 11;
+    }
+    return out;
+}
+
+function clampWinSwitcherPageOffset() {
+    const total = _winSwitcherCache.length;
+    if (total <= 12) {
+        _winSwitcherPageOffset = 0;
+        return;
+    }
+    const valid = getValidWinSwitcherOffsets(total);
+    if (!valid.includes(_winSwitcherPageOffset)) {
+        _winSwitcherPageOffset = valid[valid.length - 1];
+    }
+}
+
+/**
+ * @returns {{ type: 'window', index: number } | { type: 'more', remaining: number } | { type: 'empty' }}
+ */
+function getSwitcherSlotKind(slotIndex, total, pageOffset) {
+    const remaining = total - pageOffset;
+    if (remaining <= 0) return { type: 'empty' };
+
+    if (total <= 12 && pageOffset === 0) {
+        if (slotIndex < total) return { type: 'window', index: slotIndex };
+        return { type: 'empty' };
+    }
+
+    if (remaining <= 12) {
+        if (slotIndex < remaining) return { type: 'window', index: pageOffset + slotIndex };
+        return { type: 'empty' };
+    }
+
+    if (slotIndex < 11) return { type: 'window', index: pageOffset + slotIndex };
+    if (slotIndex === 11) return { type: 'more', remaining: remaining - 11 };
+    return { type: 'empty' };
+}
+
+function _winSwitcherAppendPreview(previewWrap, w) {
+    if (w.previewDataUrl) {
+        const pv = document.createElement('img');
+        pv.className = 'win-switcher-preview-img';
+        pv.src = w.previewDataUrl;
+        pv.alt = '';
+        pv.decoding = 'async';
+        previewWrap.appendChild(pv);
+    } else if (w.type === 'cupnet-main') {
+        const fb = document.createElement('div');
+        fb.className = 'win-switcher-preview-fallback win-switcher-preview-fallback--main';
+        const img = document.createElement('img');
+        img.className = 'win-switcher-cupnet-tile-logo';
+        img.src = 'img.png';
+        img.alt = '';
+        img.onerror = () => {
+            fb.innerHTML = CUPNET_LOGO_FALLBACK_SVG;
+        };
+        fb.appendChild(img);
+        previewWrap.appendChild(fb);
+    } else {
+        const fb = document.createElement('div');
+        fb.className = 'win-switcher-preview-fallback';
+        const iconWrap = document.createElement('span');
+        _winSwitcherFillIcon(iconWrap, w);
+        fb.appendChild(iconWrap);
+        previewWrap.appendChild(fb);
+    }
+}
+
+/**
+ * @param {{ type: 'window', index: number } | { type: 'more', remaining: number } | { type: 'empty' }} slot
+ */
+function buildSwitcherTile(slot, keyLabel) {
+    const row = document.createElement('button');
+    row.type = 'button';
+
+    if (slot.type === 'empty') {
+        row.className = 'win-switcher-tile win-switcher-tile--empty';
+        row.disabled = true;
+        row.setAttribute('tabindex', '-1');
+        row.setAttribute('aria-hidden', 'true');
+        const bar = document.createElement('div');
+        bar.className = 'win-switcher-titlebar win-switcher-titlebar--empty-slot';
+        const cap = document.createElement('span');
+        cap.className = 'win-switcher-keycap';
+        cap.textContent = keyLabel;
+        bar.appendChild(cap);
+        const previewWrap = document.createElement('div');
+        previewWrap.className = 'win-switcher-preview-wrap win-switcher-preview-wrap--empty';
+        row.appendChild(bar);
+        row.appendChild(previewWrap);
+        return row;
+    }
+
+    if (slot.type === 'more') {
+        row.className = 'win-switcher-tile win-switcher-tile--more';
+        row.setAttribute('aria-label', `More windows, ${slot.remaining} remaining`);
+        const bar = document.createElement('div');
+        bar.className = 'win-switcher-titlebar';
+        const textCol = document.createElement('div');
+        textCol.className = 'win-switcher-titlebar-text';
+        const t1 = document.createElement('span');
+        t1.className = 'win-switcher-title-primary';
+        t1.textContent = 'More…';
+        const t2 = document.createElement('span');
+        t2.className = 'win-switcher-subtitle';
+        t2.textContent = `${slot.remaining} more`;
+        textCol.appendChild(t1);
+        textCol.appendChild(t2);
+        const cap = document.createElement('span');
+        cap.className = 'win-switcher-keycap';
+        cap.textContent = keyLabel;
+        bar.appendChild(textCol);
+        bar.appendChild(cap);
+        const previewWrap = document.createElement('div');
+        previewWrap.className = 'win-switcher-preview-wrap win-switcher-preview-wrap--more';
+        const moreInner = document.createElement('span');
+        moreInner.className = 'win-switcher-more-label';
+        moreInner.textContent = 'More…';
+        previewWrap.appendChild(moreInner);
+        row.appendChild(bar);
+        row.appendChild(previewWrap);
+        row.addEventListener('click', () => {
+            _winSwitcherPageOffset += 11;
+            renderWindowSwitcher();
+        });
+        return row;
+    }
+
+    const w = _winSwitcherCache[slot.index];
+    const hasLivePreview = !!(w.previewDataUrl || w.type === 'cupnet-main');
+    row.className = 'win-switcher-tile' + (w.type === 'cupnet-main' ? ' win-switcher-tile--main' : '');
+    if (!hasLivePreview) row.classList.add('win-switcher-tile--no-preview');
+    appendSwitcherTitleBar(row, w, keyLabel);
+    const previewWrap = document.createElement('div');
+    previewWrap.className = 'win-switcher-preview-wrap';
+    _winSwitcherAppendPreview(previewWrap, w);
+    row.appendChild(previewWrap);
+    row.addEventListener('click', () => {
+        api.focusWindowById(w.id).catch(() => {});
+        hideWindowSwitcher();
+    });
+    return row;
+}
+
+function renderWindowSwitcher() {
+    if (!winSwitcherList) return;
+    winSwitcherList.innerHTML = '';
+    winSwitcherList.classList.add('win-switcher-keyboard');
+
+    const hintEl = document.getElementById('win-switcher-hint');
+    if (hintEl) {
+        hintEl.innerHTML = '';
+        const line1 = document.createElement('span');
+        line1.className = 'win-switcher-hint-line1';
+        line1.textContent = WIN_SWITCHER_HINT_LINE1;
+        const line2 = document.createElement('span');
+        line2.className = 'win-switcher-hint-line2';
+        line2.textContent = WIN_SWITCHER_HINT_LINE2;
+        hintEl.appendChild(line1);
+        hintEl.appendChild(line2);
+    }
+
+    clampWinSwitcherPageOffset();
+    const total = _winSwitcherCache.length;
+    if (total === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'win-switcher-list-empty';
+        empty.textContent = 'No windows';
+        winSwitcherList.appendChild(empty);
+        winSwitcherList.classList.remove('win-switcher-keyboard');
+        return;
+    }
+
+    for (let slot = 0; slot < 12; slot++) {
+        const kind = getSwitcherSlotKind(slot, total, _winSwitcherPageOffset);
+        const label = WIN_SWITCHER_KEY_LABELS[slot];
+        winSwitcherList.appendChild(buildSwitcherTile(kind, label));
+    }
+}
+
+function hideWindowSwitcher() {
+    if (!winSwitcherOverlay) return;
+    _winSwitcherPreviewLoadGen++;
+    if (_winSwitcherRefreshTimer != null) {
+        clearInterval(_winSwitcherRefreshTimer);
+        _winSwitcherRefreshTimer = null;
+    }
+    _winSwitcherPageOffset = 0;
+    try { api.setWindowSwitcherOverlayVisible?.(false); } catch (_) { /* ignore */ }
+    winSwitcherOverlay.classList.remove('win-switcher-overlay--open');
+    winSwitcherOverlay.setAttribute('aria-hidden', 'true');
+    document.removeEventListener('keydown', onWindowSwitcherKeydown, true);
+}
+
+function onWindowSwitcherKeydown(e) {
+    if (!winSwitcherOverlay || !winSwitcherOverlay.classList.contains('win-switcher-overlay--open')) return;
+    if (e.key === 'Escape') {
+        e.preventDefault();
+        if (_winSwitcherPageOffset > 0) {
+            _winSwitcherPageOffset = 0;
+            renderWindowSwitcher();
+            return;
+        }
+        const main = _winSwitcherCache.find((x) => x.type === 'cupnet-main');
+        if (main) api.focusWindowById(main.id).catch(() => {});
+        hideWindowSwitcher();
+        return;
+    }
+    const slot = WIN_SWITCHER_CODE_TO_SLOT.get(e.code);
+    if (slot === undefined) return;
+    const total = _winSwitcherCache.length;
+    if (total === 0) return;
+    const kind = getSwitcherSlotKind(slot, total, _winSwitcherPageOffset);
+    if (kind.type === 'empty') return;
+    if (kind.type === 'more') {
+        e.preventDefault();
+        _winSwitcherPageOffset += 11;
+        renderWindowSwitcher();
+        return;
+    }
+    e.preventDefault();
+    api.focusWindowById(_winSwitcherCache[kind.index].id).catch(() => {});
+    hideWindowSwitcher();
+}
+
+async function showWindowSwitcher() {
+    if (!winSwitcherOverlay || !winSwitcherList) return;
+    _winSwitcherPageOffset = 0;
+    const loadGen = ++_winSwitcherPreviewLoadGen;
+    let res = { windows: [] };
+    try { res = await api.getOpenWindows({ includePreviews: false }); } catch (_) { /* ignore */ }
+    _winSwitcherCache = Array.isArray(res.windows) ? res.windows : [];
+
+    try { await api.setWindowSwitcherOverlayVisible?.(true); } catch (_) { /* ignore */ }
+
+    renderWindowSwitcher();
+    winSwitcherOverlay.classList.add('win-switcher-overlay--open');
+    _lastWinSwitcherOpenedAt = Date.now();
+    winSwitcherOverlay.setAttribute('aria-hidden', 'false');
+    document.addEventListener('keydown', onWindowSwitcherKeydown, true);
+    if (_winSwitcherRefreshTimer != null) {
+        clearInterval(_winSwitcherRefreshTimer);
+        _winSwitcherRefreshTimer = null;
+    }
+    _winSwitcherRefreshTimer = setInterval(async () => {
+        if (!winSwitcherOverlay || !winSwitcherOverlay.classList.contains('win-switcher-overlay--open')) return;
+        try {
+            const r = await api.getOpenWindows({ includePreviews: true });
+            if (Array.isArray(r.windows)) {
+                _winSwitcherCache = r.windows;
+                renderWindowSwitcher();
+            }
+        } catch (_) { /* ignore */ }
+    }, WIN_SWITCHER_REFRESH_MS);
+
+    (async () => {
+        try {
+            const full = await api.getOpenWindows({ includePreviews: true });
+            if (loadGen !== _winSwitcherPreviewLoadGen) return;
+            if (!winSwitcherOverlay || !winSwitcherOverlay.classList.contains('win-switcher-overlay--open')) return;
+            if (Array.isArray(full.windows)) {
+                _winSwitcherCache = full.windows;
+                renderWindowSwitcher();
+            }
+        } catch (_) { /* ignore */ }
+    })();
+}
+
+if (winSwitcherOverlay) {
+    winSwitcherOverlay.addEventListener('click', (e) => {
+        if (e.target === winSwitcherOverlay) hideWindowSwitcher();
+    });
+}
+
+api.onToggleWindowSwitcher?.(() => {
+    if (!winSwitcherOverlay) return;
+    if (winSwitcherOverlay.classList.contains('win-switcher-overlay--open')) {
+        if (Date.now() - _lastWinSwitcherOpenedAt < WIN_SWITCHER_TOGGLE_CLOSE_GRACE_MS) return;
+        hideWindowSwitcher();
+    } else {
+        showWindowSwitcher();
+    }
+});
+
+document.getElementById('win-switcher-toolbar-btn')?.addEventListener('click', () => {
+    if (!winSwitcherOverlay) return;
+    if (winSwitcherOverlay.classList.contains('win-switcher-overlay--open')) {
+        hideWindowSwitcher();
+    } else {
+        showWindowSwitcher();
+    }
+});

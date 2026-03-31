@@ -37,6 +37,7 @@ const methodSel       = document.getElementById('method-select');
 const urlIn           = document.getElementById('url-input');
 const sendBtn         = document.getElementById('send-btn');
 const copyCurlBtn     = document.getElementById('copy-curl-btn');
+const newWindowBtn    = document.getElementById('new-window-btn');
 const historyToggleBtn= document.getElementById('history-toggle-btn');
 const respPill        = document.getElementById('resp-pill');
 const proxyInfoName   = document.getElementById('proxy-info-name');
@@ -609,6 +610,10 @@ copyCurlBtn.addEventListener('click', () => {
     navigator.clipboard.writeText(buildCurl());
     copyCurlBtn.textContent = '✓ Copied';
     setTimeout(() => { copyCurlBtn.textContent = 'cURL'; }, 1200);
+});
+
+newWindowBtn?.addEventListener('click', () => {
+    api.openRequestEditorNewWindow?.();
 });
 
 function buildCurl() {

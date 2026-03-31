@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
     <title>[CupNet]</title>
     <link rel="stylesheet" href="styles.css">
     <script src="cookies-page-match.js"></script>
@@ -22,6 +22,16 @@
 
 <!-- ── Navigation toolbar ───────────────────────────────────────────────────── -->
 <div id="browser-toolbar">
+
+    <button type="button" id="win-switcher-toolbar-btn" class="tool-btn win-switcher-toolbar-btn--leading" title="Window switcher · Ctrl+`">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <rect x="1" y="1" width="6" height="6" rx="1.2"/>
+            <rect x="9" y="1" width="6" height="6" rx="1.2"/>
+            <rect x="1" y="9" width="6" height="6" rx="1.2"/>
+            <rect x="9" y="9" width="6" height="6" rx="1.2"/>
+        </svg>
+        <span class="tool-label">Switcher</span>
+    </button>
 
     <!-- Nav buttons: icon only -->
     <button id="back-btn" class="nav-btn" title="Back (Alt+←)">
@@ -151,6 +161,15 @@
             <span class="tool-label">Analyzer</span>
         </button>
 
+        <!-- Notes -->
+        <button id="notes-btn" class="tool-btn" title="Site Notes">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 2.5h8a1 1 0 0 1 1 1v10l-2.5-2H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z"/>
+                <path d="M5 6h6M5 9h4"/>
+            </svg>
+            <span class="tool-label">Notes</span>
+        </button>
+
         <!-- System Console -->
         <button id="console-btn" class="tool-btn" title="System Console · Ctrl+Shift+K">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -178,6 +197,13 @@
 <!-- Rule notification toasts -->
 <div id="rule-toast-container"></div>
 
+<!-- Window switcher overlay (Ctrl+`) -->
+<div id="win-switcher-overlay" class="win-switcher-overlay" aria-hidden="true">
+    <div class="win-switcher-dialog" role="dialog" aria-label="Window switcher">
+        <div class="win-switcher-list" id="win-switcher-list"></div>
+        <div class="win-switcher-hint" id="win-switcher-hint"></div>
+    </div>
+</div>
 
 <script src="browser-renderer.js"></script>
 </body>

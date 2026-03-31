@@ -121,6 +121,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     exportBundle:            (payload) => ipcRenderer.invoke('export-bundle', payload),
     importBundle:            ()        => ipcRenderer.invoke('import-bundle'),
     listSessionOrigins:      (sid)     => ipcRenderer.invoke('list-session-origins', sid),
+    listSiteExportPaths:     (payload) => ipcRenderer.invoke('list-site-export-paths', payload),
     exportSiteZip:           (payload) => ipcRenderer.invoke('export-site-zip', payload),
     diffRequests:            (a, b)    => ipcRenderer.invoke('diff-requests', a, b),
     openCompareViewer:       ()        => ipcRenderer.invoke('open-compare-viewer'),
@@ -171,6 +172,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // ── DevTools ───────────────────────────────────────────────────────────
     openDevTools:            ()        => ipcRenderer.invoke('open-devtools'),
 
+    // ── Window switcher overlay ───────────────────────────────────────────────
+    getOpenWindows:          (opts)    => ipcRenderer.invoke('get-open-windows', opts),
+    focusWindowById:         (id)      => ipcRenderer.invoke('focus-window-by-id', id),
+    setWindowSwitcherOverlayVisible: (visible) => ipcRenderer.invoke('set-window-switcher-overlay-visible', visible),
+    onToggleWindowSwitcher:  (cb)      => sub('toggle-window-switcher', cb),
+
     // ── Homepage ───────────────────────────────────────────────────────────
     getHomepage:             ()        => ipcRenderer.invoke('get-homepage'),
     setHomepage:             (url)     => ipcRenderer.invoke('set-homepage', url),
@@ -200,6 +207,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Request Editor ──────────────────────────────────────────────────────────
     openRequestEditor:       (id)      => ipcRenderer.invoke('open-request-editor', id),
+    openRequestEditorNewWindow: ()     => ipcRenderer.invoke('open-request-editor-new-window'),
     executeRequest:          (data)    => ipcRenderer.invoke('execute-request', data),
     onRequestEditorInit:     (cb)      => sub('request-editor-init', cb),
 
@@ -224,6 +232,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     saveTrafficOpts:         (opts)    => ipcRenderer.invoke('save-traffic-opts', opts),
     getTrafficOpts:          ()        => ipcRenderer.invoke('get-traffic-opts'),
     setPasteUnlock:          (en)      => ipcRenderer.invoke('set-paste-unlock', en),
+    setMaxTabsBeforeWarning: (n)       => ipcRenderer.invoke('set-max-tabs-before-warning', n),
     quickConnectProfile:     (id)      => ipcRenderer.invoke('quick-connect-profile', id),
     onInitSettings:          (cb)      => sub('init-settings', cb),
     getAppMetrics:           ()        => ipcRenderer.invoke('get-app-metrics'),
@@ -257,6 +266,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     pageAnalyzerAction:      (tabId, a) => ipcRenderer.invoke('page-analyzer-action', tabId, a),
     onAnalyzerTabsList:      (cb)      => sub('analyzer-tabs-list', cb),
     onAnalyzerTabsUpdated:   (cb)      => sub('analyzer-tabs-updated', cb),
+
+    // ── Notes ──────────────────────────────────────────────────────────────────
+    openNotesWindow:         ()        => ipcRenderer.invoke('open-notes-window'),
+    notesList:               (f)       => ipcRenderer.invoke('notes-list', f),
+    notesGet:                (id, pw)  => ipcRenderer.invoke('notes-get', id, pw),
+    notesSave:               (p)       => ipcRenderer.invoke('notes-save', p),
+    notesDelete:             (id)      => ipcRenderer.invoke('notes-delete', id),
+    onNotesInit:             (cb)      => sub('notes-init', cb),
+    onNotesContextUpdate:    (cb)      => sub('notes-context-update', cb),
 
     // ── API Scout ─────────────────────────────────────────────────────────────
     openIvacScout:           ()        => ipcRenderer.invoke('open-ivac-scout'),

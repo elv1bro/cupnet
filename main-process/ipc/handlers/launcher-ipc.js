@@ -34,6 +34,7 @@ function registerLauncherIpc(ctx) {
 
     // ── Page Analyzer ────────────────────────────────────────────────────────
     ctx.ipcMain.handle('open-page-analyzer', async () => { ctx.createPageAnalyzerWindow(); return true; });
+    ctx.ipcMain.handle('open-notes-window', async () => { ctx.createNotesWindow(); return true; });
     ctx.ipcMain.handle('open-ivac-scout', async () => { ctx.createIvacScoutWindow(); return true; });
     ctx.ipcMain.handle('get-ivac-scout-context', async () => ctx.getIvacScoutContext());
     ctx.ipcMain.handle('run-ivac-scout', async (_, opts) => ctx.runIvacScoutProcess(opts || {}));

@@ -1,5 +1,7 @@
 'use strict';
 
+const { confirmOpenAnotherTab } = require('../../services/tab-open-confirm');
+
 /**
  * Вкладки и навигация.
  * @param {object} ctx
@@ -7,6 +9,7 @@
 function registerTabsIpc(ctx) {
     // ── Tab management ───────────────────────────────────────────────────────
     ctx.ipcMain.handle('new-tab', async (_, proxyRules) => {
+        if (!(await confirmOpenAnotherTab(ctx))) return null;
         const tabId = await ctx.tabManager.createTab({
             url: ctx.getNewTabUrl(),
             cookieGroupId: 1,
@@ -27,6 +30,7 @@ function registerTabsIpc(ctx) {
                 return tab.id;
             }
         }
+        if (!(await confirmOpenAnotherTab(ctx))) return null;
         const tabId = await ctx.tabManager.createTab({
             url: settingsUrl,
             cookieGroupId: 1,

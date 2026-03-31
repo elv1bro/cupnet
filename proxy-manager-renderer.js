@@ -12,6 +12,9 @@ let _storedResolvedVars = {}; // persistent copy, survives profile switches
 let connectedId    = null;   // id of currently connected profile
 let currentIp      = '';
 let searchQuery    = '';
+let editorDirty    = false;
+const unsavedDot   = document.getElementById('unsaved-dot');
+const toastProxy   = document.getElementById('toast-proxy');
 
 // Built-in: MITM без upstream (локальный прокси без внешней цепочки)
 const DIRECT_ID = '__direct__';
@@ -29,6 +32,7 @@ const DIRECT_PROFILE = {
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 const profileList   = document.getElementById('profile-list');
+const profileListBuiltIn = document.getElementById('profile-list-built-in');
 const editorEmpty   = document.getElementById('editor-empty');
 const editorWrap    = document.getElementById('editor-wrap');
 const editorTitle   = document.getElementById('editor-title');
@@ -151,10 +155,37 @@ tlsModeRadios.forEach(r => {
 // Copy full JA3
 document.getElementById('tls-ja3-copy')?.addEventListener('click', () => {
     const str = ja3FullInput?.value || ja3BuildFull();
-    navigator.clipboard.writeText(str).then(() => {
+    const onCopied = () => {
         const btn = document.getElementById('tls-ja3-copy');
-        if (btn) { btn.textContent = 'Copied ✓'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); }
-    });
+        if (btn) { btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(str).then(onCopied).catch(() => {
+            try {
+                const ta = document.createElement('textarea');
+                ta.value = str;
+                ta.style.position = 'fixed';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                onCopied();
+            } catch (_) { /* ignore */ }
+        });
+    } else {
+        try {
+            const ta = document.createElement('textarea');
+            ta.value = str;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            onCopied();
+        } catch (_) { /* ignore */ }
+    }
 });
 
 // Prefill buttons (fill custom JA3 fields from preset)
@@ -203,10 +234,15 @@ const btnCancel     = document.getElementById('btn-cancel');
 const btnDelete     = document.getElementById('btn-delete');
 const btnDuplicate  = document.getElementById('btn-duplicate');
 const btnTest       = document.getElementById('btn-test');
-const btnApplyTab   = document.getElementById('btn-apply-tab');
-const btnApplyGlobal = document.getElementById('btn-apply-global');
+const btnConnectGlobal = document.getElementById('btn-connect-global');
+const btnDisconnectGlobal = document.getElementById('btn-disconnect-global');
 const btnDisconnect = document.getElementById('btn-disconnect');
 const btnCheckIp    = document.getElementById('btn-check-ip');
+const btnEmptyNew   = document.getElementById('btn-empty-new');
+const statusPillBtn = document.getElementById('status-pill-btn');
+
+const btnTestDefaultHtml = btnTest ? btnTest.innerHTML : '';
+const btnCheckIpDefaultHtml = btnCheckIp ? btnCheckIp.innerHTML : '';
 
 const statusDot     = document.getElementById('status-dot');
 const statusLabel   = document.getElementById('status-label');
@@ -217,6 +253,74 @@ const testResult    = document.getElementById('test-result');
 // ─── Utilities ────────────────────────────────────────────────────────────────
 function esc(s) { return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
+/** Host:port from stored url_display (masked template); empty if unparseable */
+function proxyHostLineFromUrlDisplay(s) {
+    if (!s || typeof s !== 'string') return '';
+    const t = s.trim();
+    if (!t) return '';
+    try {
+        const forParse = t.replace(/\{[^}]+\}/g, 'PLACEHOLDER');
+        let u = forParse;
+        if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(u)) u = 'http://' + u;
+        const parsed = new URL(u);
+        const host = parsed.hostname;
+        if (!host) return '';
+        return parsed.port ? `${host}:${parsed.port}` : host;
+    } catch {
+        return '';
+    }
+}
+
+/** Tooltip: short host:name line + full template line */
+function proxyProfileListTitle(hostLine, profileName, urlDisplay) {
+    const name = String(profileName || '').trim();
+    const full = String(urlDisplay || '').trim();
+    const head = hostLine && name ? `${hostLine}: ${name}` : (hostLine || name || '');
+    if (head && full) return `${head}\n${full}`;
+    return full || head || '';
+}
+
+/** ISO 3166-1 alpha-2 → regional-indicator flag emoji (e.g. PL → 🇵🇱) */
+function countryCodeToFlagEmoji(cc) {
+    if (!cc || typeof cc !== 'string') return '';
+    const s = cc.trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(s)) return '';
+    const base = 0x1F1E6;
+    return String.fromCodePoint(base + s.charCodeAt(0) - 65) + String.fromCodePoint(base + s.charCodeAt(1) - 65);
+}
+
+function normalizeCountryCode(raw) {
+    if (!raw || typeof raw !== 'string') return '';
+    const t = raw.trim();
+    return /^[A-Za-z]{2}$/.test(t) ? t.toUpperCase() : '';
+}
+
+/** Stored last_geo is often "City, PL" — use trailing ISO2 when present */
+function countryCodeFromLastGeoString(geoStr) {
+    if (!geoStr) return '';
+    const parts = String(geoStr).split(',').map(p => p.trim());
+    const last = parts[parts.length - 1];
+    return normalizeCountryCode(last);
+}
+
+function formatStatusIpLine(geo) {
+    if (!geo || geo.ip === 'unknown') return '';
+    const cc = normalizeCountryCode(geo.country);
+    const flag = countryCodeToFlagEmoji(cc);
+    const location = [geo.city, geo.country_name].filter(Boolean).join(', ');
+    const tail = location ? ` · ${location}` : '';
+    return `${flag ? `${flag} ` : ''}${geo.ip}${tail}`;
+}
+
+function formatTestLocationLine(d) {
+    if (!d) return '—';
+    const cc = normalizeCountryCode(d.country);
+    const flag = countryCodeToFlagEmoji(cc);
+    const loc = [d.city, d.region, d.country].filter(Boolean).join(', ');
+    if (!loc) return '—';
+    return `${flag ? `${flag} ` : ''}${loc}`;
+}
+
 function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
 
 function setSaveStatus(msg, type = '') {
@@ -224,6 +328,69 @@ function setSaveStatus(msg, type = '') {
     saveStatus.style.color = type === 'ok' ? '#22c55e' : type === 'err' ? '#ef4444' : 'var(--dim)';
     if (type) setTimeout(() => { saveStatus.textContent = ''; }, 3000);
 }
+
+function setEditorDirty(dirty) {
+    editorDirty = !!dirty;
+    if (unsavedDot) unsavedDot.classList.toggle('visible', editorDirty);
+}
+
+function showToast(msg, kind = '') {
+    if (!toastProxy) return;
+    toastProxy.textContent = msg;
+    toastProxy.classList.remove('ok', 'err');
+    if (kind === 'ok') toastProxy.classList.add('ok');
+    if (kind === 'err') toastProxy.classList.add('err');
+    toastProxy.classList.add('visible');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => { toastProxy.classList.remove('visible'); }, 3200);
+}
+
+function initEditorTabs() {
+    const map = [
+        { btnId: 'tab-btn-connection', panelId: 'tab-panel-connection' },
+        { btnId: 'tab-btn-identity', panelId: 'tab-panel-identity' },
+        { btnId: 'tab-btn-optimization', panelId: 'tab-panel-optimization' },
+    ];
+    function activate(selectedBtnId) {
+        map.forEach(({ btnId, panelId }) => {
+            const on = btnId === selectedBtnId;
+            const b = document.getElementById(btnId);
+            const p = document.getElementById(panelId);
+            if (b) {
+                b.setAttribute('aria-selected', on ? 'true' : 'false');
+                b.tabIndex = on ? 0 : -1;
+            }
+            if (p) p.classList.toggle('active', on);
+        });
+    }
+    map.forEach(({ btnId }) => {
+        document.getElementById(btnId)?.addEventListener('click', () => activate(btnId));
+    });
+    activate('tab-btn-connection');
+}
+
+initEditorTabs();
+
+function confirmDiscardIfDirty() {
+    if (!editorDirty) return true;
+    return confirm('Discard unsaved changes?');
+}
+
+const editorBodyEl = document.querySelector('.editor-body');
+function wireEditorDirtyListeners() {
+    if (!editorBodyEl) return;
+    const mark = () => {
+        if (editorWrap?.style.display === 'none') return;
+        setEditorDirty(true);
+    };
+    editorBodyEl.addEventListener('input', mark);
+    editorBodyEl.addEventListener('change', mark);
+    editorBodyEl.addEventListener('click', (e) => {
+        if (e.target.closest('.tls-tpl-btn, .ja3-prefill, .fp-preset')) mark();
+    });
+}
+
+wireEditorDirtyListeners();
 
 /** Parse template, return vars found: { name, type: 'sid'|'rand'|'saved', range? } */
 function parseTemplateVars(template) {
@@ -302,30 +469,34 @@ function resolveTemplateFull(template, savedVars) {
 // ─── Profile list ─────────────────────────────────────────────────────────────
 function renderProfileList() {
     const q = searchQuery.toLowerCase();
-    profileList.innerHTML = '';
 
-    // Always show Direct at top (unless search query doesn't match)
-    const directMatches = !q || 'direct'.includes(q) || 'no proxy'.includes(q);
-    if (directMatches) {
-        const el = document.createElement('div');
-        el.className = 'profile-item profile-item-direct';
-        if (selectedId === DIRECT_ID) el.classList.add('active-profile');
-        if (connectedId === DIRECT_ID) el.classList.add('connected');
-        const connLabel = connectedId === DIRECT_ID ? `<span class="pi-connected-label">● CONNECTED</span>` : '';
-        el.innerHTML = `
-            <div class="pi-name"><span style="opacity:.7">🌐</span> Direct</div>
-            <div class="pi-host" style="color:var(--dim)">No proxy — direct connection</div>
+    const directMatches = !q || 'direct'.includes(q) || 'default'.includes(q) || 'mitm'.includes(q) || 'no proxy'.includes(q) || 'upstream'.includes(q);
+    if (profileListBuiltIn) {
+        profileListBuiltIn.innerHTML = '';
+        if (directMatches) {
+            const el = document.createElement('div');
+            el.className = 'profile-item profile-item-direct';
+            if (selectedId === DIRECT_ID) el.classList.add('active-profile');
+            if (connectedId === DIRECT_ID) el.classList.add('connected');
+            const connLabel = connectedId === DIRECT_ID ? `<span class="pi-connected-label">● CONNECTED</span>` : '';
+            el.innerHTML = `
+            <div class="pi-name">Direct</div>
+            <div class="pi-host" style="color:var(--dim)">No upstream proxy — MITM only</div>
             <div class="pi-meta">${connLabel}</div>`;
-        el.addEventListener('click', () => openDirectEditor());
-        profileList.appendChild(el);
+            el.addEventListener('click', () => tryOpenDirectEditor());
+            profileListBuiltIn.appendChild(el);
+        }
     }
+
+    if (!profileList) return;
+    profileList.innerHTML = '';
 
     const filtered = profiles.filter(p =>
         !q || p.name.toLowerCase().includes(q) || (p.url_display || '').toLowerCase().includes(q)
     );
 
-    if (!filtered.length && !directMatches) {
-        profileList.innerHTML = `<div class="empty-list">${q ? 'No matches found.' : 'No profiles yet.<br>Click "+ New" to add one.'}</div>`;
+    if (!filtered.length) {
+        profileList.innerHTML = `<div class="empty-list">${q ? 'No matching profiles.' : 'No profiles yet.<br>Click “New” to add one.'}</div>`;
         return;
     }
 
@@ -337,22 +508,47 @@ function renderProfileList() {
 
         const latBadge = p.last_latency_ms != null
             ? `<span class="pi-badge lat">${p.last_latency_ms}ms</span>` : '';
+        const geoCc = countryCodeFromLastGeoString(p.last_geo);
+        const geoFlag = countryCodeToFlagEmoji(geoCc);
         const geoBadge = p.last_geo
-            ? `<span class="pi-badge geo">${esc(p.last_geo)}</span>` : '';
+            ? `<span class="pi-badge geo">${geoFlag ? `<span class="pi-flag" aria-hidden="true">${geoFlag}</span> ` : ''}${esc(p.last_geo)}</span>` : '';
         const ipBadge  = p.last_ip
             ? `<span class="pi-badge geo" style="color:#a5f3fc">${esc(p.last_ip)}</span>` : '';
         const connLabel = p.id === connectedId ? `<span class="pi-connected-label">● CONNECTED</span>` : '';
-        const tplBadge  = p.is_template ? `<span class="pi-badge tmpl">template</span>` : '';
-        const modeBadge = '<span class="pi-badge tmpl">mitm</span>';
+
+        const hostLine = proxyHostLineFromUrlDisplay(p.url_display);
+        const hostRow = hostLine
+            ? `<div class="pi-host">${esc(hostLine)}</div>`
+            : '';
 
         el.innerHTML = `
             <div class="pi-name">${esc(p.name)}</div>
-            <div class="pi-host">${esc(p.url_display || '—')}</div>
-            <div class="pi-meta">${tplBadge}${modeBadge}${ipBadge}${geoBadge}${latBadge}${connLabel}</div>`;
+            ${hostRow}
+            <div class="pi-meta">${geoBadge}${ipBadge}${latBadge}${connLabel}</div>`;
 
-        el.addEventListener('click', () => openEditor(p.id));
+        el.title = proxyProfileListTitle(hostLine, p.name, p.url_display);
+
+        el.addEventListener('click', () => tryOpenEditor(p.id));
         profileList.appendChild(el);
     }
+}
+
+function tryOpenDirectEditor() {
+    if (selectedId === DIRECT_ID && editorWrap.style.display !== 'none') return;
+    if (!confirmDiscardIfDirty()) return;
+    openDirectEditor();
+}
+
+function tryOpenEditor(id) {
+    if (selectedId === id && editorWrap.style.display !== 'none') return;
+    if (!confirmDiscardIfDirty()) return;
+    openEditor(id);
+}
+
+function tryOpenNewEditor() {
+    if (isNew && editorWrap.style.display !== 'none') return;
+    if (!confirmDiscardIfDirty()) return;
+    openNewEditor();
 }
 
 // ─── Direct profile editor ────────────────────────────────────────────────────
@@ -369,7 +565,7 @@ function openDirectEditor() {
 
     editorEmpty.style.display  = 'none';
     editorWrap.style.display   = 'flex';
-    editorTitle.textContent    = '🌐 MITM (no upstream)';
+    editorTitle.textContent    = 'MITM (no upstream)';
     fName.value                = 'MITM (no upstream)';
     fTemplate.value            = '';
     fNotes.value               = '';
@@ -392,6 +588,7 @@ function openDirectEditor() {
     if (fLanguage) fLanguage.value = profile.language   || '';
     tlsLoadFromProfile(profile);
     updateFpBadge();
+    setEditorDirty(false);
     renderProfileList();
 }
 
@@ -434,6 +631,7 @@ function openEditor(id) {
         if (template) fTemplate.value = template;
         buildVarsTable(template || fTemplate.value, profile.variables || {});
         updatePreview();
+        setEditorDirty(false);
     });
 
     renderProfileList();
@@ -470,12 +668,14 @@ function openNewEditor() {
     updateFpBadge();
 
     fName.focus();
+    setEditorDirty(false);
     renderProfileList();
 }
 
 function closeEditor() {
     selectedId = null;
     isNew      = false;
+    setEditorDirty(false);
     editorEmpty.style.display = '';
     editorWrap.style.display  = 'none';
     renderProfileList();
@@ -557,6 +757,7 @@ btnSave.addEventListener('click', async () => {
         };
         try { localStorage.setItem('direct_profile', JSON.stringify(data)); } catch {}
         setSaveStatus('Saved ✓', 'ok');
+        setEditorDirty(false);
         return;
     }
 
@@ -587,13 +788,17 @@ btnSave.addEventListener('click', async () => {
         isNew      = false;
         btnDelete.style.display = '';
         editorTitle.textContent = name;
+        setEditorDirty(false);
         updateEditorActionButtons();
     } else {
         setSaveStatus(`Error: ${result.error}`, 'err');
     }
 });
 
-btnCancel.addEventListener('click', closeEditor);
+btnCancel.addEventListener('click', () => {
+    if (!confirmDiscardIfDirty()) return;
+    closeEditor();
+});
 
 btnDelete.addEventListener('click', async () => {
     if (!selectedId) return;
@@ -605,6 +810,7 @@ btnDelete.addEventListener('click', async () => {
 
 btnDuplicate?.addEventListener('click', async () => {
     if (!selectedId) return;
+    if (!confirmDiscardIfDirty()) return;
     const src = profiles.find(x => x.id === selectedId);
     if (!src) return;
 
@@ -640,88 +846,40 @@ btnDuplicate?.addEventListener('click', async () => {
 
     fName.focus();
     fName.select();
+    setEditorDirty(true);
     renderProfileList();
 });
 
-// ─── Apply globally / to active tab ───────────────────────────────────────────
-function updateApplyGlobalBtn() {
-    if (!btnApplyGlobal) return;
+// ─── Connect / Disconnect (global) + Apply to tab ───────────────────────────
+function updateConnectDisconnectButtons() {
+    if (!btnConnectGlobal || !btnDisconnectGlobal) return;
+
     if (!selectedId || isNew) {
-        btnApplyGlobal.disabled = true;
-        btnApplyGlobal.textContent = 'Apply globally';
-        return;
-    }
-
-    if (selectedId === DIRECT_ID) {
-        if (connectedId === DIRECT_ID) {
-            btnApplyGlobal.textContent = '↺ Apply globally (Direct)';
-            btnApplyGlobal.disabled   = false;
-        } else {
-            btnApplyGlobal.textContent = 'Apply globally: Direct';
-            btnApplyGlobal.disabled   = false;
-        }
+        btnConnectGlobal.disabled = true;
+        btnConnectGlobal.textContent = 'Connect';
+    } else if (selectedId === connectedId) {
+        btnConnectGlobal.disabled = true;
+        btnConnectGlobal.textContent = 'Connected';
     } else {
-        if (selectedId === connectedId) {
-            btnApplyGlobal.textContent = '✕ Disconnect global';
-        } else {
-            btnApplyGlobal.textContent = 'Apply globally';
-        }
-        btnApplyGlobal.disabled = false;
+        btnConnectGlobal.disabled = false;
+        btnConnectGlobal.textContent = selectedId === DIRECT_ID ? 'Connect (Direct)' : 'Connect';
     }
-}
 
-function updateApplyTabBtn() {
-    if (!btnApplyTab) return;
-    btnApplyTab.disabled = !selectedId || isNew;
+    const hasGlobalConnection = connectedId != null;
+    btnDisconnectGlobal.disabled = !hasGlobalConnection;
 }
 
 function updateEditorActionButtons() {
-    updateApplyGlobalBtn();
-    updateApplyTabBtn();
+    updateConnectDisconnectButtons();
 }
 
-btnApplyTab.addEventListener('click', async () => {
-    if (!selectedId || isNew || !api.setTabProxy || !api.getTabs) return;
-    collectVarsFromForm();
-    const tabs = await api.getTabs();
-    const active = tabs.find(t => t.isActive);
-    if (!active) {
-        setSaveStatus('No active tab in main window', 'err');
-        return;
-    }
-    btnApplyTab.disabled = true;
-    try {
-        if (selectedId === DIRECT_ID) {
-            const res = await api.setTabProxy(active.id, null);
-            if (res?.success) {
-                setSaveStatus('Active tab: use global / Direct upstream ✓', 'ok');
-            } else {
-                setSaveStatus(res?.error || 'Failed', 'err');
-            }
-            return;
-        }
-        const ev = Object.keys(ephemeralVars).length ? { ...ephemeralVars } : undefined;
-        const res = await api.setTabProxy(active.id, selectedId, ev);
-        if (res?.success) {
-            setSaveStatus('Profile applied to active tab ✓', 'ok');
-        } else {
-            setSaveStatus(res?.error || 'Failed', 'err');
-        }
-    } catch (e) {
-        setSaveStatus(String(e?.message || e), 'err');
-    } finally {
-        updateApplyTabBtn();
-    }
-});
-
-// ─── Connect / Disconnect (global) ─────────────────────────────────────────
-btnApplyGlobal.addEventListener('click', async () => {
-    if (!selectedId) return;
+btnConnectGlobal.addEventListener('click', async () => {
+    if (!selectedId || isNew || selectedId === connectedId) return;
     collectVarsFromForm();
 
-    // ── Direct profile ──
     if (selectedId === DIRECT_ID) {
-        btnApplyGlobal.disabled = true; btnApplyGlobal.textContent = '⟳ Applying…';
+        btnConnectGlobal.disabled = true;
+        btnConnectGlobal.textContent = 'Applying…';
         const directData = {
             user_agent: fUa?.value.trim() || null,
             timezone:   fTimezone?.value  || null,
@@ -734,34 +892,22 @@ btnApplyGlobal.addEventListener('click', async () => {
             ? api.connectDirect(directData.tls_profile || 'chrome')
             : api.disconnectProxy());
 
-        connectedId = DIRECT_ID;
-        btnApplyGlobal.disabled = false;
+        if (result?.success !== false) connectedId = DIRECT_ID;
         updateEditorActionButtons();
         setSaveStatus(result?.success !== false ? 'Direct + MITM active ✓' : `Error: ${result?.error}`, result?.success !== false ? 'ok' : 'err');
         renderProfileList();
         return;
     }
 
-    // ── Disconnect currently active proxy ──
-    if (selectedId === connectedId) {
-        btnApplyGlobal.disabled = true; btnApplyGlobal.textContent = '⟳ Disconnecting…';
-        await api.disconnectProxy();
-        // State will be updated via onProxyStatusChanged event
-        btnApplyGlobal.disabled = false;
-        return;
-    }
-
-    // ── Connect proxy profile ──
-    btnApplyGlobal.disabled = true; btnApplyGlobal.textContent = '⟳ Connecting…';
+    btnConnectGlobal.disabled = true;
+    btnConnectGlobal.textContent = 'Connecting…';
     const result = await api.connectProxyTemplate(selectedId, ephemeralVars);
-    btnApplyGlobal.disabled = false;
     if (result.success) {
         connectedId = selectedId;
         _storedResolvedVars = result.resolvedVars || {};
         lastResolvedVars = { ..._storedResolvedVars };
         updateEditorActionButtons();
         setSaveStatus('Connected ✓', 'ok');
-        // Rebuild vars table to show current resolved values
         const profile = profiles.find(p => p.id === selectedId);
         if (profile) buildVarsTable(fTemplate.value, profile.variables || {});
     } else {
@@ -771,27 +917,47 @@ btnApplyGlobal.addEventListener('click', async () => {
     renderProfileList();
 });
 
+btnDisconnectGlobal.addEventListener('click', async () => {
+    if (btnDisconnectGlobal.disabled) return;
+    btnDisconnectGlobal.disabled = true;
+    await api.disconnectProxy();
+    btnDisconnectGlobal.disabled = false;
+});
+
 // ─── Test ─────────────────────────────────────────────────────────────────────
 btnTest.addEventListener('click', async () => {
     if (!selectedId) return;
-    btnTest.disabled = true; btnTest.textContent = '⟳ Testing…';
+    btnTest.disabled = true;
+    if (btnTestDefaultHtml) btnTest.innerHTML = 'Testing…';
     testResult.classList.remove('visible', 'ok', 'err');
 
-    // Save first if new/dirty
-    if (isNew) { setSaveStatus('Save first', 'err'); btnTest.disabled = false; btnTest.textContent = '⚡ Test'; return; }
+    if (isNew) {
+        setSaveStatus('Save first', 'err');
+        btnTest.disabled = false;
+        if (btnTestDefaultHtml) btnTest.innerHTML = btnTestDefaultHtml;
+        return;
+    }
+    if (selectedId === DIRECT_ID) {
+        setSaveStatus('Test applies to saved proxy profiles', 'err');
+        btnTest.disabled = false;
+        if (btnTestDefaultHtml) btnTest.innerHTML = btnTestDefaultHtml;
+        return;
+    }
 
     const result = await api.testProxyTemplate(selectedId, ephemeralVars);
-    btnTest.disabled = false; btnTest.textContent = '⚡ Test';
+    btnTest.disabled = false;
+    if (btnTestDefaultHtml) btnTest.innerHTML = btnTestDefaultHtml;
 
     testResult.classList.add('visible');
     if (result.success && result.data) {
         testResult.classList.add('ok');
         const d = result.data;
         document.getElementById('tr-ip').textContent  = d.ip || '—';
-        document.getElementById('tr-geo').textContent = [d.city, d.region, d.country].filter(Boolean).join(', ') || '—';
+        document.getElementById('tr-geo').textContent = formatTestLocationLine(d);
         document.getElementById('tr-org').textContent = d.org || '—';
         document.getElementById('tr-lat').textContent = result.latency ? `${result.latency}ms` : '—';
         document.getElementById('tr-url').textContent = result.resolvedUrl || '—';
+        showToast('Test completed', 'ok');
     } else {
         testResult.classList.add('err');
         document.getElementById('tr-ip').textContent  = result.error || 'Failed';
@@ -799,7 +965,9 @@ btnTest.addEventListener('click', async () => {
         document.getElementById('tr-org').textContent = '—';
         document.getElementById('tr-lat').textContent = '—';
         document.getElementById('tr-url').textContent = result.resolvedUrl || '—';
+        showToast(result.error || 'Test failed', 'err');
     }
+    testResult.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     renderProfileList();
 });
 
@@ -810,23 +978,52 @@ btnDisconnect.addEventListener('click', async () => {
     btnDisconnect.disabled = false;
 });
 
-// ─── Check IP ─────────────────────────────────────────────────────────────────
-btnCheckIp.addEventListener('click', async () => {
-    btnCheckIp.disabled = true; btnCheckIp.textContent = '⟳ Checking…';
-    const geo = await api.checkIpGeo();
-    btnCheckIp.disabled = false; btnCheckIp.textContent = '⟳ Check IP';
-    if (geo && geo.ip !== 'unknown') {
-        currentIp = geo.ip;
-        const location = [geo.city, geo.country_name].filter(Boolean).join(', ');
-        statusIp.textContent = `${geo.ip}${location ? ' · ' + location : ''}`;
+async function runCheckIp() {
+    btnCheckIp.disabled = true;
+    if (btnCheckIpDefaultHtml) btnCheckIp.innerHTML = 'Checking…';
+    try {
+        const geo = await api.checkIpGeo();
+        if (geo && geo.ip !== 'unknown') {
+            currentIp = geo.ip;
+            statusIp.textContent = formatStatusIpLine(geo);
+        }
+    } finally {
+        btnCheckIp.disabled = false;
+        if (btnCheckIpDefaultHtml) btnCheckIp.innerHTML = btnCheckIpDefaultHtml;
     }
-});
+}
+
+btnCheckIp.addEventListener('click', () => runCheckIp());
+statusPillBtn?.addEventListener('click', () => runCheckIp());
+
+btnEmptyNew?.addEventListener('click', () => tryOpenNewEditor());
 
 // ─── Search ───────────────────────────────────────────────────────────────────
 searchInput.addEventListener('input', () => { searchQuery = searchInput.value; renderProfileList(); });
 
 // ─── Add new ──────────────────────────────────────────────────────────────────
-btnAddProfile.addEventListener('click', openNewEditor);
+btnAddProfile.addEventListener('click', () => tryOpenNewEditor());
+
+document.addEventListener('keydown', (e) => {
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && e.key === 's') {
+        e.preventDefault();
+        if (editorWrap.style.display !== 'none') btnSave.click();
+    }
+    if (mod && e.key === 'n') {
+        e.preventDefault();
+        tryOpenNewEditor();
+    }
+    if (mod && e.shiftKey && e.key.toLowerCase() === 't') {
+        e.preventDefault();
+        if (editorWrap.style.display !== 'none' && !btnTest.disabled) btnTest.click();
+    }
+    if (e.key === 'Escape' && editorWrap.style.display !== 'none') {
+        e.preventDefault();
+        if (!confirmDiscardIfDirty()) return;
+        closeEditor();
+    }
+});
 
 // ─── IPC events ───────────────────────────────────────────────────────────────
 api.onProxyProfilesList((list) => {
@@ -875,8 +1072,7 @@ api.onProxyStatusChanged((info) => {
             const geo = await api.checkIpGeo();
             if (geo && geo.ip !== 'unknown') {
                 currentIp = geo.ip;
-                const location = [geo.city, geo.country_name].filter(Boolean).join(', ');
-                statusIp.textContent = `${geo.ip}${location ? ' · ' + location : ''}`;
+                statusIp.textContent = formatStatusIpLine(geo);
             } else {
                 statusIp.textContent = '—';
             }
@@ -959,8 +1155,7 @@ api.getCurrentProxy().then(info => {
 api.checkIpGeo().then(geo => {
     if (geo && geo.ip !== 'unknown') {
         currentIp = geo.ip;
-        const location = [geo.city, geo.country_name].filter(Boolean).join(', ');
-        statusIp.textContent = `${geo.ip}${location ? ' · ' + location : ''}`;
+        statusIp.textContent = formatStatusIpLine(geo);
     }
 }).catch(() => {});
 

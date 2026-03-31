@@ -164,6 +164,23 @@ async function navigateAndWait(electronApp, url, timeoutMs = 90_000, waitFor = {
 }
 
 /**
+ * `navigator.userAgent` в активной вкладке (BrowserView renderer).
+ */
+async function getActiveTabNavigatorUserAgent(electronApp) {
+    return electronApp.evaluate(async () => {
+        const tm = globalThis.__cupnetAppContext?.modules?.tabManager;
+        const tab = tm?.getActiveTab?.();
+        const wc = tab?.view?.webContents;
+        if (!wc || wc.isDestroyed()) return '';
+        try {
+            return await wc.executeJavaScript('navigator.userAgent');
+        } catch {
+            return '';
+        }
+    });
+}
+
+/**
  * Текст body активной вкладки (BrowserView).
  */
 async function readActiveTabBodyText(electronApp) {
@@ -334,6 +351,60 @@ async function closeAllExcept(electronApp, keepPage) {
 /**
  * Новая вкладка с пустой cookie-группой и включённым CupNet (аналог старого newIsolatedTab).
  */
+/**
+ * Groups of duplicate rows: same tab + method + url + status (distinct request ids).
+ * Excludes internal `type === 'cupnet'` rows.
+ * @param {Array<{ id?: number, tab_id?: number|null, url?: string, method?: string, status?: number|null, type?: string }>} rows
+ * @returns {Array<{ key: string, count: number, ids: number[] }>}
+ */
+function findDuplicateRequestGroups(rows) {
+    const map = new Map();
+    for (const r of rows || []) {
+        if (!r || r.type === 'cupnet') continue;
+        const id = r.id;
+        if (id == null) continue;
+        const key = `${r.tab_id ?? ''}|${String(r.method || 'GET').toUpperCase()}|${String(r.url || '')}|${r.status ?? ''}`;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(id);
+    }
+    const out = [];
+    for (const [key, ids] of map) {
+        if (ids.length > 1) out.push({ key, count: ids.length, ids });
+    }
+    return out;
+}
+
+/**
+ * Poll until getDbRequests returns a stable row count (no change for `stableMs`), or timeout.
+ */
+async function waitForStableDbRequestCount(mainWindowPage, filters, limit, timeoutMs = 45_000, stableMs = 2000) {
+    const deadline = Date.now() + timeoutMs;
+    let last = -1;
+    let stableSince = 0;
+    while (Date.now() < deadline) {
+        const n = await mainWindowPage.evaluate(
+            async ({ f, lim }) => {
+                const api = window.electronAPI;
+                if (!api?.getDbRequests) return -1;
+                const rows = await api.getDbRequests(f, lim, 0);
+                return Array.isArray(rows) ? rows.length : -1;
+            },
+            { f: filters, lim: limit }
+        );
+        if (typeof n === 'number' && n >= 0) {
+            if (n === last) {
+                stableSince += 400;
+                if (stableSince >= stableMs) return n;
+            } else {
+                last = n;
+                stableSince = 0;
+            }
+        }
+        await new Promise((r) => setTimeout(r, 400));
+    }
+    return last;
+}
+
 async function openNewTabWithFreshCookieGroupAndCupnet(mainWindowPage) {
     await mainWindowPage.evaluate(async () => {
         const cg = await window.electronAPI.createCookieGroup('e2e-iso-' + Date.now());
@@ -353,6 +424,7 @@ module.exports = {
     launchCupnet,
     waitForAppContext,
     waitMitmReady,
+    getActiveTabNavigatorUserAgent,
     getActiveTabUrl,
     navigateAndWait,
     readActiveTabBodyText,
@@ -365,4 +437,6 @@ module.exports = {
     deleteAllInterceptRules,
     getAppCtxProxy,
     closeAllExcept,
+    findDuplicateRequestGroups,
+    waitForStableDbRequestCount,
 };

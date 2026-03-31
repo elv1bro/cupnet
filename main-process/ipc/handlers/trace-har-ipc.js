@@ -81,14 +81,43 @@ function registerTraceHarIpc(ctx) {
         }
     });
 
+    ctx.ipcMain.handle('list-site-export-paths', async (_, payload = {}) => {
+        const sid = Number(payload.sessionId || ctx.currentSessionId);
+        let origins = [];
+        if (Array.isArray(payload.origins) && payload.origins.length) {
+            origins = [...new Set(payload.origins.map((o) => String(o || '').trim()).filter(Boolean))];
+        } else {
+            const o = String(payload.origin || '').trim();
+            if (o) origins = [o];
+        }
+        if (!sid || !origins.length) return [];
+        try {
+            const sqliteDb = ctx.db.getDb();
+            if (!sqliteDb) return [];
+            return siteSnapshotExport.listSitePathsForExport(sqliteDb, sid, origins);
+        } catch (e) {
+            return [];
+        }
+    });
+
     ctx.ipcMain.handle('export-site-zip', async (_, payload = {}) => {
         const sid = Number(payload.sessionId || ctx.currentSessionId);
-        const origin = String(payload.origin || '').trim();
+        let origins = [];
+        if (Array.isArray(payload.origins) && payload.origins.length) {
+            origins = [...new Set(payload.origins.map((o) => String(o || '').trim()).filter(Boolean))];
+        } else {
+            const o = String(payload.origin || '').trim();
+            if (o) origins = [o];
+        }
         if (!sid) return { success: false, error: 'No session selected' };
-        if (!origin) return { success: false, error: 'No origin selected' };
+        if (!origins.length) return { success: false, error: 'No origin selected' };
         let slug = 'site';
         try {
-            slug = (new URL(origin).hostname || 'site').replace(/[^a-z0-9._-]+/gi, '_');
+            if (origins.length === 1) {
+                slug = (new URL(origins[0]).hostname || 'site').replace(/[^a-z0-9._-]+/gi, '_');
+            } else {
+                slug = `${origins.length}-origins`;
+            }
         } catch { /* keep */ }
         const { canceled, filePath } = await ctx.dialog.showSaveDialog(ctx.logViewerWindow, {
             title: 'Export site snapshot (ZIP)',
@@ -103,7 +132,7 @@ function registerTraceHarIpc(ctx) {
             const stats = await siteSnapshotExport.exportSiteZipToStream({
                 sqliteDb,
                 sessionId: sid,
-                origin,
+                origins,
                 outputStream: output,
                 archiverFactory: archiver,
             });

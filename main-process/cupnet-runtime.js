@@ -142,6 +142,7 @@ let proxyManagerWindow         = null;
 let compareViewerWindow        = null;
 let consoleViewerWindow        = null;
 let pageAnalyzerWindow         = null;
+let notesWindow                = null;
 let ivacScoutWindow            = null;
 const comparePair              = { left: null, right: null };
 let compareResult              = null;
@@ -161,6 +162,10 @@ const broadcastDnsRuleMatched = ipcBatch.broadcastDnsRuleMatched;
 const broadcastTlsProfileChanged = ipcBatch.broadcastTlsProfileChanged;
 
 let loggingModalWindow         = null;
+/** Основной Request Editor (тулбар, Log → «в том же окне»). */
+let requestEditorWindow        = null;
+/** Доп. окна Request Editor («+ New window»). */
+const requestEditorExtraWindows = [];
 let ivacScoutProcess           = null;
 let persistentAnonymizedProxyUrl = null;
 let connectedProfileId           = null;
@@ -209,6 +214,7 @@ function syncAppContextSnapshot() {
     appCtx.windows.compareViewer = compareViewerWindow;
     appCtx.windows.consoleViewer = consoleViewerWindow;
     appCtx.windows.pageAnalyzer = pageAnalyzerWindow;
+    appCtx.windows.notes = notesWindow;
     appCtx.windows.ivacScout = ivacScoutWindow;
 
     appCtx.proxy.actProxy = actProxy;
@@ -578,7 +584,7 @@ const {
 
 const { insertSessionBootstrapTrafficRow } = require('./services/cupnet-network-meta-log');
 
-/** Первая строка SET PROXY/DIRECT в Network при появлении session id у главного окна (до db-logging IPC). */
+/** SET PROXY/DIRECT snapshot when logging is already enabled (e.g. after reload); skipped while logging is off. */
 async function bootstrapSessionTrafficMetaLog() {
     const ctx = {
         get db() { return db; },
@@ -614,6 +620,7 @@ const dSub = {
     cupnetRoot: _cupnetRoot,
     logViewerWindows,
     traceWindows,
+    requestEditorExtraWindows,
     logViewerInitSessions,
     comparePair,
     loadSettings,
@@ -652,8 +659,10 @@ Object.defineProperties(dSub, {
     compareViewerWindow: rwWin(() => compareViewerWindow, (v) => { compareViewerWindow = v; }),
     consoleViewerWindow: rwWin(() => consoleViewerWindow, (v) => { consoleViewerWindow = v; }),
     pageAnalyzerWindow: rwWin(() => pageAnalyzerWindow, (v) => { pageAnalyzerWindow = v; }),
+    notesWindow: rwWin(() => notesWindow, (v) => { notesWindow = v; }),
     ivacScoutWindow: rwWin(() => ivacScoutWindow, (v) => { ivacScoutWindow = v; }),
     loggingModalWindow: rwWin(() => loggingModalWindow, (v) => { loggingModalWindow = v; }),
+    requestEditorWindow: rwWin(() => requestEditorWindow, (v) => { requestEditorWindow = v; }),
 });
 
 const subApis = createSubWindowsApi(dSub);
@@ -689,6 +698,8 @@ const {
 } = createMainWindowApi(dMain);
 
 const {
+    openRequestEditorWindow,
+    openRequestEditorNewWindow,
     createRequestEditorWindow,
     createLogViewerWindow,
     _serializeCompareRowRequest,
@@ -710,6 +721,7 @@ const {
     createTraceViewerWindow,
     createConsoleViewerWindow,
     createPageAnalyzerWindow,
+    createNotesWindow,
     createIvacScoutWindow,
     sendIvacScoutLog,
     getIvacScoutContext,
@@ -769,6 +781,13 @@ if (STEALTH < 3) {
 app.whenReady().then(async () => {
     startupMetrics.appReadyTs = Date.now();
     applyRuntimeAppIcon();
+
+    const { isUaSanitizeDisabled } = require('../user-agent-utils');
+    if (isUaSanitizeDisabled()) {
+        console.log('[main] UA sanitize: OFF (CUPNET_DISABLE_UA_SANITIZE=1) — MITM leaves outbound User-Agent unchanged');
+    } else {
+        console.log('[main] Outbound User-Agent: CupNet/Electron stripped in MITM (navigator.userAgent may still show Electron)');
+    }
 
     // Load only the critical modules synchronously
     db         = require('../db');
@@ -974,10 +993,12 @@ app.whenReady().then(async () => {
             case 'clipboard': return clipboard;
             case 'comparePair': return comparePair;
             case 'compareResult': return compareResult;
+            case 'compareViewerWindow': return compareViewerWindow;
             case 'connectProxyWithFailover': return connectProxyWithFailover;
             case 'connectedProfileId': return connectedProfileId;
             case 'connectedProfileName': return connectedProfileName;
             case 'connectedResolvedVars': return connectedResolvedVars;
+            case 'cookieManagerWindow': return cookieManagerWindow;
             case 'consoleCaptureApi': return consoleCaptureApi;
             case 'consoleViewerWindow': return consoleViewerWindow;
             case 'createCompareViewerWindow': return createCompareViewerWindow;
@@ -987,15 +1008,19 @@ app.whenReady().then(async () => {
             case 'createIvacScoutWindow': return createIvacScoutWindow;
             case 'createLogViewerWindow': return createLogViewerWindow;
             case 'createLoggingModalWindow': return createLoggingModalWindow;
+            case 'createNotesWindow': return createNotesWindow;
             case 'createPageAnalyzerWindow': return createPageAnalyzerWindow;
             case 'createProxyManagerWindow': return createProxyManagerWindow;
             case 'createRequestEditorWindow': return createRequestEditorWindow;
+            case 'openRequestEditorWindow': return openRequestEditorWindow;
+            case 'openRequestEditorNewWindow': return openRequestEditorNewWindow;
             case 'createRulesWindow': return createRulesWindow;
             case 'createTraceViewerWindow': return createTraceViewerWindow;
             case 'currentSessionId': return currentSessionId;
             case 'db': return db;
             case 'dialog': return dialog;
             case 'diffUtils': return diffUtils;
+            case 'dnsManagerWindow': return dnsManagerWindow;
             case 'extPortErrors': return extPortErrors;
             case 'extPortsStore': return extPortsStore;
             case 'fs': return fs;
@@ -1015,9 +1040,11 @@ app.whenReady().then(async () => {
             case 'isLoggingEnabled': return isLoggingEnabled;
             case 'isValidDnsHost': return isValidDnsHost;
             case 'isValidIpv4': return isValidIpv4;
+            case 'ivacScoutWindow': return ivacScoutWindow;
             case 'lastMouseMoveTime': return lastMouseMoveTime;
             case 'loadJsonDiffModules': return loadJsonDiffModules;
             case 'loadSettings': return loadSettings;
+            case 'loggingModalWindow': return loggingModalWindow;
             case 'logEntryCount': return logEntryCount;
             case 'logViewerInitSessions': return logViewerInitSessions;
             case 'logViewerWindow': return logViewerWindow;
@@ -1036,16 +1063,21 @@ app.whenReady().then(async () => {
             case 'notifyCookieGroupsListsUpdated': return notifyCookieGroupsListsUpdated;
             case 'notifyProxyProfilesList': return notifyProxyProfilesList;
             case 'notifyProxyStatus': return notifyProxyStatus;
+            case 'notesWindow': return notesWindow;
+            case 'pageAnalyzerWindow': return pageAnalyzerWindow;
             case 'parseFallbackProxyList': return parseFallbackProxyList;
             case 'parseProxyTemplate': return parseProxyTemplate;
             case 'path': return path;
             case 'persistentAnonymizedProxyUrl': return persistentAnonymizedProxyUrl;
+            case 'proxyManagerWindow': return proxyManagerWindow;
             case 'proxyResilience': return proxyResilience;
             case 'quickChangeProxy': return quickChangeProxy;
             case 'reattachInterceptorToAllTabs': return reattachInterceptorToAllTabs;
             case 'requestScreenshot': return requestScreenshot;
             case 'resetFingerprintOnWebContents': return resetFingerprintOnWebContents;
             case 'resolveNavigationUrl': return resolveNavigationUrl;
+            case 'requestEditorExtraWindows': return requestEditorExtraWindows;
+            case 'requestEditorWindow': return requestEditorWindow;
             case 'rulesWindow': return rulesWindow;
             case 'runIvacScoutProcess': return runIvacScoutProcess;
             case 'safeCatch': return safeCatch;
@@ -1102,6 +1134,11 @@ app.whenReady().then(async () => {
         sysLog('info', 'ext-proxy', `Created default external port 9001 (first run)`);
     }
     // External ports are started manually via the UI widget on new-tab page
+
+    const { attachWindowSwitcherHotkey } = require('./services/window-switcher-hotkey.js');
+    app.on('browser-window-created', (_, win) => {
+        attachWindowSwitcherHotkey(win, () => mainWindow);
+    });
 
     // Start app window after IPC handlers are registered, but without waiting for MITM readiness.
     createMainWindow();

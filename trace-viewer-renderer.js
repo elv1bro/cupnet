@@ -41,6 +41,7 @@ function statusCls(s) {
 function formatBody(b) {
     if (!b) return null;
     if (typeof b !== 'string') return JSON.stringify(b, null, 2);
+    if (b.startsWith('__b64__:') || b.startsWith('<base64|')) return '[Binary data]';
     try { return JSON.stringify(JSON.parse(b), null, 2); } catch { return b; }
 }
 

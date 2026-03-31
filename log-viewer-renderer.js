@@ -98,9 +98,17 @@ const sessionFromSelOkBtn = document.getElementById('session-from-sel-ok-btn');
 const sessionFromSelCancelBtn = document.getElementById('session-from-sel-cancel-btn');
 const sessionFromSelErr = document.getElementById('session-from-sel-err');
 const siteExportModal = document.getElementById('site-export-modal');
-const siteExportSelect = document.getElementById('site-export-origin');
+const siteExportPatternRows = document.getElementById('site-export-pattern-rows');
+const siteExportAddPatternBtn = document.getElementById('site-export-add-pattern');
+const siteExportHostList = document.getElementById('site-export-host-list');
 const siteExportConfirmBtn = document.getElementById('site-export-confirm-btn');
 const siteExportCancelBtn = document.getElementById('site-export-cancel-btn');
+const siteExportPathList = document.getElementById('site-export-path-list');
+const MAX_SITE_EXPORT_PATTERN_FIELDS = 10;
+/** @type {string[]} */
+let _siteExportSessionOrigins = [];
+/** @type {string[]} */
+let _siteExportPaths = [];
 /** @type {number|null} */
 let _siteExportSessionId = null;
 /** @type {((e: KeyboardEvent) => void)|null} */
@@ -506,6 +514,11 @@ function buildRawHttp(entry) {
     let respBody = entry.response_body ?? entry.responseBody ?? '';
     if (typeof reqBody !== 'string') reqBody = String(reqBody);
     if (typeof respBody !== 'string') respBody = String(respBody);
+    if (reqBody.startsWith('<base64|') || reqBody.startsWith('__b64__:')) {
+        let bLen = 0;
+        try { bLen = reqBody.startsWith('__b64__:') ? atob(reqBody.slice(8)).length : reqBody.length; } catch {}
+        reqBody = `[Binary data, ${formatFileSize(bLen)}]`;
+    }
     if (respBody.startsWith('<base64|') || respBody.startsWith('__b64__:')) {
         let bLen = 0;
         try { bLen = respBody.startsWith('__b64__:') ? atob(respBody.slice(8)).length : respBody.length; } catch {}
@@ -2552,6 +2565,175 @@ async function resolveSessionIdForDbExport() {
     return sid != null ? Number(sid) : null;
 }
 
+/** Host без схемы (hostname:port), как в адресной строке. */
+function _siteExportHostLabel(origin) {
+    try {
+        return new URL(origin).host || origin;
+    } catch {
+        return origin;
+    }
+}
+
+function _siteExportGlobToRegExp(pattern) {
+    let s = '';
+    const p = String(pattern);
+    for (let i = 0; i < p.length; i++) {
+        const c = p[i];
+        if (c === '*') s += '.*';
+        else if (c === '?') s += '.';
+        else if ('.+^${}()|[\\]'.includes(c)) s += `\\${c}`;
+        else s += c;
+    }
+    return new RegExp(`^${s}$`, 'i');
+}
+
+/** Без * и ? — точное совпадение host; с * или ? — glob на весь host. */
+function _siteExportHostMatchesPattern(host, rawPattern) {
+    const p = String(rawPattern).trim();
+    if (!p) return false;
+    const h = String(host);
+    if (p.includes('*') || p.includes('?')) {
+        try {
+            return _siteExportGlobToRegExp(p).test(h);
+        } catch {
+            return false;
+        }
+    }
+    return h.toLowerCase() === p.toLowerCase();
+}
+
+function _siteExportActivePatternStrings() {
+    return [...(siteExportPatternRows?.querySelectorAll('.site-export-pattern-input') || [])]
+        .map((el) => el.value.trim())
+        .filter(Boolean);
+}
+
+/** Host входит в экспорт: нет активных фильтров → все; иначе OR по полям. */
+function _siteExportHostIncluded(host) {
+    const active = _siteExportActivePatternStrings();
+    if (!active.length) return true;
+    return active.some((pat) => _siteExportHostMatchesPattern(host, pat));
+}
+
+function _siteExportMatchedOrigins() {
+    return _siteExportSessionOrigins.filter((o) => _siteExportHostIncluded(_siteExportHostLabel(o)));
+}
+
+function _renderSiteExportHostList() {
+    if (!siteExportHostList) return;
+    siteExportHostList.textContent = '';
+    const sorted = _siteExportSessionOrigins.slice().sort((a, b) => _siteExportHostLabel(a).localeCompare(_siteExportHostLabel(b)));
+    for (const origin of sorted) {
+        const host = _siteExportHostLabel(origin);
+        const div = document.createElement('div');
+        div.className = 'site-export-host-line';
+        div.classList.add(_siteExportHostIncluded(host) ? 'hit' : 'miss');
+        div.textContent = host;
+        div.title = origin;
+        siteExportHostList.appendChild(div);
+    }
+}
+
+function _updateSiteExportPatternRemoveButtons() {
+    const rows = [...(siteExportPatternRows?.querySelectorAll('.site-export-pattern-row') || [])];
+    rows.forEach((row) => {
+        let btn = row.querySelector('.site-export-pattern-remove');
+        if (rows.length <= 1) {
+            if (btn) btn.remove();
+        } else if (!btn) {
+            btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'lv-btn site-export-pattern-remove';
+            btn.textContent = '×';
+            btn.title = 'Remove field';
+            btn.addEventListener('click', () => {
+                row.remove();
+                _updateSiteExportPatternRemoveButtons();
+                _updateSiteExportAddPatternState();
+                _renderSiteExportHostList();
+                _loadSiteExportPathsForModal();
+            });
+            row.appendChild(btn);
+        }
+    });
+}
+
+function _updateSiteExportAddPatternState() {
+    const n = siteExportPatternRows?.querySelectorAll('.site-export-pattern-row').length || 0;
+    if (siteExportAddPatternBtn) siteExportAddPatternBtn.disabled = n >= MAX_SITE_EXPORT_PATTERN_FIELDS;
+}
+
+function _addSiteExportPatternRow(value = '') {
+    if (!siteExportPatternRows) return;
+    if (siteExportPatternRows.querySelectorAll('.site-export-pattern-row').length >= MAX_SITE_EXPORT_PATTERN_FIELDS) return;
+    const row = document.createElement('div');
+    row.className = 'site-export-pattern-row';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'site-export-pattern-input';
+    input.placeholder = 'e.g. app.example.com or *.cdn.io';
+    input.value = value;
+    input.autocomplete = 'off';
+    input.addEventListener('input', () => {
+        _renderSiteExportHostList();
+        _loadSiteExportPathsForModal();
+    });
+    row.appendChild(input);
+    siteExportPatternRows.appendChild(row);
+    _updateSiteExportPatternRemoveButtons();
+    _updateSiteExportAddPatternState();
+}
+
+function _resetSiteExportPatternRows() {
+    if (!siteExportPatternRows) return;
+    siteExportPatternRows.innerHTML = '';
+    _addSiteExportPatternRow('');
+}
+
+function _renderSiteExportPathList() {
+    if (!siteExportPathList) return;
+    siteExportPathList.textContent = '';
+    if (!_siteExportPaths.length) {
+        const empty = document.createElement('div');
+        empty.className = 'lv-dialog-note';
+        empty.style.padding = '6px 0';
+        empty.textContent = 'No matching GET 200 responses with body for the selected origin(s).';
+        siteExportPathList.appendChild(empty);
+        return;
+    }
+    for (const p of _siteExportPaths) {
+        const div = document.createElement('div');
+        div.className = 'site-export-path-line';
+        div.textContent = p;
+        siteExportPathList.appendChild(div);
+    }
+}
+
+async function _loadSiteExportPathsForModal() {
+    const sid = _siteExportSessionId;
+    const origins = _siteExportMatchedOrigins();
+    if (!siteExportPathList) return;
+    if (!sid || !origins.length) {
+        _siteExportPaths = [];
+        _renderSiteExportPathList();
+        return;
+    }
+    siteExportPathList.textContent = '';
+    const loading = document.createElement('div');
+    loading.className = 'lv-dialog-note';
+    loading.style.padding = '8px 4px';
+    loading.textContent = 'Loading paths…';
+    siteExportPathList.appendChild(loading);
+    try {
+        const paths = await api.listSiteExportPaths({ sessionId: sid, origins });
+        _siteExportPaths = Array.isArray(paths) ? paths : [];
+    } catch (e) {
+        console.error('[log-viewer] listSiteExportPaths', e);
+        _siteExportPaths = [];
+    }
+    _renderSiteExportPathList();
+}
+
 function closeSiteExportModal() {
     if (_siteExportEscHandler) {
         document.removeEventListener('keydown', _siteExportEscHandler);
@@ -2559,6 +2741,8 @@ function closeSiteExportModal() {
     }
     siteExportModal?.classList.remove('visible');
     _siteExportSessionId = null;
+    _siteExportSessionOrigins = [];
+    _siteExportPaths = [];
 }
 
 exportSiteZipBtn?.addEventListener('click', async () => {
@@ -2578,20 +2762,15 @@ exportSiteZipBtn?.addEventListener('click', async () => {
             _siteExportSessionId = null;
             return;
         }
-        if (siteExportSelect) {
-            siteExportSelect.innerHTML = '';
-            for (const o of origins) {
-                const opt = document.createElement('option');
-                opt.value = o;
-                opt.textContent = o;
-                siteExportSelect.appendChild(opt);
-            }
-        }
+        _siteExportSessionOrigins = origins;
+        _resetSiteExportPatternRows();
+        _renderSiteExportHostList();
         _siteExportEscHandler = (e) => {
             if (e.key === 'Escape') closeSiteExportModal();
         };
         document.addEventListener('keydown', _siteExportEscHandler);
         siteExportModal?.classList.add('visible');
+        await _loadSiteExportPathsForModal();
     } catch (e) {
         console.error('[log-viewer] listSessionOrigins', e);
         alert('Could not load origins for this session.');
@@ -2607,22 +2786,38 @@ siteExportModal?.addEventListener('click', (e) => {
     if (e.target === siteExportModal) closeSiteExportModal();
 });
 
+siteExportAddPatternBtn?.addEventListener('click', () => {
+    _addSiteExportPatternRow('');
+    _renderSiteExportHostList();
+    _loadSiteExportPathsForModal();
+});
+
 siteExportConfirmBtn?.addEventListener('click', async () => {
-    const origin = siteExportSelect?.value;
+    const origins = _siteExportMatchedOrigins();
     const sessionId = _siteExportSessionId;
-    if (!origin || !sessionId) {
+    if (!sessionId) {
         closeSiteExportModal();
+        return;
+    }
+    if (!origins.length) {
+        alert('No hosts match the filters. Clear filters or adjust patterns to include at least one host.');
         return;
     }
     siteExportConfirmBtn.disabled = true;
     const prev = siteExportConfirmBtn.textContent;
     siteExportConfirmBtn.textContent = '⟳ …';
     try {
-        const res = await api.exportSiteZip({ sessionId, origin });
+        const res = await api.exportSiteZip({
+            sessionId,
+            origins,
+        });
         closeSiteExportModal();
         if (res?.success) {
             const st = res.stats || {};
-            alert(`Site ZIP saved.\nFiles: ${st.files ?? 0}\nRows skipped (filtered): ${st.skipped ?? '—'}`);
+            const oline = Array.isArray(st.origins) && st.origins.length
+                ? st.origins.join('\n')
+                : '—';
+            alert(`Site ZIP saved.\nOrigins:\n${oline}\nFiles: ${st.files ?? 0}\nRows skipped (filtered): ${st.skipped ?? '—'}`);
         } else if (!res?.canceled) {
             alert(`Site ZIP export failed: ${res?.error || 'unknown error'}`);
         }

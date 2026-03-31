@@ -1,6 +1,81 @@
 'use strict';
 
 const { insertCupnetTrafficSnapshotWithGeo } = require('../../services/cupnet-network-meta-log');
+const { confirmOpenAnotherTab } = require('../../services/tab-open-confirm');
+
+// ── Managed DevTools (real BrowserWindow + setDevToolsWebContents) ───────────
+// Track by tab.id (Map), not WeakMap(webContents): the same logical tab must
+// always resolve to one DevTools BrowserWindow; WeakMap lookups were missing on
+// repeat clicks → duplicate white windows.
+const _dtByTabId = new Map();
+const _dtDestroyGuards = new Set();
+
+function _focusDevToolsWindow(devWin) {
+    if (!devWin || devWin.isDestroyed()) return;
+    if (devWin.isMinimized()) devWin.restore();
+    devWin.show();
+    devWin.focus();
+}
+
+function _openManagedDevTools(wc, tabManager, tab) {
+    const { BrowserWindow } = require('electron');
+    const tabId = tab.id;
+    const existing = _dtByTabId.get(tabId);
+    if (existing && !existing.isDestroyed()) {
+        _focusDevToolsWindow(existing);
+        return true;
+    }
+    if (existing) _dtByTabId.delete(tabId);
+
+    // getAllTabs() returns MapIterator (tabs.values()), not Array — no findIndex.
+    const tabList = Array.from(tabManager.getAllTabs());
+    const tabNum = Math.max(1, tabList.findIndex((t) => t.id === tab.id) + 1);
+    const winTitle = `devtools #${tabNum}`;
+
+    const devWin = new BrowserWindow({
+        title: winTitle,
+        show: false,
+        width: 960,
+        height: 700,
+        webPreferences: { nodeIntegration: false, contextIsolation: true },
+    });
+
+    _dtByTabId.set(tabId, devWin);
+
+    devWin.on('closed', () => {
+        _dtByTabId.delete(tabId);
+        if (!wc.isDestroyed() && wc.isDevToolsOpened()) {
+            try { wc.closeDevTools(); } catch (_) {}
+        }
+    });
+
+    // Register devtools-closed ONLY after a real open — avoids spurious close during init.
+    wc.once('devtools-opened', () => {
+        wc.once('devtools-closed', () => {
+            _dtByTabId.delete(tabId);
+            if (devWin && !devWin.isDestroyed()) {
+                try { devWin.close(); } catch (_) {}
+            }
+        });
+    });
+
+    if (!_dtDestroyGuards.has(tabId)) {
+        _dtDestroyGuards.add(tabId);
+        wc.once('destroyed', () => {
+            _dtDestroyGuards.delete(tabId);
+            const w = _dtByTabId.get(tabId);
+            _dtByTabId.delete(tabId);
+            if (w && !w.isDestroyed()) try { w.close(); } catch (_) {}
+        });
+    }
+
+    wc.setDevToolsWebContents(devWin.webContents);
+    wc.openDevTools({ mode: 'detach' });
+    try { devWin.setTitle(winTitle); } catch (_) {}
+    devWin.show();
+    devWin.focus();
+    return true;
+}
 
 /**
  * Cookies, DNS overrides, isolate/direct tabs, DevTools.
@@ -178,6 +253,7 @@ function registerCookiesDnsIpc(ctx) {
     });
 
     ctx.ipcMain.handle('new-isolated-tab', async () => {
+        if (!(await confirmOpenAnotherTab(ctx))) return null;
         const tabId = await ctx.tabManager.createTab(
             ctx.persistentAnonymizedProxyUrl || null,
             ctx.getNewTabUrl(),
@@ -323,41 +399,85 @@ function registerCookiesDnsIpc(ctx) {
     // ── DevTools for active tab ──────────────────────────────────────────────
     ctx.ipcMain.handle('open-devtools', async () => {
         const tab = ctx.tabManager?.getActiveTab();
-        if (tab && !tab.view.webContents.isDestroyed()) {
-            const wc = tab.view.webContents;
-            const { app, BrowserWindow } = require('electron');
+        if (!tab || tab.view.webContents.isDestroyed()) return false;
+        const wc = tab.view.webContents;
+        const tabId = tab.id;
+        const { app } = require('electron');
+        try { app.focus({ steal: true }); } catch (_) {}
 
-            const focusDevTools = () => {
-                const dt = wc.devToolsWebContents;
-                if (!dt || dt.isDestroyed()) return false;
-                try { dt.focus(); } catch (_) { /* ignore focus errors */ }
-                try {
-                    const win = BrowserWindow.fromWebContents(dt);
-                    if (win && !win.isDestroyed()) {
-                        if (win.isMinimized()) win.restore();
-                        win.show();
-                        try { win.moveTop(); } catch (_) { /* optional */ }
-                        win.focus();
-                        return true;
-                    }
-                } catch (_) { /* ignore focus errors */ }
-                return false;
-            };
-
-            try { app.focus({ steal: true }); } catch (_) { /* ignore focus errors */ }
-            if (wc.isDevToolsOpened()) {
-                focusDevTools();
-                setTimeout(focusDevTools, 50);
-                return true;
-            }
-
-            wc.openDevTools({ activate: true, mode: 'detach' });
-            setTimeout(focusDevTools, 50);
-            setTimeout(focusDevTools, 140);
+        // Prefer stable tab id — same as _openManagedDevTools guard (no duplicate windows).
+        const managed = _dtByTabId.get(tabId);
+        if (managed && !managed.isDestroyed()) {
+            _focusDevToolsWindow(managed);
             return true;
         }
-        return false;
+
+        if (wc.isDevToolsOpened()) {
+            await new Promise((resolve) => {
+                let settled = false;
+                const finish = () => {
+                    if (settled) return;
+                    settled = true;
+                    resolve();
+                };
+                wc.once('devtools-closed', finish);
+                try { wc.closeDevTools(); } catch (_) { finish(); }
+                setTimeout(finish, 400);
+            });
+        }
+
+        if (wc.isDestroyed()) return false;
+        return _openManagedDevTools(wc, ctx.tabManager, tab);
     });
 }
 
-module.exports = { registerCookiesDnsIpc };
+/** For window switcher: BrowserWindow ids of managed DevTools (detach). */
+function getManagedDevToolsWindowIds() {
+    const ids = [];
+    for (const [, bw] of _dtByTabId) {
+        if (bw && !bw.isDestroyed()) {
+            try { ids.push(bw.id); } catch (_) { /* ignore */ }
+        }
+    }
+    return ids;
+}
+
+/**
+ * Rich metadata for DevTools tiles: tab index (#N) and inspected page title (from webContents).
+ * @param {{ tabManager?: { getAllTabs: () => Iterable<unknown>; getTab: (id: unknown) => unknown } }} ctx
+ */
+function getManagedDevToolsSwitcherEntries(ctx) {
+    const out = [];
+    for (const [tabId, bw] of _dtByTabId) {
+        if (!bw || bw.isDestroyed()) continue;
+        let tabNum = 1;
+        let tabTitle = '';
+        try {
+            if (ctx && ctx.tabManager) {
+                const tabList = Array.from(ctx.tabManager.getAllTabs());
+                const idx = tabList.findIndex((t) => t.id === tabId);
+                tabNum = idx >= 0 ? idx + 1 : 1;
+                const tab = ctx.tabManager.getTab(tabId);
+                if (tab && tab.view && tab.view.webContents && !tab.view.webContents.isDestroyed()) {
+                    tabTitle = tab.view.webContents.getTitle() || '';
+                }
+            }
+        } catch (_) { /* ignore */ }
+        try {
+            out.push({
+                id: bw.id,
+                title: `DevTools #${tabNum}`,
+                type: 'devtools',
+                devtoolsTabNum: tabNum,
+                tabTitle: tabTitle || undefined,
+            });
+        } catch (_) { /* ignore */ }
+    }
+    return out;
+}
+
+module.exports = {
+    registerCookiesDnsIpc,
+    getManagedDevToolsWindowIds,
+    getManagedDevToolsSwitcherEntries,
+};

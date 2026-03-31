@@ -90,11 +90,11 @@ function isGlobalProxyActive(ctx) {
     return false;
 }
 
-/** First row for a new logging session (before tab CDP attaches). */
+/** Synthetic SET PROXY/DIRECT row once logging is enabled (not before recording starts). */
 async function insertSessionBootstrapTrafficRow(ctx) {
     const mode = isGlobalProxyActive(ctx) ? 'proxy' : 'direct';
     const profileName = mode === 'proxy' ? (ctx.connectedProfileName || null) : null;
-    await insertCupnetTrafficSnapshotWithGeo(ctx, { mode, profileName }, { force: true });
+    await insertCupnetTrafficSnapshotWithGeo(ctx, { mode, profileName }, { force: false });
 }
 
 module.exports = {

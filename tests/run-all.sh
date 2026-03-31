@@ -31,6 +31,7 @@ run_test() {
 }
 
 run_test tests/test-utils.js
+run_test tests/test-user-agent-utils.js
 run_test tests/test-page-analyzer-endpoints.js
 run_test tests/test-reliability-policy.js
 run_test tests/test-proxy-resilience.js

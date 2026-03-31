@@ -10,6 +10,7 @@ const settingsAppVersion = document.getElementById('settings-app-version');
 const spFilters = document.getElementById('sp-filter-patterns');
 const spSaveFilters = document.getElementById('sp-save-filters');
 const spPasteUnlock = document.getElementById('sp-paste-unlock');
+const spMaxTabsWarning = document.getElementById('sp-max-tabs-warning');
 const spBypassDomains = document.getElementById('sp-bypass-domains');
 const spSaveBypass = document.getElementById('sp-save-bypass');
 
@@ -378,6 +379,27 @@ spPasteUnlock?.addEventListener('change', async () => {
     } catch {}
 });
 
+function readMaxTabsBeforeWarningInput() {
+    const v = Math.floor(Number(spMaxTabsWarning?.value));
+    if (!Number.isFinite(v)) return 10;
+    return Math.max(1, Math.min(200, v));
+}
+
+async function saveMaxTabsBeforeWarning() {
+    if (!api.setMaxTabsBeforeWarning) return;
+    try {
+        const n = readMaxTabsBeforeWarningInput();
+        const res = await api.setMaxTabsBeforeWarning(n);
+        if (spMaxTabsWarning && res?.maxTabsBeforeWarning != null) {
+            spMaxTabsWarning.value = String(res.maxTabsBeforeWarning);
+        }
+        setStatus('Saved');
+    } catch {}
+}
+
+spMaxTabsWarning?.addEventListener('change', () => { saveMaxTabsBeforeWarning(); });
+spMaxTabsWarning?.addEventListener('blur', () => { saveMaxTabsBeforeWarning(); });
+
 spSaveFilters?.addEventListener('click', async () => {
     const patterns = (spFilters?.value || '').split('\n').map((l) => l.trim()).filter(Boolean);
     try {
@@ -435,6 +457,12 @@ async function init() {
         if (spFilters) spFilters.value = (data?.filterPatterns || []).join('\n');
         if (spBypassDomains) spBypassDomains.value = (data?.bypassDomains || []).join('\n');
         if (spPasteUnlock) spPasteUnlock.checked = data?.pasteUnlock !== false;
+        if (spMaxTabsWarning) {
+            const m = Number(data?.maxTabsBeforeWarning);
+            spMaxTabsWarning.value = String(
+                Number.isFinite(m) ? Math.max(1, Math.min(200, Math.floor(m))) : 10,
+            );
+        }
         applyTrackingSettings(data?.tracking || {});
         applyDevicePermissionsToForm(data?.devicePermissions && typeof data.devicePermissions === 'object' ? data.devicePermissions : {});
         if (activeTab === 'devices') refreshCameraDevices();

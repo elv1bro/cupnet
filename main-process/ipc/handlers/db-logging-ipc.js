@@ -55,12 +55,12 @@ function registerDbLoggingIpc(ctx) {
             const sess = await ctx.db.createSessionAsync(ctx.actProxy || null, null);
             ctx.currentSessionId = sess ? sess.id : null;
             ctx.logEntryCount = 0;
+            ctx.isLoggingEnabled = true;
             await insertSessionBootstrapTrafficRow(ctx).catch(() => {});
             for (const tab of ctx.tabManager.getAllTabs()) {
                 tab.sessionId = ctx.currentSessionId;
                 ctx.setupNetworkLogging(tab.view.webContents, tab.id, ctx.currentSessionId);
             }
-            ctx.isLoggingEnabled = true;
             ctx.sendLogStatus();
             return { status: 'started' };
         }
@@ -80,6 +80,7 @@ function registerDbLoggingIpc(ctx) {
 
         // First enable ever with a pre-created empty session — start silently
         ctx.isLoggingEnabled = true;
+        await insertSessionBootstrapTrafficRow(ctx).catch(() => {});
         // Иначе setupNetworkLogging ранее мог выйти рано (!logging && !fp) — CDP не висит, в MITM пишет только CDP.
         for (const tab of ctx.tabManager.getAllTabs()) {
             if (!tab.view?.webContents || tab.view.webContents.isDestroyed()) continue;
@@ -111,12 +112,12 @@ function registerDbLoggingIpc(ctx) {
         ctx.currentSessionId = sess ? sess.id : null;
         ctx.logEntryCount = 0;
         ctx.hadLoggingBeenStopped = false;
+        ctx.isLoggingEnabled = true;
         await insertSessionBootstrapTrafficRow(ctx).catch(() => {});
         for (const tab of ctx.tabManager.getAllTabs()) {
             tab.sessionId = ctx.currentSessionId;
             ctx.setupNetworkLogging(tab.view.webContents, tab.id, ctx.currentSessionId);
         }
-        ctx.isLoggingEnabled = true;
         ctx.sendLogStatus();
         return { success: true };
     });
@@ -185,7 +186,9 @@ function registerDbLoggingIpc(ctx) {
             const newSession = await ctx.db.createSessionAsync(ctx.actProxy || null, null);
             ctx.currentSessionId = newSession ? newSession.id : null;
             ctx.logEntryCount = 0;
-            await insertSessionBootstrapTrafficRow(ctx).catch(() => {});
+            if (ctx.isLoggingEnabled) {
+                await insertSessionBootstrapTrafficRow(ctx).catch(() => {});
+            }
             // Re-attach logging for every open tab so they write to the new session
             for (const tab of ctx.tabManager.getAllTabs()) {
                 tab.sessionId = ctx.currentSessionId;

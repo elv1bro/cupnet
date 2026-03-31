@@ -13,6 +13,8 @@ const SETTINGS_DEFAULTS = {
     lastLogPath: null,
     filterPatterns: ['*google.com*', '*cloudflare.com*', '*analytics*', '*tracking*'],
     homepage: '',
+    /** Open this many tabs without a confirmation when opening another (1–200). */
+    maxTabsBeforeWarning: 10,
     pasteUnlock: true,
     traceMode: false,
     currentProxy: '',
@@ -146,6 +148,12 @@ function normalizeDevicePermissions(raw) {
     };
 }
 
+function normalizeMaxTabsBeforeWarning(raw) {
+    const n = Number(raw && raw.maxTabsBeforeWarning);
+    if (Number.isFinite(n) && n >= 1) return Math.min(200, Math.floor(n));
+    return SETTINGS_DEFAULTS.maxTabsBeforeWarning;
+}
+
 function normalizeCapmonsterSettings(raw) {
     const base = SETTINGS_DEFAULTS.capmonster;
     const src = raw && typeof raw === 'object' ? raw : {};
@@ -218,6 +226,7 @@ function loadSettings() {
                 tracking: normalizeTrackingSettings(raw.tracking),
                 capmonster: hydrateCapmonsterFromDisk(raw.capmonster),
                 devicePermissions: normalizeDevicePermissions(raw.devicePermissions),
+                maxTabsBeforeWarning: normalizeMaxTabsBeforeWarning(raw),
             };
             if (_cached.effectiveTrafficMode === 'browser_proxy') {
                 _cached.effectiveTrafficMode = 'mitm';
@@ -235,6 +244,7 @@ function loadSettings() {
         tracking: normalizeTrackingSettings(),
         capmonster: normalizeCapmonsterSettings(),
         devicePermissions: normalizeDevicePermissions(),
+        maxTabsBeforeWarning: SETTINGS_DEFAULTS.maxTabsBeforeWarning,
     };
     _syncTrafficModeFromSettings();
     return _cached;
@@ -270,4 +280,5 @@ module.exports = {
     normalizeTrafficOpts,
     normalizeCapmonsterSettings,
     normalizeDevicePermissions,
+    normalizeMaxTabsBeforeWarning,
 };

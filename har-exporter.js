@@ -36,6 +36,13 @@ function truncateExportText(text) {
     return s.slice(0, max) + '\n… [truncated by CupNet HAR export max chars]';
 }
 
+/** Strip `__b64__:` prefix and return pure base64 string, or null if body is plain text. */
+function _parseB64Prefix(body) {
+    if (!body || typeof body !== 'string') return null;
+    if (body.startsWith('__b64__:')) return body.slice(8);
+    return null;
+}
+
 /** Chrome HAR: send | receive, time in seconds, opcode 1 = text */
 function buildWebSocketMessagesHar(rows) {
     if (!rows || !rows.length) return null;
@@ -107,8 +114,14 @@ function exportHar(sessionId, filters = {}) {
             ? new Date(full.created_at).toISOString()
             : new Date().toISOString();
 
-        const reqBodyText = full.request_body ? truncateExportText(full.request_body) : null;
-        const respBodyText = full.response_body ? truncateExportText(full.response_body) : '';
+        const reqBodyRaw = full.request_body || null;
+        const respBodyRaw = full.response_body || null;
+        const reqB64 = _parseB64Prefix(reqBodyRaw);
+        const respB64 = _parseB64Prefix(respBodyRaw);
+        const reqBodyText = reqB64 ? truncateExportText(reqB64) : (reqBodyRaw ? truncateExportText(reqBodyRaw) : null);
+        const respBodyText = respB64 ? truncateExportText(respB64) : (respBodyRaw ? truncateExportText(respBodyRaw) : '');
+        const reqBodySize = reqB64 ? Math.ceil(reqB64.length * 3 / 4) : (reqBodyRaw ? reqBodyRaw.length : -1);
+        const respBodySize = respB64 ? Math.ceil(respB64.length * 3 / 4) : (respBodyRaw ? respBodyRaw.length : -1);
         const entry = {
             startedDateTime,
             time: full.duration_ms || -1,
@@ -120,9 +133,9 @@ function exportHar(sessionId, filters = {}) {
                 queryString: parseQueryString(full.url),
                 cookies: [],
                 headersSize: -1,
-                bodySize: full.request_body ? full.request_body.length : -1,
-                postData: full.request_body
-                    ? { mimeType: getContentType(reqHeaders), text: reqBodyText }
+                bodySize: reqBodySize,
+                postData: reqBodyRaw
+                    ? { mimeType: getContentType(reqHeaders), text: reqBodyText, ...(reqB64 ? { encoding: 'base64' } : {}) }
                     : undefined
             },
             response: {
@@ -132,13 +145,14 @@ function exportHar(sessionId, filters = {}) {
                 headers: objToHarHeaders(respHeaders),
                 cookies: [],
                 content: {
-                    size: full.response_body ? full.response_body.length : -1,
+                    size: respBodySize,
                     mimeType: getContentType(respHeaders) || 'application/octet-stream',
-                    text: respBodyText
+                    text: respBodyText,
+                    ...(respB64 ? { encoding: 'base64' } : {}),
                 },
                 redirectURL: '',
                 headersSize: -1,
-                bodySize: full.response_body ? full.response_body.length : -1
+                bodySize: respBodySize
             },
             cache: {},
             timings: { send: 0, wait: full.duration_ms || -1, receive: 0 },

@@ -9,6 +9,7 @@ npm run test:e2e
 Выборочно:
 
 ```bash
+npx playwright test tests/e2e/user-agent.e2e.spec.js   # исходящий UA после MITM (Chrome-like)
 npm run test:e2e:windows    # вспомогательные окна
 npm run test:e2e:intercept # block / mock / modifyHeaders
 npm run test:e2e:traffic   # MITM, connect-direct, check-ip-geo, sys log

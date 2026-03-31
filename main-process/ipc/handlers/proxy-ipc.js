@@ -6,6 +6,16 @@ const { insertCupnetTrafficSnapshot, insertCupnetTrafficSnapshotWithGeo } = requ
  * Текущий прокси, connect/disconnect, профили, тесты.
  * @param {object} ctx
  */
+function parseProxyVariablesJson(raw, ctx) {
+    if (!raw) return {};
+    try {
+        return JSON.parse(raw);
+    } catch (e) {
+        ctx.safeCatch({ module: 'main', eventCode: 'proxy.profile.variables.parse.failed', context: { op: 'parseProxyVariablesJson' } }, e, 'info');
+        return {};
+    }
+}
+
 function registerProxyIpc(ctx) {
     ctx.ipcMain.handle('get-current-proxy', async () => {
         const isDirect = !ctx.persistentAnonymizedProxyUrl && ctx.actProxy === '';
@@ -46,7 +56,7 @@ function registerProxyIpc(ctx) {
         }
         if (!template) return { success: false, error: 'Cannot decrypt template' };
 
-        const savedVars  = row.variables ? JSON.parse(row.variables) : {};
+        const savedVars  = parseProxyVariablesJson(row.variables, ctx);
         const mergedVars = { ...savedVars, ...(ephemeralVars || {}) };
         const resolvedVars = {};
         const resolvedUrl = ctx.parseProxyTemplate(template, mergedVars, resolvedVars);
@@ -247,6 +257,9 @@ function registerProxyIpc(ctx) {
                 user_agent:    profile.user_agent || null,
                 timezone:      profile.timezone   || null,
                 language:      profile.language   || null,
+                tls_profile:   profile.tls_profile    || 'chrome',
+                tls_ja3_mode:  profile.tls_ja3_mode   || 'template',
+                tls_ja3_custom: profile.tls_ja3_custom || null,
             });
             ctx.notifyProxyProfilesList();
             return { success: true, id: profile.id };
@@ -261,6 +274,9 @@ function registerProxyIpc(ctx) {
             user_agent: profile.user_agent || null,
             timezone:   profile.timezone   || null,
             language:   profile.language   || null,
+            tls_profile:   profile.tls_profile    || 'chrome',
+            tls_ja3_mode:  profile.tls_ja3_mode   || 'template',
+            tls_ja3_custom: profile.tls_ja3_custom || null,
         });
         ctx.notifyProxyProfilesList();
         return { success: true, id };
@@ -274,7 +290,7 @@ function registerProxyIpc(ctx) {
             try { template = ctx.safeStorage.decryptString(row.url_encrypted); } catch (e) { ctx.sysLog('warn', 'proxy', 'decrypt test proxy template failed: ' + (e?.message || e)); }
         }
         if (!template) return { success: false, error: 'Cannot decrypt' };
-        const savedVars  = row.variables ? JSON.parse(row.variables) : {};
+        const savedVars  = parseProxyVariablesJson(row.variables, ctx);
         const resolved   = ctx.parseProxyTemplate(template, { ...savedVars, ...(ephemeralVars || {}) });
         const start      = Date.now();
         const result     = await ctx.testProxy(resolved);

@@ -177,30 +177,47 @@ function createProxyMitmService(d) {
                 // В MITM CDP иногда не даёт loadingFinished/getResponseBody — строка терялась. Пишем из MITM;
                 // дубликат от CDP отсекается в cdp-network-logging (mitm-cdp-dedup).
                 if (!tabId || sessionId == null) return;
+                const cupnetRid = entry.cupnetRid || null;
+                let ridClaimed = false;
+                if (cupnetRid) {
+                    try {
+                        const { tryClaimRid } = require('./mitm-cdp-dedup');
+                        const c = tryClaimRid(cupnetRid);
+                        if (c === false) return;
+                        if (c === true) ridClaimed = true;
+                    } catch (_) { /* ignore */ }
+                } else {
+                    try {
+                        const { shouldSkipMitmAsCdpDuplicate } = require('./mitm-cdp-dedup');
+                        if (shouldSkipMitmAsCdpDuplicate(tabId, entry.url, entry.method, entry.status)) return;
+                    } catch (_) { /* ignore */ }
+                }
                 const reqId = entry.requestId;
                 const seenIds = d.getSeenRequestIds();
                 const lastKeys = d.getLastMitmLogKey();
-                if (reqId) {
-                    if (seenIds.has(reqId)) return;
-                    seenIds.add(reqId);
-                    if (seenIds.size > 5000) {
-                        const iter = seenIds.values();
-                        for (let i = 0; i < 2500; i++) iter.next();
-                        const keep = new Set();
-                        for (const v of iter) keep.add(v);
-                        seenIds.clear();
-                        for (const v of keep) seenIds.add(v);
-                    }
-                } else {
-                    const dedupKey = `${sessionId}:${tabId}:${entry.url}:${entry.method}:${entry.status}`;
-                    const now = Date.now();
-                    const last = lastKeys.get(dedupKey);
-                    if (last != null && now - last < d.MITM_DEDUP_MS) return;
-                    lastKeys.set(dedupKey, now);
-                    if (lastKeys.size > 500) {
-                        const cutoff = now - 2000;
-                        for (const k of lastKeys.keys()) {
-                            if (lastKeys.get(k) < cutoff) lastKeys.delete(k);
+                if (!ridClaimed) {
+                    if (reqId) {
+                        if (seenIds.has(reqId)) return;
+                        seenIds.add(reqId);
+                        if (seenIds.size > 5000) {
+                            const iter = seenIds.values();
+                            for (let i = 0; i < 2500; i++) iter.next();
+                            const keep = new Set();
+                            for (const v of iter) keep.add(v);
+                            seenIds.clear();
+                            for (const v of keep) seenIds.add(v);
+                        }
+                    } else {
+                        const dedupKey = `${sessionId}:${tabId}:${entry.url}:${entry.method}:${entry.status}`;
+                        const now = Date.now();
+                        const last = lastKeys.get(dedupKey);
+                        if (last != null && now - last < d.MITM_DEDUP_MS) return;
+                        lastKeys.set(dedupKey, now);
+                        if (lastKeys.size > 500) {
+                            const cutoff = now - 2000;
+                            for (const k of lastKeys.keys()) {
+                                if (lastKeys.get(k) < cutoff) lastKeys.delete(k);
+                            }
                         }
                     }
                 }
@@ -218,6 +235,12 @@ function createProxyMitmService(d) {
                         responseBody: entry.responseBody || null,
                     };
                     const sessId = parseInt(String(sessionId), 10) || sessionId;
+                    // Sync before async insert: CDP shadow often has no X-CupNet-Rid in headers; finalizeLog may run
+                    // before insertRequestAsync.then — legacy shouldSkipCdpShadowAsMitmDuplicate needs this key early.
+                    try {
+                        const { markMitmLogged } = require('./mitm-cdp-dedup');
+                        markMitmLogged(tabId, logEntry.url, logEntry.method, logEntry.status);
+                    } catch (_) { /* ignore */ }
                     db.insertRequestAsync(sessId, tabId, {
                         requestId: entry.requestId || logEntry.id,
                         url: logEntry.url,
@@ -232,12 +255,14 @@ function createProxyMitmService(d) {
                     }).then((dbId) => {
                         if (dbId) logEntry.id = dbId;
                         d.incrementLogEntryCount();
-                        try {
-                            const { markMitmLogged } = require('./mitm-cdp-dedup');
-                            markMitmLogged(tabId, logEntry.url, logEntry.method, logEntry.status);
-                        } catch (_) { /* ignore */ }
                         d.broadcastLogEntryToViewers({ ...logEntry, tabId, sessionId: sessId });
                     }).catch((err) => {
+                        if (ridClaimed && cupnetRid) {
+                            try {
+                                const { releaseRid } = require('./mitm-cdp-dedup');
+                                releaseRid(cupnetRid);
+                            } catch (_) { /* ignore */ }
+                        }
                         console.error('[main] MITM log insert failed:', err?.message || err);
                     });
                 } catch (e) {

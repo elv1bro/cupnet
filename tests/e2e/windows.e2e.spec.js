@@ -82,9 +82,17 @@ test('w5) DNS Manager — новое окно, закрытие', async () => {
     if (extra) await extra.close().catch(() => {});
 });
 
-test('w6) Request Editor — новое окно, закрытие', async () => {
+test('w6) Request Editor — первое открытие создаёт окно, повтор без второго окна', async () => {
     const extra = await openSubWindowExpectNew(electronApp, mainWindow, 'openRequestEditor');
-    if (extra) await extra.close().catch(() => {});
+    if (extra) {
+        const nAfterFirst = electronApp.windows().length;
+        await mainWindow.evaluate(async () => {
+            await window.electronAPI.openRequestEditor(null);
+        });
+        await new Promise((r) => setTimeout(r, 500));
+        expect(electronApp.windows().length).toBe(nAfterFirst);
+        await extra.close().catch(() => {});
+    }
 });
 
 test('w7) Console Viewer — новое окно, закрытие', async () => {
