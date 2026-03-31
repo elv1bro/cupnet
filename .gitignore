@@ -16,6 +16,8 @@ resources/.cupnet-node-tmp/
 
 # Local debug dumps (HTML/JSON captures, gitleaks noise, IVAC, stability baselines — not for VCS)
 _debug/
+_debug2/
+_debug*.zip
 
 # Secrets — шаблоны с плейсхолдерами остаются в репозитории
 .env
