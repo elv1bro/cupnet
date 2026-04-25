@@ -5,8 +5,9 @@
  *
  * Architecture:
  *   Chromium (--proxy-server=127.0.0.1:PORT)
- *     ↓  HTTP  → AzureTLS (дочерний azure-tls-worker.js на системном Node в Electron 21+;
- *               in-process только при CUPNET_AZURETLS_IN_PROCESS=1 — ffi ломается из‑за V8 memory cage)
+ *     ↓  HTTP/HTTPS upstream → AzureTLS via Go worker binary (azuretls-go/bin/azuretls-worker-*).
+ *        Electron: child-process Go worker only; Node azure-tls-worker.js (FFI) is disabled unless
+ *        CUPNET_ALLOW_LEGACY_NODE_WORKER=1. Plain Node tests may use in-process (CUPNET_AZURETLS_IN_PROCESS).
  *     ↓  HTTPS CONNECT → MITM:
  *         1. Accept CONNECT, reply 200
  *         2. Terminate Chromium's TLS with fake domain cert (Electron trusts it)
@@ -22,11 +23,69 @@
 
 const net              = require('net');
 const tls              = require('tls');
-const crypto           = require('crypto');
+const https            = require('https');
+const http             = require('http');
 const { EventEmitter } = require('events');
 const { safeCatch } = require('./sys-log');
-const { networkPolicy } = require('./network-policy');
+const { networkPolicy, computeBackoffMs } = require('./network-policy');
+
+/**
+ * Native Node.js HTTPS fallback when Go azureTLS library fails with connection errors.
+ * No TLS fingerprinting, but reliable connection handling.
+ */
+function _nativeHttpsFallback(url, method, headers, orderedHeaders, body, bodyBase64, timeout) {
+    const parsed = new URL(url);
+    const isHttps = parsed.protocol === 'https:';
+    const mod = isHttps ? https : http;
+    const finalHeaders = {};
+    if (orderedHeaders && Array.isArray(orderedHeaders)) {
+        for (const [k, v] of orderedHeaders) finalHeaders[k] = v;
+    } else if (headers) {
+        Object.assign(finalHeaders, headers);
+    }
+    delete finalHeaders[':method'];
+    delete finalHeaders[':path'];
+    delete finalHeaders[':authority'];
+    delete finalHeaders[':scheme'];
+
+    return new Promise((resolve, reject) => {
+        const reqOpts = {
+            hostname: parsed.hostname,
+            port:     parsed.port || (isHttps ? 443 : 80),
+            path:     parsed.pathname + parsed.search,
+            method:   method || 'GET',
+            headers:  finalHeaders,
+            rejectUnauthorized: false,
+            timeout:  timeout || networkPolicy.timeouts.upstreamRequestMs,
+        };
+        const req = mod.request(reqOpts, (res) => {
+            const chunks = [];
+            res.on('data', chunk => chunks.push(chunk));
+            res.on('end', () => {
+                resolve({
+                    statusCode: res.statusCode,
+                    headers:    res.headers,
+                    bodyBase64: Buffer.concat(chunks).toString('base64'),
+                });
+            });
+            res.on('error', reject);
+        });
+        req.on('error', reject);
+        req.on('timeout', () => req.destroy(new Error('Native fallback timeout')));
+        if (bodyBase64) req.write(Buffer.from(bodyBase64, 'base64'));
+        else if (body) req.write(body);
+        req.end();
+    });
+}
 const { applyOutboundUserAgentToMitmHeaders } = require('./user-agent-utils');
+const {
+    generateCA,
+    generateCAAsync,
+    loadOrGenerateCA,
+    getFakeCert,
+    getFakeCertAsync,
+    getCACertPem,
+} = require('./mitm-ca');
 
 /**
  * Strip internal CupNet request id before upstream; value is used for MITM vs CDP log dedup.
@@ -50,292 +109,12 @@ function _stripCupnetRidFromParsedRequest(headers, orderedHeaders) {
     return { cupnetRid, headers, orderedHeaders: oh };
 }
 
-// ── Pure Node.js CA + cert generation (no openssl binary needed) ──────────────
-// Works on macOS, Windows, Linux without any system dependencies.
-
-let caKey, caCert, caKeyPem, caCertPem;
-
-/**
- * Encode ASN.1 TLV
- */
-function asn1(tag, ...contents) {
-    const body = Buffer.concat(contents.map(c => Buffer.isBuffer(c) ? c : Buffer.from(c)));
-    const len  = body.length;
-    let lenBuf;
-    if (len < 0x80) {
-        lenBuf = Buffer.from([len]);
-    } else if (len < 0x100) {
-        lenBuf = Buffer.from([0x81, len]);
-    } else {
-        lenBuf = Buffer.from([0x82, (len >> 8) & 0xff, len & 0xff]);
-    }
-    return Buffer.concat([Buffer.from([tag]), lenBuf, body]);
-}
-
-const SEQ  = c => asn1(0x30, ...c);
-const SET  = c => asn1(0x31, ...c);
-const OID  = b => asn1(0x06, b);
-const INT  = b => asn1(0x02, b);
-const BIT  = b => asn1(0x03, Buffer.concat([Buffer.from([0x00]), b]));
-const OCT  = b => asn1(0x04, b);
-const UTF8 = s => asn1(0x0c, Buffer.from(s, 'utf8'));
-const ctx  = (n, b) => asn1(0xa0 | n, b);
-const RAW  = b => b;
-
-// OIDs
-const OID_ecPublicKey    = Buffer.from('2a8648ce3d0201', 'hex');
-const OID_prime256v1     = Buffer.from('2a8648ce3d030107', 'hex');
-const OID_sha256withECDSA= Buffer.from('2a8648ce3d040302', 'hex');
-const OID_commonName     = Buffer.from('550403', 'hex');  // 2.5.4.3
-const OID_organization   = Buffer.from('55040a', 'hex'); // 2.5.4.10
-const OID_countryName    = Buffer.from('550406', 'hex'); // 2.5.4.6
-const OID_subjectAltName = Buffer.from('551d11', 'hex');
-const OID_basicConstraints = Buffer.from('551d13', 'hex');
-const OID_subjectKeyId   = Buffer.from('551d0e', 'hex');
-const OID_authorityKeyId = Buffer.from('551d23', 'hex');
-
-function encodeRDN(oidHex, value) {
-    return SET([SEQ([OID(Buffer.from(oidHex, 'hex')), UTF8(value)])]);
-}
-
-function encodeTime(date) {
-    // GeneralizedTime: YYYYMMDDHHmmssZ
-    const s = date.toISOString().replace(/[-:T]/g, '').slice(0, 14) + 'Z';
-    return asn1(0x18, Buffer.from(s, 'ascii'));
-}
-
-function encodeSerial(n) {
-    let h = n.toString(16);
-    if (h.length % 2) h = '0' + h;
-    let b = Buffer.from(h, 'hex');
-    // Ensure positive (no high bit set)
-    if (b[0] & 0x80) b = Buffer.concat([Buffer.from([0x00]), b]);
-    return INT(b);
-}
-
-function derPublicKey(keyObj) {
-    // SubjectPublicKeyInfo for EC P-256
-    const rawPub = keyObj.export({ type: 'spki', format: 'der' });
-    return rawPub; // Node.js already gives us SPKI DER
-}
-
-function buildCert({ subjectCN, subjectOrg, issuerCN, serial, notBefore, notAfter,
-                     pubKeyDer, signerKey, isCA, san, authorityKeyIdBytes }) {
-
-    const subject = subjectOrg
-        ? SEQ([encodeRDN('550403', subjectCN), encodeRDN('55040a', subjectOrg), encodeRDN('550406', 'US')])
-        : SEQ([encodeRDN('550403', subjectCN)]);
-
-    const issuer = issuerCN === subjectCN && subjectOrg
-        ? subject
-        : SEQ([encodeRDN('550403', issuerCN)]);
-
-    const extensions = [];
-
-    // Basic Constraints
-    const bcValue = isCA
-        ? SEQ([asn1(0x01, Buffer.from([0xff]))])  // cA=TRUE
-        : SEQ([]);
-    extensions.push(SEQ([OID(OID_basicConstraints),
-        asn1(0x01, Buffer.from([0xff])),  // critical
-        OCT(bcValue)]));
-
-    // Subject Key Identifier
-    const pubKeyHash = crypto.createHash('sha1')
-        .update(Buffer.from(pubKeyDer).slice(-65)) // last 65 bytes = uncompressed EC point
-        .digest();
-    extensions.push(SEQ([OID(OID_subjectKeyId), OCT(OCT(pubKeyHash))]));
-
-    // Authority Key Identifier (for domain certs)
-    if (authorityKeyIdBytes) {
-        extensions.push(SEQ([OID(OID_authorityKeyId),
-            OCT(SEQ([ctx(0, authorityKeyIdBytes)]))]));
-    }
-
-    // Subject Alternative Name
-    if (san) {
-        const sanExt = SEQ([asn1(0x82, Buffer.from(san, 'ascii'))]);
-        extensions.push(SEQ([OID(OID_subjectAltName), OCT(sanExt)]));
-    }
-
-    const tbsCert = SEQ([
-        ctx(0, asn1(0x02, Buffer.from([0x02]))),  // version = v3
-        encodeSerial(serial),
-        SEQ([OID(OID_sha256withECDSA)]),
-        issuer,
-        SEQ([encodeTime(notBefore), encodeTime(notAfter)]),
-        subject,
-        RAW(Buffer.from(pubKeyDer)),
-        ctx(3, SEQ(extensions)),
-    ]);
-
-    const sig = crypto.sign('SHA256', tbsCert, signerKey);
-    return SEQ([RAW(tbsCert), SEQ([OID(OID_sha256withECDSA)]), BIT(sig)]);
-}
-
-function derToPem(tag, der) {
-    const b64 = der.toString('base64').match(/.{1,64}/g).join('\n');
-    return `-----BEGIN ${tag}-----\n${b64}\n-----END ${tag}-----\n`;
-}
-
-function generateCA() {
-    caKey = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
-    _finishCA(caKey.publicKey, caKey.privateKey);
-    return { caKeyPem, caCertPem };
-}
-
-/**
- * Load existing CA from disk or generate a new one and save it.
- * @param {string} dir — directory to store ca-key.pem + ca-cert.pem
- * @returns {{ caKeyPem: string, caCertPem: string, generated: boolean }}
- */
-function loadOrGenerateCA(dir) {
-    const keyFile  = path.join(dir, 'ca-key.pem');
-    const certFile = path.join(dir, 'ca-cert.pem');
-
-    try {
-        if (fs.existsSync(keyFile) && fs.existsSync(certFile)) {
-            const savedKey  = fs.readFileSync(keyFile, 'utf8');
-            const savedCert = fs.readFileSync(certFile, 'utf8');
-            caKey = crypto.createPrivateKey(savedKey);
-            caKey = { publicKey: crypto.createPublicKey(caKey), privateKey: caKey };
-            caKeyPem  = savedKey;
-            caCertPem = savedCert;
-            const certDer = Buffer.from(
-                savedCert.replace(/-----[^-]+-----/g, '').replace(/\s/g, ''), 'base64'
-            );
-            caCert = certDer;
-            return { caKeyPem, caCertPem, generated: false };
-        }
-    } catch (e) {
-        // Corrupted files — regenerate
-    }
-
-    generateCA();
-    try {
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(keyFile, caKeyPem, { mode: 0o600 });
-        fs.writeFileSync(certFile, caCertPem, { mode: 0o644 });
-    } catch (e) {
-        // Non-fatal — CA works in memory, just won't persist
-    }
-    return { caKeyPem, caCertPem, generated: true };
-}
-
-function generateCAAsync() {
-    // Async version — doesn't block event loop at all
-    return new Promise((resolve, reject) => {
-        crypto.generateKeyPair('ec', { namedCurve: 'P-256' }, (err, pubKey, privKey) => {
-            if (err) return reject(err);
-            caKey = { publicKey: pubKey, privateKey: privKey };
-            _finishCA(pubKey, privKey);
-            resolve({ caKeyPem, caCertPem });
-        });
-    });
-}
-
-function _finishCA(pubKey, privKey) {
-    const pubDer = pubKey.export({ type: 'spki', format: 'der' });
-    const now  = new Date();
-    const then = new Date(now); then.setFullYear(then.getFullYear() + 10);
-
-    const certDer = buildCert({
-        subjectCN:  'CupNet MITM CA',
-        subjectOrg: 'CupNet',
-        issuerCN:   'CupNet MITM CA',
-        serial:     Date.now(),
-        notBefore:  now,
-        notAfter:   then,
-        pubKeyDer:  pubDer,
-        signerKey:  privKey,
-        isCA:       true,
-        san:        null,
-        authorityKeyIdBytes: null,
-    });
-
-    caKeyPem  = privKey.export({ type: 'pkcs8', format: 'pem' });
-    caCertPem = derToPem('CERTIFICATE', certDer);
-    caCert    = certDer;
-}
-
-// Domain cert cache — LRU capped at 500 entries to prevent unbounded growth
-const CERT_CACHE_MAX = 500;
-const domainCertCache = new Map();
-function cacheCert(hostname, cert) {
-    if (domainCertCache.size >= CERT_CACHE_MAX) {
-        // Evict oldest entry (Map preserves insertion order)
-        domainCertCache.delete(domainCertCache.keys().next().value);
-    }
-    domainCertCache.set(hostname, cert);
-}
-
-// Async version to avoid blocking event loop during parallel domain handshakes
-const domainCertPending = new Map(); // hostname → Promise<cert>
-
-function getFakeCert(hostname) {
-    // Sync fast-path: already cached — LRU touch (move to end of Map insertion order)
-    if (domainCertCache.has(hostname)) {
-        const c = domainCertCache.get(hostname);
-        domainCertCache.delete(hostname);
-        domainCertCache.set(hostname, c);
-        return c;
-    }
-    // Fallback: generate synchronously (first miss — should be rare with async path)
-    return _generateDomainCert(hostname);
-}
-
-function getFakeCertAsync(hostname) {
-    if (domainCertCache.has(hostname)) {
-        const c = domainCertCache.get(hostname);
-        domainCertCache.delete(hostname);
-        domainCertCache.set(hostname, c);
-        return Promise.resolve(c);
-    }
-    if (domainCertPending.has(hostname)) return domainCertPending.get(hostname);
-    const p = new Promise((resolve, reject) => {
-        crypto.generateKeyPair('ec', { namedCurve: 'P-256' }, (err, pubKey, privKey) => {
-            if (err) return reject(err);
-            try {
-                const result = _buildDomainCert(hostname, pubKey, privKey);
-                cacheCert(hostname, result);
-                resolve(result);
-            } catch (e) { reject(e); }
-        });
-    }).finally(() => domainCertPending.delete(hostname));
-    domainCertPending.set(hostname, p);
-    return p;
-}
-
-function _generateDomainCert(hostname) {
-    const domKey = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
-    const result = _buildDomainCert(hostname, domKey.publicKey, domKey.privateKey);
-    cacheCert(hostname, result);
-    return result;
-}
-
-function _buildDomainCert(hostname, pubKey, privKey) {
-    const pubDer = pubKey.export({ type: 'spki', format: 'der' });
-    const now    = new Date();
-    const then   = new Date(now); then.setFullYear(then.getFullYear() + 2);
-    const caPubDer = caKey.publicKey.export({ type: 'spki', format: 'der' });
-    const caKeyId  = crypto.createHash('sha1').update(Buffer.from(caPubDer).slice(-65)).digest();
-    const certDer  = buildCert({
-        subjectCN:   hostname,
-        subjectOrg:  null,
-        issuerCN:    'CupNet MITM CA',
-        serial:      Date.now() + Math.floor(Math.random() * 1000),
-        notBefore:   now,
-        notAfter:    then,
-        pubKeyDer:   pubDer,
-        signerKey:   caKey.privateKey,
-        isCA:        false,
-        san:         hostname,
-        authorityKeyIdBytes: caKeyId,
-    });
-    return {
-        key:  privKey.export({ type: 'pkcs8', format: 'pem' }),
-        cert: derToPem('CERTIFICATE', certDer),
-    };
+/** tab-manager sets X-CupNet-Rid to `${tabId}_${uuid}`; derive tabId when CONNECT has no Proxy-Authorization. */
+function _tabIdFromCupnetRid(rid) {
+    const s = String(rid || '').trim();
+    if (!s) return null;
+    const m = s.match(/^(.*)_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+    return m ? m[1] : null;
 }
 
 // ── AzureTLS worker pool ──────────────────────────────────────────────────────
@@ -471,6 +250,51 @@ function _resolveAzureTlsWorkerScriptForExternalNode(scriptPath) {
     return scriptPath;
 }
 
+/**
+ * Native Go upstream worker (azuretls-go): no ffi-napi; same NDJSON protocol as azure-tls-worker.js.
+ * Built with `npm run build:go`. Packaged under `resources/azuretls-go/bin/` (see package.json extraResources).
+ */
+function _goWorkerBinaryName() {
+    const arch = process.arch;
+    const platform = process.platform;
+    if (platform === 'darwin') {
+        return arch === 'arm64' ? 'azuretls-worker-darwin-arm64' : 'azuretls-worker-darwin-amd64';
+    }
+    if (platform === 'linux') {
+        return arch === 'arm64' ? 'azuretls-worker-linux-arm64' : 'azuretls-worker-linux-amd64';
+    }
+    if (platform === 'win32' && (arch === 'x64' || arch === 'ia32')) {
+        return 'azuretls-worker-win32-amd64.exe';
+    }
+    return null;
+}
+
+function _resolveGoWorkerBinary() {
+    const name = _goWorkerBinaryName();
+    if (!name) return null;
+    const candidates = [];
+    if (process.resourcesPath) {
+        candidates.push(path.join(process.resourcesPath, 'azuretls-go', 'bin', name));
+    }
+    candidates.push(path.join(__dirname, 'azuretls-go', 'bin', name));
+    for (const p of candidates) {
+        try {
+            if (fs.existsSync(p)) return p;
+        } catch { /* ignore */ }
+    }
+    return null;
+}
+
+/**
+ * True when the Go worker binary should be used: file exists and env does not force Node.
+ * CUPNET_USE_GO_WORKER=0 / CUPNET_USE_NODE_WORKER=1 skip Go (then Node FFI path runs only if CUPNET_ALLOW_LEGACY_NODE_WORKER=1).
+ */
+function mitmPreferGoWorkerBinary() {
+    if (process.env.CUPNET_USE_GO_WORKER === '0') return false;
+    if (process.env.CUPNET_USE_NODE_WORKER === '1') return false;
+    return _resolveGoWorkerBinary() != null;
+}
+
 class AzureTLSWorker extends EventEmitter {
     constructor(workerPath) {
         super();
@@ -484,6 +308,8 @@ class AzureTLSWorker extends EventEmitter {
         this._inflightRequests = 0;
         this._stdinQueue = [];
         this._stdinDraining = false;
+        /** Set when Go binary is required but missing (Node FFI disabled). */
+        this._fatalWorkerConfigError = null;
         this._start();
     }
 
@@ -527,11 +353,53 @@ class AzureTLSWorker extends EventEmitter {
             delete env.ELECTRON_RUN_AS_NODE;
         }
 
-        const scriptPath = nodeBin === process.execPath
-            ? this.workerPath
-            : _resolveAzureTlsWorkerScriptForExternalNode(this.workerPath);
+        const goBin = mitmPreferGoWorkerBinary() ? _resolveGoWorkerBinary() : null;
+        let scriptPath;
+        let spawnExe;
+        let spawnArgs;
+        this._workerType = goBin ? 'go' : 'node';
+        if (goBin) {
+            spawnExe = goBin;
+            spawnArgs = [];
+            // Informational: upstream TLS uses the Go binary (not Node+FFI).
+            if (debugMitmLevel) {
+                console.error(`[azure-worker] using Go upstream worker: ${goBin}`);
+            }
+        } else {
+            const allowLegacy = process.env.CUPNET_ALLOW_LEGACY_NODE_WORKER === '1';
+            if (!allowLegacy) {
+                const expected = _goWorkerBinaryName() || '<platform-binary>';
+                const msg =
+                    '[azure-worker] Upstream TLS requires the Go worker binary. The Node.js FFI worker is not supported in this build.\n' +
+                    '  Build: npm run build:go or npm run build:go:local\n' +
+                    `  Expected: azuretls-go/bin/${expected}\n` +
+                    '  (Tests only: set CUPNET_ALLOW_LEGACY_NODE_WORKER=1 to allow the legacy Node worker.)';
+                console.error(msg);
+                this._stopped = true;
+                const err = new Error('AzureTLS: Go worker required; Node FFI worker disabled');
+                this._fatalWorkerConfigError = err;
+                process.nextTick(() => {
+                    try {
+                        this.emit('error', err);
+                    } catch (_) { /* ignore */ }
+                });
+                try {
+                    safeCatch(
+                        { module: 'mitm-proxy', eventCode: 'azure.worker.ffi.disabled', context: { expected } },
+                        err,
+                        'error',
+                    );
+                } catch (_) { /* ignore */ }
+                return;
+            }
+            scriptPath = nodeBin === process.execPath
+                ? this.workerPath
+                : _resolveAzureTlsWorkerScriptForExternalNode(this.workerPath);
+            spawnExe = nodeBin;
+            spawnArgs = [scriptPath];
+        }
 
-        this.proc = spawn(nodeBin, [scriptPath], {
+        this.proc = spawn(spawnExe, spawnArgs, {
             stdio: ['pipe', 'pipe', 'pipe'],
             env,
         });
@@ -540,12 +408,18 @@ class AzureTLSWorker extends EventEmitter {
 
         this.proc.on('error', (err) => {
             const hint = err && err.code === 'ENOENT'
-                ? ' Нет бинарника: выполните `node scripts/ensure-cupnet-node.mjs`, задайте CUPNET_AZURETLS_NODE или установите Node в PATH.'
+                ? (goBin
+                    ? ' No Go worker binary: run `npm run build:go` or add azuretls-go/bin to extraResources.'
+                    : ' Нет бинарника: выполните `node scripts/ensure-cupnet-node.mjs`, задайте CUPNET_AZURETLS_NODE или установите Node в PATH.')
                 : '';
-            console.error(`[azure-worker] spawn failed (${nodeBin}): ${err.message || err}.${hint}`);
+            console.error(`[azure-worker] spawn failed (${spawnExe}): ${err.message || err}.${hint}`);
             try {
                 safeCatch(
-                    { module: 'mitm-proxy', eventCode: 'worker.spawn.failed', context: { nodeBin } },
+                    {
+                        module: 'mitm-proxy',
+                        eventCode: 'worker.spawn.failed',
+                        context: { spawnExe, workerKind: goBin ? 'go' : 'node' },
+                    },
                     err,
                     'error',
                 );
@@ -732,13 +606,21 @@ class AzureTLSWorker extends EventEmitter {
      */
     waitReady(timeoutMs = 120_000) {
         if (this.ready) return Promise.resolve();
+        if (this._fatalWorkerConfigError) return Promise.reject(this._fatalWorkerConfigError);
         return new Promise((resolve, reject) => {
             const onReady = () => {
+                this.off('error', onErr);
                 clearTimeout(timer);
                 resolve();
             };
+            const onErr = (e) => {
+                this.off('ready', onReady);
+                clearTimeout(timer);
+                reject(e);
+            };
             const timer = setTimeout(() => {
                 this.off('ready', onReady);
+                this.off('error', onErr);
                 reject(new Error(
                     `AzureTLS worker did not become ready within ${timeoutMs}ms. `
                     + 'If this is a packaged app, ensure `electron-builder` bundles Node into '
@@ -747,6 +629,7 @@ class AzureTLSWorker extends EventEmitter {
                 ));
             }, timeoutMs);
             this.once('ready', onReady);
+            this.once('error', onErr);
         });
     }
 }
@@ -1102,7 +985,6 @@ class MitmProxy {
 
         const dispatchRequest = (req) => {
             const url = `https://${hostname}${port !== 443 ? ':' + port : ''}${req.path}`;
-            const tabId = connectTabId;
             const sessionId = null;
             const requestId = `mitm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
             const headers = { ...req.headers };
@@ -1115,6 +997,7 @@ class MitmProxy {
                 return true;
             });
             const { cupnetRid, orderedHeaders: orderedHeadersStripped } = _stripCupnetRidFromParsedRequest(headers, orderedHeaders);
+            const tabId = connectTabId || _tabIdFromCupnetRid(cupnetRid);
             dbg(`[mitm] → ${req.method} ${url}${ctag}\n`);
             if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(headers));
             if (debugMitmLevel >= 3) mitmUserLog(_fmtBody(req.body, req.bodyBase64, 'req body'));
@@ -1122,8 +1005,14 @@ class MitmProxy {
             const entry = { done: false, data: null };
             pipeline.push(entry);
             const t0 = Date.now();
+            // #region agent log
+            try{const http=require('http');const d=JSON.stringify({sessionId:'7c0789',hypothesisId:'E',location:'mitm-proxy.js:dispatchRequest',message:'MITM dispatchRequest',data:{url,method:req.method,tabId,requestId,forceHttp1},timestamp:t0});const r=http.request('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'}});r.on('error',()=>{});r.end(d);}catch(_){}
+            // #endregion
             this._doRequest({ method: req.method, url, headers, orderedHeaders: orderedHeadersStripped, body: req.body, bodyBase64: req.bodyBase64, requestId, tabId })
                 .then(res  => {
+                    // #region agent log
+                    try{const http=require('http');const d=JSON.stringify({sessionId:'7c0789',hypothesisId:'E',location:'mitm-proxy.js:dispatchRequest-ok',message:'MITM request OK',data:{url,status:res.statusCode,elapsedMs:Date.now()-t0,tabId},timestamp:Date.now()});const r=http.request('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'}});r.on('error',()=>{});r.end(d);}catch(_){}
+                    // #endregion
                     dbg(`[mitm] ← ${url} status=${res.statusCode}${ctag}\n`);
                     if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(res.headers));
                     if (debugMitmLevel >= 4) mitmUserLog(_fmtBody(null, res.bodyBase64, 'res body'));
@@ -1157,6 +1046,9 @@ class MitmProxy {
                 })
                 .catch((e) => {
                     dbg(`[mitm] ✗ ${url} ${e.message}${ctag}\n`);
+                    // #region agent log
+                    try{const http=require('http');const d=JSON.stringify({sessionId:'7c0789',hypothesisId:'E',location:'mitm-proxy.js:dispatchRequest-error',message:'MITM 502 error',data:{url,error:e.message,elapsedMs:Date.now()-t0,tabId},timestamp:Date.now()});const r=http.request('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'}});r.on('error',()=>{});r.end(d);}catch(_){}
+                    // #endregion
                     const errRes = { statusCode: 502, headers: {}, bodyBase64: '' };
                     const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
                     entry.data = buildHttpResponse(resOut);
@@ -1210,12 +1102,16 @@ class MitmProxy {
                     pipeline.length = 0;
                     chunks.length = 0;
                     chunksLen = 0;
+                    const hdrWs = { ...req.headers };
+                    const ohWs = Array.isArray(req.orderedHeaders) ? [...req.orderedHeaders] : [];
+                    const { cupnetRid: ridWs } = _stripCupnetRidFromParsedRequest(hdrWs, ohWs);
+                    const wsTabId = connectTabId || _tabIdFromCupnetRid(ridWs);
                     this._tunnelWebSocketUpgradeMitm({
                         clientTls: tlsSocket,
                         hostname,
                         port,
                         req,
-                        tabId: connectTabId,
+                        tabId: wsTabId,
                         clientRemainder: inBuf,
                         hsTimer,
                     });
@@ -1312,7 +1208,7 @@ class MitmProxy {
         const req = parseHttpRequest(head);
         if (!req) { socket.destroy(); return; }
 
-        const tabId = _mitmTabIdFromProxyAuthHead(head);
+        const connectTabId = _mitmTabIdFromProxyAuthHead(head);
         const hostHeader = (req.headers['host'] || req.headers['Host'] || '');
         const url = req.path.startsWith('http') ? req.path : `http://${hostHeader}${req.path}`;
         const headers = { ...req.headers };
@@ -1324,7 +1220,8 @@ class MitmProxy {
             if (hasBody && SKIP_WHEN_BODY.includes(kl)) return false;
             return true;
         });
-        const { orderedHeaders: orderedHeadersPlain } = _stripCupnetRidFromParsedRequest(headers, orderedHeaders);
+        const { cupnetRid, orderedHeaders: orderedHeadersPlain } = _stripCupnetRidFromParsedRequest(headers, orderedHeaders);
+        const tabId = connectTabId || _tabIdFromCupnetRid(cupnetRid);
 
         const ctagPlain = _clientTag(socket);
         dbg(`[mitm] → ${req.method} ${url}${ctagPlain}\n`);
@@ -1396,12 +1293,14 @@ class MitmProxy {
                     ? dnsAdjusted.orderedHeaders.map((pair) => [...pair])
                     : dnsAdjusted.orderedHeaders,
             };
-            const plan = planMitmIntercept(mitmOpts);
+            const plan = await planMitmIntercept(mitmOpts);
             if (plan.done) {
                 const ms = Date.now() - t0;
                 st.totalMs += ms;
                 if (ms < st.minMs) st.minMs = ms;
                 if (ms > st.maxMs) st.maxMs = ms;
+                const delayMs = Number(plan.responseDelayMs) || 0;
+                if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
                 return plan.response;
             }
 
@@ -1412,36 +1311,87 @@ class MitmProxy {
             const retryCountUp = /^(GET|HEAD|OPTIONS)$/i.test(up.method || '')
                 ? networkPolicy.retry.maxRetries
                 : 0;
-            const res = await this.worker.request({
-                method:            up.method,
-                url:               up.url,
-                headers:           up.headers,
-                orderedHeaders:    up.orderedHeaders || undefined,
-                body:              noBodyUp ? undefined : (up.bodyBase64 ? undefined : (up.body || null)),
-                bodyBase64:        noBodyUp ? undefined : (up.bodyBase64 || undefined),
-                proxy:             tabUpstream.proxy || null,
-                browser:           tabUpstream.browser,
-                ja3:               tabUpstream.ja3 || undefined,
-                requestId:         opts.requestId || undefined,
-                maxRetries:        retryCountUp,
-                timeout:           networkPolicy.timeouts.upstreamRequestMs,
-                disableRedirects:  opts.disableRedirects !== false,
-                forceHttp1:         forceHttp1,
-            });
-            const ms = Date.now() - t0;
-            st.totalMs += ms;
-            if (ms < st.minMs) st.minMs = ms;
-            if (ms > st.maxMs) st.maxMs = ms;
-            let out = {
-                statusCode: res.statusCode,
-                headers: res.headers || {},
-                bodyBase64: res.bodyBase64 || '',
-                dnsOverride: dnsAdjusted.dnsOverride || null,
-            };
-            if (plan.postProcess) {
-                out = await finalizeMitmInterceptResponseAsync(out, plan.postProcess);
+            const isIdempotent = /^(GET|HEAD|OPTIONS)$/i.test(up.method || '');
+            const CONN_ERR = /\bEOF\b|connection reset|ECONNRESET|ETIMEDOUT|ECONNREFUSED|broken pipe/i;
+
+            let workerError = null;
+            // #region agent log
+            {const _oh=up.orderedHeaders?up.orderedHeaders.slice(0,12).map(([k,v])=>[k,(v&&v.length>60)?v.slice(0,60)+'…':v]):null;const _h=up.headers?Object.fromEntries(Object.entries(up.headers).slice(0,12).map(([k,v])=>[k,(v&&v.length>60)?String(v).slice(0,60)+'…':v])):null;const _hasUA=!!(_h&&Object.keys(_h).some(k=>k.toLowerCase()==='user-agent'));try{const _http=require('http');const d=JSON.stringify({sessionId:'7c0789',hypothesisId:'MITM_REQ',location:'mitm-proxy.js:pre-worker-request',message:'request to worker',data:{url:up.url,method:up.method,headers:_h,orderedHeaders:_oh,hasUA:_hasUA,proxy:tabUpstream.proxy||null,browser:tabUpstream.browser,forceHttp1,disableRedirects:opts.disableRedirects!==false,tabId:opts.tabId||null},timestamp:Date.now()});const r=_http.request('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'}});r.on('error',()=>{});r.end(d);}catch(_){}}
+            // #endregion
+            try {
+                const res = await this.worker.request({
+                    method:            up.method,
+                    url:               up.url,
+                    headers:           up.headers,
+                    orderedHeaders:    up.orderedHeaders || undefined,
+                    body:              noBodyUp ? undefined : (up.bodyBase64 ? undefined : (up.body || null)),
+                    bodyBase64:        noBodyUp ? undefined : (up.bodyBase64 || undefined),
+                    proxy:             tabUpstream.proxy || null,
+                    browser:           tabUpstream.browser,
+                    ja3:               tabUpstream.ja3 || undefined,
+                    tabId:             opts.tabId != null && opts.tabId !== '' ? String(opts.tabId) : undefined,
+                    requestId:         opts.requestId || undefined,
+                    maxRetries:        retryCountUp,
+                    timeout:           networkPolicy.timeouts.upstreamRequestMs,
+                    disableRedirects:  opts.disableRedirects !== false,
+                    forceHttp1:        forceHttp1,
+                });
+                const ms = Date.now() - t0;
+                st.totalMs += ms;
+                if (ms < st.minMs) st.minMs = ms;
+                if (ms > st.maxMs) st.maxMs = ms;
+                let out = {
+                    statusCode: res.statusCode,
+                    headers: res.headers || {},
+                    bodyBase64: res.bodyBase64 || '',
+                    dnsOverride: dnsAdjusted.dnsOverride || null,
+                };
+                if (plan.postProcess) {
+                    out = await finalizeMitmInterceptResponseAsync(out, plan.postProcess);
+                }
+                const delayMs = Number(plan.responseDelayMs) || Number(plan.postProcess || {}._responseDelayMs) || 0;
+                if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+                return out;
+            } catch (e) {
+                workerError = e;
+                if (!isIdempotent || !CONN_ERR.test(String(e.message || ''))) throw e;
             }
-            return out;
+
+            // Worker failed with connection error — native Node.js https fallback
+            dbg(`[mitm] ↻ native-fallback ${url} (${workerError.message})\n`);
+            // #region agent log
+            try{const _http=require('http');const d=JSON.stringify({sessionId:'7c0789',hypothesisId:'FALLBACK',location:'mitm-proxy.js:native-fallback',message:'using native https fallback',data:{url,method:up.method,workerError:workerError.message},timestamp:Date.now()});const r=_http.request('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'}});r.on('error',()=>{});r.end(d);}catch(_){}
+            // #endregion
+            try {
+                const nativeRes = await _nativeHttpsFallback(
+                    url, up.method, up.headers, up.orderedHeaders,
+                    noBodyUp ? null : (up.body || null),
+                    noBodyUp ? null : (up.bodyBase64 || null)
+                );
+                const ms = Date.now() - t0;
+                st.totalMs += ms;
+                if (ms < st.minMs) st.minMs = ms;
+                if (ms > st.maxMs) st.maxMs = ms;
+                dbg(`[mitm] ← ${url} status=${nativeRes.statusCode} (native-fallback)\n`);
+                // #region agent log
+                try{const _http=require('http');const d=JSON.stringify({sessionId:'7c0789',hypothesisId:'FALLBACK',location:'mitm-proxy.js:native-fallback-ok',message:'native fallback OK',data:{url,status:nativeRes.statusCode,elapsedMs:ms},timestamp:Date.now()});const r=_http.request('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'}});r.on('error',()=>{});r.end(d);}catch(_){}
+                // #endregion
+                let out = {
+                    statusCode: nativeRes.statusCode,
+                    headers: nativeRes.headers || {},
+                    bodyBase64: nativeRes.bodyBase64 || '',
+                    dnsOverride: dnsAdjusted.dnsOverride || null,
+                };
+                if (plan.postProcess) {
+                    out = await finalizeMitmInterceptResponseAsync(out, plan.postProcess);
+                }
+                const delayMs = Number(plan.responseDelayMs) || Number(plan.postProcess || {}._responseDelayMs) || 0;
+                if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+                return out;
+            } catch (fallbackErr) {
+                dbg(`[mitm] ✗ native-fallback ${url} ${fallbackErr.message}\n`);
+                throw workerError;
+            }
         } catch (e) {
             st.errors++;
             throw e;
@@ -1600,23 +1550,38 @@ class MitmProxy {
         mitmOpts = this._applyDnsOverride(mitmOpts);
 
         const { planMitmIntercept, finalizeMitmInterceptResponseAsync } = require('./request-interceptor');
-        const plan = planMitmIntercept(mitmOpts);
-        if (plan.done) {
-            const finishShort = async () => {
-                let out = plan.response;
-                if (plan.postProcess) {
-                    out = await finalizeMitmInterceptResponseAsync(out, plan.postProcess);
-                }
-                const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, out);
-                try { clientTls.write(buildHttpResponse(resOut)); } catch {}
-                try { clientTls.end(); } catch {}
-            };
-            void finishShort().catch((err) => {
-                try { safeCatch({ module: 'mitm-proxy', eventCode: 'mitm.ws.shortCircuitFinalize.failed', context: { url } }, err, 'warn'); } catch (_) { /* ignore */ }
-                try { clientTls.end(); } catch {}
+        void (async () => {
+            const plan = await planMitmIntercept(mitmOpts);
+            if (plan.done) {
+                const delayMs = Number(plan.responseDelayMs) || 0;
+                if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+                const finishShort = async () => {
+                    let out = plan.response;
+                    if (plan.postProcess) {
+                        out = await finalizeMitmInterceptResponseAsync(out, plan.postProcess);
+                    }
+                    const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, out);
+                    try { clientTls.write(buildHttpResponse(resOut)); } catch {}
+                    try { clientTls.end(); } catch {}
+                };
+                await finishShort().catch((err) => {
+                    try { safeCatch({ module: 'mitm-proxy', eventCode: 'mitm.ws.shortCircuitFinalize.failed', context: { url } }, err, 'warn'); } catch (_) { /* ignore */ }
+                    try { clientTls.end(); } catch {}
+                });
+                return;
+            }
+            this._continueWsTunnelAfterPlan({
+                plan, mitmOpts, url, headers, req, clientTls, tabId, hsTimer, orderedHeaders, clientRemainder,
             });
-            return;
-        }
+        })().catch((err) => {
+            safeCatch({ module: 'mitm-proxy', eventCode: 'mitm.ws.plan.failed', context: { url } }, err, 'warn');
+            try { clientTls.end(); } catch {}
+        });
+        return;
+    }
+
+    _continueWsTunnelAfterPlan(ctx) {
+        const { plan, mitmOpts, url, headers, req, clientTls, tabId, hsTimer, orderedHeaders, clientRemainder } = ctx;
         const up = plan.opts;
         if (!up.headers) up.headers = {};
         applyOutboundUserAgentToMitmHeaders(up.headers, up.orderedHeaders);
@@ -1757,7 +1722,7 @@ class MitmProxy {
     }
 
     getProxyUrl()  { return `http://127.0.0.1:${this.port}`; }
-    getCACert()    { return caCertPem; }
+    getCACert()    { return getCACertPem(); }
 }
 
 // ── HTTP parsing helpers ──────────────────────────────────────────────────────

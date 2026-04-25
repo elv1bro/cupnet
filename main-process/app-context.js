@@ -10,7 +10,6 @@ function createAppContext() {
             db: null,
             tabManager: null,
             harExporter: null,
-            rulesEngine: null,
             interceptor: null,
             mitmProxy: null,
         },
@@ -25,6 +24,8 @@ function createAppContext() {
             compareViewer: null,
             consoleViewer: null,
             pageAnalyzer: null,
+            notes: null,
+            credentials: null,
             ivacScout: null,
         },
         proxy: {

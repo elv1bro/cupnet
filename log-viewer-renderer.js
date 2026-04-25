@@ -12,7 +12,6 @@ let selectionAnchorIdx  = -1;
 let autoScrollEnabled = true;
 let currentSessionId  = null;
 let knownTabs         = new Set();
-let highlightRules    = {};
 
 // Session filter state — replaces unreliable <select> value approach
 // null = live/current, 'all' = all sessions, number = specific session ID
@@ -59,6 +58,8 @@ const filterSession  = document.getElementById('filter-session');
 const selectedTypes    = new Set();
 const selectedStatuses = new Set();
 const selectedTabs     = new Set();
+/** Activity Monitor categories: console, exception, storage, csp (all on by default so rows are visible) */
+const selectedActivityTypes = new Set(['console', 'exception', 'storage', 'csp']);
 const lvCount        = document.getElementById('lv-count');
 const lvSessionFromSelBtn = document.getElementById('lv-session-from-sel-btn');
 const autoScrollBtn  = document.getElementById('auto-scroll-btn');
@@ -75,6 +76,9 @@ const addToCompareBtn = document.getElementById('lv-add-to-compare');
 const openCompareBtn = document.getElementById('lv-open-compare');
 const rawBtn         = document.getElementById('lv-raw-btn');
 const copyUrlBtn     = document.getElementById('lv-copy-url');
+const lvDetailIdStrip = document.getElementById('lv-detail-id-strip');
+const dRequestIdEl   = document.getElementById('d-request-id');
+const copyIdBtn      = document.getElementById('lv-copy-id-btn');
 const replayDiff     = document.getElementById('lv-replay-diff');
 const replayResult   = document.getElementById('lv-replay-result');
 const replayBody     = document.getElementById('replay-body');
@@ -145,6 +149,59 @@ recBtn?.addEventListener('click', async () => {
         await api.toggleLoggingStart({ x: r.left, y: r.top, w: r.width, h: r.height }).catch(console.error);
     }
 });
+
+function browserEventCategory(e) {
+    const et = String(e.event_type || '');
+    if (et === 'exception') return 'exception';
+    if (et === 'csp-violation') return 'csp';
+    if (et.startsWith('ls-') || et.startsWith('ss-')) return 'storage';
+    return 'console';
+}
+
+/** Method column: STG (storage), LOG (console / log-entry), etc. */
+function browserActivityMethodBadge(et) {
+    const e = String(et || '');
+    if (e.startsWith('ls-') || e.startsWith('ss-')) return { text: 'STG', cls: 'be-method-stg' };
+    if (e === 'console') return { text: 'LOG', cls: 'be-method-log' };
+    if (e === 'exception') return { text: 'EXC', cls: 'be-method-exc' };
+    if (e === 'csp-violation') return { text: 'CSP', cls: 'be-method-csp' };
+    if (e === 'log-entry') return { text: 'LOG', cls: 'be-method-log' };
+    return { text: 'LOG', cls: 'be-method-log' };
+}
+
+/** Status column: LOC / SES for storage; console levels abbreviated. */
+function browserActivityStatusLabel(et, lev) {
+    const e = String(et || '');
+    const l = String(lev || '').toLowerCase();
+    if (e.startsWith('ls-')) return { text: 'LOC', cls: 'be-status-loc' };
+    if (e.startsWith('ss-')) return { text: 'SES', cls: 'be-status-ses' };
+    if (e === 'exception') return { text: 'ERR', cls: 's-err' };
+    if (e === 'csp-violation') return { text: 'CSP', cls: 'be-status-csp' };
+    if (e === 'console' || e === 'log-entry') {
+        if (l === 'error') return { text: 'ERR', cls: 's-err' };
+        if (l === 'warning' || l === 'warn') return { text: 'WRN', cls: 'be-status-wrn' };
+        if (l === 'info') return { text: 'INF', cls: 'be-status-inf' };
+        if (l === 'debug') return { text: 'DBG', cls: 'be-status-dbg' };
+        if (l === 'trace') return { text: 'TRC', cls: 'be-status-trc' };
+        if (l === 'log') return { text: 'LOG', cls: 'be-status-log' };
+        return { text: 'LOG', cls: 'be-status-log' };
+    }
+    return { text: '—', cls: 's-nil' };
+}
+
+/** Row background classes for console (pastel by level). */
+function browserConsoleLevelRowClass(et, lev) {
+    const e = String(et || '');
+    const l = String(lev || '').toLowerCase();
+    if (e !== 'console' && e !== 'log-entry') return '';
+    if (l === 'error') return 'lv-row-be-lvl-error';
+    if (l === 'warning' || l === 'warn') return 'lv-row-be-lvl-warn';
+    if (l === 'info') return 'lv-row-be-lvl-info';
+    if (l === 'debug') return 'lv-row-be-lvl-debug';
+    if (l === 'trace') return 'lv-row-be-lvl-trace';
+    if (l === 'log') return 'lv-row-be-lvl-log';
+    return 'lv-row-be-lvl-log';
+}
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 function debounce(fn, ms) {
@@ -734,7 +791,7 @@ function handleRowClick(idx, e) {
     const entry = filteredEntries[idx];
     if (!entry) return;
 
-    if (!entry.id || String(entry.type || '').toLowerCase() === 'screenshot') {
+    if (!entry.id || String(entry.type || '').toLowerCase() === 'screenshot' || entry._browserEvent) {
         selectedRequestIds.clear();
         selectionAnchorIdx = idx;
         updateSessionFromSelButton();
@@ -752,7 +809,7 @@ function handleRowClick(idx, e) {
         const hi = Math.max(anchor, idx);
         for (let i = lo; i <= hi; i++) {
             const en = filteredEntries[i];
-            if (en?.id && String(en.type || '').toLowerCase() !== 'screenshot') selectedRequestIds.add(en.id);
+            if (en?.id && String(en.type || '').toLowerCase() !== 'screenshot' && !en._browserEvent) selectedRequestIds.add(en.id);
         }
         selectionAnchorIdx = anchor;
         selectedIndex = idx;
@@ -810,14 +867,53 @@ function buildRow(entry, idx) {
     const host    = entry.host || extractHost(url);
     const dur     = entry.duration_ms ?? entry.duration;
 
-    const hl = highlightRules[url];
-    if (hl) { row.style.borderLeft = `3px solid ${hl}`; row.classList.add('hl-rule'); }
     if (String(type).toLowerCase() === 'mock') row.classList.add('lv-row-mock');
     if (String(type).toLowerCase() === 'cupnet') row.classList.add('lv-row-cupnet');
     if (String(type).toLowerCase() === 'websocket') row.classList.add('lv-row-ws');
 
     const cupnetSess = getCupnetSessionTrafficPresentation(entry);
     if (cupnetSess) row.classList.add('lv-row-cupnet-session');
+
+    if (entry._browserEvent) {
+        const et = String(entry.event_type || '');
+        const levRaw = String(entry.level || '');
+        const lev = levRaw.toLowerCase();
+        const mb = browserActivityMethodBadge(et);
+        const st = browserActivityStatusLabel(et, levRaw);
+        const isStorage = et.startsWith('ls-') || et.startsWith('ss-');
+        const isConsole = et === 'console' || et === 'log-entry';
+        if (isStorage) {
+            row.classList.add('lv-row-browser-storage');
+        } else if (isConsole) {
+            row.classList.add('lv-row-browser-console');
+            const lc = browserConsoleLevelRowClass(et, levRaw);
+            if (lc) row.classList.add(lc);
+        } else {
+            row.classList.add('lv-row-browser-event');
+            if (et === 'exception' || lev === 'error') row.classList.add('lv-row-browser-err');
+            else if (lev === 'warning' || lev === 'warn') row.classList.add('lv-row-browser-warn');
+        }
+        const ts = entry.created_at
+            ? new Date(entry.created_at).toLocaleTimeString()
+            : '';
+        const hostTxt = entry.origin || entry.source_url || '—';
+        const hostShort = hostTxt.length > 36 ? hostTxt.slice(0, 33) + '…' : hostTxt;
+        const typeLbl = entry.type || 'browser';
+        const sum = String(entry.summary || '').slice(0, 200);
+        const rowIdx = entry.id != null ? entry.id : idx + 1;
+        row.innerHTML =
+            `<div class="lv-td col-idx">${esc(rowIdx)}</div>` +
+            `<div class="lv-td col-method"><span class="method-badge ${esc(mb.cls)}" title="${esc(et)}">${esc(mb.text)}</span></div>` +
+            `<div class="lv-td col-status"><span class="lv-status ${esc(st.cls)}">${esc(st.text)}</span></div>` +
+            `<div class="lv-td col-mark"></div>` +
+            `<div class="lv-td col-host"><span class="host-chip" title="${esc(hostTxt)}">${esc(hostShort)}</span></div>` +
+            `<div class="lv-td col-type"><span class="type-chip type-browser-act" title="${esc(et)}">${esc(typeLbl)}</span></div>` +
+            `<div class="lv-td col-dur"><span class="lv-dur">${esc(ts)}</span></div>` +
+            `<div class="lv-td col-path"><span class="lv-path" title="${esc(sum)}">${esc(sum)}</span></div>`;
+        row.addEventListener('mousedown', rowModifierMouseDown);
+        row.addEventListener('click', (e) => handleRowClick(idx, e));
+        return row;
+    }
 
     if (type === 'screenshot') {
         row.classList.add('lv-row-screenshot');
@@ -839,8 +935,9 @@ function buildRow(entry, idx) {
         const tagDot = tag
             ? `<span class="tag-dot ${hasNote ? 'tag-has-note' : ''}" style="background:${esc(tag)}" title="${esc(tagTitle)}"></span>`
             : `<span class="tag-dot tag-none ${hasNote ? 'tag-has-note' : ''}" title="${esc(tagTitle)}"></span>`;
+        const rowIdx = entry.id != null ? entry.id : idx + 1;
         row.innerHTML =
-            `<div class="lv-td col-idx">${idx + 1}</div>` +
+            `<div class="lv-td col-idx">${esc(rowIdx)}</div>` +
             `<div class="lv-td col-method"><span class="method-badge m-other">Scrn</span></div>` +
             `<div class="lv-td col-status"><span class="lv-status s-2xx">OK</span></div>` +
             `<div class="lv-td col-mark"><div class="mark-stack">${tagDot}</div></div>` +
@@ -883,8 +980,9 @@ function buildRow(entry, idx) {
     const pathCell = cupnetSess
         ? `${mockBadge}${extBadge}<span class="lv-path lv-path-cupnet-sess" title="${esc(cupnetSess.pathTitle)}">${esc(cupnetSess.path)}</span>`
         : `${mockBadge}${extBadge}<span class="lv-path" title="${esc(url)}">${esc(truncUrl(url))}</span>`;
+    const rowIdx = entry.id != null ? entry.id : idx + 1;
     row.innerHTML =
-        `<div class="lv-td col-idx">${idx + 1}</div>` +
+        `<div class="lv-td col-idx">${esc(rowIdx)}</div>` +
         `<div class="lv-td col-method"><span class="method-badge ${methodCls(rowMethod)}">${esc(rowMethod) || '—'}</span></div>` +
         `<div class="lv-td col-status"><span class="lv-status ${entry.error ? 's-err' : statusCls(status)}">${status || (entry.error ? 'ERR' : '—')}${cookieMarkV3}</span></div>` +
         `<div class="lv-td col-mark">${tagDot}</div>` +
@@ -1012,17 +1110,26 @@ function addEntry(entry) {
 function entryPassesFilter(e) {
     const q = searchInput.value.trim().toLowerCase();
 
-    // Type filter (multi). By default hide per-frame WS rows (see Messages tab on WS handshake).
-    if (selectedTypes.size > 0) {
-        const eType = (e.type || '').toLowerCase();
-        if (![...selectedTypes].some(t => t.toLowerCase() === eType)) return false;
-    } else if (String(e.type || '').toLowerCase() === 'websocket_frame') {
-        return false;
+    if (e._browserEvent) {
+        // Category multiselect only (capture is controlled in Settings → Activity Monitor).
+        if (selectedActivityTypes.size > 0) {
+            if (!selectedActivityTypes.has(browserEventCategory(e))) return false;
+        } else {
+            return false;
+        }
+    } else {
+        // Type filter (multi). By default hide per-frame WS rows (see Messages tab on WS handshake).
+        if (selectedTypes.size > 0) {
+            const eType = (e.type || '').toLowerCase();
+            if (![...selectedTypes].some(t => t.toLowerCase() === eType)) return false;
+        } else if (String(e.type || '').toLowerCase() === 'websocket_frame') {
+            return false;
+        }
     }
 
-    // Status filter (multi)
+    // Status filter (multi) — HTTP only
     const s = e.status ?? e.response?.statusCode;
-    if (selectedStatuses.size > 0) {
+    if (selectedStatuses.size > 0 && !e._browserEvent) {
         let ok = false;
         if (selectedStatuses.has('success')      && s >= 200 && s < 300) ok = true;
         if (selectedStatuses.has('redirect')     && s >= 300 && s < 400) ok = true;
@@ -1038,12 +1145,12 @@ function entryPassesFilter(e) {
     }
 
     // Set-Cookie only filter
-    if (scOnlyCheckbox?.checked) {
+    if (scOnlyCheckbox?.checked && !e._browserEvent) {
         if (countSetCookies(e) === 0) return false;
     }
 
     // Hide OPTIONS requests
-    if (hideOptionsCheckbox?.checked) {
+    if (hideOptionsCheckbox?.checked && !e._browserEvent) {
         if ((e.method || '').toUpperCase() === 'OPTIONS') return false;
     }
     // Hide screenshot entries
@@ -1064,12 +1171,29 @@ function entryPassesFilter(e) {
 async function applyFilters() {
     const q = searchInput.value.trim(), fts = ftsCheckbox?.checked;
     if (fts && q) {
-        filteredEntries = await api.ftsSearch(q, currentSessionId).catch(() => []);
+        const ql = q.toLowerCase();
+        let ftsRes = await api.ftsSearch(q, currentSessionId).catch(() => []);
+        const fromFts = new Set((ftsRes || []).map((r) => r.id));
+        const beMatch = allEntries.filter((e) => {
+            if (!e._browserEvent) return false;
+            const sum = String(e.summary || '').toLowerCase();
+            const det = String(e.detail || '').toLowerCase();
+            return sum.includes(ql) || det.includes(ql);
+        }).filter(entryPassesFilter);
+        const merged = [...(ftsRes || [])];
+        for (const b of beMatch) {
+            if (!fromFts.has(b.id)) merged.push(b);
+        }
+        merged.sort((a, b) => {
+            const ta = a.created_at || '', tb = b.created_at || '';
+            return ta < tb ? -1 : ta > tb ? 1 : 0;
+        });
+        filteredEntries = merged;
         if (scOnlyCheckbox?.checked) {
-            filteredEntries = filteredEntries.filter(e => countSetCookies(e) > 0);
+            filteredEntries = filteredEntries.filter(e => e._browserEvent || countSetCookies(e) > 0);
         }
         if (hideOptionsCheckbox?.checked) {
-            filteredEntries = filteredEntries.filter(e => (e.method || '').toUpperCase() !== 'OPTIONS');
+            filteredEntries = filteredEntries.filter(e => e._browserEvent || (e.method || '').toUpperCase() !== 'OPTIONS');
         }
         if (hideScreenshotCheckbox?.checked) {
             filteredEntries = filteredEntries.filter(e => String(e.type || '').toLowerCase() !== 'screenshot');
@@ -1374,7 +1498,7 @@ async function selectEntry(idx) {
     detailPanel?.classList.remove('multi-sel');
     selectedRequestIds.clear();
     const ent0 = filteredEntries[idx];
-    if (ent0?.id && String(ent0.type || '').toLowerCase() !== 'screenshot') {
+    if (ent0?.id && String(ent0.type || '').toLowerCase() !== 'screenshot' && !ent0._browserEvent) {
         selectedRequestIds.add(ent0.id);
     }
     selectionAnchorIdx = idx;
@@ -1393,7 +1517,7 @@ async function selectEntry(idx) {
     ensureVisible(idx);
     const entry = filteredEntries[idx];
     showDetail(entry);
-    if (entry.type !== 'screenshot' && entry.id && !entry._detailLoaded) {
+    if (entry.type !== 'screenshot' && !entry._browserEvent && entry.id && !entry._detailLoaded) {
         try {
             const full = await api.getRequestDetail(entry.id);
             if (full) {
@@ -1419,6 +1543,23 @@ function showDetail(entry) {
 
     document.getElementById('lv-detail-url').textContent = url;
 
+    const idForDisplay = entry.id != null && entry.id !== '' ? String(entry.id) : '';
+    if (dRequestIdEl) {
+        dRequestIdEl.textContent = idForDisplay || '—';
+        dRequestIdEl.title = idForDisplay ? 'Database entry id' : '';
+    }
+    if (copyIdBtn) {
+        copyIdBtn.style.display = idForDisplay ? '' : 'none';
+        copyIdBtn.onclick = () => {
+            if (!idForDisplay) return;
+            navigator.clipboard.writeText(idForDisplay).then(() => {
+                copyIdBtn.textContent = '✓ Copied';
+                setTimeout(() => { copyIdBtn.textContent = '⧉ Copy ID'; }, 1500);
+            }).catch(() => {});
+        };
+    }
+    if (lvDetailIdStrip) lvDetailIdStrip.style.display = '';
+
     const dStatus = document.getElementById('d-status');
     dStatus.textContent = status || (entry.error ? 'Error' : '—');
     dStatus.className   = `meta-val lv-status ${entry.error ? 's-err' : statusCls(status)}`;
@@ -1433,8 +1574,8 @@ function showDetail(entry) {
     document.getElementById('d-tab').textContent = isExt ? `EXT :${entry.extPort || tabDisplay}` : tabDisplay;
 
     // Replay bar
-    const canAnnotate = entry.id && !String(entry.id).startsWith('ss-');
-    const showReplay = entry.id && !type.startsWith('websocket') && type !== 'screenshot' && type !== 'cupnet';
+    const canAnnotate = entry.id && !String(entry.id).startsWith('ss-') && !entry._browserEvent;
+    const showReplay = entry.id && !type.startsWith('websocket') && type !== 'screenshot' && type !== 'cupnet' && !entry._browserEvent;
     replayBar.classList.toggle('visible', showReplay);
     if (showReplay) replayBtn.dataset.entryId = entry.id;
     replayResult.classList.remove('visible');
@@ -1465,6 +1606,7 @@ function showDetail(entry) {
         lvTabs.style.display = 'none';
         lvTabBody.style.display = 'none';
         if (urlBar) urlBar.style.display = 'none';
+        if (lvDetailIdStrip) lvDetailIdStrip.style.display = '';
         if (metaRow) metaRow.style.display = 'none';
         replayBar.style.display = 'none';
         if (markPanel) markPanel.classList.remove('visible');
@@ -1525,6 +1667,61 @@ function showDetail(entry) {
         return;
     }
 
+    if (entry._browserEvent) {
+        const ssDirect = document.getElementById('lv-screenshot-direct');
+        const lvTabs = document.getElementById('lv-tabs');
+        const lvTabBody = document.getElementById('lv-tab-body');
+        const urlBar = document.getElementById('lv-detail-url-bar');
+        const metaRow = document.getElementById('lv-detail-meta');
+        const eventTabBtn = document.getElementById('lv-tab-event-btn');
+        if (ssDirect) ssDirect.style.display = 'none';
+        if (lvTabs) lvTabs.style.display = '';
+        if (lvTabBody) lvTabBody.style.display = '';
+        if (urlBar) urlBar.style.display = '';
+        if (metaRow) metaRow.style.display = '';
+        replayBar.style.display = 'none';
+        if (markPanel) markPanel.classList.remove('visible');
+        if (eventTabBtn) eventTabBtn.style.display = '';
+        document.querySelectorAll('.lv-tab-btn').forEach((b) => {
+            if (b.dataset.tab === 'event') b.style.display = '';
+            else b.style.display = 'none';
+        });
+        document.getElementById('d-status').textContent = browserActivityStatusLabel(entry.event_type, entry.level).text;
+        document.getElementById('d-method').textContent = browserActivityMethodBadge(entry.event_type).text;
+        document.getElementById('d-type').textContent = String(entry.type || 'browser');
+        document.getElementById('d-duration').textContent = '—';
+        document.getElementById('d-time').textContent = formatTime(entry.created_at || entry.timestamp);
+        document.getElementById('d-tab').textContent = (entry.tabId || entry.tab_id || '—');
+        const evPre = document.getElementById('tab-event-body');
+        if (evPre) {
+            let pretty = String(entry.detail || '');
+            let storageLine = '';
+            try {
+                const o = JSON.parse(pretty);
+                if (o.storageKind) storageLine = `Storage: ${o.storageKind}\n`;
+                pretty = JSON.stringify(o, null, 2);
+            } catch { /* keep raw */ }
+            const head = `Summary: ${entry.summary || ''}\n${storageLine}Source: ${entry.source_url || '—'}${entry.source_line != null ? ':' + entry.source_line : ''}\nOrigin: ${entry.origin || '—'}\n\n`;
+            evPre.textContent = head + pretty;
+        }
+        const copyEv = document.getElementById('tab-event-copy-btn');
+        if (copyEv) {
+            copyEv.onclick = () => {
+                const t = document.getElementById('tab-event-body')?.textContent || '';
+                navigator.clipboard.writeText(t).then(() => {
+                    copyEv.textContent = '✓ Copied';
+                    setTimeout(() => { copyEv.textContent = '⎘ Copy'; }, 1500);
+                }).catch(() => {});
+            };
+        }
+        activateTab('event', false);
+        lastActiveTab = 'event';
+        return;
+    }
+
+    const eventTabBtnHide = document.getElementById('lv-tab-event-btn');
+    if (eventTabBtnHide) eventTabBtnHide.style.display = 'none';
+
     lvTabs.style.display = '';
     lvTabBody.style.display = '';
     ssDirect.style.display = 'none';
@@ -1533,6 +1730,11 @@ function showDetail(entry) {
     replayBar.style.display = '';
     if (markPanel) markPanel.classList.toggle('visible', !!canAnnotate);
     if (canAnnotate) syncMarkPanel(entry);
+
+    document.querySelectorAll('.lv-tab-btn').forEach((b) => {
+        if (b.dataset.tab === 'event') b.style.display = 'none';
+        else b.style.display = '';
+    });
 
     const msgTabBtn = document.getElementById('lv-tab-messages-btn');
     const isWsHandshake = String(type || '').toLowerCase() === 'websocket';
@@ -1923,6 +2125,38 @@ function setupMarkPanel() {
         if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
             flushCommentAutosave();
+        }
+    });
+    const embedInNoteBtn = document.getElementById('lv-embed-in-note');
+    embedInNoteBtn?.addEventListener('click', async () => {
+        const entry = _currentDetailEntry;
+        if (!entry?.id || String(entry.id).startsWith('ss-')) return;
+        const reqHeaders = parseHeaders(entry.request_headers || entry.request?.headers);
+        const respHeaders = parseHeaders(entry.response_headers || entry.response?.headers);
+        const blockData = {
+            kind: 'request',
+            requestId: entry.id,
+            sessionId: entry.session_id ?? entry.sessionId ?? null,
+            url: entry.url || '',
+            method: (entry.method || 'GET').toUpperCase(),
+            status: entry.status ?? entry.response?.statusCode ?? null,
+            statusText: entry.statusText ?? '',
+            mimeType: entry.type || '',
+            requestHeaders: reqHeaders,
+            responseHeaders: respHeaders,
+            requestBody: entry.request_body ?? entry.request?.body ?? null,
+            responseBody: entry.response_body ?? entry.responseBody ?? null,
+            responseSize: entry.response_size ?? entry.size ?? null,
+            timing: entry.duration_ms ?? entry.duration ?? null,
+            timestamp: entry.created_at ?? entry.timestamp ?? null,
+            tlsVersion: entry.tls_version ?? null,
+            protocol: entry.protocol ?? null,
+        };
+        try {
+            await api.notesEmbedRequest(blockData);
+            flashMarkStatus('Copied to note');
+        } catch (e) {
+            flashMarkStatus(String(e?.message || e), true);
         }
     });
 }
@@ -2484,6 +2718,7 @@ hideScreenshotCheckbox?.addEventListener('change', applyFilters);
 clearSearchBtn?.addEventListener('click', () => { searchInput.value = ''; applyFilters(); });
 filterSession?.addEventListener('change', applyFilters);
 setupMultiSelects();
+syncMsBadge('ms-activity-badge', 'ms-activity-btn', selectedActivityTypes.size);
 
 lvSessionFromSelBtn?.addEventListener('click', async () => {
     if (selectedRequestIds.size === 0) return;
@@ -2924,6 +3159,27 @@ api.onFocusRequestUrl?.(({ url }) => {
     }).catch(() => {});
 });
 
+api.onFocusRequestId?.(({ id }) => {
+    const rid = Number(id);
+    if (!Number.isFinite(rid) || rid <= 0) return;
+    const pick = () => {
+        const i = filteredEntries.findIndex((x) => Number(x.id) === rid);
+        if (i >= 0) {
+            selectEntry(i);
+            return;
+        }
+        const exists = allEntries.some((x) => Number(x.id) === rid);
+        if (!exists) return;
+        searchInput.value = '';
+        if (ftsCheckbox) ftsCheckbox.checked = false;
+        applyFilters().then(() => {
+            const j = filteredEntries.findIndex((x) => Number(x.id) === rid);
+            if (j >= 0) selectEntry(j);
+        }).catch(() => {});
+    };
+    pick();
+});
+
 // Trace mode: full req/res to DB, ⌘/Ctrl+click opens Trace window
 async function updateTraceBtnState() {
     if (!traceModeBtn || !api.getTraceMode) return;
@@ -2966,11 +3222,6 @@ function applyWsHandshakeMessageCount(payload) {
     if (patch(allEntries) || patch(filteredEntries)) scheduleRenderVirtual();
 }
 api.onWsHandshakeMessageCount?.(applyWsHandshakeMessageCount);
-
-api.onRuleHighlight?.((({ url, color }) => {
-    highlightRules[url] = color;
-    scheduleRenderVirtual();
-}));
 
 function _onInterceptRuleMatchedToast({ type, ruleName, url }) {
     showInterceptToast(type, ruleName, url);
@@ -3112,6 +3363,7 @@ function setupMultiSelects() {
     setupMultiSelect('ms-type-btn',   'ms-type-drop',   'ms-type-badge',   selectedTypes);
     setupMultiSelect('ms-status-btn', 'ms-status-drop', 'ms-status-badge', selectedStatuses);
     setupMultiSelect('ms-tab-btn',    'ms-tab-drop',    'ms-tab-badge',    selectedTabs);
+    setupMultiSelect('ms-activity-btn', 'ms-activity-drop', 'ms-activity-badge', selectedActivityTypes);
 }
 
 // Close all dropdowns when clicking outside

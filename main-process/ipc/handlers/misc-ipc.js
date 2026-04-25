@@ -155,8 +155,8 @@ function registerMiscIpc(ctx) {
     }
 
     /**
-     * Main window preview must use the active tab BrowserView — capturePage on the shell
-     * webContents does not include the BrowserView layer, so it would never update with the site.
+     * Main window preview must use the active tab WebContentsView — capturePage on the shell
+     * webContents does not include the tab WebContentsView layer, so it would never update with the site.
      */
     async function _thumbnailDataUrlForMainWindowEntry(maxW, maxH) {
         try {
@@ -274,6 +274,52 @@ function registerMiscIpc(ctx) {
         } catch (_) {
             return false;
         }
+    });
+
+    // Omnibox: separate WebContentsView above tab (see tab-manager showOmniboxOverlay)
+    ctx.ipcMain.handle('omnibox-overlay-show', async () => {
+        try {
+            if (ctx.tabManager && typeof ctx.tabManager.showOmniboxOverlay === 'function') {
+                return await ctx.tabManager.showOmniboxOverlay();
+            }
+            return false;
+        } catch (_) {
+            return false;
+        }
+    });
+    ctx.ipcMain.handle('omnibox-overlay-hide', () => {
+        try {
+            if (ctx.tabManager && typeof ctx.tabManager.hideOmniboxOverlay === 'function') {
+                ctx.tabManager.hideOmniboxOverlay();
+            }
+            return true;
+        } catch (_) {
+            return false;
+        }
+    });
+    ctx.ipcMain.handle('omnibox-overlay-update', (_, payload) => {
+        try {
+            if (ctx.tabManager && typeof ctx.tabManager.updateOmniboxOverlay === 'function') {
+                return ctx.tabManager.updateOmniboxOverlay(payload);
+            }
+            return false;
+        } catch (_) {
+            return false;
+        }
+    });
+    ctx.ipcMain.on('omnibox-overlay-select', (_, idx) => {
+        try {
+            if (ctx.mainWindow && !ctx.mainWindow.isDestroyed()) {
+                ctx.mainWindow.webContents.send('omnibox-overlay-select', idx);
+            }
+        } catch (_) { /* ignore */ }
+    });
+    ctx.ipcMain.on('omnibox-overlay-dismiss', () => {
+        try {
+            if (ctx.mainWindow && !ctx.mainWindow.isDestroyed()) {
+                ctx.mainWindow.webContents.send('omnibox-overlay-dismiss');
+            }
+        } catch (_) { /* ignore */ }
     });
 }
 

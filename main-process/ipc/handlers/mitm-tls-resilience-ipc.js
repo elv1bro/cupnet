@@ -30,7 +30,15 @@ function registerMitmTlsResilienceIpc(ctx) {
         },
     }));
     ctx.ipcMain.handle('proxy-resilience-state', () => ctx.proxyResilience.snapshot());
-    ctx.ipcMain.handle('mitm-get-ca-cert',  ()         => ctx.mitmProxy?.getCACert() || '');
+    ctx.ipcMain.handle('mitm-get-ca-cert', () => {
+        try {
+            const fromProxy = ctx.mitmProxy?.getCACert?.();
+            if (fromProxy && String(fromProxy).trim()) return fromProxy;
+            const caPath = ctx.path.join(ctx.app.getPath('userData'), 'mitm-ca', 'ca-cert.pem');
+            if (ctx.fs.existsSync(caPath)) return ctx.fs.readFileSync(caPath, 'utf8');
+        } catch { /* ignore */ }
+        return '';
+    });
     ctx.ipcMain.handle('mitm-set-browser',  (_, prof)  => { ctx.mitmProxy?.setBrowser(prof); return { success: true }; });
     ctx.ipcMain.handle('mitm-set-upstream', (_, url)   => { ctx.mitmProxy?.setUpstream(url);  return { success: true }; });
 

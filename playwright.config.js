@@ -2,9 +2,14 @@
 
 const path = require('path');
 
+const skipE2e =
+    process.env.CUPNET_SKIP_E2E === '1' ||
+    process.env.SKIP_E2E === '1';
+
 /** @type {import('@playwright/test').PlaywrightTestConfig} */
 module.exports = {
     testDir: path.join(__dirname, 'tests', 'e2e'),
+    ...(skipE2e ? { testIgnore: ['**/*'] } : {}),
     // beforeAll: launch + firstWindow + waitMitmReady (до 180s) — иначе хук обрывается раньше MITM
     timeout: 420_000,
     expect: { timeout: 45_000 },

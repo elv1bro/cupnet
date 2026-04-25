@@ -257,7 +257,7 @@ export default function es(kbdRow) {
     <h2>17) MITM · Archivo CA · Omisiones</h2>
     <p>El MITM termina TLS con un CA generado por CupNet, registra texto plano si corresponde y vuelve a cifrar hacia el ascendente con AzureTLS.</p>
     <h3>Confianza dentro de la app</h3>
-    <p>Las BrowserViews confían en el CA automáticamente — rara vez necesita importar para pestañas internas.</p>
+    <p>Las superficies de pestaña internas (WebContentsView) confían en el CA automáticamente — rara vez necesita importar para pestañas internas.</p>
     <h3>PEM en disco (herramientas externas)</h3>
     <ul>
         <li><b>macOS:</b> <code>~/Library/Application Support/CupNet/mitm-ca/ca-cert.pem</code></li>

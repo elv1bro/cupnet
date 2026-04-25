@@ -138,7 +138,13 @@ function createProxyNotifyBroadcast({
     function notifyProxyProfilesList() {
         const db = typeof getDb === 'function' ? getDb() : null;
         if (!db || typeof db.getProxyProfiles !== 'function') return;
-        const list = db.getProxyProfiles();
+        let list;
+        try {
+            list = db.getProxyProfiles();
+        } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'proxy.profiles.notify.failed', context: { op: 'notifyProxyProfilesList' } }, err, 'warn');
+            return;
+        }
         const proxyManagerWindow = typeof getProxyManagerWindow === 'function' ? getProxyManagerWindow() : null;
         const mainWindow = typeof getMainWindow === 'function' ? getMainWindow() : null;
         if (proxyManagerWindow && !proxyManagerWindow.isDestroyed()) {

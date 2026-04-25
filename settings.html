@@ -2,449 +2,516 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>[CupNet] Settings</title>
-    <style>
-        :root {
-            --bg: #0f1117;
-            --panel: #171a24;
-            --panel-soft: #1c2030;
-            --border: #2d3447;
-            --text: #e5e7eb;
-            --text-dim: #9ca3af;
-            --accent: #3b82f6;
-            --ok: #22c55e;
-        }
-        * { box-sizing: border-box; }
-        html, body { height: 100%; margin: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            overflow: hidden;
-            position: relative;
-        }
-        body::before {
-            content: "";
-            position: fixed;
-            right: 56px;
-            bottom: 64px;
-            width: 340px;
-            height: 340px;
-            border-radius: 50%;
-            pointer-events: none;
-            background-image: url("icons/icon.png");
-            background-repeat: no-repeat;
-            background-position: center;
-            background-size: 86% 86%;
-            opacity: 0.06;
-            filter: saturate(0.9) brightness(0.95);
-            z-index: 0;
-        }
-        .settings-watermark-label {
-            position: fixed;
-            right: 56px;
-            bottom: 26px;
-            width: 340px;
-            z-index: 0;
-            pointer-events: none;
-            font-size: 14px;
-            font-weight: 700;
-            text-transform: uppercase;
-            color: rgba(255,255,255,0.32);
-            letter-spacing: 0.12em;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            text-align: center;
-            gap: 4px;
-            text-shadow: 0 2px 10px rgba(0,0,0,0.28);
-        }
-        .settings-watermark-version {
-            color: rgba(148,163,184,0.86);
-            font-weight: 600;
-            font-size: 12px;
-            letter-spacing: 0.08em;
-            text-transform: none;
-        }
-        .settings-shell {
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-            position: relative;
-            z-index: 1;
-        }
-        .settings-head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 13px 18px;
-            border-bottom: 1px solid var(--border);
-            background: #121521;
-        }
-        .settings-title {
-            margin: 0;
-            font-size: 16px;
-            font-weight: 700;
-            letter-spacing: 0.2px;
-        }
-        .settings-subtitle {
-            margin: 4px 0 0;
-            color: var(--text-dim);
-            font-size: 12.5px;
-        }
-        .settings-main {
-            flex: 1;
-            min-height: 0;
-            display: flex;
-        }
-        .settings-sidebar {
-            width: 250px;
-            flex: 0 0 250px;
-            border-right: 1px solid var(--border);
-            background: #131827;
-            padding: 10px;
-            overflow-y: auto;
-        }
-        .settings-sidebar-title {
-            margin: 0 0 10px;
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: var(--text-dim);
-            font-weight: 700;
-            padding: 0 6px;
-        }
-        .sp-tab-bar {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-        .sp-tab-btn {
-            border: 1px solid transparent;
-            border-radius: 7px;
-            background: transparent;
-            color: var(--text-dim);
-            font-size: 12.5px;
-            font-weight: 500;
-            padding: 8px 10px;
-            min-height: 32px;
-            cursor: pointer;
-            text-align: left;
-            width: 100%;
-        }
-        .sp-tab-btn:hover {
-            background: rgba(255,255,255,0.04);
-            color: var(--text);
-        }
-        .sp-tab-btn.active {
-            color: #dbeafe;
-            border-color: #274989;
-            background: rgba(59, 130, 246, 0.2);
-            font-weight: 600;
-        }
-        .settings-content {
-            flex: 1;
-            min-width: 0;
-            display: flex;
-            flex-direction: column;
-        }
-        .settings-body {
-            flex: 1;
-            min-height: 0;
-            overflow: auto;
-            padding: 18px 24px 22px;
-        }
-        .sp-tab-body { display: none; }
-        .sp-tab-body.active { display: block; }
-
-        .grid-2 {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 14px;
-            align-items: start;
-            width: min(1100px, 100%);
-            margin: 0 auto;
-        }
-        .card {
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            background: var(--panel);
-            padding: 14px;
-        }
-        .card-title {
-            margin: 0 0 10px;
-            font-size: 12.5px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: var(--text-dim);
-            font-weight: 700;
-        }
-        .row { display: flex; align-items: center; gap: 12px; }
-        .row.space { justify-content: space-between; }
-        .hint { color: var(--text-dim); font-size: 11.5px; margin-top: 8px; line-height: 1.4; }
-        .sp-btn {
-            border: 1px solid #3b445e;
-            background: var(--panel-soft);
-            color: var(--text);
-            border-radius: 7px;
-            min-height: 32px;
-            padding: 8px 14px;
-            font-size: 11.5px;
-            cursor: pointer;
-            line-height: 1;
-            letter-spacing: 0.1px;
-        }
-        .sp-btn:hover { background: #252c40; }
-        .sp-input, .sp-textarea {
-            width: 100%;
-            border: 1px solid #3b445e;
-            border-radius: 7px;
-            background: #131827;
-            color: var(--text);
-            padding: 8px 9px;
-            font-size: 12.5px;
-        }
-        .sp-textarea { min-height: 104px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.35; }
-        .tracking-table {
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            overflow: hidden;
-            background: var(--panel);
-        }
-        .tracking-row {
-            padding: 10px 11px;
-            border-bottom: 1px solid var(--border);
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            cursor: pointer;
-        }
-        .tracking-row:last-child { border-bottom: 0; }
-        .tracking-row-main { display: flex; align-items: center; gap: 9px; min-height: 20px; }
-        .tracking-row-main input { width: 12px; height: 12px; margin: 0; }
-        .tracking-row-label { font-size: 12.5px; text-align: left; }
-        .tracking-row-hint { margin-left: 21px; color: var(--text-dim); font-size: 11.5px; line-height: 1.4; text-align: left; }
-        .tracking-row:has(input:checked) { background: rgba(59, 130, 246, 0.14); }
-        .limit-grid { display: grid; gap: 10px; }
-        .limit-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; min-height: 30px; }
-        .limit-label { color: var(--text-dim); font-size: 11.5px; }
-        .limit-input { width: 86px; text-align: center; }
-        .perf-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 12.5px;
-        }
-        .perf-table th, .perf-table td {
-            border-bottom: 1px solid var(--border);
-            padding: 8px 9px;
-            text-align: left;
-        }
-        .perf-table th { color: var(--text-dim); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.3px; }
-        .perf-table td.num, .perf-table th.num { text-align: right; }
-        .status-inline { font-size: 11.5px; color: var(--text-dim); margin-left: 8px; }
-        .cam-mode-row { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-        .cam-mode-row label { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; cursor: pointer; text-align: left; }
-        .cam-mode-row input { margin-top: 2px; flex-shrink: 0; }
-        .device-table { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--panel-soft); min-height: 48px; }
-        .device-row {
-            display: grid;
-            grid-template-columns: 22px 36px 18px 1fr;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 10px;
-            border-bottom: 1px solid var(--border);
-            font-size: 12.5px;
-            cursor: grab;
-        }
-        .device-row:last-child { border-bottom: 0; }
-        .device-row.drag-over { background: rgba(59, 130, 246, 0.12); }
-        .device-drag-handle { color: var(--text-dim); cursor: grab; user-select: none; font-size: 14px; line-height: 1; }
-        .device-priority-num { color: var(--accent); font-weight: 700; font-size: 11px; }
-        .device-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .device-row .device-cb { width: 14px; height: 14px; margin: 0; }
-        .device-row.mode-all { grid-template-columns: 22px 36px 1fr; }
-    </style>
+    <title>CupNet Settings</title>
+    <link rel="stylesheet" href="shared-dark-theme.css">
+    <link rel="stylesheet" href="settings.css">
 </head>
 <body>
 <div class="settings-shell">
     <header class="settings-head">
-        <div>
-            <h1 class="settings-title">[CupNet] Settings</h1>
-            <p class="settings-subtitle">General, Tracking, Devices and Performance</p>
+        <div class="settings-head-main">
+            <h1 class="settings-title">CupNet Settings</h1>
+            <p class="settings-subtitle" id="settings-subtitle">Startup, behavior, appearance, network, capture, and certificate</p>
+            <div class="settings-hub-search-wrap">
+                <label for="settings-hub-search" class="visually-hidden">Search settings</label>
+                <input type="search" id="settings-hub-search" placeholder="Search settings…" autocomplete="off" spellcheck="false" />
+            </div>
         </div>
-        <span id="settings-saved-status" class="status-inline"></span>
+        <div class="settings-head-right">
+            <div id="settings-persist-status" class="settings-persist-status" data-state="saved" role="status" aria-live="polite">All changes saved</div>
+        </div>
     </header>
 
     <div class="settings-main">
-        <aside class="settings-sidebar">
-            <h3 class="settings-sidebar-title">Settings</h3>
-            <div class="sp-tab-bar">
-                <button class="sp-tab-btn active" data-sp-tab="general">General</button>
-                <button class="sp-tab-btn" data-sp-tab="tracking">Tracking</button>
-                <button class="sp-tab-btn" data-sp-tab="devices">Devices</button>
-                <button class="sp-tab-btn" data-sp-tab="performance">Performance</button>
+        <div class="settings-sidebar-wrap" id="settings-sidebar-wrap">
+            <div class="settings-sidebar-inner">
+                <div class="settings-sidebar-toolbar">
+                    <button type="button" class="sidebar-collapse-btn" id="sidebar-collapse-btn" title="Collapse sidebar" aria-expanded="true" aria-controls="settings-sidebar-nav">◀</button>
+                </div>
+                <h3 class="settings-sidebar-title" id="settings-sidebar-heading">Categories</h3>
+                <nav class="sp-tab-bar" id="settings-sidebar-nav" aria-labelledby="settings-sidebar-heading">
+                    <button type="button" class="sp-tab-btn active" data-sp-tab="general" data-sp-title="General">
+                        <svg class="sp-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+                        <span class="sp-tab-label">General</span>
+                    </button>
+                    <button type="button" class="sp-tab-btn" data-sp-tab="appearance" data-sp-title="Appearance">
+                        <svg class="sp-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>
+                        <span class="sp-tab-label">Appearance</span>
+                    </button>
+                    <button type="button" class="sp-tab-btn" data-sp-tab="network" data-sp-title="Network">
+                        <svg class="sp-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                        <span class="sp-tab-label">Network</span>
+                    </button>
+                    <button type="button" class="sp-tab-btn" data-sp-tab="capture" data-sp-title="Capture &amp; logging">
+                        <svg class="sp-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                        <span class="sp-tab-label">Capture</span>
+                    </button>
+                    <button type="button" class="sp-tab-btn" data-sp-tab="certificate" data-sp-title="Certificate">
+                        <svg class="sp-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><path d="M14 2v6h6"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
+                        <span class="sp-tab-label">Certificate</span>
+                    </button>
+                    <button type="button" class="sp-tab-btn" data-sp-tab="devices" data-sp-title="Devices">
+                        <svg class="sp-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+                        <span class="sp-tab-label">Devices</span>
+                    </button>
+                    <button type="button" class="sp-tab-btn" data-sp-tab="shortcuts" data-sp-title="Keyboard shortcuts">
+                        <svg class="sp-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M14 8h.01"/></svg>
+                        <span class="sp-tab-label">Shortcuts</span>
+                    </button>
+                    <button type="button" class="sp-tab-btn" data-sp-tab="performance" data-sp-title="Performance">
+                        <svg class="sp-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                        <span class="sp-tab-label">Performance</span>
+                    </button>
+                    <button type="button" class="sp-tab-btn" data-sp-tab="about" data-sp-title="About">
+                        <svg class="sp-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+                        <span class="sp-tab-label">About</span>
+                    </button>
+                </nav>
+                <div class="settings-sidebar-footer">
+                    <span id="settings-sidebar-version" class="settings-sidebar-footer-version">CupNet</span>
+                </div>
             </div>
-        </aside>
+        </div>
 
         <section class="settings-content">
             <main class="settings-body">
+                <!-- General -->
                 <section id="sp-tab-general" class="sp-tab-body active">
-            <div class="grid-2">
-                <div class="card">
-                    <div class="row space">
-                        <h3 class="card-title">Behavior</h3>
-                    </div>
-                    <label class="row" style="margin-top:4px">
-                        <input type="checkbox" id="sp-paste-unlock">
-                        <span>Unblock copy / paste</span>
-                    </label>
-                    <div class="hint">Prevents sites from blocking Ctrl+C / Ctrl+V / right-click paste.</div>
-                    <div class="row" style="margin-top:12px;align-items:center;gap:10px;flex-wrap:wrap">
-                        <label for="sp-max-tabs-warning" style="margin:0;font-size:12.5px;color:var(--text)">Tabs before warning</label>
-                        <input type="number" id="sp-max-tabs-warning" min="1" max="200" step="1"
-                            style="width:72px;padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--panel-soft);color:var(--text);font-size:12.5px">
-                    </div>
-                    <div class="hint">When you already have at least this many tabs, CupNet asks before opening another. Range 1–200. Default 10.</div>
-                </div>
+                    <div class="sp-tab-stack">
+                        <p class="sp-tab-intro"><strong>General</strong> Startup page, clipboard behavior, tab warnings, and backup of your preferences.</p>
+                        <div class="grid-2">
+                            <div class="card" data-sp-search="homepage start page new tab url startup onboarding wizard first run welcome">
+                                <h3 class="card-title">Startup</h3>
+                                <p class="card-title-desc">New tab URL and first-run wizard</p>
+                                <label class="sp-field-label" for="sp-homepage-url">Homepage URL (new tab)</label>
+                                <input type="text" id="sp-homepage-url" class="sp-input" placeholder="https://… or cupnet://newtab" autocomplete="off" />
+                                <p class="field-error" id="sp-homepage-url-err" hidden></p>
+                                <p class="hint">Saves automatically after you pause typing. Full traffic mode and proxy profiles are in <strong>Proxy Manager</strong>.</p>
+                                <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+                                    <p class="sp-field-label" style="margin-bottom:8px">First-run wizard</p>
+                                    <p id="sp-onboarding-status" class="sp-help-lead" style="margin:0 0 10px;font-size:13px;color:var(--text-dim)">—</p>
+                                    <div class="card-actions" style="justify-content:flex-start">
+                                        <button type="button" class="sp-btn" id="sp-reset-onboarding">Reset welcome wizard…</button>
+                                    </div>
+                                    <p class="hint" style="margin-top:8px;margin-bottom:0">Clears the completed flag, opens the welcome window, and shows the wizard again on the next launch if you close it without finishing.</p>
+                                </div>
+                            </div>
 
-                <div class="card">
-                    <div class="row space">
-                        <h3 class="card-title">MITM bypass domains</h3>
-                        <button class="sp-btn" id="sp-save-bypass">Save</button>
-                    </div>
-                    <textarea id="sp-bypass-domains" class="sp-textarea" placeholder="challenges.cloudflare.com&#10;*.recaptcha.net&#10;*.gstatic.com"></textarea>
-                    <div class="hint">Domains here go direct (no MITM). One domain per line, supports <code>*.example.com</code>.</div>
-                </div>
+                            <div class="card" data-sp-search="clipboard paste copy unlock behavior tabs warning">
+                                <h3 class="card-title">Behavior</h3>
+                                <p class="card-title-desc">Clipboard and tab limit</p>
+                                <label class="sp-toggle" for="sp-paste-unlock">
+                                    <input type="checkbox" id="sp-paste-unlock" class="sp-toggle-input">
+                                    <span class="sp-toggle-track" aria-hidden="true"></span>
+                                    <span class="sp-toggle-label">Unblock copy / paste on sites that restrict the clipboard</span>
+                                </label>
+                                <div class="sp-help-panel" style="margin-top:12px">
+                                    <p class="sp-help-lead" style="margin-bottom:8px">Injects a capture-phase listener so copy, cut, paste, and context menu behave like a normal desktop app.</p>
+                                </div>
+                                <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+                                    <label class="sp-field-label" for="sp-max-tabs-warning">Tabs before warning</label>
+                                    <div class="sp-setting-inline">
+                                        <input type="number" id="sp-max-tabs-warning" min="1" max="200" step="1" aria-describedby="sp-max-tabs-hint">
+                                        <span id="sp-max-tabs-hint" style="font-size:12px;color:var(--text-dim)">Range 1–200 · default 10</span>
+                                    </div>
+                                    <p class="field-error" id="sp-max-tabs-warning-err" hidden></p>
+                                    <p class="hint" style="margin-top:8px;margin-bottom:0">Saves automatically when you pause typing, press Enter, Tab, or leave the field.</p>
+                                </div>
+                            </div>
 
-                <div class="card">
-                    <div class="row space">
-                        <h3 class="card-title">URL filter patterns</h3>
-                        <button class="sp-btn" id="sp-save-filters">Save filters</button>
+                            <div class="card" data-sp-search="export import backup reset settings json data">
+                                <h3 class="card-title">Data</h3>
+                                <p class="card-title-desc">Export, import, or restore factory defaults</p>
+                                <div class="card-actions" style="justify-content:flex-start;margin-top:0">
+                                    <button type="button" class="sp-btn sp-btn-primary" id="sp-export-settings">Export settings…</button>
+                                    <button type="button" class="sp-btn" id="sp-import-settings">Import settings…</button>
+                                    <button type="button" class="sp-btn sp-btn-danger" id="sp-reset-all-settings">Reset all to defaults…</button>
+                                </div>
+                                <p class="hint">Import merges into your current profile. You will be prompted before destructive actions.</p>
+                                <input type="file" id="sp-import-file" accept="application/json,.json" class="visually-hidden" />
+                            </div>
+                        </div>
                     </div>
-                    <textarea id="sp-filter-patterns" class="sp-textarea" placeholder="*google.com*&#10;*analytics*&#10;*tracking*"></textarea>
-                </div>
-            </div>
                 </section>
 
-                <section id="sp-tab-tracking" class="sp-tab-body">
-            <div class="grid-2">
-                <div class="card">
-                    <div class="row space">
-                        <h3 class="card-title">Tracking triggers</h3>
-                        <div class="row">
-                            <button class="sp-btn" id="sp-track-enable-all">Enable all</button>
-                            <button class="sp-btn" id="sp-track-disable-all">Disable all</button>
+                <!-- Appearance -->
+                <section id="sp-tab-appearance" class="sp-tab-body">
+                    <div class="sp-tab-stack">
+                        <p class="sp-tab-intro"><strong>Appearance</strong> Theme and UI scale are stored locally and applied where supported.</p>
+                        <div class="grid-2">
+                            <div class="card" data-sp-search="theme dark light system appearance">
+                                <h3 class="card-title">Theme</h3>
+                                <p class="card-title-desc">Window chrome preference (stored in UI preferences)</p>
+                                <label class="sp-field-label" for="sp-ui-theme">Color theme</label>
+                                <select id="sp-ui-theme" class="sp-select">
+                                    <option value="dark">Dark</option>
+                                    <option value="light">Light</option>
+                                    <option value="system">Match system</option>
+                                </select>
+                                <p class="hint">CupNet windows that read this preference will follow on next open.</p>
+                            </div>
+                            <div class="card" data-sp-search="font size scale zoom ui">
+                                <h3 class="card-title">UI scale</h3>
+                                <p class="card-title-desc">Relative size for this Settings window</p>
+                                <label class="sp-field-label" for="sp-ui-scale">Scale</label>
+                                <select id="sp-ui-scale" class="sp-select">
+                                    <option value="100">100%</option>
+                                    <option value="110">110%</option>
+                                    <option value="125">125%</option>
+                                </select>
+                            </div>
                         </div>
                     </div>
-                    <div class="tracking-table">
-                        <label class="tracking-row" for="sp-track-click">
-                            <span class="tracking-row-main"><input type="checkbox" id="sp-track-click"><span class="tracking-row-label">On user click (toolbar / F2)</span></span>
-                            <span class="tracking-row-hint">Captures when screenshot is triggered manually.</span>
-                        </label>
-                        <label class="tracking-row" for="sp-track-page-load">
-                            <span class="tracking-row-main"><input type="checkbox" id="sp-track-page-load"><span class="tracking-row-label">On page load complete</span></span>
-                            <span class="tracking-row-hint">Captures after active page finishes loading.</span>
-                        </label>
-                        <label class="tracking-row" for="sp-track-network-pending">
-                            <span class="tracking-row-main"><input type="checkbox" id="sp-track-network-pending"><span class="tracking-row-label">On network pending change</span></span>
-                            <span class="tracking-row-hint">Captures when pending requests change above threshold.</span>
-                        </label>
-                        <label class="tracking-row" for="sp-track-mouse">
-                            <span class="tracking-row-main"><input type="checkbox" id="sp-track-mouse"><span class="tracking-row-label">On mouse activity (every 5 s)</span></span>
-                            <span class="tracking-row-hint">Captures during active mouse use; dedup keeps changed content only.</span>
-                        </label>
-                        <label class="tracking-row" for="sp-track-typing-end">
-                            <span class="tracking-row-main"><input type="checkbox" id="sp-track-typing-end"><span class="tracking-row-label">On tapping / typing pause (700 ms)</span></span>
-                            <span class="tracking-row-hint">Captures after keyboard input pauses in fields (also Enter and blur).</span>
-                        </label>
-                        <label class="tracking-row" for="sp-track-scroll-end">
-                            <span class="tracking-row-main"><input type="checkbox" id="sp-track-scroll-end"><span class="tracking-row-label">On scroll end (2 s)</span></span>
-                            <span class="tracking-row-hint">Captures 2 seconds after scrolling stops on the active page.</span>
-                        </label>
-                        <label class="tracking-row" for="sp-track-rule">
-                            <span class="tracking-row-main"><input type="checkbox" id="sp-track-rule"><span class="tracking-row-label">On rule screenshot action</span></span>
-                            <span class="tracking-row-hint">Captures when a matching rule triggers screenshot action.</span>
-                        </label>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <h3 class="card-title">Thresholds and limits</h3>
-                    <div class="limit-grid">
-                        <div class="limit-row">
-                            <label class="limit-label" for="sp-track-pending-threshold">Pending delta threshold</label>
-                            <input id="sp-track-pending-threshold" class="sp-input limit-input" type="number" min="1" max="50" step="1">
-                        </div>
-                        <div class="limit-row">
-                            <label class="limit-label" for="sp-track-cooldown-ms">Cooldown (ms)</label>
-                            <input id="sp-track-cooldown-ms" class="sp-input limit-input" type="number" min="200" max="30000" step="100">
-                        </div>
-                        <div class="limit-row">
-                            <label class="limit-label" for="sp-track-max-per-minute">Max per minute</label>
-                            <input id="sp-track-max-per-minute" class="sp-input limit-input" type="number" min="1" max="120" step="1">
-                        </div>
-                    </div>
-                    <div class="hint">Dedup is always on. Background, home/new-tab and direct tabs are skipped.</div>
-                </div>
-            </div>
                 </section>
 
+                <!-- Network -->
+                <section id="sp-tab-network" class="sp-tab-body">
+                    <div class="sp-tab-stack">
+                        <p class="sp-tab-intro"><strong>Network</strong> Effective traffic mode and hosts that bypass CupNet MITM (direct TLS to origin).</p>
+                        <div class="grid-2">
+                            <div class="card" data-sp-search="traffic mode mitm network effective proxy">
+                                <h3 class="card-title">Traffic</h3>
+                                <p class="card-title-desc">Read-only effective mode</p>
+                                <p class="sp-field-label">Effective traffic mode</p>
+                                <p id="sp-effective-traffic" class="sp-help-lead" style="margin:0;font-family:ui-monospace,monospace;font-size:12px;color:#cbd5e1">—</p>
+                                <p class="hint">Change mode and TLS profile in <strong>Proxy Manager</strong>.</p>
+                            </div>
+                            <div class="card" data-sp-search="mitm bypass domains direct tls proxy host">
+                                <h3 class="card-title">MITM bypass domains</h3>
+                                <p class="card-title-desc">Hosts using a direct connection (not CupNet MITM)</p>
+                                <label class="sp-field-label" for="sp-bypass-domains">Hosts (one per line)</label>
+                                <textarea id="sp-bypass-domains" class="sp-textarea" placeholder="One host or pattern per line" rows="5" aria-describedby="sp-bypass-help"></textarea>
+                                <p class="field-error" id="sp-bypass-domains-err" hidden></p>
+                                <div class="sp-help-panel" id="sp-bypass-help">
+                                    <ul class="sp-help-list">
+                                        <li><span class="sp-help-k">Use</span> Site breaks with TLS interception, or needs native TLS / fingerprint.</li>
+                                        <li><span class="sp-help-k">Tech</span> Sent to Chromium <code>proxyBypassRules</code> (plus built-in entries such as local and some video hosts).</li>
+                                        <li><span class="sp-help-k">Not</span> Log filter patterns — those only hide rows in the Network Log.</li>
+                                    </ul>
+                                    <div class="sp-help-examples">
+                                        <span class="sp-help-k" style="display:block;margin-bottom:6px">Examples</span>
+                                        <code>challenges.cloudflare.com</code> <code>*.example-cdn.com</code> <code>bank.example.com</code>
+                                    </div>
+                                </div>
+                                <p class="hint">Saves automatically after you pause typing or leave the field.</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Capture -->
+                <section id="sp-tab-capture" class="sp-tab-body">
+                    <div class="sp-tab-stack">
+                        <p class="sp-tab-intro"><strong>Capture &amp; logging</strong> Network log noise filters, optional full HTTP capture for Trace viewer, Activity Monitor, and screenshot triggers.</p>
+                        <div class="grid-2">
+                            <div class="card" data-sp-search="network log filter url hide analytics noise trace full request response capture">
+                                <h3 class="card-title">Network Log &amp; Trace</h3>
+                                <p class="card-title-desc">Filter noisy URLs in the log; optionally store full bodies in Trace (separate from filters and Activity Monitor).</p>
+                                <label class="sp-field-label" for="sp-filter-patterns">Hide URLs matching patterns (one per line)</label>
+                                <textarea id="sp-filter-patterns" class="sp-textarea" placeholder="*analytics*&#10;*doubleclick*&#10;*tracking*" rows="5" aria-describedby="sp-filters-help"></textarea>
+                                <p class="field-error" id="sp-filter-patterns-err" hidden></p>
+                                <label class="sp-toggle" for="sp-trace-mode" style="margin-top:14px">
+                                    <input type="checkbox" id="sp-trace-mode" class="sp-toggle-input">
+                                    <span class="sp-toggle-track" aria-hidden="true"></span>
+                                    <span class="sp-toggle-label">Trace viewer: save full HTTP request/response bodies (uses more disk; open from command palette or Tools)</span>
+                                </label>
+                                <div class="sp-help-panel" id="sp-filters-help" style="margin-top:14px">
+                                    <p class="sp-help-lead">URL patterns only affect what appears in the Network Log database — not MITM, not Trace content. Trace is off unless the toggle above is on.</p>
+                                    <ul class="sp-help-list">
+                                        <li><span class="sp-help-k">Match</span> <code>*</code> = any substring (case-insensitive). One pattern per line.</li>
+                                        <li><span class="sp-help-k">Note</span> <code>file://</code> requests are never logged, regardless of patterns.</li>
+                                    </ul>
+                                </div>
+                                <p class="hint">Saves automatically after you pause typing or leave the field.</p>
+                            </div>
+
+                            <div class="card" data-sp-search="activity monitor network log console storage exception csp browser events">
+                                <h3 class="card-title">Network Activity Monitor</h3>
+                                <p class="card-title-desc">Console, storage, and browser log events in the Network Activity timeline</p>
+                                <label class="sp-toggle" for="sp-activity-monitor-enabled" style="margin-top:4px">
+                                    <input type="checkbox" id="sp-activity-monitor-enabled" class="sp-toggle-input">
+                                    <span class="sp-toggle-track" aria-hidden="true"></span>
+                                    <span class="sp-toggle-label">Enable Activity Monitor (CDP Runtime / Log / DOMStorage)</span>
+                                </label>
+                                <label class="sp-field-label" for="sp-activity-rate" style="margin-top:14px">Console messages per tab per second (rate limit)</label>
+                                <div class="sp-setting-inline">
+                                    <input type="range" id="sp-activity-rate" min="50" max="500" step="10">
+                                    <span id="sp-activity-rate-val" style="font-size:12px;color:var(--text-dim);min-width:36px">100</span>
+                                </div>
+                                <label class="sp-toggle" for="sp-activity-storage-stack" style="margin-top:12px">
+                                    <input type="checkbox" id="sp-activity-storage-stack" class="sp-toggle-input">
+                                    <span class="sp-toggle-track" aria-hidden="true"></span>
+                                    <span class="sp-toggle-label">Storage: capture call stacks (inject). CDP still logs storage mutations; setItem/remove/clear may appear twice.</span>
+                                </label>
+                                <p class="hint" style="margin-top:12px">Changes save automatically. CDP reattaches to open tabs; reload a page if events do not appear.</p>
+                            </div>
+
+                            <div class="card" data-sp-search="screenshot tracking capture click load network mouse scroll rule">
+                                <div class="row space">
+                                    <div>
+                                        <h3 class="card-title" style="margin:0">Tracking triggers</h3>
+                                        <p class="card-title-desc" style="margin:6px 0 0">When to capture screenshots</p>
+                                    </div>
+                                    <div class="row">
+                                        <button type="button" class="sp-btn" id="sp-track-enable-all">Enable all</button>
+                                        <button type="button" class="sp-btn" id="sp-track-disable-all">Disable all</button>
+                                    </div>
+                                </div>
+                                <div class="tracking-table">
+                                    <label class="tracking-row" for="sp-track-click">
+                                        <span class="tracking-row-main">
+                                            <input type="checkbox" id="sp-track-click" class="sp-toggle-input">
+                                            <span class="sp-toggle-track" aria-hidden="true"></span>
+                                            <span class="tracking-row-label">On user click (toolbar / F2)</span>
+                                        </span>
+                                        <span class="tracking-row-hint">Captures when screenshot is triggered manually.</span>
+                                    </label>
+                                    <label class="tracking-row" for="sp-track-page-load">
+                                        <span class="tracking-row-main">
+                                            <input type="checkbox" id="sp-track-page-load" class="sp-toggle-input">
+                                            <span class="sp-toggle-track" aria-hidden="true"></span>
+                                            <span class="tracking-row-label">On page load complete</span>
+                                        </span>
+                                        <span class="tracking-row-hint">Captures after active page finishes loading.</span>
+                                    </label>
+                                    <label class="tracking-row" for="sp-track-network-pending">
+                                        <span class="tracking-row-main">
+                                            <input type="checkbox" id="sp-track-network-pending" class="sp-toggle-input">
+                                            <span class="sp-toggle-track" aria-hidden="true"></span>
+                                            <span class="tracking-row-label">On network pending change</span>
+                                        </span>
+                                        <span class="tracking-row-hint">Captures when pending requests change above threshold.</span>
+                                    </label>
+                                    <label class="tracking-row" for="sp-track-mouse">
+                                        <span class="tracking-row-main">
+                                            <input type="checkbox" id="sp-track-mouse" class="sp-toggle-input">
+                                            <span class="sp-toggle-track" aria-hidden="true"></span>
+                                            <span class="tracking-row-label">On mouse activity (every 5 s)</span>
+                                        </span>
+                                        <span class="tracking-row-hint">Captures during active mouse use; dedup keeps changed content only.</span>
+                                    </label>
+                                    <label class="tracking-row" for="sp-track-typing-end">
+                                        <span class="tracking-row-main">
+                                            <input type="checkbox" id="sp-track-typing-end" class="sp-toggle-input">
+                                            <span class="sp-toggle-track" aria-hidden="true"></span>
+                                            <span class="tracking-row-label">On tapping / typing pause (700 ms)</span>
+                                        </span>
+                                        <span class="tracking-row-hint">Captures after keyboard input pauses in fields (also Enter and blur).</span>
+                                    </label>
+                                    <label class="tracking-row" for="sp-track-scroll-end">
+                                        <span class="tracking-row-main">
+                                            <input type="checkbox" id="sp-track-scroll-end" class="sp-toggle-input">
+                                            <span class="sp-toggle-track" aria-hidden="true"></span>
+                                            <span class="tracking-row-label">On scroll end (2 s)</span>
+                                        </span>
+                                        <span class="tracking-row-hint">Captures 2 seconds after scrolling stops on the active page.</span>
+                                    </label>
+                                    <label class="tracking-row" for="sp-track-rule">
+                                        <span class="tracking-row-main">
+                                            <input type="checkbox" id="sp-track-rule" class="sp-toggle-input">
+                                            <span class="sp-toggle-track" aria-hidden="true"></span>
+                                            <span class="tracking-row-label">On rule screenshot action</span>
+                                        </span>
+                                        <span class="tracking-row-hint">Captures when a matching rule triggers screenshot action.</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="card" data-sp-search="screenshot cooldown threshold pending limit minute">
+                                <h3 class="card-title">Thresholds and limits</h3>
+                                <p class="card-title-desc">Throttle automatic screenshot captures</p>
+                                <div class="sp-help-panel" style="margin-bottom:14px">
+                                    <p class="sp-help-lead" style="margin-bottom:0">Caps how often screenshots can run. Deduplication is always on. Background tabs, the new-tab page, and direct (non-MITM) tabs are skipped.</p>
+                                </div>
+                                <div class="limit-grid">
+                                    <div class="limit-row">
+                                        <label class="limit-label" for="sp-track-pending-threshold">Pending delta threshold</label>
+                                        <input id="sp-track-pending-threshold" class="sp-input limit-input" type="number" min="1" max="50" step="1">
+                                    </div>
+                                    <p class="field-error" id="sp-track-pending-threshold-err" hidden></p>
+                                    <div class="limit-row">
+                                        <label class="limit-label" for="sp-track-cooldown-ms">Cooldown (ms)</label>
+                                        <input id="sp-track-cooldown-ms" class="sp-input limit-input" type="number" min="200" max="30000" step="100">
+                                    </div>
+                                    <p class="field-error" id="sp-track-cooldown-ms-err" hidden></p>
+                                    <div class="limit-row">
+                                        <label class="limit-label" for="sp-track-max-per-minute">Max per minute</label>
+                                        <input id="sp-track-max-per-minute" class="sp-input limit-input" type="number" min="1" max="120" step="1">
+                                    </div>
+                                    <p class="field-error" id="sp-track-max-per-minute-err" hidden></p>
+                                </div>
+                                <div class="sp-help-panel" style="margin-top:14px">
+                                    <ul class="sp-help-list">
+                                        <li><span class="sp-help-k">Pending</span> For “network pending change”: only if in-flight count changes by ≥ this vs the previous sample.</li>
+                                        <li><span class="sp-help-k">Cooldown</span> Minimum ms between captures.</li>
+                                        <li><span class="sp-help-k">Max/min</span> Hard cap on tracking screenshots per 60s.</li>
+                                    </ul>
+                                </div>
+                                <p class="hint">Saves automatically when values change.</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Certificate (MITM root CA only) -->
+                <section id="sp-tab-certificate" class="sp-tab-body">
+                    <div class="sp-tab-stack">
+                        <p class="sp-tab-intro"><strong>Certificate</strong> CupNet MITM root CA for trusting HTTPS on phones or other browsers when they use this machine as an HTTP proxy. Inside CupNet the app trusts the CA automatically — you only need this file elsewhere.</p>
+                        <div class="grid-2">
+                            <div class="card" data-sp-search="certificate pem mitm ca trust download clipboard tls proxy">
+                                <h3 class="card-title">MITM root CA</h3>
+                                <p class="sp-help-lead" style="margin-bottom:12px">Subject: <code>CupNet MITM CA</code> (ECDSA P-256). Install on the device that sends traffic through CupNet’s proxy.</p>
+                                <div class="card-actions" style="gap:10px;flex-wrap:wrap;justify-content:flex-start;margin-top:0">
+                                    <button type="button" class="sp-btn sp-btn-primary" id="sp-ca-download">Download certificate</button>
+                                    <button type="button" class="sp-btn" id="sp-ca-copy">Copy PEM to clipboard</button>
+                                </div>
+                                <div class="sp-help-panel" style="margin-top:14px">
+                                    <ul class="sp-help-list">
+                                        <li><span class="sp-help-k">Use</span> Mobile Wi‑Fi proxy → <code>host:8877</code> (your PC’s LAN IP), then install this CA on the device.</li>
+                                        <li><span class="sp-help-k">Security</span> Treat this CA like a password — anyone who trusts it can intercept TLS for you.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Devices -->
                 <section id="sp-tab-devices" class="sp-tab-body">
-            <div class="grid-2">
-                <div class="card">
-                    <h3 class="card-title">Camera access</h3>
-                    <div class="cam-mode-row" id="sp-cam-mode-group">
-                        <label><input type="radio" name="sp-cam-mode" value="all"> <span>Allow camera (same as default Chromium)</span></label>
-                        <label><input type="radio" name="sp-cam-mode" value="none"> <span>Block camera for sites</span></label>
-                        <label><input type="radio" name="sp-cam-mode" value="custom"> <span>Custom list below — unchecked cameras are hidden from sites; order sets default when using generic video</span></label>
+                    <div class="sp-tab-stack">
+                        <p class="sp-tab-intro"><strong>Devices</strong> Camera enumeration and priority for web pages. Use <strong>Refresh</strong> after connecting a camera.</p>
+                        <div class="grid-2">
+                            <div class="card" data-sp-search="camera video microphone media device getusermedia">
+                                <h3 class="card-title">Camera access</h3>
+                                <p class="card-title-desc">Policy for <code>getUserMedia</code></p>
+                                <div class="cam-mode-row" id="sp-cam-mode-group">
+                                    <label><input type="radio" name="sp-cam-mode" value="all"> <span>Allow camera (same as default Chromium)</span></label>
+                                    <label><input type="radio" name="sp-cam-mode" value="none"> <span>Block camera for sites</span></label>
+                                    <label><input type="radio" name="sp-cam-mode" value="custom"> <span>Custom list below — unchecked cameras are hidden; order sets default for generic video</span></label>
+                                </div>
+                                <div class="sp-help-panel" style="margin-top:12px">
+                                    <ul class="sp-help-list">
+                                        <li><span class="sp-help-k">Allow / Block</span> OS permission handlers only.</li>
+                                        <li><span class="sp-help-k">Custom</span> Also wraps <code>navigator.mediaDevices</code> (some pages may detect this).</li>
+                                    </ul>
+                                </div>
+                            </div>
+                            <div class="card" data-sp-search="camera list priority order enumerate refresh">
+                                <div class="row space" style="align-items:center;margin-bottom:10px">
+                                    <div>
+                                        <h3 class="card-title" style="margin:0">Camera list &amp; priority</h3>
+                                        <p class="card-title-desc" style="margin:6px 0 0">Drag to reorder</p>
+                                    </div>
+                                    <button type="button" class="sp-btn sp-btn-primary" id="sp-devices-refresh">Refresh</button>
+                                </div>
+                                <div class="sp-help-panel" style="margin-bottom:12px">
+                                    <ul class="sp-help-list">
+                                        <li><span class="sp-help-k">Order</span> <strong>#1</strong> is used for <code>getUserMedia({ video: true })</code> in Custom mode.</li>
+                                        <li><span class="sp-help-k">Hide</span> Uncheck devices in Custom mode to omit them from <code>enumerateDevices</code>.</li>
+                                    </ul>
+                                </div>
+                                <div id="sp-devices-list" class="device-table"></div>
+                                <div id="sp-devices-empty" class="hint" style="margin-top:10px;display:none">No cameras detected. Click Refresh or check OS privacy settings.</div>
+                            </div>
+                        </div>
                     </div>
-                    <div class="hint">«Allow» / «Block» use only OS permission handlers. «Custom» additionally wraps <code>navigator.mediaDevices</code> in page (advanced pages could detect this).</div>
-                </div>
-
-                <div class="card">
-                    <div class="row space">
-                        <h3 class="card-title">Camera list &amp; priority</h3>
-                        <button type="button" class="sp-btn" id="sp-devices-refresh">Refresh</button>
-                    </div>
-                    <div class="hint" style="margin-bottom:10px">Drag to set priority (#1 is used for <code>getUserMedia({ video: true })</code> when Custom is on). Reload the page after changing settings if a site already cached the device list.</div>
-                    <div id="sp-devices-list" class="device-table"></div>
-                    <div id="sp-devices-empty" class="hint" style="margin-top:10px;display:none">No cameras detected. Click Refresh or check OS privacy settings.</div>
-                </div>
-            </div>
                 </section>
 
+                <!-- Shortcuts -->
+                <section id="sp-tab-shortcuts" class="sp-tab-body">
+                    <div class="sp-tab-stack">
+                        <p class="sp-tab-intro"><strong>Keyboard shortcuts</strong> Reference for the main window. Bindings are fixed in this release.</p>
+                        <div class="card" data-sp-search="shortcut hotkey keyboard keybinding">
+                            <h3 class="card-title">Shortcuts</h3>
+                            <p class="card-title-desc">Main window and tools</p>
+                            <div style="overflow:auto">
+                                <table class="shortcuts-table" id="sp-shortcuts-table">
+                                    <thead><tr><th>Action</th><th>Keys</th><th>Scope</th></tr></thead>
+                                    <tbody></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Performance -->
                 <section id="sp-tab-performance" class="sp-tab-body">
-            <div class="card">
-                <div class="row space" style="margin-bottom:8px">
-                    <h3 class="card-title">Process metrics</h3>
-                    <span id="sp-perf-updated" class="status-inline"></span>
-                </div>
-                <table class="perf-table">
-                    <thead>
-                    <tr>
-                        <th>Type</th>
-                        <th>PID</th>
-                        <th class="num">CPU %</th>
-                        <th class="num">RAM MB</th>
-                        <th class="num">Private MB</th>
-                        <th>Sandbox</th>
-                    </tr>
-                    </thead>
-                    <tbody id="sp-perf-tbody">
-                    <tr><td colspan="6" style="color:var(--text-dim);text-align:center;padding:14px">Loading…</td></tr>
-                    </tbody>
-                </table>
-            </div>
+                    <div class="sp-tab-stack">
+                        <p class="sp-tab-intro"><strong>Performance</strong> Read-only CPU and memory per process. Updates while this tab is visible. Nothing is saved.</p>
+                        <div class="card" data-sp-search="performance cpu memory process metrics ram sandbox">
+                            <div class="row space" style="margin-bottom:10px;align-items:baseline">
+                                <div>
+                                    <h3 class="card-title" style="margin:0">Process metrics</h3>
+                                    <p class="card-title-desc" style="margin:6px 0 0">Live OS / Chromium processes</p>
+                                </div>
+                                <span id="sp-perf-updated" class="status-inline" style="margin-left:auto"></span>
+                            </div>
+                            <div class="sp-help-panel" style="margin-bottom:14px">
+                                <ul class="sp-help-list" style="padding-left:16px">
+                                    <li><span class="sp-help-k">Type</span> Browser (shell), Renderer (page), GPU, … — from Chromium. Rows labeled <strong>CupNet</strong> are separate OS children (AzureTLS worker, optional IVAC Scout).</li>
+                                    <li><span class="sp-help-k">PID</span> OS process id · <strong>CPU %</strong> approximate · <strong>RAM / Private</strong> working set &amp; private MB · <strong>Sandbox</strong> on/off for renderers</li>
+                                </ul>
+                            </div>
+                            <table class="perf-table">
+                                <thead>
+                                <tr>
+                                    <th>Type</th>
+                                    <th>PID</th>
+                                    <th class="num">CPU %</th>
+                                    <th class="num">RAM MB</th>
+                                    <th class="num">Private MB</th>
+                                    <th>Sandbox</th>
+                                </tr>
+                                </thead>
+                                <tbody id="sp-perf-tbody">
+                                <tr><td colspan="6" style="color:var(--text-dim);text-align:center;padding:14px">Loading…</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- About -->
+                <section id="sp-tab-about" class="sp-tab-body">
+                    <div class="sp-tab-stack">
+                        <p class="sp-tab-intro"><strong>About</strong> Version, license, and project information.</p>
+                        <div class="grid-2">
+                            <div class="card" data-sp-search="about version release">
+                                <div class="settings-about-brand">
+                                    <img src="icons/icon.png" width="40" height="40" class="settings-about-brand-icon" alt="" />
+                                    <div class="settings-about-brand-text">
+                                        <h3 class="card-title">CupNet</h3>
+                                        <p class="card-title-desc">Electron browser with MITM proxy and network tooling</p>
+                                    </div>
+                                </div>
+                                <p class="sp-help-lead" style="margin-bottom:8px">Version <strong id="settings-app-version">—</strong></p>
+                                <p class="hint" style="margin-top:0">Check for updates using your distribution channel (npm / installer).</p>
+                            </div>
+                            <div class="card" data-sp-search="license mit open source">
+                                <h3 class="card-title">License</h3>
+                                <p class="card-title-desc">See repository for full text</p>
+                                <p class="sp-help-lead">This build is provided as-is for development and testing. Refer to the <code>LICENSE</code> file in the project root and third-party notices bundled with Electron and native dependencies.</p>
+                            </div>
+                            <div class="card about-links" data-sp-search="links documentation github">
+                                <h3 class="card-title">Links</h3>
+                                <p class="card-title-desc">Resources</p>
+                                <ul class="sp-help-list">
+                                    <li><a href="https://www.electronjs.org/" target="_blank" rel="noopener noreferrer">Electron</a> — desktop shell</li>
+                                    <li>Project documentation: see <code>README.md</code> and <code>docs/</code> in the repository</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
                 </section>
             </main>
         </section>
     </div>
 </div>
-<div class="settings-watermark-label">[CupNet] <span id="settings-app-version" class="settings-watermark-version">v…</span></div>
 
+<script src="toast-notifications.js"></script>
+<script src="keyboard-shortcuts.js"></script>
 <script src="settings-renderer.js"></script>
 </body>
 </html>

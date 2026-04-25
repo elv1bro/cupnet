@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<style>
+*, *::before, *::after { box-sizing: border-box; }
+html, body {
+    margin: 0; padding: 0;
+    background: transparent;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+}
+#backdrop {
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.42);
+}
+#dropdown {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    max-height: min(58vh, 440px);
+    border-radius: 12px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+    z-index: 2;
+    margin-top: 4px; /* overridden from payload topGap */
+}
+#items {
+    list-style: none;
+    margin: 0;
+    padding: 6px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+}
+#items::-webkit-scrollbar { width: 6px; }
+#items::-webkit-scrollbar-track { background: transparent; }
+#items::-webkit-scrollbar-thumb { background: rgba(139, 148, 158, 0.25); border-radius: 3px; }
+.item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    color: #e6edf3;
+    transition: background 80ms ease;
+}
+.item:hover, .item.active {
+    background: rgba(88, 166, 255, 0.12);
+}
+.item-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.item-cat {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #8b949e;
+    flex-shrink: 0;
+}
+.item-kbd {
+    font-size: 11px;
+    color: #656d76;
+    flex-shrink: 0;
+}
+#hint {
+    padding: 6px 10px;
+    border-top: 1px solid #30363d;
+    font-size: 11px;
+    color: #656d76;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.empty {
+    padding: 16px 10px;
+    color: #8b949e;
+    text-align: center;
+    font-size: 13px;
+}
+</style>
+</head>
+<body>
+<div id="backdrop"></div>
+<div id="dropdown" style="display:none">
+    <ul id="items"></ul>
+    <div id="hint"></div>
+</div>
+<script>
+'use strict';
+const api = window.omniboxOverlay;
+const backdrop = document.getElementById('backdrop');
+const dropdown = document.getElementById('dropdown');
+const itemsList = document.getElementById('items');
+const hintEl   = document.getElementById('hint');
+
+function esc(s) {
+    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+}
+
+function render(data) {
+    if (!data) { dropdown.style.display = 'none'; return; }
+    dropdown.style.display = '';
+    if (data.left != null && data.width != null) {
+        dropdown.style.marginLeft = data.left + 'px';
+        dropdown.style.width      = data.width + 'px';
+    }
+    if (data.topGap != null) {
+        dropdown.style.marginTop = data.topGap + 'px';
+    }
+    const items = data.items || [];
+    if (!items.length) {
+        itemsList.innerHTML = '<li class="empty">' + esc(data.emptyText || 'No results') + '</li>';
+    } else {
+        itemsList.innerHTML = items.map((it, i) => {
+            const cls = 'item' + (it.active ? ' active' : '');
+            const kbd = it.shortcut
+                ? '<span class="item-kbd">' + esc(it.shortcut) + '</span>'
+                : '';
+            return '<li class="' + cls + '" data-idx="' + i + '">'
+                + '<span class="item-label">' + esc(it.label) + '</span>'
+                + '<span class="item-cat">' + esc(it.sub) + '</span>'
+                + kbd + '</li>';
+        }).join('');
+    }
+    hintEl.textContent = data.hint || '';
+    const activeEl = itemsList.querySelector('.item.active');
+    if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+}
+
+api.onUpdate(render);
+
+backdrop.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    api.dismiss();
+});
+
+itemsList.addEventListener('mousedown', (e) => {
+    const li = e.target.closest('.item');
+    if (!li) return;
+    e.preventDefault();
+    const idx = Number(li.dataset.idx);
+    if (Number.isFinite(idx)) api.selectItem(idx);
+});
+</script>
+</body>
+</html>

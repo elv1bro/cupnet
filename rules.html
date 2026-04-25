@@ -3,580 +3,215 @@
 <head>
     <meta charset="UTF-8">
     <meta http-equiv="Content-Security-Policy"
-          content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+          content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob: data:; img-src 'self' data: blob:;">
     <title>Rules &amp; Interceptor</title>
-    <style>
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-        :root {
-            --bg:        #0f1117;
-            --bg2:       #151923;
-            --bg3:       #1c2235;
-            --bg4:       #222840;
-            --border:    rgba(255,255,255,0.08);
-            --border2:   rgba(255,255,255,0.14);
-            --text:      #e2e8f0;
-            --text-dim:  #8892a4;
-            --text-mute: #4b5568;
-            --accent:    #3b82f6;
-            --accent-bg: rgba(59,130,246,0.14);
-            --green:     #22c55e;
-            --green-bg:  rgba(34,197,94,0.12);
-            --red:       #ef4444;
-            --red-bg:    rgba(239,68,68,0.12);
-            --orange:    #f97316;
-            --orange-bg: rgba(249,115,22,0.12);
-            --purple:    #a855f7;
-            --purple-bg: rgba(168,85,247,0.12);
-            --radius:    8px;
-        }
-
-        html, body {
-            height: 100%;
-            background: var(--bg);
-            color: var(--text);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
-            font-size: 13px;
-            line-height: 1.5;
-        }
-
-        body { display: flex; flex-direction: column; overflow: hidden; }
-
-        /* ── Header / tabs ──────────────────────────────────────────────────── */
-        .header {
-            display: flex; align-items: center; gap: 0;
-            background: var(--bg2);
-            border-bottom: 1px solid var(--border);
-            padding: 0 16px;
-            flex-shrink: 0;
-        }
-
-        .tab-btn {
-            padding: 12px 18px; background: none; border: none;
-            border-bottom: 2px solid transparent;
-            color: var(--text-dim); cursor: pointer; font-size: 13px;
-            font-weight: 500; white-space: nowrap;
-            transition: color 0.15s, border-color 0.15s;
-            margin-bottom: -1px;
-        }
-        .tab-btn:hover { color: var(--text); }
-        .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
-
-        /* ── Content area ───────────────────────────────────────────────────── */
-        .tab-content { display: none; flex: 1; overflow-y: auto; padding: 18px 20px; }
-        .tab-content.active { display: flex; flex-direction: column; gap: 14px; }
-
-        /* ── Toolbar row ────────────────────────────────────────────────────── */
-        .toolbar-row {
-            display: flex; align-items: center; gap: 10px;
-        }
-        .toolbar-row h2 {
-            flex: 1; font-size: 15px; font-weight: 600; color: var(--text);
-        }
-
-        /* ── Buttons ────────────────────────────────────────────────────────── */
-        button { cursor: pointer; font-family: inherit; }
-
-        .btn-primary {
-            background: var(--accent); color: #fff; border: none;
-            padding: 7px 14px; border-radius: var(--radius);
-            font-size: 12.5px; font-weight: 600;
-            transition: opacity 0.15s;
-        }
-        .btn-primary:hover { opacity: 0.88; }
-
-        .btn-secondary {
-            background: var(--bg3); color: var(--text); border: 1px solid var(--border2);
-            padding: 6px 12px; border-radius: var(--radius); font-size: 12px;
-            transition: background 0.15s;
-        }
-        .btn-secondary:hover { background: var(--bg4); }
-
-        .btn-danger {
-            background: var(--red-bg); color: var(--red); border: 1px solid rgba(239,68,68,0.25);
-            padding: 4px 9px; border-radius: 6px; font-size: 11.5px;
-            transition: background 0.15s;
-        }
-        .btn-danger:hover { background: rgba(239,68,68,0.22); }
-
-        .btn-sm { padding: 4px 9px; font-size: 11.5px; }
-
-        /* ── Edit form ──────────────────────────────────────────────────────── */
-        .edit-form {
-            display: none;
-            background: var(--bg2); border: 1px solid var(--border2);
-            border-radius: 12px; padding: 18px 20px;
-        }
-        .edit-form.visible { display: block; }
-
-        .form-row { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
-        .form-row label {
-            font-size: 11.5px; font-weight: 600; color: var(--text-dim);
-            text-transform: uppercase; letter-spacing: 0.4px;
-        }
-        .form-row input[type="text"],
-        .form-row input[type="number"],
-        .form-row select,
-        .form-row textarea {
-            background: var(--bg3); color: var(--text);
-            border: 1px solid var(--border2); border-radius: 6px;
-            padding: 7px 10px; font-size: 12.5px; font-family: inherit;
-            outline: none; transition: border-color 0.15s;
-        }
-        .form-row input:focus,
-        .form-row select:focus,
-        .form-row textarea:focus { border-color: var(--accent); }
-        .form-row select option { background: var(--bg3); color: var(--text); }
-        .form-row textarea {
-            min-height: 72px; resize: vertical;
-            font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
-            font-size: 12px; line-height: 1.55;
-        }
-
-        /* ── Section title ──────────────────────────────────────────────────── */
-        .section-title {
-            font-size: 11px; font-weight: 700; color: var(--text-mute);
-            text-transform: uppercase; letter-spacing: 0.6px;
-            margin: 14px 0 8px;
-        }
-        .section-title small {
-            font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11px; color: var(--text-dim);
-        }
-
-        /* ── Condition / action rows ────────────────────────────────────────── */
-        .builder { display: flex; flex-direction: column; gap: 6px; }
-        .builder-row { display: flex; gap: 6px; align-items: center; }
-        .builder-row select,
-        .builder-row input { flex: 1; min-width: 0; }
-        .builder-row select {
-            background: var(--bg3); color: var(--text);
-            border: 1px solid var(--border2); border-radius: 6px;
-            padding: 6px 8px; font-size: 12px; outline: none;
-        }
-        .builder-row input[type="text"] {
-            background: var(--bg3); color: var(--text);
-            border: 1px solid var(--border2); border-radius: 6px;
-            padding: 6px 8px; font-size: 12px; outline: none;
-        }
-        .builder-row input[type="color"] {
-            width: 34px; height: 32px; padding: 2px; border-radius: 6px;
-            border: 1px solid var(--border2); background: var(--bg3);
-            cursor: pointer; flex-shrink: 0;
-        }
-
-        /* ── Rule items list ────────────────────────────────────────────────── */
-        .rule-list { display: flex; flex-direction: column; gap: 6px; }
-
-        .rule-item {
-            background: var(--bg2); border: 1px solid var(--border);
-            border-radius: 10px; padding: 11px 14px;
-            display: flex; align-items: center; gap: 10px;
-            transition: background 0.15s, border-color 0.15s;
-        }
-        .rule-item:hover { background: var(--bg3); border-color: var(--border2); }
-
-        .rule-name { flex: 1; font-weight: 600; font-size: 13px; color: var(--text); }
-        .rule-meta { font-size: 11px; color: var(--text-mute); white-space: nowrap; }
-        .rule-hits {
-            font-size: 11px; background: var(--bg4); color: var(--text-dim);
-            padding: 2px 7px; border-radius: 99px; white-space: nowrap;
-        }
-
-        /* Type badges */
-        .badge {
-            font-size: 11px; padding: 2px 8px; border-radius: 99px;
-            font-weight: 600; white-space: nowrap;
-        }
-        .badge-block    { background: var(--red-bg);    color: var(--red); }
-        .badge-mock     { background: var(--green-bg);  color: var(--green); }
-        .badge-modify   { background: var(--orange-bg); color: var(--orange); }
-        .badge-hl       { background: var(--purple-bg); color: var(--purple); }
-        .badge-default  { background: var(--accent-bg); color: var(--accent); }
-
-        /* ── Mock source toggle ────────────────────────────────────────────── */
-        .mock-source-toggle { display: flex; gap: 16px; align-items: center; }
-        .radio-label { display: flex; align-items: center; gap: 5px; cursor: pointer; color: var(--text); font-size: 13px; }
-        .radio-label input[type="radio"] { accent-color: var(--accent); }
-
-        /* ── Toggle switch ──────────────────────────────────────────────────── */
-        .toggle { position: relative; width: 34px; height: 18px; display: inline-block; flex-shrink: 0; }
-        .toggle input { display: none; }
-        .toggle-track {
-            position: absolute; inset: 0; background: var(--bg4);
-            border-radius: 99px; cursor: pointer; transition: 0.2s;
-            border: 1px solid var(--border2);
-        }
-        .toggle-track::before {
-            content: ''; position: absolute;
-            width: 12px; height: 12px; background: var(--text-dim);
-            border-radius: 50%; left: 2px; top: 2px; transition: 0.2s;
-        }
-        .toggle input:checked + .toggle-track { background: var(--accent); border-color: var(--accent); }
-        .toggle input:checked + .toggle-track::before { transform: translateX(16px); background: #fff; }
-
-        /* ── Form action row ────────────────────────────────────────────────── */
-        .form-actions { display: flex; gap: 8px; margin-top: 16px; }
-
-        /* ── Empty state ────────────────────────────────────────────────────── */
-        .empty-state {
-            text-align: center; padding: 48px 20px;
-            color: var(--text-mute); font-size: 13px;
-        }
-        .empty-state-icon { font-size: 36px; margin-bottom: 10px; opacity: 0.5; }
-
-        /* ── Description text ───────────────────────────────────────────────── */
-        .description {
-            font-size: 12px; color: var(--text-dim); line-height: 1.6;
-            background: var(--bg2); border: 1px solid var(--border);
-            border-radius: 8px; padding: 10px 14px;
-        }
-        .description code {
-            background: var(--bg3); color: #93c5fd;
-            padding: 1px 4px; border-radius: 4px; font-size: 11px;
-        }
-
-        /* ── Activity log ──────────────────────────────────────────────────── */
-        .act-group-header {
-            padding: 10px 14px 6px;
-            font-size: 11px; font-weight: 700;
-            color: var(--text-mute); text-transform: uppercase;
-            letter-spacing: 0.4px;
-            border-top: 1px solid var(--border);
-            margin-top: 8px;
-            display: flex; align-items: center; gap: 8px;
-        }
-        .act-group-header:first-child { border-top: none; margin-top: 0; }
-        .act-group-url {
-            font-weight: 400; text-transform: none; letter-spacing: 0;
-            color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
-            white-space: nowrap; flex: 1; min-width: 0;
-        }
-        .act-entry {
-            display: flex; align-items: center; gap: 8px;
-            flex-wrap: wrap;
-            padding: 5px 14px 5px 28px;
-            font-size: 12px; color: var(--text);
-            transition: background 0.1s;
-        }
-        .act-entry:hover { background: var(--bg3); }
-        .act-time { font-size: 10px; color: var(--text-mute); flex-shrink: 0; width: 55px; }
-        .act-icon { font-size: 13px; flex-shrink: 0; }
-        .act-rule { font-weight: 600; flex-shrink: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .act-url { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-        .act-type-mock { color: #f59e0b; }
-        .act-type-block { color: #ef4444; }
-        .act-type-modify { color: #3b82f6; }
-        .act-type-script { color: #a855f7; }
-        .act-detail {
-            font-size: 10px; color: #64748b;
-            background: rgba(255,255,255,0.04);
-            padding: 1px 6px; border-radius: 4px;
-            flex-shrink: 0; white-space: nowrap;
-            font-family: 'SF Mono', 'Fira Code', monospace;
-        }
-        .act-body {
-            grid-column: 1 / -1;
-            font-size: 10px; color: #6b7280;
-            font-family: 'SF Mono', 'Fira Code', monospace;
-            background: rgba(0,0,0,0.2);
-            padding: 4px 8px; border-radius: 4px;
-            margin-top: 2px;
-            white-space: pre-wrap; word-break: break-all;
-            max-height: 60px; overflow: hidden;
-        }
-        .act-links {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            margin-left: auto;
-        }
-        .act-link {
-            border: 1px solid var(--border2);
-            background: var(--bg2);
-            color: var(--text-dim);
-            border-radius: 4px;
-            padding: 1px 6px;
-            font-size: 10px;
-            cursor: pointer;
-        }
-        .act-link:hover {
-            color: var(--text);
-            border-color: var(--accent);
-        }
-        .rule-item.flash {
-            animation: flashRule .9s ease;
-        }
-        @keyframes flashRule {
-            0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.35); border-color: rgba(59,130,246,0.8); }
-            100% { box-shadow: 0 0 0 9px rgba(59,130,246,0); border-color: var(--border); }
-        }
-
-        .badge-script { background: var(--purple-bg); color: var(--purple); }
-        .script-textarea { min-height: 140px; }
-
-        /* Large mock bodies: fixed viewport + internal scroll; avoids layout churn + spellchecker load */
-        #edit-mock-body {
-            min-height: 120px;
-            max-height: min(65vh, 520px);
-            overflow-y: auto;
-            resize: vertical;
-        }
-        #script-test-out {
-            display: none;
-            margin-top: 10px;
-            padding: 10px;
-            border-radius: 8px;
-            background: var(--bg3);
-            border: 1px solid var(--border2);
-            font-size: 11px;
-            font-family: 'SF Mono', 'Fira Code', monospace;
-            white-space: pre-wrap;
-            word-break: break-all;
-            max-height: 200px;
-            overflow-y: auto;
-        }
-        #script-test-out.visible { display: block; }
-        #tab-intercept { padding-bottom: 0; }
-
-        .script-ai-panel {
-            background: var(--bg3);
-            border: 1px solid var(--border2);
-            border-radius: 10px;
-            padding: 12px 14px;
-            margin-bottom: 14px;
-        }
-        .script-ai-toolbar {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: flex-start;
-            gap: 8px 12px;
-            margin-bottom: 10px;
-        }
-        .script-ai-badge {
-            flex-shrink: 0;
-            font-size: 10px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            padding: 3px 8px;
-            border-radius: 99px;
-            background: var(--purple-bg);
-            color: var(--purple);
-            border: 1px solid rgba(168,85,247,0.35);
-        }
-        .script-ai-lead {
-            flex: 1;
-            min-width: 200px;
-            margin: 0;
-            font-size: 11.5px;
-            color: var(--text-dim);
-            line-height: 1.55;
-        }
-        textarea.script-ai-prompt-text {
-            display: block;
-            width: 100%;
-            margin: 0;
-            min-height: 200px;
-            max-height: 480px;
-            resize: vertical;
-            box-sizing: border-box;
-            padding: 10px 12px;
-            background: rgba(0,0,0,0.22);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            font-size: 11px;
-            line-height: 1.55;
-            font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
-            color: var(--text-dim);
-        }
-        textarea.script-ai-prompt-text:read-only {
-            cursor: default;
-            opacity: 0.95;
-        }
-        .script-preset-row {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 14px;
-            padding: 10px 12px;
-            background: var(--bg2);
-            border: 1px solid var(--border2);
-            border-radius: 8px;
-        }
-        .script-preset-row label {
-            font-size: 11px;
-            font-weight: 600;
-            color: var(--text-mute);
-            text-transform: uppercase;
-            letter-spacing: 0.4px;
-            width: 100%;
-            margin: 0;
-        }
-        #script-snippet-preset {
-            flex: 1;
-            min-width: 180px;
-            background: var(--bg3);
-            color: var(--text);
-            border: 1px solid var(--border2);
-            border-radius: 6px;
-            padding: 6px 10px;
-            font-size: 12px;
-        }
-    </style>
+    <link rel="stylesheet" href="shared-dark-theme.css">
+    <link rel="stylesheet" href="node_modules/jsondiffpatch/lib/formatters/styles/html.css">
+    <link rel="stylesheet" href="rules.css">
 </head>
 <body>
-
-<!-- ── Header / tabs ──────────────────────────────────────────────────────── -->
-<div class="header">
-    <button class="tab-btn active" data-tab="intercept">Intercept Rules</button>
-    <button class="tab-btn" data-tab="activity">Activity <span id="activity-count" style="font-size:10px;background:rgba(239,68,68,0.2);color:#f87171;padding:1px 6px;border-radius:99px;margin-left:4px;font-weight:700">0</span></button>
-</div>
-
-<!-- ══════════════════════ INTERCEPT RULES ══════════════════════════════════ -->
-<div id="tab-intercept" class="tab-content active">
-
-    <div class="toolbar-row">
-        <h2>Request Interceptor</h2>
-        <button class="btn-secondary btn-sm" id="btn-test-notification" title="Send a test notification to all windows">🔔 Test Notification</button>
-        <button class="btn-primary" id="btn-add-intercept">+ New Rule</button>
-    </div>
-
-    <div class="description">
-        Intercept rules modify or block requests <b>before</b> they reach the server.
-        By default use a glob with <code>*</code>, e.g. <code>*example.com/api*</code>.
-        If <code>CUPNET_INTERCEPT_STRICT_URLS=1</code> is set, use only a URL prefix without <code>*</code>, e.g. <code>https://api.example.com/v1/</code>.
-    </div>
-
-    <!-- Edit form -->
-    <div id="intercept-edit-form" class="edit-form">
-        <input type="hidden" id="edit-intercept-id">
-
-        <div class="form-row">
-            <label>Rule name</label>
-            <input type="text" id="edit-intercept-name" placeholder="e.g. Block ads">
+<div class="rules-shell">
+    <header class="cn-toolbar rules-toolbar">
+        <div class="rules-toolbar-row">
+            <strong>Intercept Rules</strong>
+            <div class="cn-search-wrap">
+                <input type="search" id="rules-search" placeholder="Search rules…" aria-label="Search rules">
+            </div>
+            <div class="type-filters" id="type-filters"></div>
         </div>
-
-        <div class="form-row">
-            <label>URL pattern (glob or strict prefix — see above)</label>
-            <input type="text" id="edit-intercept-pattern" placeholder="https://example.com/api/ or *example.com/ads*">
-        </div>
-
-        <div class="form-row">
-            <label>Action type</label>
-            <select id="edit-intercept-type">
-                <option value="block">Block request</option>
-                <option value="modifyHeaders">Modify headers</option>
-                <option value="mock">Mock response</option>
-                <option value="script">Dynamic script (before/after MITM)</option>
+        <div class="rules-toolbar-row">
+            <select id="rule-template-select" class="cn-btn" title="Create from template" aria-label="Rule template">
+                <option value="">Template…</option>
+                <option value="block-trackers">Block common trackers</option>
+                <option value="cors-everywhere">CORS: Allow-Origin *</option>
+                <option value="disable-csp">Strip Content-Security-Policy</option>
+                <option value="slow-network">Slow network (2s delay)</option>
+                <option value="mock-404">Mock 404</option>
             </select>
+            <button type="button" class="cn-btn cn-btn-primary" id="btn-new-rule">+ New</button>
+            <button type="button" class="cn-btn" id="btn-dup-rule" title="Duplicate">Duplicate</button>
+            <button type="button" class="cn-btn" id="btn-export-rules">Export</button>
+            <button type="button" class="cn-btn" id="btn-import-rules">Import</button>
+            <button type="button" class="cn-btn" id="btn-history" title="Version history" disabled>History</button>
+            <span class="cn-toolbar-sep"></span>
+            <button type="button" class="cn-btn" id="btn-test-notification" title="Test activity toast">Test toast</button>
         </div>
+    </header>
 
-        <!-- block info -->
-        <div id="intercept-params-block" style="display:none">
-            <div class="description">Request will be cancelled before it is sent. No additional parameters needed.</div>
-        </div>
-
-        <!-- modifyHeaders params -->
-        <div id="intercept-params-headers" style="display:none">
-            <div class="form-row" style="margin-top:10px">
-                <label>Request headers to set (JSON object)</label>
-                <textarea id="edit-req-headers" placeholder='{"X-Custom": "value"}' spellcheck="false" autocomplete="off"></textarea>
-            </div>
-            <div class="form-row">
-                <label>Response headers to set (JSON object)</label>
-                <textarea id="edit-resp-headers" placeholder='{"Access-Control-Allow-Origin": "*"}' spellcheck="false" autocomplete="off"></textarea>
-            </div>
-        </div>
-
-        <!-- mock params -->
-        <div id="intercept-params-mock" style="display:none">
-            <div class="form-row" style="margin-top:10px">
-                <label>Status code</label>
-                <input type="number" id="edit-mock-status" value="200" min="100" max="599" style="max-width:120px">
-            </div>
-            <div class="form-row">
-                <label>MIME type</label>
-                <select id="edit-mock-mime-select" class="mock-mime-select" title="Common Content-Type values; pick Custom to type your own"></select>
-            </div>
-            <div class="form-row" id="edit-mock-mime-custom-row" style="display:none">
-                <label>Custom MIME type</label>
-                <input type="text" id="edit-mock-mime-custom" placeholder="e.g. application/vnd.api+json" spellcheck="false" autocomplete="off">
-            </div>
-            <div class="form-row">
-                <label>Body source</label>
-                <div class="mock-source-toggle">
-                    <label class="radio-label"><input type="radio" name="mock-body-source" value="text" checked> Inline text</label>
-                    <label class="radio-label"><input type="radio" name="mock-body-source" value="file"> File path</label>
+    <div class="rules-main">
+        <aside class="rules-sidebar">
+            <div class="rules-sidebar-head">
+                <div class="rules-search-row">
+                    <span class="lbl">Group</span>
+                    <input type="text" id="group-filter" class="rules-input" placeholder="Group name…" aria-label="Filter by group">
+                </div>
+                <div class="rules-search-row">
+                    <span class="lbl">Tag</span>
+                    <input type="text" id="tag-filter" class="rules-input" placeholder="Filter by tag…" aria-label="Filter by tag">
                 </div>
             </div>
-            <div class="form-row" id="mock-body-text-row">
-                <label>Response body</label>
-                <textarea id="edit-mock-body" placeholder='{"ok":true}' rows="14" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
-            </div>
-            <div class="form-row" id="mock-body-file-row" style="display:none">
-                <label>File path <span style="font-weight:normal;color:var(--text-dim)">(read fresh on every request)</span></label>
-                <div style="display:flex;gap:8px;align-items:center">
-                    <input type="text" id="edit-mock-file-path" placeholder="/path/to/response.json or .wasm" spellcheck="false" autocomplete="off" style="flex:1">
-                    <button type="button" class="btn-secondary btn-sm" id="btn-browse-mock-file">Browse…</button>
-                </div>
-                <div id="mock-file-info" class="description" style="margin-top:4px"></div>
-            </div>
-        </div>
+            <div id="rule-list-items"></div>
+        </aside>
 
-        <!-- script params -->
-        <div id="intercept-params-script" style="display:none">
-            <div class="script-ai-panel">
-                <div class="script-ai-toolbar">
-                    <span class="script-ai-badge" title="Prompt for ChatGPT, Claude, etc.">For LLM</span>
-                    <p class="script-ai-lead">This <b>LLM instruction</b> lives only in the textarea below (includes reference snippets). Copy it into your AI chat, describe the task, and ask for two bodies (before / after MITM) with <b>no</b> <code>function</code> wrapper. Use <b>Preset snippets</b> under the textarea to fill or copy examples.</p>
-                    <button type="button" class="btn-secondary btn-sm" id="btn-copy-intercept-ai-prompt">Copy prompt</button>
+        <main class="rules-editor">
+            <div class="rules-editor-inner" id="editor-scroll">
+                <h2 id="editor-title">Select or create a rule</h2>
+                <p class="cn-empty-state-sub" id="editor-empty" style="margin:0 0 16px">Choose a rule from the list or click New. Intercept rules run in the MITM pipeline (no protocol.handle).</p>
+
+                <div id="editor-form" class="form-grid" style="display:none">
+                    <input type="hidden" id="edit-id">
+                    <div class="form-row">
+                        <label>Name</label>
+                        <input type="text" id="edit-name" placeholder="e.g. Block trackers">
+                    </div>
+                    <div class="form-row">
+                        <label>URL pattern</label>
+                        <input type="text" id="edit-pattern" placeholder="*example.com/api* or https://host/path/">
+                    </div>
+                    <div class="form-row url-test-block">
+                        <label for="edit-url-test">Test URL</label>
+                        <div class="url-test-inputs">
+                            <input type="text" id="edit-url-test" placeholder="https://example.com/test" autocomplete="off">
+                            <span id="url-match-indicator" class="match-bad" aria-hidden="true"></span>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <label>HTTP methods</label>
+                        <div class="method-wrap">
+                            <div class="method-grid" id="method-checkboxes"></div>
+                            <div class="method-all-row">
+                                <label><input type="checkbox" id="method-all"> All methods (*)</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <label>Group</label>
+                        <input type="text" id="edit-group" placeholder="Default">
+                    </div>
+                    <div class="form-row">
+                        <label>Tags (comma-separated)</label>
+                        <input type="text" id="edit-tags" placeholder="api, dev">
+                    </div>
+                    <div class="form-row delay-row">
+                        <label>Response delay (ms)</label>
+                        <div class="delay-slider-row">
+                            <input type="range" id="edit-delay" min="0" max="10000" step="50" value="0" aria-valuetext="0 ms">
+                            <span id="edit-delay-val">0</span>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <label><input type="checkbox" id="edit-stop-on-match" checked> Stop on first match (disable to chain modify-headers rules)</label>
+                    </div>
+                    <div class="form-row">
+                        <label><input type="checkbox" id="edit-breakpoint"> Breakpoint (pause — Breakpoint window)</label>
+                    </div>
+                    <div class="form-row">
+                        <label>Action type</label>
+                        <select id="edit-type">
+                            <option value="block">Block</option>
+                            <option value="modifyHeaders">Modify headers</option>
+                            <option value="mock">Mock response</option>
+                            <option value="script">Dynamic script</option>
+                        </select>
+                    </div>
+
+                    <div id="params-block" class="form-row" style="display:none"><p class="cn-empty-state-sub">Request is cancelled before the network.</p></div>
+
+                    <div id="params-headers" style="display:none">
+                        <div class="form-row"><label>Request headers (JSON)</label><div class="monaco-wrap" id="monaco-req-h"></div><textarea id="edit-req-headers" class="fallback-ta" spellcheck="false"></textarea></div>
+                        <div class="form-row"><label>Response headers (JSON)</label><div class="monaco-wrap" id="monaco-resp-h"></div><textarea id="edit-resp-headers" class="fallback-ta" spellcheck="false"></textarea></div>
+                    </div>
+
+                    <div id="params-mock" style="display:none">
+                        <div class="form-row"><label>Status</label><input type="number" id="edit-mock-status" min="100" max="599" value="200"></div>
+                        <div class="form-row"><label>MIME</label><select id="edit-mock-mime-select"></select></div>
+                        <div class="form-row" id="edit-mock-mime-custom-row" style="display:none"><label>Custom MIME</label><input type="text" id="edit-mock-mime-custom" placeholder="application/vnd.api+json"></div>
+                        <div class="form-row"><label>Body</label><div class="monaco-wrap" id="monaco-mock-body"></div><textarea id="edit-mock-body" class="fallback-ta" rows="8" spellcheck="false"></textarea></div>
+                        <div class="form-row">
+                            <label>Or file path</label>
+                            <div class="mock-file-row">
+                                <input type="text" id="edit-mock-file" placeholder="Absolute path to file">
+                                <button type="button" class="cn-btn" id="btn-browse-mock">Browse…</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="params-script" style="display:none">
+                        <div class="form-row"><button type="button" class="cn-btn" id="btn-copy-llm">Copy LLM prompt</button></div>
+                        <div class="form-row"><label>Before MITM</label><div class="monaco-wrap" id="monaco-script-before"></div><textarea id="edit-script-before" class="fallback-ta" spellcheck="false"></textarea></div>
+                        <div class="form-row"><label>After response</label><div class="monaco-wrap" id="monaco-script-after"></div><textarea id="edit-script-after" class="fallback-ta" spellcheck="false"></textarea></div>
+                        <button type="button" class="cn-btn" id="btn-script-test">Run self-test</button>
+                        <pre id="script-test-out" style="display:none;font-size:11px;background:var(--bg2);padding:8px;border-radius:6px;overflow:auto;max-height:120px"></pre>
+                    </div>
+
+                    <div class="form-row">
+                        <label>Advanced: match headers (JSON array)</label>
+                        <textarea id="edit-match-headers" rows="3" placeholder='[{"key":"authorization","op":"exists"}]' spellcheck="false"></textarea>
+                    </div>
+                    <div class="form-row">
+                        <label>Advanced: match body</label>
+                        <textarea id="edit-match-body" rows="2" placeholder='{"mode":"contains","value":"token"}' spellcheck="false"></textarea>
+                    </div>
+
+                    <div style="display:flex;gap:8px;margin-top:12px">
+                        <button type="button" class="cn-btn cn-btn-primary" id="btn-save">Save</button>
+                        <button type="button" class="cn-btn" id="btn-cancel">Cancel</button>
+                    </div>
                 </div>
-                <textarea id="intercept-ai-prompt-editor" class="script-ai-prompt-text" readonly rows="18" spellcheck="false" aria-label="LLM prompt (read-only)"></textarea>
             </div>
-            <div class="script-preset-row">
-                <label>Preset snippets</label>
-                <select id="script-snippet-preset" title="Insert or copy example before/after bodies">
-                    <option value="">— Choose preset —</option>
+        </main>
+    </div>
+
+    <div class="activity-panel" id="activity-panel">
+        <div class="activity-head">
+            <div class="activity-head-title" id="activity-toggle" title="Click to collapse or expand">
+                <span>Activity</span>
+                <span class="cn-badge cn-badge-accent" id="activity-count">0</span>
+            </div>
+            <div class="activity-tools">
+                <input type="search" id="activity-search" class="act-input" placeholder="Filter activity…" aria-label="Filter activity">
+                <span class="act-lbl">From</span>
+                <input type="datetime-local" id="activity-from" class="act-input" title="From">
+                <span class="act-lbl">To</span>
+                <input type="datetime-local" id="activity-to" class="act-input" title="To">
+                <select id="activity-type-filter" aria-label="Activity type">
+                    <option value="">All types</option>
+                    <option value="block">block</option>
+                    <option value="mock">mock</option>
+                    <option value="modifyHeaders">modifyHeaders</option>
+                    <option value="script">script</option>
                 </select>
-                <button type="button" class="btn-secondary btn-sm" id="btn-script-preset-insert">Insert into fields</button>
-                <button type="button" class="btn-secondary btn-sm" id="btn-script-preset-copy">Copy snippet</button>
+                <button type="button" class="cn-btn cn-btn-ghost" id="btn-activity-more">More</button>
+                <button type="button" class="cn-btn cn-btn-ghost" id="btn-activity-export">Export JSON</button>
+                <button type="button" class="cn-btn cn-btn-ghost" id="btn-activity-export-csv">Export CSV</button>
+                <button type="button" class="cn-btn cn-btn-ghost" id="btn-activity-clear">Clear</button>
             </div>
-            <div class="form-row" style="margin-top:10px">
-                <label>Before upstream (function body, argument <code>ctx</code>)</label>
-                <textarea id="edit-script-before" class="script-textarea" placeholder="// ctx.url, ctx.method, ctx.headers, ctx.orderedHeaders, ctx.body, ctx.bodyBase64&#10;ctx.headers['X-Demo'] = '1';" spellcheck="false" autocomplete="off"></textarea>
-            </div>
-            <div class="form-row">
-                <label>After server response (<code>ctx.response</code>: status, headers, body)</label>
-                <textarea id="edit-script-after" class="script-textarea" placeholder="// ctx.response.statusCode, ctx.response.headers, ctx.response.bodyBase64&#10;// ctx.request — request snapshot after the &quot;before&quot; phase" spellcheck="false" autocomplete="off"></textarea>
-            </div>
-            <div class="toolbar-row" style="margin-top:4px">
-                <button type="button" class="btn-secondary btn-sm" id="btn-test-script">Run script self-test</button>
-            </div>
-            <pre id="script-test-out" aria-live="polite"></pre>
         </div>
-
-        <div class="form-actions">
-            <button class="btn-primary" id="btn-save-intercept">Save Rule</button>
-            <button class="btn-secondary" id="btn-cancel-intercept">Cancel</button>
-        </div>
+        <div class="activity-body" id="activity-body"></div>
     </div>
-
-    <div id="intercept-list" class="rule-list"></div>
 </div>
 
-<!-- ══════════════════════ ACTIVITY LOG ══════════════════════════════════════ -->
-<div id="tab-activity" class="tab-content">
-    <div class="toolbar-row">
-        <h2>Intercept Activity</h2>
-        <button class="btn-secondary btn-sm" id="btn-clear-activity">✕ Clear</button>
+<div id="history-modal" class="history-modal">
+    <div class="history-box">
+        <h3 style="margin-top:0">Rule history</h3>
+        <div id="history-content"></div>
+        <button type="button" class="cn-btn" id="btn-history-close">Close</button>
     </div>
-    <div class="description">
-        Live log of intercept rule matches. Grouped by page navigation. Counter resets on clear.
-    </div>
-    <div id="activity-log" class="rule-list" style="gap:0"></div>
 </div>
 
+<div id="onboarding-overlay">
+    <div class="onb-card" id="onb-card">
+        <h3 style="margin-top:0" id="onb-title">Step 1 — Create your first rule</h3>
+        <p id="onb-text">Click <strong>+ New</strong> or pick a <strong>Template</strong>, then set URL pattern and action.</p>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+            <button type="button" class="cn-btn" id="onb-skip">Skip</button>
+            <button type="button" class="cn-btn cn-btn-primary" id="onb-next">Next</button>
+        </div>
+    </div>
+</div>
+
+<script src="node_modules/sortablejs/Sortable.min.js"></script>
+<script src="rules-monaco-setup.js"></script>
 <script src="rules.js"></script>
 </body>
 </html>

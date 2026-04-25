@@ -25,6 +25,8 @@ const { registerMitmTlsResilienceIpc } = require('./handlers/mitm-tls-resilience
 const { registerExtProxyIpc } = require('./handlers/ext-proxy-ipc');
 const { registerToolbarActivityBadgeIpc } = require('./handlers/toolbar-activity-badge-ipc');
 const { registerNotesIpc } = require('./handlers/notes-ipc');
+const { registerCredentialsIpc } = require('./handlers/credentials-ipc');
+const { registerRequestEditorIpc } = require('./handlers/request-editor-ipc');
 
 function registerMainProcessIpc(ctx) {
     registerMitmStartupIpc(ctx);
@@ -48,6 +50,8 @@ function registerMainProcessIpc(ctx) {
     registerMitmTlsResilienceIpc(ctx);
     registerExtProxyIpc(ctx);
     registerNotesIpc(ctx);
+    registerCredentialsIpc(ctx);
+    registerRequestEditorIpc(ctx);
 }
 
 module.exports = { registerMainProcessIpc };

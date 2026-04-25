@@ -29,6 +29,14 @@ function registerDbLoggingIpc(ctx) {
         return ctx.db.ftsSearch(query, sessionId || null);
     });
 
+    ctx.ipcMain.handle('get-omnibox-top-hosts', async (_, limit) => {
+        try {
+            return ctx.db.getOmniboxTopHosts(limit);
+        } catch {
+            return [];
+        }
+    });
+
     ctx.ipcMain.handle('get-sessions', async () => {
         return ctx.db.getSessions(50, 0);
     });
@@ -167,11 +175,18 @@ function registerDbLoggingIpc(ctx) {
         if (!ctx.currentSessionId) return [];
         const requests    = ctx.db.queryRequests({ sessionId: ctx.currentSessionId }, 5000, 0);
         const screenshots = ctx.db.getScreenshotEntriesForSession(ctx.currentSessionId);
+        const browserEvents = ctx.db.getBrowserEventsForSession(ctx.currentSessionId);
         // Merge and sort ascending by created_at so order is chronological
-        return [...requests, ...screenshots].sort((a, b) => {
+        return [...requests, ...screenshots, ...browserEvents].sort((a, b) => {
             const ta = a.created_at || '', tb = b.created_at || '';
             return ta < tb ? -1 : ta > tb ? 1 : 0;
         });
+    });
+
+    ctx.ipcMain.handle('get-browser-events', async (_, opts) => {
+        const sessionId = opts && opts.sessionId != null ? opts.sessionId : ctx.currentSessionId;
+        if (!sessionId) return [];
+        return ctx.db.getBrowserEvents(sessionId, opts || {});
     });
 
     ctx.ipcMain.handle('get-ws-events', async (_, payload) => {
@@ -196,6 +211,70 @@ function registerDbLoggingIpc(ctx) {
             }
             return { success: true };
         } catch (e) { return { success: false, error: e.message }; }
+    });
+
+    /** Injected page script (storage stack traces) — see tab-manager + preload-view `cupnetStorageActivity`. */
+    ctx.ipcMain.on('browser-storage-activity', (event, payload) => {
+        if (!ctx.isLoggingEnabled) return;
+        const s = ctx.loadSettings();
+        if (!s.activityMonitorEnabled || !s.activityMonitorStorageStackTraces) return;
+        const wcId = event.sender && event.sender.id;
+        if (wcId == null || !ctx.currentSessionId) return;
+        const tabId = ctx.tabManager.getTabIdByWebContentsId(wcId);
+        if (!tabId) return;
+        const p = payload && typeof payload === 'object' ? payload : {};
+        const kind = String(p.kind || '').toLowerCase() === 'ss' ? 'ss' : 'ls';
+        const op = String(p.op || 'set');
+        let eventType = `${kind}-set`;
+        if (op === 'remove') eventType = `${kind}-remove`;
+        if (op === 'clear') eventType = `${kind}-clear`;
+        let summary = '';
+        if (op === 'clear') summary = 'storage cleared (inject)';
+        else if (op === 'remove') summary = `remove ${p.key || ''}`;
+        else summary = `${p.key || ''} = ${String(p.newValue || '').slice(0, 200)}`;
+        const storageKind = kind === 'ss' ? 'sessionStorage' : 'localStorage';
+        const detail = JSON.stringify({
+            inject: true,
+            stack: p.stack || '',
+            key: p.key,
+            newValue: p.newValue,
+            op,
+            storageKind,
+            isLocalStorage: kind === 'ls',
+        });
+        (async () => {
+            try {
+                const id = await ctx.db.insertBrowserEventAsync(ctx.currentSessionId, tabId, {
+                    event_type: eventType,
+                    level: 'info',
+                    summary: summary.slice(0, 8000),
+                    detail,
+                    source_url: null,
+                    source_line: null,
+                    origin: null,
+                });
+                if (id && typeof ctx._broadcastLogEntryToViewers === 'function') {
+                    ctx._broadcastLogEntryToViewers({
+                        _browserEvent: true,
+                        id,
+                        event_type: eventType,
+                        level: 'info',
+                        summary: summary.slice(0, 8000),
+                        detail,
+                        source_url: null,
+                        source_line: null,
+                        origin: null,
+                        url: summary,
+                        type: 'storage',
+                        tabId,
+                        tab_id: tabId,
+                        session_id: ctx.currentSessionId,
+                        sessionId: ctx.currentSessionId,
+                        created_at: new Date().toISOString(),
+                    });
+                }
+            } catch { /* ignore */ }
+        })();
     });
 }
 

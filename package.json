@@ -6,10 +6,12 @@
   "main": "main.js",
   "scripts": {
     "start": "ELECTRON_RUN_AS_NODE= electron .",
+    "start-force": "node scripts/start-force.js",
     "debug": "ELECTRON_RUN_AS_NODE= electron --inspect-brk .",
-    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "rebuild": "node scripts/rebuild-electron-native.js",
+    "postinstall": "node scripts/rebuild-electron-native.js",
     "install:from-lock": "npm install --ignore-scripts && npm run rebuild",
-    "rebuild:arm64": "arch -arm64 node node_modules/.bin/electron-rebuild -f -w better-sqlite3",
+    "rebuild:arm64": "electron-rebuild -f -o better-sqlite3 --arch arm64",
     "rebuild:azuretls": "node scripts/azuretls-electron-rebuild.js",
     "rebuild:azuretls:arm64": "CUPNET_ELECTRON_REBUILD_ARCH=arm64 node scripts/azuretls-electron-rebuild.js",
     "rebuild:azuretls:x64": "CUPNET_ELECTRON_REBUILD_ARCH=x64 node scripts/azuretls-electron-rebuild.js",
@@ -20,9 +22,16 @@
     "check:native:universal": "npm run rebuild:azuretls:universal && CUPNET_SMOKE_REQUIRE_UNIVERSAL=1 npm run smoke:azuretls-native",
     "setup:ffi": "cd ../greengo22 && npm install",
     "test": "bash tests/run-all.sh",
-    "test:e2e": "playwright test tests/e2e/",
+    "test:unit": "vitest run",
+    "test:go": "cd azuretls-go && GO111MODULE=on GOTOOLCHAIN=auto go test -count=1 ./...",
+    "test:unit:all": "npm run test:unit && npm run test:go",
+    "test:e2e": "node scripts/playwright-e2e.mjs tests/e2e/",
+    "test:e2e:smoke": "node scripts/playwright-e2e.mjs tests/e2e/cupnet.e2e.spec.js tests/e2e/windows.e2e.spec.js tests/e2e/intercept.e2e.spec.js tests/e2e/mitm-azure-first-load.e2e.spec.js tests/e2e/azuretls-go-worker.e2e.spec.js",
+    "test:no-e2e": "npm run test:unit:all && CUPNET_SKIP_E2E=1 npm run test:e2e:smoke",
     "baseline:stability": "node scripts/stability-baseline.js",
     "test:utils": "node tests/test-utils.js",
+    "build:go": "bash azuretls-go/build.sh",
+    "build:go:local": "bash azuretls-go/build-local.sh",
     "build:guide": "node scripts/build-new-tab-guide.mjs",
     "test:mitm": "node tests/test-mitm.js",
     "test:dns-mitm": "node --test --test-force-exit tests/test-dns-mitm.js",
@@ -49,24 +58,36 @@
     "@electron/rebuild": "^3.6.0",
     "@playwright/test": "^1.58.2",
     "cross-env": "^7.0.3",
-    "electron": "^28.0.0",
+    "electron": "^34.0.0",
     "electron-builder": "^24.13.0",
     "icon-gen": "^5.0.0",
     "node-addon-api": "^8.3.0",
-    "node-gyp": "^10.3.0"
+    "node-gyp": "^10.3.0",
+    "vitest": "^2.1.9"
   },
   "overrides": {
     "node-addon-api": "^8.3.0"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-html": "^6.4.11",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-xml": "^6.1.0",
+    "@codemirror/search": "^6.6.0",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/theme-one-dark": "^6.1.3",
+    "@codemirror/view": "^6.41.0",
     "archiver": "^7.0.1",
-    "better-sqlite3": "^9.4.3",
+    "better-sqlite3": "^12.8.0",
+    "codemirror": "^6.0.2",
     "form-data": "^4.0.0",
     "jsondiffpatch": "^0.7.3",
     "marked": "^17.0.5",
+    "monaco-editor": "^0.55.1",
     "node-forge": "^1.3.3",
     "proxy-chain": "^2.5.9",
     "quill": "^2.0.3",
+    "sortablejs": "^1.15.7",
     "tldts": "^7.0.27",
     "turndown": "^7.2.2"
   },
@@ -99,6 +120,13 @@
       {
         "from": "resources/cupnet-node",
         "to": "cupnet-node",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "azuretls-go/bin",
+        "to": "azuretls-go/bin",
         "filter": [
           "**/*"
         ]

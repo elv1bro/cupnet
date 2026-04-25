@@ -1,3 +1,7 @@
+/**
+ * LEGACY monolithic bootstrap (not used by production entry `main.js` → `main-process/index.js`).
+ * Tab surfaces are managed in `../tab-manager.js` via WebContentsView on BrowserWindow.contentView.
+ */
 const { sysLog, safeCatch, flushOnExit, initIPC: initSysLogIPC } = require('./sys-log');
 
 const {
@@ -53,7 +57,6 @@ process.on('uncaughtException', (err) => {
 let db          = null;
 let tabManager  = null;
 let harExporter = null;
-let rulesEngine = null;
 let interceptor = null;
 
 const getAssetPath = (name) => path.join(__dirname, name);
@@ -69,7 +72,7 @@ const {
 } = require('./utils');
 const bundleUtils = require('./bundle-utils');
 const diffUtils = require('./diff-utils');
-const { solveTurnstileWithCapMonster, CaptchaSolverError } = require('./captcha-solver');
+const { CaptchaSolverError } = require('../captcha-solver');
 const { networkPolicy } = require('./network-policy');
 const { ProxyResilienceManager } = require('./proxy-resilience');
 const { normalizeTrafficMode, resolveSessionProxyConfig } = require('./traffic-mode-router');
@@ -676,8 +679,9 @@ function applyRuntimeAppIcon() {
 }
 
 // ─── Console capture (stdout/stderr → console viewer window) ──────────────────
+const { buildConsoleEntryFromLine } = require('../main-process/services/console-capture');
 const _consoleBuffer = [];
-const _CONSOLE_BUFFER_MAX = 3000;
+const _CONSOLE_BUFFER_MAX = 10000;
 let _consoleBatchTimer = null;
 let _consoleBatch = [];
 
@@ -691,16 +695,17 @@ function _flushConsoleBatch() {
     }
 }
 
-function captureConsoleLine(text) {
+function captureConsoleLine(text, stream) {
     const clean = text.replace(/\n+$/, '');
     if (!clean) return;
     const lines = clean.split('\n');
+    const st = stream === 'stderr' ? 'stderr' : 'stdout';
     for (const line of lines) {
         if (!line) continue;
-        const entry = { text: line, ts: Date.now() };
+        const entry = buildConsoleEntryFromLine(line, st);
         _consoleBuffer.push(entry);
         if (_consoleBuffer.length > _CONSOLE_BUFFER_MAX) {
-            _consoleBuffer.splice(0, 1000);
+            _consoleBuffer.splice(0, Math.floor(_CONSOLE_BUFFER_MAX * 0.2));
         }
         _consoleBatch.push(entry);
     }
@@ -713,11 +718,11 @@ const _origStdoutWrite = process.stdout.write.bind(process.stdout);
 const _origStderrWrite = process.stderr.write.bind(process.stderr);
 
 process.stdout.write = function (chunk, encoding, callback) {
-    captureConsoleLine(typeof chunk === 'string' ? chunk : chunk.toString());
+    captureConsoleLine(typeof chunk === 'string' ? chunk : chunk.toString(), 'stdout');
     return _origStdoutWrite(chunk, encoding, callback);
 };
 process.stderr.write = function (chunk, encoding, callback) {
-    captureConsoleLine(typeof chunk === 'string' ? chunk : chunk.toString());
+    captureConsoleLine(typeof chunk === 'string' ? chunk : chunk.toString(), 'stderr');
     return _origStderrWrite(chunk, encoding, callback);
 };
 
@@ -742,7 +747,7 @@ const SETTINGS_DEFAULTS = {
         cooldownMs: 2000,
         maxPerMinute: 12,
     },
-    bypassDomains: ['challenges.cloudflare.com'],
+    bypassDomains: [],
     trafficOpts: {
         trafficEnabled: false,
         blockImages: false,
@@ -757,13 +762,6 @@ const SETTINGS_DEFAULTS = {
             '*.hcaptcha.com', 'turnstile.com', '*.turnstile.com',
         ],
     },
-    capmonster: {
-        apiKey: '',
-        autoInject: true,
-        autoSubmit: false,
-        pollTimeoutMs: 90000,
-        pollIntervalMs: 3000,
-    },
 };
 
 function loadSettings() {
@@ -776,8 +774,8 @@ function loadSettings() {
                 ...raw,
                 trafficOpts: { ...SETTINGS_DEFAULTS.trafficOpts, ...(raw.trafficOpts || {}) },
                 tracking: normalizeTrackingSettings(raw.tracking),
-                capmonster: normalizeCapmonsterSettings(raw.capmonster),
             };
+            delete cachedSettings.capmonster;
             currentTrafficMode = normalizeTrafficMode(cachedSettings.effectiveTrafficMode);
             return cachedSettings;
         }
@@ -787,7 +785,6 @@ function loadSettings() {
     cachedSettings = {
         ...SETTINGS_DEFAULTS,
         tracking: normalizeTrackingSettings(),
-        capmonster: normalizeCapmonsterSettings(),
     };
     currentTrafficMode = normalizeTrafficMode(cachedSettings.effectiveTrafficMode);
     return cachedSettings;
@@ -820,29 +817,6 @@ function normalizeTrackingSettings(raw) {
         cooldownMs: Math.max(200, Math.min(30000, Number(src.cooldownMs) || base.cooldownMs)),
         maxPerMinute: Math.max(1, Math.min(120, Number(src.maxPerMinute) || base.maxPerMinute)),
     };
-}
-
-function normalizeCapmonsterSettings(raw) {
-    const base = SETTINGS_DEFAULTS.capmonster;
-    const src = raw && typeof raw === 'object' ? raw : {};
-    return {
-        apiKey: String(src.apiKey || '').trim(),
-        autoInject: src.autoInject !== false,
-        autoSubmit: src.autoSubmit === true,
-        pollTimeoutMs: Math.max(30000, Math.min(180000, Number(src.pollTimeoutMs) || base.pollTimeoutMs)),
-        pollIntervalMs: Math.max(1000, Math.min(10000, Number(src.pollIntervalMs) || base.pollIntervalMs)),
-    };
-}
-
-function getCapmonsterSettings() {
-    const s = loadSettings();
-    if (!s.capmonster || typeof s.capmonster !== 'object') {
-        s.capmonster = normalizeCapmonsterSettings();
-        saveSettings(s);
-    } else {
-        s.capmonster = normalizeCapmonsterSettings(s.capmonster);
-    }
-    return s.capmonster;
 }
 
 function getTrackingSettings() {
@@ -1072,7 +1046,7 @@ async function checkCurrentIpGeo() {
     return empty;
 }
 
-/** Broadcast proxy status to ALL windows, proxy manager, and all tab BrowserViews */
+/** Broadcast proxy status to ALL windows, proxy manager, and all tab WebContentsViews */
 function notifyProxyStatus() {
     const isDirect = !persistentAnonymizedProxyUrl && actProxy === '';
     const info = {
@@ -1095,7 +1069,7 @@ function notifyProxyStatus() {
             safeCatch({ module: 'main', eventCode: 'ipc.broadcast.failed', context: { channel: 'proxy-status-changed.window' } }, err, 'info');
         }
     }
-    // Also push to all open tab BrowserViews (e.g. new-tab.html proxy widget)
+    // Also push to all open tab WebContentsViews (e.g. new-tab.html proxy widget)
     if (tabManager) {
         for (const tab of tabManager.getAllTabs()) {
             try {
@@ -1323,26 +1297,6 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
                     error: logEntry.error || null
                 });
                 if (dbId) logEntry.id = dbId; // replace CDP string id with real DB integer id
-
-                // Run rules engine (may not be loaded yet during early startup)
-                if (rulesEngine) {
-                    try {
-                        const matched = rulesEngine.evaluate({
-                            url: logEntry.url,
-                            method: logEntry.method,
-                            status: logEntry.response?.statusCode,
-                            type: logEntry.type,
-                            duration_ms: logEntry.duration,
-                            response_body: logEntry.responseBody
-                        });
-                        if (matched.length) {
-                            const actions = rulesEngine.buildActions(matched);
-                            handleRuleActions(actions, logEntry);
-                        }
-                    } catch (err) {
-                        safeCatch({ module: 'main', eventCode: 'rules.engine.failed', context: { tabId, url: logEntry.url || '' } }, err);
-                    }
-                }
             }
         } catch (e) {
             console.error('[DB] insertRequest failed:', e.message);
@@ -1613,43 +1567,6 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
             safeCatch({ module: 'main', eventCode: 'cdp.detach.failed', context: { phase: 'destroy.detach', tabId } }, err, 'info');
         }
     });
-}
-
-function handleRuleActions(actions, logEntry) {
-    for (const action of actions) {
-        if (action.type === 'notification') {
-            // System notification (may require bundle ID on macOS in production)
-            try {
-                if (Notification.isSupported()) {
-                    new Notification({
-                        title: `Rule matched: ${action.ruleName || 'unnamed'}`,
-                        body:  (logEntry.url || '').slice(0, 120),
-                    }).show();
-                }
-            } catch (err) {
-                safeCatch({ module: 'main', eventCode: 'notification.send.failed', context: { ruleName: action.ruleName || 'unnamed' } }, err, 'info');
-            }
-            // Always send an in-app toast regardless of system support
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send('rule-notification', {
-                    ruleName: action.ruleName || 'unnamed',
-                    url:      logEntry.url || '',
-                });
-            }
-        }
-        if (action.type === 'highlight') {
-            for (const w of logViewerWindows) {
-                if (!w.isDestroyed()) w.webContents.send('rule-highlight', {
-                    url: logEntry.url, color: action.color, ruleName: action.ruleName
-                });
-            }
-        }
-        if (action.type === 'screenshot') {
-            requestScreenshot({ reason: 'rule', meta: { ruleName: action.ruleName || '' } }).catch((err) => {
-                safeCatch({ module: 'main', eventCode: 'screenshot.capture.failed', context: { reason: 'rule', ruleName: action.ruleName || '' } }, err, 'info');
-            });
-        }
-    }
 }
 
 // ─── Fingerprint / Identity ───────────────────────────────────────────────────
@@ -2036,7 +1953,7 @@ function createMainWindow() {
         // Send initial data to browser toolbar
         const s = loadSettings();
         tabManager.setPasteUnlock(s.pasteUnlock !== false);
-        if (s.bypassDomains?.length) applyBypassDomains(s.bypassDomains);
+        applyBypassDomains(s.bypassDomains || []);
         if (s.trafficOpts) applyTrafficFilters(s.trafficOpts);
         mainWindow.webContents.send('init-settings', {
             filterPatterns: s.filterPatterns || [],
@@ -2056,7 +1973,7 @@ function createMainWindow() {
         } catch (_) { /* ignore */ }
     });
 
-    // Forward F12 / F5 / Ctrl+R from toolbar to active BrowserView
+    // Forward F12 / F5 / Ctrl+R from toolbar to active tab WebContentsView
     mainWindow.webContents.on('before-input-event', (event, input) => {
         const tab = tabManager ? tabManager.getActiveTab() : null;
         if (!tab || tab.view.webContents.isDestroyed()) return;
@@ -2074,16 +1991,22 @@ function createMainWindow() {
     mainWindow.on('blur', () => { isWindowActive = false; });
     mainWindow.on('resize', () => tabManager.relayout());
     mainWindow.on('close', (e) => {
-        if (forceAppQuit) return;
-        if (!confirmExitDialog(mainWindow)) {
-            e.preventDefault();
-            return;
+        if (!forceAppQuit) {
+            if (!confirmExitDialog(mainWindow)) {
+                e.preventDefault();
+                return;
+            }
+            forceAppQuit = true;
         }
-        forceAppQuit = true;
+        try {
+            const wins = BrowserWindow.getAllWindows();
+            for (const w of wins) {
+                if (w && !w.isDestroyed() && w !== mainWindow) w.destroy();
+            }
+        } catch (_) { /* ignore */ }
     });
     mainWindow.on('closed', () => {
         mainWindow = null;
-        // Close all secondary windows and terminate the process
         app.quit();
     });
 
@@ -3303,12 +3226,29 @@ app.whenReady().then(async () => {
         broadcastInterceptRuleMatched(info);
         maybeLogMockToNetworkActivity(info);
     });
+    interceptor.setBreakpointHandler(async (opts, rule) => {
+        const { dialog } = require('electron');
+        const parent = (rulesWindow && !rulesWindow.isDestroyed())
+            ? rulesWindow
+            : (mainWindow && !mainWindow.isDestroyed())
+                ? mainWindow
+                : null;
+        if (!parent) return;
+        try {
+            await dialog.showMessageBox(parent, {
+                type: 'info',
+                title: 'Breakpoint',
+                message: `Intercept rule: ${rule.name || ''}`,
+                detail: `${String(opts.method || 'GET').toUpperCase()} ${String(opts.url || '').slice(0, 1200)}`,
+                buttons: ['Continue'],
+            });
+        } catch { /* ignore */ }
+    });
     interceptor.setTrafficMode(getCurrentTrafficMode());
 
     // Non-critical modules loaded after window is shown
     setImmediate(() => {
         harExporter = require('./har-exporter');
-        rulesEngine = require('./rules-engine');
     });
 
     // Start MITM proxy in background so first window appears immediately
@@ -3617,24 +3557,22 @@ app.whenReady().then(async () => {
         tabManager.navigate(url);
     });
     ipcMain.on('nav-back', () => {
+        tabManager.ensureActiveTabViewVisible?.();
         const tab = tabManager.getActiveTab();
         if (tab && tab.view.webContents.canGoBack()) tab.view.webContents.goBack();
     });
     ipcMain.on('nav-forward', () => {
+        tabManager.ensureActiveTabViewVisible?.();
         const tab = tabManager.getActiveTab();
         if (tab && tab.view.webContents.canGoForward()) tab.view.webContents.goForward();
     });
     ipcMain.on('nav-reload', () => {
+        tabManager.ensureActiveTabViewVisible?.();
         const tab = tabManager.getActiveTab();
         if (tab) tab.view.webContents.reload();
     });
     ipcMain.on('nav-home', () => {
-        const tab = tabManager.getActiveTab();
-        if (tab && !tab.view.webContents.isDestroyed()) {
-            tab.view.webContents.loadURL(getNewTabUrl()).catch((err) => {
-                safeCatch({ module: 'main', eventCode: 'navigation.load.failed', context: { target: 'new-tab' } }, err, 'info');
-            });
-        }
+        tabManager.navigate(getNewTabUrl());
     });
 
     // ── DB queries (for log viewer) ──────────────────────────────────────────
@@ -3816,8 +3754,12 @@ app.whenReady().then(async () => {
         });
         if (canceled) return { success: false, canceled: true };
         try {
-            const har = harExporter.exportHar(sid);
-            fs.writeFileSync(filePath, JSON.stringify(har, null, 2));
+            if (typeof harExporter.exportHarToFileStream === 'function' && process.env.CUPNET_HAR_LEGACY_SYNC !== '1') {
+                harExporter.exportHarToFileStream(filePath, sid);
+            } else {
+                const har = harExporter.exportHar(sid);
+                fs.writeFileSync(filePath, JSON.stringify(har, null, 2));
+            }
             let sidecarPath = null;
             if (process.env.CUPNET_HAR_WS_SIDECAR === '1' && typeof harExporter.exportWebSocketSidecarPayload === 'function') {
                 const side = harExporter.exportWebSocketSidecarPayload(sid);
@@ -3948,11 +3890,6 @@ app.whenReady().then(async () => {
     });
 
     // ── Rules ────────────────────────────────────────────────────────────────
-    ipcMain.handle('get-rules', async () => db.getRules());
-    ipcMain.handle('save-rule', async (_, rule) => db.saveRuleAsync(rule));
-    ipcMain.handle('delete-rule', async (_, id) => { await db.deleteRuleAsync(id); return true; });
-    ipcMain.handle('toggle-rule', async (_, id, enabled) => { await db.toggleRuleAsync(id, enabled); return true; });
-
     // ── Intercept rules ──────────────────────────────────────────────────────
     ipcMain.handle('get-intercept-rules', async () => db.getAllInterceptRules());
     ipcMain.handle('save-intercept-rule', async (_, rule) => {
@@ -4194,7 +4131,7 @@ app.whenReady().then(async () => {
         if (!err) return fallback;
         const code = String(err.code || 'SOLVER_ERROR');
         const message = String(err.message || fallback.message);
-        const nonRetryable = new Set(['MISSING_API_KEY', 'INVALID_API_KEY', 'MISSING_PAGE_URL', 'MISSING_SITEKEY', 'TASK_NOT_SUPPORTED']);
+        const nonRetryable = new Set(['DISABLED', 'MISSING_API_KEY', 'INVALID_API_KEY', 'MISSING_PAGE_URL', 'MISSING_SITEKEY', 'TASK_NOT_SUPPORTED']);
         return {
             code,
             message,
@@ -4203,121 +4140,18 @@ app.whenReady().then(async () => {
         };
     }
 
-    function extractTurnstileSitekey(item = {}) {
-        const direct = String(item.sitekey || '').trim();
-        if (direct) return direct;
-        const iframeSrc = String(item.iframeSrc || '').trim();
-        if (!iframeSrc) return '';
-        try {
-            const u = new URL(iframeSrc);
-            return String(
-                u.searchParams.get('k')
-                || u.searchParams.get('sitekey')
-                || u.searchParams.get('render')
-                || ''
-            ).trim();
-        } catch {
-            return '';
-        }
-    }
-
-    async function discoverTurnstilePayloadFromPage(tabId, fallbackPayload = {}) {
-        const tab = tabManager.getTab(tabId);
-        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return fallbackPayload;
-        const base = { ...(fallbackPayload || {}) };
-        if (!base.pageUrl) {
-            try { base.pageUrl = tab.view.webContents.getURL() || tab.url || ''; } catch (err) {
-                safeCatch({ module: 'main', eventCode: 'captcha.context.discovery_failed', context: { field: 'pageUrl', tabId } }, err, 'info');
-            }
-        }
-        if (base.sitekey) return base;
-        try {
-            const data = await tab.view.webContents.executeJavaScript(`(${_analyzeCaptchaScript})()`);
-            const turns = Array.isArray(data?.turnstile) ? data.turnstile : [];
-            const item = turns.find(x => extractTurnstileSitekey(x)) || turns[0] || {};
-            const discoveredSitekey = extractTurnstileSitekey(item);
-            return {
-                ...base,
-                sitekey: discoveredSitekey || base.sitekey || '',
-                action: base.action || item.action || '',
-                cData: base.cData || item.cData || '',
-                iframeSrc: base.iframeSrc || item.iframeSrc || '',
-                pageUrl: base.pageUrl || data?.pageUrl || '',
-            };
-        } catch {
-            return base;
-        }
-    }
-
-    ipcMain.handle('get-capmonster-settings', () => getCapmonsterSettings());
-    ipcMain.handle('save-capmonster-settings', (_, cfg) => {
-        const s = loadSettings();
-        s.capmonster = normalizeCapmonsterSettings({ ...(s.capmonster || {}), ...(cfg || {}) });
-        saveSettings(s);
-        return s.capmonster;
-    });
     ipcMain.handle('inject-turnstile-token', async (_, tabId, payload) => {
         return await injectTurnstileTokenToTab(tabId, payload || {});
     });
-    ipcMain.handle('solve-turnstile-captcha', async (_, tabId, captcha, options = {}) => {
-        try {
-            const tab = tabManager.getTab(tabId);
-            if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) {
-                return { ok: false, error: { code: 'TAB_NOT_FOUND', message: 'Target tab not found.', retryable: false } };
-            }
-            const settings = getCapmonsterSettings();
-            const merged = {
-                ...settings,
-                ...(options || {}),
-                apiKey: String((options && options.apiKey) || settings.apiKey || '').trim(),
-            };
-            const hydratedCaptcha = await discoverTurnstilePayloadFromPage(tabId, {
-                ...(captcha || {}),
-                sitekey: extractTurnstileSitekey(captcha || {}),
-            });
-            const pageUrl = String(hydratedCaptcha.pageUrl || tab.url || tab.view.webContents.getURL() || '');
-            const sitekey = String(hydratedCaptcha.sitekey || '');
-            const action = String(hydratedCaptcha.action || '');
-            const cData = String(hydratedCaptcha.cData || '');
-            const userAgent = String(tab.view.webContents.getUserAgent() || '');
-
-            const solved = await solveTurnstileWithCapMonster({
-                apiKey: merged.apiKey,
-                pageUrl,
-                sitekey,
-                action,
-                cData,
-                userAgent,
-                timeoutMs: merged.pollTimeoutMs,
-                pollIntervalMs: merged.pollIntervalMs,
-            });
-
-            let injectResult = { injected: false, submitted: false, updatedCount: 0, reason: 'auto-inject-disabled' };
-            if (merged.autoInject) {
-                injectResult = await injectTurnstileTokenToTab(tabId, {
-                    token: solved.token,
-                    sitekey,
-                    action,
-                    autoSubmit: merged.autoSubmit === true,
-                });
-            }
-
-            return {
-                ok: true,
-                token: solved.token,
-                taskId: solved.taskId,
-                cost: solved.cost,
-                solveCount: solved.solveCount,
-                createdAt: solved.createdAt,
-                endedAt: solved.endedAt,
-                inject: injectResult,
-            };
-        } catch (err) {
-            if (err instanceof CaptchaSolverError) {
-                return { ok: false, error: formatSolverError(err) };
-            }
-            return { ok: false, error: formatSolverError(new CaptchaSolverError('SOLVER_ERROR', err?.message || 'Unknown solver error')) };
+    ipcMain.handle('solve-turnstile-captcha', async (_, tabId) => {
+        const tab = tabManager.getTab(tabId);
+        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) {
+            return { ok: false, error: { code: 'TAB_NOT_FOUND', message: 'Target tab not found.', retryable: false } };
         }
+        return {
+            ok: false,
+            error: formatSolverError(new CaptchaSolverError('DISABLED', 'Automated Turnstile solving is not available.')),
+        };
     });
 
     ipcMain.handle('analyze-page-meta', async (_, tabId) => {
@@ -5453,7 +5287,6 @@ app.whenReady().then(async () => {
             trafficOpts:     s.trafficOpts || {},
             effectiveTrafficMode: getCurrentTrafficMode(),
             tracking:        getTrackingSettings(),
-            capmonster:      getCapmonsterSettings(),
         };
     });
 
@@ -5465,7 +5298,7 @@ app.whenReady().then(async () => {
         return { success: true, pasteUnlock: s.pasteUnlock };
     });
 
-    // Adjust BrowserView y-offset to reveal HTML overlay panels (e.g. settings)
+    // Adjust tab WebContentsView y-offset to reveal HTML overlay panels (e.g. settings)
     ipcMain.handle('set-toolbar-height', (_, extraPx) => {
         tabManager.setExtraTopOffset(extraPx || 0);
         return true;
@@ -5889,6 +5722,12 @@ app.on('before-quit', (e) => {
     e.preventDefault();
     if (!confirmExitDialog(mainWindow)) return;
     forceAppQuit = true;
+    try {
+        const wins = BrowserWindow.getAllWindows();
+        for (const w of wins) {
+            if (w && !w.isDestroyed() && w !== mainWindow) w.destroy();
+        }
+    } catch (_) { /* ignore */ }
     app.quit();
 });
 

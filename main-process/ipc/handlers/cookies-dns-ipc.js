@@ -2,6 +2,7 @@
 
 const { insertCupnetTrafficSnapshotWithGeo } = require('../../services/cupnet-network-meta-log');
 const { confirmOpenAnotherTab } = require('../../services/tab-open-confirm');
+const { isDevtoolsHostileWebContents } = require('../../services/devtools-hostile-sites');
 
 // ── Managed DevTools (real BrowserWindow + setDevToolsWebContents) ───────────
 // Track by tab.id (Map), not WeakMap(webContents): the same logical tab must
@@ -232,7 +233,7 @@ function registerCookiesDnsIpc(ctx) {
     ctx.ipcMain.handle('isolate-tab', async (_, tabId) => {
         const tid = tabId || ctx.tabManager.getActiveTabId();
         const result = await ctx.tabManager.isolateTab(tid);
-        // Mirror set-tab-cookie-group: new BrowserView/session loses MITM upstream + logging unless re-applied.
+        // Mirror set-tab-cookie-group: new WebContentsView/session loses MITM upstream + logging unless re-applied.
         if (result?.success) {
             const tab = ctx.tabManager.getTab(tid);
             if (tab) {
@@ -397,13 +398,32 @@ function registerCookiesDnsIpc(ctx) {
     });
 
     // ── DevTools for active tab ──────────────────────────────────────────────
-    ctx.ipcMain.handle('open-devtools', async () => {
+    // When invoked from a secondary window (Proxy Manager, Rules, Log viewer, …),
+    // open DevTools for that window — not for the browser tab. The main CupNet
+    // window uses the same preload API, so we branch on ipc sender's BrowserWindow.
+    ctx.ipcMain.handle('open-devtools', async (event) => {
+        const { BrowserWindow, app } = require('electron');
+        const mainWin = typeof ctx.getMainWindow === 'function' ? ctx.getMainWindow() : null;
+        const senderWin = event && event.sender ? BrowserWindow.fromWebContents(event.sender) : null;
+        if (mainWin && !mainWin.isDestroyed() && senderWin && !senderWin.isDestroyed() && senderWin.id !== mainWin.id) {
+            try { app.focus({ steal: true }); } catch (_) { /* ignore */ }
+            try {
+                senderWin.webContents.openDevTools({ mode: 'detach', activate: true });
+            } catch (_) { /* ignore */ }
+            return true;
+        }
+
         const tab = ctx.tabManager?.getActiveTab();
         if (!tab || tab.view.webContents.isDestroyed()) return false;
         const wc = tab.view.webContents;
         const tabId = tab.id;
-        const { app } = require('electron');
         try { app.focus({ steal: true }); } catch (_) {}
+        if (isDevtoolsHostileWebContents(wc)) {
+            if (wc.isDevToolsOpened()) {
+                try { wc.closeDevTools(); } catch (_) {}
+            }
+            return false;
+        }
 
         // Prefer stable tab id — same as _openManagedDevTools guard (no duplicate windows).
         const managed = _dtByTabId.get(tabId);

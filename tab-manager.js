@@ -1,16 +1,32 @@
 'use strict';
 
 const crypto = require('crypto');
-const { BrowserView, session } = require('electron');
+const fs = require('fs');
+const { pathToFileURL } = require('url');
+const { WebContentsView, session } = require('electron');
 const path = require('path');
 const { attachWindowSwitcherHotkeyToTabWebContents } = require('./main-process/services/window-switcher-hotkey.js');
+const { isDevtoolsHostileUrl } = require('./main-process/services/devtools-hostile-sites.js');
 const db = require('./db');
 const { networkPolicy } = require('./network-policy');
 const settingsStore = require('./main-process/services/settings-store');
+const loggingState = require('./main-process/services/logging-state.js');
 let mainWindow = null;
 let onTabEventCb = null;
 
 const NEW_TAB_PATH = path.join(__dirname, 'new-tab.html');
+const OMNIBOX_OVERLAY_HTML = path.join(__dirname, 'omnibox-overlay.html');
+const OMNIBOX_OVERLAY_PRELOAD = path.join(__dirname, 'preload-omnibox-overlay.js');
+
+/**
+ * Dedicated session for the omnibox overlay. defaultSession is MITM-proxied (traffic-mode-service);
+ * loading file:// in a WebContentsView on that session can fail with ERR_FAILED (-2).
+ */
+const OMNIBOX_OVERLAY_SESSION = session.fromPartition('persist:cupnet_omnibox_overlay');
+OMNIBOX_OVERLAY_SESSION.setProxy({ mode: 'direct' }).catch(() => {});
+
+/** Renders above the active tab WebContentsView so omnibox suggestions are not hidden behind the page. */
+let omniboxOverlayView = null;
 
 // Legacy constant — kept for backward compat with code that references it
 const SHARED_PARTITION = 'persist:cupnet-shared';
@@ -31,17 +47,20 @@ function displayUrl(url) {
 
 const tabs = new Map();
 let activeTabId = null;
-/** True while window-switcher overlay is open: active tab's BrowserView is detached so shell HTML is visible above content area. */
-let _windowSwitcherOverlayHidesBrowserView = false;
+/** True while a shell HTML overlay has detached the active tab WebContentsView (see setWindowSwitcherOverlayVisible). */
+let _shellOverlayHidesTabView = false;
+/** Ref-count for overlapping overlays (window switcher, command palette) that need tab surface hidden. */
+let _shellOverlayHideRefCount = 0;
 let nextTabNumber = 1;
 let extraTopOffset = 0;
 let _broadcastTimer = null;
 let _relayoutTimer = null;
-let _currentBypassRules = '<local>,*.youtube.com,*.googlevideo.com,challenges.cloudflare.com';
+/** Matches traffic-mode-service buildBypassList([]): hardcoded only until applyBypassDomains runs. */
+let _currentBypassRules = '<local>,*.youtube.com,*.googlevideo.com';
 let _trafficOpts = {};
 let _upstreamProxyRules = null;
 
-/** Локальный MITM без логина в proxyRules; tabId в Basic опционален (см. mitm-proxy _mitmTabIdFromProxyAuthHead). */
+/** Local MITM without credentials in proxyRules; tab id for MITM/AzureTLS comes from X-CupNet-Rid on each request. */
 function mitmProxyRulesForTabId(_tabId) {
     const p = networkPolicy.mitmPort;
     const hostport = `127.0.0.1:${p}`;
@@ -110,6 +129,214 @@ function injectPasteUnlock(webContents) {
     webContents.executeJavaScript(PASTE_UNLOCK_SCRIPT).catch(() => {});
 }
 
+/** Injected into pages: form submit + login-like button clicks + fetch/XHR login hints (SPA). */
+const CREDENTIAL_FORM_CAPTURE_SCRIPT = `(function () {
+    if (window.__cupnetCredCaptureInstalled) return;
+    window.__cupnetCredCaptureInstalled = true;
+
+    function findLoginForPassword(pwd) {
+        var login = '';
+        var form = pwd.closest && pwd.closest('form');
+        var scope = form || document;
+        var inputs = scope.querySelectorAll('input');
+        for (var i = 0; i < inputs.length; i++) {
+            var el = inputs[i];
+            if (el === pwd) continue;
+            var t = (el.type || '').toLowerCase();
+            if (t === 'password' || t === 'hidden' || t === 'submit' || t === 'button' || t === 'reset' || t === 'image' || t === 'file') continue;
+            if (el.value && String(el.value).trim()) {
+                login = String(el.value).trim();
+                break;
+            }
+        }
+        return login;
+    }
+
+    function report(login, password) {
+        try {
+            if (typeof window.cupnetCredentials !== 'undefined' && window.cupnetCredentials.reportCapture) {
+                window.cupnetCredentials.reportCapture({ login: login, password: password, source: 'cupnet-capture' });
+            }
+        } catch (_) {}
+    }
+
+    function maybeLoginPath(url) {
+        try {
+            var p = new URL(url, location.origin).pathname.toLowerCase();
+            return /login|signin|auth|session|oauth|token/.test(p);
+        } catch (_) { return false; }
+    }
+
+    document.addEventListener('submit', function (e) {
+        var form = e.target;
+        if (!form || form.tagName !== 'FORM') return;
+        var pwd = form.querySelector('input[type="password"]');
+        if (!pwd || !pwd.value) return;
+        report(findLoginForPassword(pwd), pwd.value);
+    }, true);
+
+    document.addEventListener('click', function (e) {
+        var t = e.target;
+        if (!t || !t.closest) return;
+        var btn = t.closest('button,[role="button"],input[type="submit"],input[type="button"]');
+        if (!btn) return;
+        var txt = (btn.innerText || btn.value || btn.getAttribute('aria-label') || '').trim().toLowerCase();
+        if (!/log\\s*in|sign\\s*in|signin|submit|continue|next|enter/.test(txt)) return;
+        var scope = btn.closest('form') || document;
+        var pwd = scope.querySelector('input[type="password"]:not([disabled])');
+        if (!pwd || !pwd.value) return;
+        report(findLoginForPassword(pwd), pwd.value);
+    }, true);
+
+    function extractCredsFromBody(body) {
+        var user = '', pass = '';
+        if (!body || typeof body !== 'string' || body.length > 65536) return null;
+        var trimmed = body.trim();
+        if (trimmed.charAt(0) === '{') {
+            try {
+                var obj = JSON.parse(trimmed);
+                var keys = Object.keys(obj);
+                for (var i = 0; i < keys.length; i++) {
+                    var k = keys[i].toLowerCase();
+                    var v = obj[keys[i]];
+                    if (typeof v !== 'string') continue;
+                    if (/password|passwd|pwd/.test(k) && !pass) pass = v;
+                    if (/user|login|email|identifier|account|username/.test(k) && !user) user = v;
+                }
+            } catch (_) {}
+        }
+        if (!pass) {
+            var pairs = body.split('&');
+            for (var i = 0; i < pairs.length; i++) {
+                var kv = pairs[i].split('=');
+                var k = decodeURIComponent(kv[0] || '').toLowerCase();
+                var v = decodeURIComponent(kv.slice(1).join('=') || '');
+                if (/password|passwd|pwd/.test(k) && !pass) pass = v;
+                if (/user|login|email|identifier|account/.test(k) && !user) user = v;
+            }
+        }
+        return pass ? { user: user, pass: pass } : null;
+    }
+
+    var _origFetch = window.fetch;
+    if (typeof _origFetch === 'function') {
+        window.fetch = function (input, init) {
+            try {
+                var url = typeof input === 'string' ? input : (input && input.url);
+                var method = (init && init.method) || 'GET';
+                var body = init && init.body;
+                if (maybeLoginPath(url) && String(method).toUpperCase() !== 'GET' && body && typeof body === 'string') {
+                    var creds = extractCredsFromBody(body);
+                    if (creds) report(creds.user, creds.pass);
+                }
+            } catch (_) {}
+            return _origFetch.apply(this, arguments);
+        };
+    }
+
+    try {
+        var XHROpen = XMLHttpRequest.prototype.open;
+        var XHRSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function (method, url) {
+            this.__cupnetUrl = url;
+            this.__cupnetMethod = method;
+            return XHROpen.apply(this, arguments);
+        };
+        XMLHttpRequest.prototype.send = function (body) {
+            try {
+                var url = this.__cupnetUrl;
+                var method = this.__cupnetMethod || 'GET';
+                if (maybeLoginPath(url) && String(method).toUpperCase() !== 'GET' && body && typeof body === 'string') {
+                    var creds = extractCredsFromBody(body);
+                    if (creds) report(creds.user, creds.pass);
+                }
+            } catch (_) {}
+            return XHRSend.apply(this, arguments);
+        };
+    } catch (_) {}
+
+    try {
+        var obs = new MutationObserver(function () { /* reserved: dynamic forms */ });
+        obs.observe(document.documentElement, { childList: true, subtree: true });
+    } catch (_) {}
+})();`;
+
+/**
+ * Storage activity inject: patch Storage.prototype (setItem/removeItem/clear) for stack traces.
+ * Property assignment (localStorage.k = v) is logged via CDP DOMStorage (always enabled when
+ * Activity Monitor is on, alongside inject for stack traces when that option is enabled).
+ */
+const STORAGE_ACTIVITY_SCRIPT = `(function () {
+    if (window.__cupnetStorageActInstalled) return;
+    window.__cupnetStorageActInstalled = true;
+    function report(payload) {
+        try {
+            if (window.cupnetStorageActivity && window.cupnetStorageActivity.report) {
+                window.cupnetStorageActivity.report(payload);
+            }
+        } catch (_) {}
+    }
+    try {
+        var Sp = Storage.prototype;
+        if (Sp.__cupnetStorageActHooked) return;
+        Sp.__cupnetStorageActHooked = true;
+        var oSet = Sp.setItem;
+        var oRemove = Sp.removeItem;
+        var oClear = Sp.clear;
+        function kindOf(st) {
+            try {
+                if (st === window.localStorage) return 'ls';
+                if (st === window.sessionStorage) return 'ss';
+            } catch (_) {}
+            return 'ls';
+        }
+        Sp.setItem = function (k, v) {
+            try {
+                report({
+                    kind: kindOf(this),
+                    op: 'set',
+                    key: String(k),
+                    newValue: String(v),
+                    stack: new Error().stack
+                });
+            } catch (_) {}
+            return oSet.call(this, k, v);
+        };
+        Sp.removeItem = function (k) {
+            try {
+                report({
+                    kind: kindOf(this),
+                    op: 'remove',
+                    key: String(k),
+                    stack: new Error().stack
+                });
+            } catch (_) {}
+            return oRemove.call(this, k);
+        };
+        Sp.clear = function () {
+            try {
+                report({ kind: kindOf(this), op: 'clear', stack: new Error().stack });
+            } catch (_) {}
+            return oClear.call(this);
+        };
+    } catch (_) {}
+})();`;
+
+function injectStorageActivityMonitor(webContents) {
+    if (_STEALTH >= 1) return;
+    if (!webContents || webContents.isDestroyed()) return;
+    const s = settingsStore.getCached() || settingsStore.loadSettings();
+    if (!s.activityMonitorEnabled || !s.activityMonitorStorageStackTraces) return;
+    if (!loggingState.isRecordingEnabled()) return;
+    webContents.executeJavaScript(STORAGE_ACTIVITY_SCRIPT).catch(() => {});
+}
+
+function injectCredentialFormCapture(webContents) {
+    if (_STEALTH >= 1) return;
+    if (!webContents || webContents.isDestroyed()) return;
+    webContents.executeJavaScript(CREDENTIAL_FORM_CAPTURE_SCRIPT).catch(() => {});
+}
+
 /**
  * Converts a proxy URL (http://host:port) to the simple HOST:PORT format.
  */
@@ -143,16 +370,41 @@ function resetWebRtcPolicy(webContents) {
     } catch {}
 }
 
-/** Dynamically adjust how far down the BrowserView starts (to reveal overlays). */
+/** Dynamically adjust how far down the tab WebContentsView starts (to reveal overlays). */
 function setExtraTopOffset(px) {
     extraTopOffset = px || 0;
     resizeActiveView();
 }
 
 const TOOLBAR_HEIGHT = 95;
+/** Reserved height at bottom of main window for HTML status bar (see browser.html). */
+const STATUS_BAR_HEIGHT = 26;
 
 /**
- * @param {BrowserWindow} win
+ * Attach tab surface to the main window (WebContentsView on BrowserWindow.contentView).
+ * @param {import('electron').BrowserWindow} win
+ * @param {import('electron').WebContentsView} view
+ */
+function _contentViewAddTabView(win, view) {
+    if (!win || win.isDestroyed() || !view) return;
+    try {
+        win.contentView.addChildView(view);
+    } catch (_) { /* ignore */ }
+}
+
+/**
+ * @param {import('electron').BrowserWindow} win
+ * @param {import('electron').WebContentsView} view
+ */
+function _contentViewRemoveTabView(win, view) {
+    if (!win || win.isDestroyed() || !view) return;
+    try {
+        win.contentView.removeChildView(view);
+    } catch (_) { /* ignore */ }
+}
+
+/**
+ * @param {import('electron').BrowserWindow} win
  * @param {Function} onEvent
  */
 function init(win, onEvent) {
@@ -234,7 +486,10 @@ function attachTabListeners(tab) {
     // did-finish-load fires after all page scripts ran — our capture listener
     // still wins because capture phase fires before site bubble-phase listeners.
     view.webContents.on('did-finish-load', () => {
+        if (isDevtoolsHostileUrl(view.webContents.getURL())) return;
         injectPasteUnlock(view.webContents);
+        injectCredentialFormCapture(view.webContents);
+        injectStorageActivityMonitor(view.webContents);
     });
 
     attachWindowSwitcherHotkeyToTabWebContents(view.webContents, () => mainWindow);
@@ -436,7 +691,7 @@ async function createTab(opts = {}) {
     applyCupNetRidHeaderToSession(tabSession, tabId);
     installMediaPermissionHandlers(tabSession, settingsStore.normalizeDevicePermissions(settingsStore.loadSettings().devicePermissions).cameraMode);
 
-    const view = new BrowserView({ webPreferences: buildTabViewWebPreferences(tabSession) });
+    const view = new WebContentsView({ webPreferences: buildTabViewWebPreferences(tabSession) });
 
     let sessionId = existingSessionId || null;
     if (!sessionId) {
@@ -475,12 +730,10 @@ async function createTab(opts = {}) {
         view.webContents.loadURL(url).catch(() => {});
     }
 
-    if (mainWindow && !mainWindow.isDestroyed()) {
-        if (!_windowSwitcherOverlayHidesBrowserView) {
-            mainWindow.addBrowserView(view);
-            resizeActiveView();
-        }
-    }
+    // Do not attach the new WebContentsView here. Only `switchTab` adds the active tab's view
+    // to `mainWindow.contentView`. Attaching before `switchTab` stacks the new view above the
+    // still-active tab while `activeTabId` still points at the old tab — navigation and
+    // `resizeActiveView` then target the wrong webContents (breaks isolated-tab / e2e).
 
     return tabId;
 }
@@ -499,7 +752,7 @@ async function setTabProxy(tabId, proxyProfileId) {
 }
 
 /**
- * Change cookie group for a tab. Recreates BrowserView with new partition.
+ * Change cookie group for a tab. Recreates WebContentsView with new partition.
  * Requires page reload since Electron binds sessions at creation.
  */
 async function setTabCookieGroup(tabId, cookieGroupId) {
@@ -526,10 +779,10 @@ async function setTabCookieGroup(tabId, cookieGroupId) {
     applyCupNetRidHeaderToSession(newSession, tid);
     installMediaPermissionHandlers(newSession, settingsStore.normalizeDevicePermissions(settingsStore.loadSettings().devicePermissions).cameraMode);
 
-    const newView = new BrowserView({ webPreferences: buildTabViewWebPreferences(newSession) });
+    const newView = new WebContentsView({ webPreferences: buildTabViewWebPreferences(newSession) });
 
     if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.removeBrowserView(tab.view);
+        _contentViewRemoveTabView(mainWindow, tab.view);
     }
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.destroy();
 
@@ -544,8 +797,8 @@ async function setTabCookieGroup(tabId, cookieGroupId) {
     newView.webContents.session.setProxy(getProxyOptsForTab(tab)).catch(() => {});
 
     if (mainWindow && !mainWindow.isDestroyed()) {
-        if (!_windowSwitcherOverlayHidesBrowserView) {
-            mainWindow.addBrowserView(newView);
+        if (!_shellOverlayHidesTabView) {
+            _contentViewAddTabView(mainWindow, newView);
         }
         if (tid === activeTabId) resizeActiveView();
     }
@@ -574,24 +827,31 @@ async function isolateTab(tabId) {
 }
 
 /**
- * Switches the active tab and brings its BrowserView to front.
+ * Switches the active tab and brings its WebContentsView to front.
  */
 function switchTab(tabId) {
     const tab = tabs.get(tabId);
     if (!tab) return false;
 
+    _destroyOmniboxOverlayView();
+    try {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('force-close-omnibox');
+        }
+    } catch (_) { /* ignore */ }
+
     if (activeTabId && tabs.has(activeTabId)) {
         const prev = tabs.get(activeTabId);
         if (prev && mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.removeBrowserView(prev.view);
+            _contentViewRemoveTabView(mainWindow, prev.view);
         }
     }
 
     activeTabId = tabId;
 
     if (mainWindow && !mainWindow.isDestroyed()) {
-        if (!_windowSwitcherOverlayHidesBrowserView) {
-            mainWindow.addBrowserView(tab.view);
+        if (!_shellOverlayHidesTabView) {
+            _contentViewAddTabView(mainWindow, tab.view);
             resizeActiveView();
         }
         mainWindow.webContents.send('url-updated', displayUrl(tab.url));
@@ -615,7 +875,7 @@ function closeTab(tabId) {
     }
 
     if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.removeBrowserView(tab.view);
+        _contentViewRemoveTabView(mainWindow, tab.view);
     }
 
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.destroy();
@@ -635,6 +895,24 @@ function closeTab(tabId) {
 }
 
 /**
+ * Reattach the active tab WebContentsView if shell overlays detached it.
+ * Used before navigation so loaded content is visible even when overlay UI/JS state is out of sync
+ * (e.g. Enter in the URL bar after overlay IPC but before the omnibox removes `hidden`).
+ */
+function ensureActiveTabViewVisible() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!_shellOverlayHidesTabView) return;
+    _shellOverlayHideRefCount = 0;
+    _shellOverlayHidesTabView = false;
+    const tab = activeTabId ? tabs.get(activeTabId) : null;
+    if (!tab?.view || tab.view.webContents.isDestroyed()) return;
+    try {
+        _contentViewAddTabView(mainWindow, tab.view);
+        resizeActiveView();
+    } catch (_) { /* ignore */ }
+}
+
+/**
  * Navigate the active (or specified) tab to a URL.
  */
 function navigate(url, tabId) {
@@ -642,6 +920,7 @@ function navigate(url, tabId) {
     if (!tid) return false;
     const tab = tabs.get(tid);
     if (!tab) return false;
+    ensureActiveTabViewVisible();
     tab.view.webContents.loadURL(url).catch(() => {});
     return true;
 }
@@ -725,26 +1004,41 @@ async function setProxyAll(proxyRules) {
 }
 
 /**
- * Detach/reattach the active tab BrowserView so HTML overlays (window switcher) can paint over the content area.
- * Electron draws BrowserView above the window's webContents, not below z-index in the page.
+ * Detach/reattach the active tab WebContentsView so HTML overlays can paint over the content area.
+ * Child views sit above the window webContents — z-index in the page cannot cover them.
+ * Multiple overlays (window switcher + command palette) use ref-counting so one close does not restore early.
  */
 function setWindowSwitcherOverlayVisible(visible) {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (visible) {
-        if (_windowSwitcherOverlayHidesBrowserView) return;
+        _destroyOmniboxOverlayView();
+        _shellOverlayHideRefCount += 1;
+        if (_shellOverlayHideRefCount !== 1) return;
         const tab = activeTabId ? tabs.get(activeTabId) : null;
-        if (!tab?.view) return;
+        if (!tab?.view) {
+            _shellOverlayHideRefCount -= 1;
+            return;
+        }
         try {
-            mainWindow.removeBrowserView(tab.view);
-            _windowSwitcherOverlayHidesBrowserView = true;
-        } catch (_) { /* ignore */ }
+            _contentViewRemoveTabView(mainWindow, tab.view);
+            _shellOverlayHidesTabView = true;
+            // Keyboard was on the tab; move focus to shell so overlays (palette, switcher) receive keys.
+            try {
+                mainWindow.webContents.focus();
+            } catch (_) { /* ignore */ }
+        } catch (_) {
+            _shellOverlayHideRefCount -= 1;
+        }
     } else {
-        if (!_windowSwitcherOverlayHidesBrowserView) return;
-        _windowSwitcherOverlayHidesBrowserView = false;
+        if (_shellOverlayHideRefCount === 0) return;
+        _shellOverlayHideRefCount -= 1;
+        if (_shellOverlayHideRefCount > 0) return;
+        if (!_shellOverlayHidesTabView) return;
+        _shellOverlayHidesTabView = false;
         const tab = activeTabId ? tabs.get(activeTabId) : null;
         if (!tab?.view || tab.view.webContents.isDestroyed()) return;
         try {
-            mainWindow.addBrowserView(tab.view);
+            _contentViewAddTabView(mainWindow, tab.view);
             resizeActiveView();
         } catch (_) { /* ignore */ }
     }
@@ -756,8 +1050,101 @@ function resizeActiveView() {
     if (!tab) return;
     const { width, height } = mainWindow.getContentBounds();
     const topY = TOOLBAR_HEIGHT + extraTopOffset;
-    tab.view.setBounds({ x: 0, y: topY, width, height: Math.max(0, height - topY) });
-    tab.view.setAutoResize({ width: true, height: true });
+    const bottomReserve = STATUS_BAR_HEIGHT;
+    tab.view.setBounds({ x: 0, y: topY, width, height: Math.max(0, height - topY - bottomReserve) });
+    _layoutOmniboxOverlayBounds();
+}
+
+function _layoutOmniboxOverlayBounds() {
+    if (!omniboxOverlayView || !mainWindow || mainWindow.isDestroyed()) return;
+    if (omniboxOverlayView.webContents.isDestroyed()) return;
+    const { width, height } = mainWindow.getContentBounds();
+    const topY = TOOLBAR_HEIGHT + extraTopOffset;
+    const bottomReserve = STATUS_BAR_HEIGHT;
+    omniboxOverlayView.setBounds({
+        x: 0,
+        y: topY,
+        width,
+        height: Math.max(0, height - topY - bottomReserve),
+    });
+}
+
+function _destroyOmniboxOverlayView() {
+    if (!omniboxOverlayView || !mainWindow || mainWindow.isDestroyed()) {
+        omniboxOverlayView = null;
+        return;
+    }
+    try {
+        _contentViewRemoveTabView(mainWindow, omniboxOverlayView);
+    } catch (_) { /* ignore */ }
+    try {
+        if (!omniboxOverlayView.webContents.isDestroyed()) {
+            omniboxOverlayView.webContents.destroy();
+        }
+    } catch (_) { /* ignore */ }
+    omniboxOverlayView = null;
+}
+
+/**
+ * Show omnibox suggestion overlay (above tab surface). Call hide when palette closes.
+ */
+async function showOmniboxOverlay() {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    if (omniboxOverlayView && !omniboxOverlayView.webContents.isDestroyed()) {
+        _layoutOmniboxOverlayBounds();
+        try {
+            _contentViewRemoveTabView(mainWindow, omniboxOverlayView);
+            _contentViewAddTabView(mainWindow, omniboxOverlayView);
+        } catch (_) { /* ignore */ }
+        return true;
+    }
+    await OMNIBOX_OVERLAY_SESSION.setProxy({ mode: 'direct' }).catch(() => {});
+    const v = new WebContentsView({
+        webPreferences: {
+            preload: OMNIBOX_OVERLAY_PRELOAD,
+            contextIsolation: true,
+            nodeIntegration: false,
+            session: OMNIBOX_OVERLAY_SESSION,
+            webSecurity: true,
+        },
+    });
+    try {
+        v.setBackgroundColor('#00000000');
+    } catch (_) { /* ignore */ }
+    omniboxOverlayView = v;
+    _layoutOmniboxOverlayBounds();
+    _contentViewAddTabView(mainWindow, v);
+    try {
+        const htmlPath = OMNIBOX_OVERLAY_HTML;
+        if (!fs.existsSync(htmlPath) || !fs.existsSync(OMNIBOX_OVERLAY_PRELOAD)) {
+            console.error('[tab-manager] omnibox overlay asset missing', { htmlPath, preload: OMNIBOX_OVERLAY_PRELOAD });
+            throw new Error('omnibox overlay assets not found');
+        }
+        try {
+            await v.webContents.loadFile(htmlPath);
+        } catch (e1) {
+            await v.webContents.loadURL(pathToFileURL(htmlPath).href);
+        }
+    } catch (e) {
+        console.error('[tab-manager] omnibox overlay load failed:', e?.message || e);
+        _destroyOmniboxOverlayView();
+        return false;
+    }
+    return true;
+}
+
+function hideOmniboxOverlay() {
+    _destroyOmniboxOverlayView();
+}
+
+function updateOmniboxOverlay(payload) {
+    if (!omniboxOverlayView || omniboxOverlayView.webContents.isDestroyed()) return false;
+    try {
+        omniboxOverlayView.webContents.send('omnibox-overlay-update', payload);
+        return true;
+    } catch (_) {
+        return false;
+    }
 }
 
 function relayout() {
@@ -796,7 +1183,9 @@ function broadcastTabList(immediate = false) {
 }
 
 function destroyAll() {
-    _windowSwitcherOverlayHidesBrowserView = false;
+    _destroyOmniboxOverlayView();
+    _shellOverlayHidesTabView = false;
+    _shellOverlayHideRefCount = 0;
     if (_relayoutTimer) { clearTimeout(_relayoutTimer); _relayoutTimer = null; }
     if (_broadcastTimer) { clearTimeout(_broadcastTimer); _broadcastTimer = null; }
     for (const tab of tabs.values()) {
@@ -804,7 +1193,7 @@ function destroyAll() {
             if (_mitmTabUpstreamCleanup) {
                 try { _mitmTabUpstreamCleanup(tab.id); } catch (_) {}
             }
-            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.removeBrowserView(tab.view);
+            if (mainWindow && !mainWindow.isDestroyed()) _contentViewRemoveTabView(mainWindow, tab.view);
             if (!tab.view.webContents.isDestroyed()) tab.view.webContents.destroy();
         } catch {}
     }
@@ -979,7 +1368,7 @@ function setTrafficOpts(opts) {
 }
 
 module.exports = {
-    init, createTab, isolateTab, switchTab, closeTab, navigate,
+    init, createTab, isolateTab, switchTab, closeTab, navigate, ensureActiveTabViewVisible,
     getTabList, getActiveTabId, getTab, getActiveTab, getAllTabs, getTabIdByWebContentsId,
     setProxy, setProxyAll, relayout, destroyAll,
     broadcastTabList, setExtraTopOffset,
@@ -987,11 +1376,16 @@ module.exports = {
     setMitmTabUpstreamCleanup,
     reapplyMitmTrustToSharedSession,
     setPasteUnlock, getPasteUnlock,
+    injectCredentialFormCapture,
+    injectStorageActivityMonitor,
     setBypassRules, setTrafficOpts,
     applyWebRtcPolicy, resetWebRtcPolicy,
     // New per-tab controls
     setTabProxy, setTabCookieGroup,
     setWindowSwitcherOverlayVisible,
+    showOmniboxOverlay,
+    hideOmniboxOverlay,
+    updateOmniboxOverlay,
     partitionForGroup,
     SHARED_PARTITION,
     applyDevicePermissions,

@@ -94,7 +94,23 @@ async function waitMitmReady(electronApp, timeoutMs = 180_000) {
 }
 
 /**
- * URL активной вкладки (BrowserView).
+ * Poll until the active tab uses a non-default cookie group (isolated tab after newIsolatedTab).
+ */
+async function waitForActiveTabIsolated(electronApp, timeoutMs = 15_000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        const ok = await electronApp.evaluate(() => {
+            const t = globalThis.__cupnetAppContext?.modules?.tabManager?.getActiveTab?.();
+            return !!(t && t.cookieGroupId != null && t.cookieGroupId !== 1);
+        });
+        if (ok) return;
+        await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error(`Active tab did not become isolated (cookieGroupId !== 1) within ${timeoutMs}ms`);
+}
+
+/**
+ * URL активной вкладки (WebContentsView).
  */
 async function getActiveTabUrl(electronApp) {
     return electronApp.evaluate(() => {
@@ -134,7 +150,7 @@ async function navigateAndWait(electronApp, url, timeoutMs = 90_000, waitFor = {
         if (!tm) throw new Error('tabManager missing');
         const tab = tm.getActiveTab();
         if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) {
-            throw new Error('no active BrowserView');
+            throw new Error('no active tab WebContentsView');
         }
         const wc = tab.view.webContents;
         // Как tab-manager.navigate: не роняем процесс при отклонении (редиректы/abort).
@@ -164,7 +180,7 @@ async function navigateAndWait(electronApp, url, timeoutMs = 90_000, waitFor = {
 }
 
 /**
- * `navigator.userAgent` в активной вкладке (BrowserView renderer).
+ * `navigator.userAgent` в активной вкладке (WebContentsView renderer).
  */
 async function getActiveTabNavigatorUserAgent(electronApp) {
     return electronApp.evaluate(async () => {
@@ -181,7 +197,7 @@ async function getActiveTabNavigatorUserAgent(electronApp) {
 }
 
 /**
- * Текст body активной вкладки (BrowserView).
+ * Текст body активной вкладки (WebContentsView).
  */
 async function readActiveTabBodyText(electronApp) {
     return electronApp.evaluate(async () => {
@@ -333,17 +349,44 @@ async function getAppCtxProxy(electronApp) {
 }
 
 /**
- * Закрыть все окна кроме указанной страницы (главное).
+ * Close every window except the main CupNet shell (browser.html).
+ * Prefer `keepPage` when still in `windows()`. Otherwise detect shell via `location.href`
+ * (more reliable than `page.url()` after stress). Never fall back to `windows()[0]` — order
+ * is not guaranteed and can close the real main window (0 windows left).
  */
 async function closeAllExcept(electronApp, keepPage) {
     const pages = electronApp.windows();
-    for (const p of pages) {
-        if (p !== keepPage) {
+    let keep = keepPage && pages.some((p) => p === keepPage) ? keepPage : null;
+    if (!keep) {
+        for (const p of pages) {
             try {
-                await p.close();
+                const isShell = await p.evaluate(() => {
+                    try {
+                        return typeof location !== 'undefined' && String(location.href || '').includes('browser.html');
+                    } catch {
+                        return false;
+                    }
+                });
+                if (isShell) {
+                    keep = p;
+                    break;
+                }
             } catch {
                 /* ignore */
             }
+        }
+    }
+    if (!keep) {
+        throw new Error(
+            `closeAllExcept: could not find main shell (browser.html) among ${pages.length} window(s)`
+        );
+    }
+    for (const p of pages) {
+        if (p === keep) continue;
+        try {
+            await p.close();
+        } catch {
+            /* ignore */
         }
     }
 }
@@ -418,6 +461,107 @@ async function openNewTabWithFreshCookieGroupAndCupnet(mainWindowPage) {
     await new Promise((r) => setTimeout(r, 750));
 }
 
+/**
+ * Run JavaScript in the active tab page context (main process → WebContents.executeJavaScript).
+ * @param {import('@playwright/test').ElectronApplication} electronApp
+ * @param {string} js — expression or IIFE returning a value
+ */
+async function executeActiveTabJavaScript(electronApp, js) {
+    return electronApp.evaluate(
+        async (_electron, code) => {
+            const tm = globalThis.__cupnetAppContext?.modules?.tabManager;
+            const wc = tm?.getActiveTab?.()?.view?.webContents;
+            if (!wc || wc.isDestroyed()) throw new Error('no active tab WebContents');
+            return wc.executeJavaScript(code);
+        },
+        js
+    );
+}
+
+/**
+ * Poll `getBrowserEvents` until a row satisfies `predicate` or timeout.
+ * @param {import('@playwright/test').Page} mainWindowPage
+ * @param {number|string} sessionId
+ * @param {(row: object) => boolean} predicate
+ */
+async function waitForBrowserEvent(mainWindowPage, sessionId, predicate, timeoutMs = 45_000) {
+    const deadline = Date.now() + timeoutMs;
+    let lastLen = 0;
+    while (Date.now() < deadline) {
+        const rows = await mainWindowPage.evaluate(
+            async ({ sid, lim }) => {
+                const api = window.electronAPI;
+                if (!api?.getBrowserEvents) return [];
+                return api.getBrowserEvents({ sessionId: sid, limit: lim || 500 });
+            },
+            { sid: sessionId, lim: 500 }
+        );
+        lastLen = Array.isArray(rows) ? rows.length : 0;
+        const hit = (rows || []).find(predicate);
+        if (hit) return hit;
+        await new Promise((r) => setTimeout(r, 400));
+    }
+    throw new Error(
+        `No matching browser event within ${timeoutMs}ms (last poll had ${lastLen} row(s))`
+    );
+}
+
+/**
+ * Start logging if the modal would block (after logging was stopped earlier in the same session).
+ * @param {import('@playwright/test').Page} mainWindowPage
+ */
+async function ensureLoggingStartedNoModal(mainWindowPage) {
+    const startRes = await mainWindowPage.evaluate(() => window.electronAPI.toggleLoggingStart('e2e'));
+    if (startRes?.status === 'modal_shown') {
+        await mainWindowPage.evaluate(() =>
+            window.electronAPI.confirmLoggingStart({ mode: 'continue', renameOld: null })
+        );
+    } else if (startRes?.status != null) {
+        const ok = ['started', 'already_on'].includes(startRes.status);
+        if (!ok) throw new Error(`toggleLoggingStart unexpected: ${JSON.stringify(startRes)}`);
+    }
+}
+
+/**
+ * Build HAR object in main (same as export dialog) without save dialog — for e2e validation.
+ * @param {import('@playwright/test').ElectronApplication} electronApp
+ * @param {number|string} sessionId
+ * @returns {Promise<object>}
+ */
+async function exportHarViaMain(electronApp, sessionId) {
+    return electronApp.evaluate((sid) => {
+        const exp = globalThis.__cupnetAppContext?.modules?.harExporter;
+        if (!exp || typeof exp.exportHar !== 'function') throw new Error('harExporter.exportHar missing');
+        return exp.exportHar(sid);
+    }, sessionId);
+}
+
+/**
+ * Active tab id from tabManager (main process).
+ */
+async function getActiveTabId(electronApp) {
+    return electronApp.evaluate(() => {
+        const t = globalThis.__cupnetAppContext?.modules?.tabManager?.getActiveTab?.();
+        return t?.id ?? null;
+    });
+}
+
+/**
+ * Inject a minimal login form into the active tab (for credentials fill e2e).
+ */
+async function injectLoginFormInActiveTab(electronApp) {
+    return executeActiveTabJavaScript(
+        electronApp,
+        `(() => {
+          document.body.innerHTML = '<form id="f">' +
+            '<input type="text" name="user" autocomplete="username" />' +
+            '<input type="password" name="pass" autocomplete="current-password" />' +
+            '</form>';
+          return true;
+        })()`
+    );
+}
+
 module.exports = {
     PROJECT_ROOT,
     getElectronExecutablePath,
@@ -439,4 +583,12 @@ module.exports = {
     closeAllExcept,
     findDuplicateRequestGroups,
     waitForStableDbRequestCount,
+    waitForActiveTabIsolated,
+    executeActiveTabJavaScript,
+    waitForBrowserEvent,
+    ensureLoggingStartedNoModal,
+    exportHarViaMain,
+    getActiveTabId,
+    injectLoginFormInActiveTab,
+    openNewTabWithFreshCookieGroupAndCupnet,
 };

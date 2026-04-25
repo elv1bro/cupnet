@@ -62,7 +62,6 @@ function ipcScopeGet(k) {
         case 'extPortsStore': return extPortsStore;
         case 'fs': return fs;
         case 'generatePassword': return generatePassword;
-        case 'getCapmonsterSettings': return getCapmonsterSettings;
         case 'getCurrentTrafficMode': return getCurrentTrafficMode;
         case 'getInternalPageUrl': return getInternalPageUrl;
         case 'getIvacScoutContext': return getIvacScoutContext;
@@ -91,7 +90,6 @@ function ipcScopeGet(k) {
         case 'nativeImage': return nativeImage;
         case 'netFetchWithTimeout': return netFetchWithTimeout;
         case 'networkPolicy': return networkPolicy;
-        case 'normalizeCapmonsterSettings': return normalizeCapmonsterSettings;
         case 'normalizeTrackingSettings': return normalizeTrackingSettings;
         case 'normalizeTrafficMode': return normalizeTrafficMode;
         case 'notifyCookieManagerTabs': return notifyCookieManagerTabs;
@@ -118,7 +116,6 @@ function ipcScopeGet(k) {
         case 'settingsStore': return settingsStore;
         case 'setupNetworkLogging': return setupNetworkLogging;
         case 'shell': return shell;
-        case 'solveTurnstileWithCapMonster': return solveTurnstileWithCapMonster;
         case 'stabilityMetrics': return stabilityMetrics;
         case 'startupMetrics': return startupMetrics;
         case 'stopIvacScoutProcess': return stopIvacScoutProcess;

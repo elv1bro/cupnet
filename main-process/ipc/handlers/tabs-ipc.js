@@ -83,24 +83,22 @@ function registerTabsIpc(ctx) {
         ctx.tabManager.navigate(url);
     });
     ctx.ipcMain.on('nav-back', () => {
+        ctx.tabManager.ensureActiveTabViewVisible?.();
         const tab = ctx.tabManager.getActiveTab();
         if (tab && tab.view.webContents.canGoBack()) tab.view.webContents.goBack();
     });
     ctx.ipcMain.on('nav-forward', () => {
+        ctx.tabManager.ensureActiveTabViewVisible?.();
         const tab = ctx.tabManager.getActiveTab();
         if (tab && tab.view.webContents.canGoForward()) tab.view.webContents.goForward();
     });
     ctx.ipcMain.on('nav-reload', () => {
+        ctx.tabManager.ensureActiveTabViewVisible?.();
         const tab = ctx.tabManager.getActiveTab();
         if (tab) tab.view.webContents.reload();
     });
     ctx.ipcMain.on('nav-home', () => {
-        const tab = ctx.tabManager.getActiveTab();
-        if (tab && !tab.view.webContents.isDestroyed()) {
-            tab.view.webContents.loadURL(ctx.getNewTabUrl()).catch((err) => {
-                ctx.safeCatch({ module: 'main', eventCode: 'navigation.load.failed', context: { target: 'new-tab' } }, err, 'info');
-            });
-        }
+        ctx.tabManager.navigate(ctx.getNewTabUrl());
     });
 }
 

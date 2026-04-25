@@ -9,7 +9,7 @@
 | `settings-store.js` | `settings.json`, CapMonster M7, кэш, sync `effectiveTrafficMode`; `cancelPendingSave()` на выходе |
 | `ui-prefs-store.js` | `ui-prefs.json` |
 | `ext-ports-store.js` | `ext-ports.json` (путь через `app.getPath('userData')`) |
-| `console-capture.js` | `installConsoleCapture(getViewerWindow)` → перехват stdout/stderr; `dispose()` на выходе |
+| `console-capture.js` | `installConsoleCapture(getViewerWindow, opts)` — structured `{ text, ts, level, source, module, stream }`, optional DB batch via `onPersistBatch`; `cupnetLog()`, `flushPersistQueue()`, `dispose()` |
 | `ipc-batch-messenger.js` | `createIpcBatchMessenger(…)` — батчи логов / intercept / DNS / TLS broadcast; `disposePendingBatches()` на `will-quit` |
 | `network-helpers.js` | `getLocalIp`, `generatePassword`, `sanitizeProxyUrl` (+ `_lastMasked`), `withTimeout` |
 | `proxy-notify-broadcast.js` | `createProxyNotifyBroadcast({…})` → `notifyProxyStatus`, `notifyMitmReady`, `notifyProxyProfilesList` |

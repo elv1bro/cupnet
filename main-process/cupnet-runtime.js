@@ -33,7 +33,6 @@ function attachMainProcess() {
 let db          = null;
 let tabManager  = null;
 let harExporter = null;
-let rulesEngine = null;
 let interceptor = null;
 
 const _cupnetRoot = path.join(__dirname, '..');
@@ -50,7 +49,7 @@ const {
 } = require('../utils');
 const bundleUtils = require('../bundle-utils');
 const diffUtils = require('../diff-utils');
-const { solveTurnstileWithCapMonster, CaptchaSolverError } = require('../captcha-solver');
+const { CaptchaSolverError } = require('../captcha-solver');
 const { networkPolicy } = require('../network-policy');
 const { ProxyResilienceManager } = require('../proxy-resilience');
 const { normalizeTrafficMode, resolveSessionProxyConfig } = require('../traffic-mode-router');
@@ -84,41 +83,13 @@ const { createTrafficModeService } = require('./services/traffic-mode-service');
 const { createProxyMitmService } = require('./services/proxy-service');
 const { createSubWindowsApi } = require('./services/sub-windows');
 const { createMainWindowApi } = require('./services/main-window');
+const { STEALTH, applyCupnetEarlyChromiumFlags } = require('./runtime-early-flags');
 
 // ─── MITM Proxy (required lazily inside app.whenReady) ───────────────────────
 let mitmProxy = null;
 const { MitmProxy, ExternalProxyPort } = require('../mitm-proxy.js');
 
-// ─── Stealth debug: CUPNET_STEALTH_LEVEL=N отключает слои по одному для бисекции CF Turnstile ──
-const STEALTH = Number(process.env.CUPNET_STEALTH_LEVEL || 0);
-if (STEALTH) console.log(`[stealth] CUPNET_STEALTH_LEVEL=${STEALTH}`);
-
-(function logCupnetBisectEnv() {
-    const parts = [];
-    const on = (k) => { if (process.env[k] === '1') parts.push(k); };
-    on('CUPNET_DISABLE_TRAFFIC_WEBREQUEST');
-    on('CUPNET_DISABLE_INTERCEPT_PROTOCOL');
-    on('CUPNET_DISABLE_FINGERPRINT');
-    on('CUPNET_TRAFFIC_FILTER_LOG');
-    on('CUPNET_FORCE_HTTP1');
-    if (STEALTH) parts.push(`CUPNET_STEALTH_LEVEL=${STEALTH}`);
-    if (parts.length) console.log('[cupnet-bisect]', parts.join(' '));
-})();
-
-app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
-// Read bypass domains early (before app.whenReady) for Chromium proxy bypass hints.
-// Proxy route itself is controlled dynamically via session.setProxy (MITM vs browser proxy).
-if (STEALTH < 7) {
-    const earlySettingsPath = path.join(app.getPath('userData'), 'settings.json');
-    let earlyBypass = [];
-    try {
-        earlyBypass = JSON.parse(fs.readFileSync(earlySettingsPath, 'utf8')).bypassDomains || [];
-    } catch (err) {
-        safeCatch({ module: 'main', eventCode: 'settings.parse.failed', context: { file: earlySettingsPath } }, err, 'info');
-    }
-    const bypassList = ['<local>', '*.youtube.com', '*.googlevideo.com', ...earlyBypass];
-    app.commandLine.appendSwitch('proxy-bypass-list', [...new Set(bypassList)].join(','));
-}
+applyCupnetEarlyChromiumFlags(app, { path, fs, safeCatch });
 // MITM self-signed certs обрабатываются через setCertificateVerifyProc + certificate-error,
 // а НЕ глобальным --ignore-certificate-errors (Cloudflare детектит этот флаг и блокирует challenge).
 //
@@ -136,6 +107,7 @@ const traceWindows            = [];   // all open trace-viewer windows
 // Map<webContentsId, sessionId|null> for log-viewer windows opened on a specific session
 const logViewerInitSessions    = new Map();
 let rulesWindow                = null;
+let breakpointWindow           = null;
 let cookieManagerWindow        = null;
 let dnsManagerWindow           = null;
 let proxyManagerWindow         = null;
@@ -143,11 +115,25 @@ let compareViewerWindow        = null;
 let consoleViewerWindow        = null;
 let pageAnalyzerWindow         = null;
 let notesWindow                = null;
+let credentialsWindow          = null;
+let onboardingWindow           = null;
 let ivacScoutWindow            = null;
 const comparePair              = { left: null, right: null };
 let compareResult              = null;
 
-const consoleCaptureApi = installConsoleCapture(() => consoleViewerWindow);
+const consoleCaptureApi = installConsoleCapture(() => consoleViewerWindow, {
+    bufferMax: 10000,
+    getSessionId: () => currentSessionId,
+    persistIntervalMs: 500,
+    onPersistBatch: (rows) => {
+        if (!rows.length) return;
+        try {
+            if (db && typeof db.insertConsoleLogsBatchAsync === 'function') {
+                db.insertConsoleLogsBatchAsync(rows).catch(() => {});
+            }
+        } catch { /* ignore */ }
+    },
+});
 const ipcBatch = createIpcBatchMessenger({
     safeCatch,
     BrowserWindow,
@@ -174,6 +160,8 @@ let connectedResolvedVars        = {};
 let currentTrafficMode           = 'mitm';
 settingsStore.configure({ onEffectiveTrafficModeLoaded: (mode) => { currentTrafficMode = mode; } });
 let isLoggingEnabled           = false;
+const loggingState = require('./services/logging-state.js');
+loggingState.setGetIsLoggingEnabled(() => isLoggingEnabled);
 let hadLoggingBeenStopped      = false; // true after first explicit stop; controls modal on re-enable
 let currentSessionId           = null;
 let logStatusInterval          = null;
@@ -200,7 +188,6 @@ function syncAppContextSnapshot() {
     appCtx.modules.db = db;
     appCtx.modules.tabManager = tabManager;
     appCtx.modules.harExporter = harExporter;
-    appCtx.modules.rulesEngine = rulesEngine;
     appCtx.modules.interceptor = interceptor;
     appCtx.modules.mitmProxy = mitmProxy;
 
@@ -215,6 +202,7 @@ function syncAppContextSnapshot() {
     appCtx.windows.consoleViewer = consoleViewerWindow;
     appCtx.windows.pageAnalyzer = pageAnalyzerWindow;
     appCtx.windows.notes = notesWindow;
+    appCtx.windows.credentials = credentialsWindow;
     appCtx.windows.ivacScout = ivacScoutWindow;
 
     appCtx.proxy.actProxy = actProxy;
@@ -414,7 +402,7 @@ const iconPath = fs.existsSync(getAssetPath('icons/icon.png'))
 // ─── Console capture: installConsoleCapture() above (consoleCaptureApi) ───────
 
 // ─── Settings (store: main-process/services/settings-store.js) ────────────────
-const { normalizeTrackingSettings, normalizeCapmonsterSettings } = settingsStore;
+const { normalizeTrackingSettings } = settingsStore;
 
 function loadSettings() {
     return settingsStore.loadSettings();
@@ -422,17 +410,6 @@ function loadSettings() {
 
 function saveSettings(s) {
     return settingsStore.saveSettings(s);
-}
-
-function getCapmonsterSettings() {
-    const s = loadSettings();
-    if (!s.capmonster || typeof s.capmonster !== 'object') {
-        s.capmonster = normalizeCapmonsterSettings();
-        saveSettings(s);
-    } else {
-        s.capmonster = normalizeCapmonsterSettings(s.capmonster);
-    }
-    return s.capmonster;
 }
 
 function getTrackingSettings() {
@@ -473,12 +450,10 @@ const { captureScreenshot, requestScreenshot } = screenshotSvc;
 const _cdpNetworkLogging = createCdpNetworkLogging({
     safeCatch,
     shouldFilterUrl,
-    Notification,
     getTabManager: () => tabManager,
     getMitmProxy: () => mitmProxy,
     getIsLoggingEnabled: () => isLoggingEnabled,
     getDb: () => db,
-    getRulesEngine: () => rulesEngine,
     getSettings: () => settingsStore.getCached() || loadSettings(),
     getLogViewerWindows: () => logViewerWindows,
     broadcastLogEntryToViewers: _broadcastLogEntryToViewers,
@@ -624,6 +599,7 @@ const dSub = {
     logViewerInitSessions,
     comparePair,
     loadSettings,
+    saveSettings,
     ipcBatch,
     diffUtils,
     settingsStore,
@@ -653,6 +629,7 @@ Object.defineProperties(dSub, {
     mainWindow: rwWin(() => mainWindow, (v) => { mainWindow = v; }),
     logViewerWindow: rwWin(() => logViewerWindow, (v) => { logViewerWindow = v; }),
     rulesWindow: rwWin(() => rulesWindow, (v) => { rulesWindow = v; }),
+    breakpointWindow: rwWin(() => breakpointWindow, (v) => { breakpointWindow = v; }),
     cookieManagerWindow: rwWin(() => cookieManagerWindow, (v) => { cookieManagerWindow = v; }),
     dnsManagerWindow: rwWin(() => dnsManagerWindow, (v) => { dnsManagerWindow = v; }),
     proxyManagerWindow: rwWin(() => proxyManagerWindow, (v) => { proxyManagerWindow = v; }),
@@ -660,9 +637,11 @@ Object.defineProperties(dSub, {
     consoleViewerWindow: rwWin(() => consoleViewerWindow, (v) => { consoleViewerWindow = v; }),
     pageAnalyzerWindow: rwWin(() => pageAnalyzerWindow, (v) => { pageAnalyzerWindow = v; }),
     notesWindow: rwWin(() => notesWindow, (v) => { notesWindow = v; }),
+    credentialsWindow: rwWin(() => credentialsWindow, (v) => { credentialsWindow = v; }),
     ivacScoutWindow: rwWin(() => ivacScoutWindow, (v) => { ivacScoutWindow = v; }),
     loggingModalWindow: rwWin(() => loggingModalWindow, (v) => { loggingModalWindow = v; }),
     requestEditorWindow: rwWin(() => requestEditorWindow, (v) => { requestEditorWindow = v; }),
+    onboardingWindow: rwWin(() => onboardingWindow, (v) => { onboardingWindow = v; }),
 });
 
 const subApis = createSubWindowsApi(dSub);
@@ -722,6 +701,8 @@ const {
     createConsoleViewerWindow,
     createPageAnalyzerWindow,
     createNotesWindow,
+    createCredentialsWindow,
+    broadcastCredentialsWindowContext,
     createIvacScoutWindow,
     sendIvacScoutLog,
     getIvacScoutContext,
@@ -738,7 +719,9 @@ const {
     createLoggingModalWindow,
     createProxyManagerWindow,
     createRulesWindow,
+    openBreakpointWindow,
     reattachInterceptorToAllTabs,
+    createOnboardingWindow,
 } = subApis;
 
 function syncDnsOverridesToMitm(...args) {
@@ -793,6 +776,7 @@ app.whenReady().then(async () => {
     db         = require('../db');
     tabManager = require('../tab-manager');
     db.init();
+    try { db.purgeConsoleLogsOlderThanDays(14); } catch { /* ignore */ }
     _syncDnsOverrideHostsSet();
     loadSettings();
     tabManager.applyDevicePermissions();
@@ -812,6 +796,35 @@ app.whenReady().then(async () => {
         broadcastInterceptRuleMatched(info);
         maybeLogMockToNetworkActivity(info);
     });
+    interceptor.setBreakpointHandler(async (opts, rule, meta) => {
+        const crypto = require('node:crypto');
+        const breakpointService = require('./services/breakpoint-service');
+        const id = crypto.randomUUID();
+        const snapshot = {
+            url: opts.url,
+            method: opts.method,
+            headers: opts.headers || {},
+            orderedHeaders: opts.orderedHeaders,
+            bodyBase64: opts.bodyBase64,
+            body: opts.body,
+            interceptMatchUrl: opts.interceptMatchUrl,
+        };
+        return new Promise((resolve) => {
+            breakpointService.registerBreakpoint(id, resolve);
+            try {
+                openBreakpointWindow({
+                    id,
+                    snapshot,
+                    ruleName: rule.name,
+                    matchUrl: meta && meta.matchUrl,
+                    wireUrl: meta && meta.wireUrl,
+                });
+            } catch (e) {
+                safeCatch({ module: 'main', eventCode: 'breakpoint.window.failed', context: { ruleName: rule.name } }, e, 'warn');
+                breakpointService.resumeBreakpoint(id, { action: 'forward' });
+            }
+        });
+    });
     interceptor.setTrafficMode(getCurrentTrafficMode());
 
     const { createAppContext } = require('./app-context');
@@ -822,7 +835,6 @@ app.whenReady().then(async () => {
     // Non-critical modules loaded after window is shown
     setImmediate(() => {
         harExporter = require('../har-exporter');
-        rulesEngine = require('../rules-engine');
         syncAppContextSnapshot();
     });
 
@@ -1008,7 +1020,10 @@ app.whenReady().then(async () => {
             case 'createIvacScoutWindow': return createIvacScoutWindow;
             case 'createLogViewerWindow': return createLogViewerWindow;
             case 'createLoggingModalWindow': return createLoggingModalWindow;
+            case 'createOnboardingWindow': return createOnboardingWindow;
             case 'createNotesWindow': return createNotesWindow;
+            case 'createCredentialsWindow': return createCredentialsWindow;
+            case 'broadcastCredentialsWindowContext': return broadcastCredentialsWindowContext;
             case 'createPageAnalyzerWindow': return createPageAnalyzerWindow;
             case 'createProxyManagerWindow': return createProxyManagerWindow;
             case 'createRequestEditorWindow': return createRequestEditorWindow;
@@ -1025,7 +1040,6 @@ app.whenReady().then(async () => {
             case 'extPortsStore': return extPortsStore;
             case 'fs': return fs;
             case 'generatePassword': return generatePassword;
-            case 'getCapmonsterSettings': return getCapmonsterSettings;
             case 'getCurrentTrafficMode': return getCurrentTrafficMode;
             case 'getInternalPageUrl': return getInternalPageUrl;
             case 'getIvacScoutContext': return getIvacScoutContext;
@@ -1041,6 +1055,7 @@ app.whenReady().then(async () => {
             case 'isValidDnsHost': return isValidDnsHost;
             case 'isValidIpv4': return isValidIpv4;
             case 'ivacScoutWindow': return ivacScoutWindow;
+            case 'ivacScoutProcess': return ivacScoutProcess;
             case 'lastMouseMoveTime': return lastMouseMoveTime;
             case 'loadJsonDiffModules': return loadJsonDiffModules;
             case 'loadSettings': return loadSettings;
@@ -1056,7 +1071,6 @@ app.whenReady().then(async () => {
             case 'nativeImage': return nativeImage;
             case 'netFetchWithTimeout': return netFetchWithTimeout;
             case 'networkPolicy': return networkPolicy;
-            case 'normalizeCapmonsterSettings': return normalizeCapmonsterSettings;
             case 'normalizeTrackingSettings': return normalizeTrackingSettings;
             case 'normalizeTrafficMode': return normalizeTrafficMode;
             case 'notifyCookieManagerTabs': return notifyCookieManagerTabs;
@@ -1064,6 +1078,7 @@ app.whenReady().then(async () => {
             case 'notifyProxyProfilesList': return notifyProxyProfilesList;
             case 'notifyProxyStatus': return notifyProxyStatus;
             case 'notesWindow': return notesWindow;
+            case 'credentialsWindow': return credentialsWindow;
             case 'pageAnalyzerWindow': return pageAnalyzerWindow;
             case 'parseFallbackProxyList': return parseFallbackProxyList;
             case 'parseProxyTemplate': return parseProxyTemplate;
@@ -1088,7 +1103,6 @@ app.whenReady().then(async () => {
             case 'settingsStore': return settingsStore;
             case 'setupNetworkLogging': return setupNetworkLogging;
             case 'shell': return shell;
-            case 'solveTurnstileWithCapMonster': return solveTurnstileWithCapMonster;
             case 'stabilityMetrics': return stabilityMetrics;
             case 'startupMetrics': return startupMetrics;
             case 'stopIvacScoutProcess': return stopIvacScoutProcess;
@@ -1136,13 +1150,50 @@ app.whenReady().then(async () => {
     // External ports are started manually via the UI widget on new-tab page
 
     const { attachWindowSwitcherHotkey } = require('./services/window-switcher-hotkey.js');
+
+    /** Mirror Chromium console warnings/errors to the terminal running the main process (and sysLog). */
+    function attachRendererConsoleForward(win) {
+        if (!win || win.isDestroyed()) return;
+        const verbose = process.env.CUPNET_RENDERER_CONSOLE_VERBOSE === '1';
+        win.webContents.on('console-message', (event, level, message, line, sourceId) => {
+            if (level < 2 && !verbose) return;
+            let title = '';
+            try { title = win.getTitle() || ''; } catch (_) { /* ignore */ }
+            const loc = sourceId ? `${sourceId}:${line}` : '';
+            const prefix = `[renderer${title ? ` · ${title}` : ''}]${loc ? ` ${loc}` : ''}`;
+            const lineTxt = `${prefix} ${message}`;
+            if (level >= 3) {
+                console.error(lineTxt);
+                sysLog('error', 'renderer-console', lineTxt);
+            } else if (level >= 2) {
+                console.warn(lineTxt);
+                sysLog('warn', 'renderer-console', lineTxt);
+            } else if (verbose) {
+                console.log(lineTxt);
+                sysLog('info', 'renderer-console', lineTxt);
+            }
+        });
+    }
+
     app.on('browser-window-created', (_, win) => {
         attachWindowSwitcherHotkey(win, () => mainWindow);
+        attachRendererConsoleForward(win);
     });
 
     // Start app window after IPC handlers are registered, but without waiting for MITM readiness.
     createMainWindow();
     syncAppContextSnapshot();
+
+    setImmediate(() => {
+        try {
+            const s = loadSettings();
+            if (s && s.onboardingComplete === false && typeof createOnboardingWindow === 'function') {
+                createOnboardingWindow();
+            }
+        } catch (e) {
+            sysLog('warn', 'onboarding', String(e && e.message ? e.message : e));
+        }
+    });
 
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
@@ -1155,6 +1206,12 @@ app.on('before-quit', (e) => {
     e.preventDefault();
     if (!confirmExitDialog(mainWindow)) return;
     forceAppQuit = true;
+    try {
+        const wins = BrowserWindow.getAllWindows();
+        for (const w of wins) {
+            if (w && !w.isDestroyed() && w !== mainWindow) w.destroy();
+        }
+    } catch (_) { /* ignore */ }
     syncAppContextSnapshot();
     app.quit();
 });
@@ -1164,6 +1221,7 @@ app.on('will-quit', () => {
     ipcBatch.disposePendingBatches();
     if (logStatusInterval) clearInterval(logStatusInterval);
     settingsStore.cancelPendingSave();
+    if (typeof consoleCaptureApi.flushPersistQueue === 'function') consoleCaptureApi.flushPersistQueue();
     if (typeof consoleCaptureApi.dispose === 'function') consoleCaptureApi.dispose();
     if (notifyTabsDebounce.id) { clearTimeout(notifyTabsDebounce.id); notifyTabsDebounce.id = null; }
     if (mitmProxy) {

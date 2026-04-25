@@ -2,6 +2,23 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+let _requestEditorCmCache = null;
+function getRequestEditorCodeMirrorModules() {
+    if (_requestEditorCmCache) return _requestEditorCmCache;
+    const codemirror = require('codemirror');
+    const { json } = require('@codemirror/lang-json');
+    const { xml } = require('@codemirror/lang-xml');
+    const { html } = require('@codemirror/lang-html');
+    const { oneDark } = require('@codemirror/theme-one-dark');
+    const { EditorState, Compartment } = require('@codemirror/state');
+    const { searchKeymap, openSearchPanel } = require('@codemirror/search');
+    _requestEditorCmCache = {
+        ...codemirror,
+        json, xml, html, oneDark, EditorState, Compartment, searchKeymap, openSearchPanel,
+    };
+    return _requestEditorCmCache;
+}
+
 /**
  * Helper: registers an ipcRenderer listener and returns an unsubscribe function.
  * Usage:
@@ -67,15 +84,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // ── Log viewer / DB data ───────────────────────────────────────────────
     openLogViewer:           ()        => ipcRenderer.invoke('open-log-viewer'),
     openLogViewerWithUrl:    (url)     => ipcRenderer.invoke('open-log-viewer-with-url', url),
+    openLogViewerFocusRequest: (id)    => ipcRenderer.invoke('open-log-viewer-focus-request', id),
     getExistingLogs:         ()        => ipcRenderer.invoke('get-existing-logs'),
+    getBrowserEvents:        (opts)    => ipcRenderer.invoke('get-browser-events', opts),
     getWsEvents:             (payload) => ipcRenderer.invoke('get-ws-events', payload),
     clearLogs:               ()        => ipcRenderer.invoke('clear-logs'),
     openJsonlFile:           ()        => ipcRenderer.invoke('open-jsonl-file'),
     onNewLogEntry:           (cb)      => sub('new-log-entry', cb),
     onNewLogEntryBatch:      (cb)      => sub('new-log-entry-batch', cb),
     onWsHandshakeMessageCount: (cb)   => sub('ws-handshake-message-count', cb),
-    onRuleHighlight:         (cb)      => sub('rule-highlight', cb),
     onFocusRequestUrl:       (cb)      => sub('focus-request-url', cb),
+    onFocusRequestId:        (cb)      => sub('focus-request-id', cb),
     onInterceptRuleMatched:  (cb)      => sub('intercept-rule-matched', cb),
     onInterceptRuleMatchedBatch: (cb)  => sub('intercept-rule-matched-batch', cb),
 
@@ -85,6 +104,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setRequestAnnotation:    (id, d)   => ipcRenderer.invoke('set-request-annotation', id, d),
     getScreenshotData:       (id)      => ipcRenderer.invoke('get-screenshot-data', id),
     ftsSearch:               (q, sid)  => ipcRenderer.invoke('fts-search', q, sid),
+    getOmniboxTopHosts:      (limit)   => ipcRenderer.invoke('get-omnibox-top-hosts', limit),
     getSessions:             ()        => ipcRenderer.invoke('get-sessions'),
     getSessionsWithStats:    ()        => ipcRenderer.invoke('get-sessions-with-stats'),
     getCurrentSessionId:     ()        => ipcRenderer.invoke('get-current-session-id'),
@@ -134,10 +154,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     replayRequest:           (id)      => ipcRenderer.invoke('replay-request', id),
 
     // ── Rules ──────────────────────────────────────────────────────────────
-    getRules:                ()        => ipcRenderer.invoke('get-rules'),
-    saveRule:                (r)       => ipcRenderer.invoke('save-rule', r),
-    deleteRule:              (id)      => ipcRenderer.invoke('delete-rule', id),
-    toggleRule:              (id, en)  => ipcRenderer.invoke('toggle-rule', id, en),
     openRulesWindow:         ()        => ipcRenderer.invoke('open-rules-window'),
     openRulesWithMock:       (data)    => ipcRenderer.invoke('open-rules-window-with-mock', data),
     onPrefillInterceptRule:  (cb)      => sub('prefill-intercept-rule', cb),
@@ -149,6 +165,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     testInterceptNotification: ()     => ipcRenderer.invoke('test-intercept-notification'),
     testInterceptScript:       (p)    => ipcRenderer.invoke('test-intercept-script', p || {}),
     selectMockFile:            ()     => ipcRenderer.invoke('select-mock-file'),
+    testInterceptUrlMatch:     (pattern, url) => ipcRenderer.invoke('test-intercept-url-match', pattern, url),
+    exportInterceptRules:      ()     => ipcRenderer.invoke('export-intercept-rules'),
+    importInterceptRules:      ()     => ipcRenderer.invoke('import-intercept-rules'),
+    reorderInterceptRules:     (pairs) => ipcRenderer.invoke('reorder-intercept-rules', pairs),
+    getInterceptRuleHistory:   (id, lim) => ipcRenderer.invoke('get-intercept-rule-history', id, lim),
+    exportRulesActivityLog:   (payload) => ipcRenderer.invoke('export-rules-activity-log', payload || {}),
+    getMonacoVsPath:          ()        => ipcRenderer.invoke('get-monaco-vs-path'),
 
     // ── Proxy profiles ─────────────────────────────────────────────────────
     getProxyProfiles:        ()        => ipcRenderer.invoke('get-proxy-profiles'),
@@ -176,7 +199,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getOpenWindows:          (opts)    => ipcRenderer.invoke('get-open-windows', opts),
     focusWindowById:         (id)      => ipcRenderer.invoke('focus-window-by-id', id),
     setWindowSwitcherOverlayVisible: (visible) => ipcRenderer.invoke('set-window-switcher-overlay-visible', visible),
+    showOmniboxOverlay:      ()        => ipcRenderer.invoke('omnibox-overlay-show'),
+    hideOmniboxOverlay:      ()        => ipcRenderer.invoke('omnibox-overlay-hide'),
+    updateOmniboxOverlay:    (payload) => ipcRenderer.invoke('omnibox-overlay-update', payload),
+    onOmniboxOverlaySelect:  (cb)      => sub('omnibox-overlay-select', cb),
+    onOmniboxOverlayDismiss: (cb)      => sub('omnibox-overlay-dismiss', cb),
+    onForceCloseOmnibox:     (cb)      => sub('force-close-omnibox', cb),
     onToggleWindowSwitcher:  (cb)      => sub('toggle-window-switcher', cb),
+    onToggleCommandPalette:  (cb)      => sub('toggle-command-palette', cb),
 
     // ── Homepage ───────────────────────────────────────────────────────────
     getHomepage:             ()        => ipcRenderer.invoke('get-homepage'),
@@ -206,9 +236,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onToolbarActivityBadgeReset: (cb) => sub('toolbar-activity-badge-reset', cb),
 
     // ── Request Editor ──────────────────────────────────────────────────────────
-    openRequestEditor:       (id)      => ipcRenderer.invoke('open-request-editor', id),
+    openRequestEditor:       (idOrPayload) => ipcRenderer.invoke('open-request-editor', idOrPayload),
     openRequestEditorNewWindow: ()     => ipcRenderer.invoke('open-request-editor-new-window'),
     executeRequest:          (data)    => ipcRenderer.invoke('execute-request', data),
+    cancelExecuteRequest:    (token)   => ipcRenderer.invoke('cancel-execute-request', token),
+    getRequestEditorCodeMirror: () => getRequestEditorCodeMirrorModules(),
+    requestEditorListCollections: () => ipcRenderer.invoke('request-editor-list-collections'),
+    requestEditorSaveCollectionNode: (row) => ipcRenderer.invoke('request-editor-save-collection-node', row),
+    requestEditorDeleteCollectionNode: (id) => ipcRenderer.invoke('request-editor-delete-collection-node', id),
+    requestEditorListEnvironments: () => ipcRenderer.invoke('request-editor-list-environments'),
+    requestEditorUpsertEnvironment: (row) => ipcRenderer.invoke('request-editor-upsert-environment', row),
+    requestEditorDeleteEnvironment: (id) => ipcRenderer.invoke('request-editor-delete-environment', id),
+    requestEditorPickFile:   ()        => ipcRenderer.invoke('request-editor-pick-file'),
+    requestEditorBuildMultipart: (parts) => ipcRenderer.invoke('request-editor-build-multipart', parts),
     onRequestEditorInit:     (cb)      => sub('request-editor-init', cb),
 
     // ── TLS Fingerprint (AzureTLS) ─────────────────────────────────────────────
@@ -218,11 +258,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── MITM / AzureTLS stats ──────────────────────────────────────────────────
     getMitmStats:            ()        => ipcRenderer.invoke('mitm-get-stats'),
+    getMitmCaCert:           ()        => ipcRenderer.invoke('mitm-get-ca-cert'),
     onMitmStatsUpdate:       (cb)      => sub('mitm-stats-update', cb),
 
     // ── Inline settings (browser toolbar) ──────────────────────────────────────
     setToolbarHeight:        (px)      => ipcRenderer.invoke('set-toolbar-height', px),
     getSettingsAll:          ()        => ipcRenderer.invoke('get-settings-all'),
+    saveActivityMonitorSettings: (opts) => ipcRenderer.invoke('save-activity-monitor-settings', opts),
+    completeOnboarding:      ()        => ipcRenderer.invoke('onboarding-complete'),
+    resetOnboardingWizard: ()        => ipcRenderer.invoke('reset-onboarding-wizard'),
     setAutoScreenshot:       (en)      => ipcRenderer.invoke('set-auto-screenshot', en),
     getTrackingSettings:     ()        => ipcRenderer.invoke('get-tracking-settings'),
     saveTrackingSettings:    (cfg)     => ipcRenderer.invoke('save-tracking-settings', cfg),
@@ -236,6 +280,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     quickConnectProfile:     (id)      => ipcRenderer.invoke('quick-connect-profile', id),
     onInitSettings:          (cb)      => sub('init-settings', cb),
     getAppMetrics:           ()        => ipcRenderer.invoke('get-app-metrics'),
+    getAppVersion:           ()        => ipcRenderer.invoke('get-app-version'),
+    getUiPref:                 (key, def) => ipcRenderer.invoke('get-ui-pref', key, def),
+    setUiPref:                 (key, value) => ipcRenderer.invoke('set-ui-pref', key, value),
+    exportSettingsJson:      ()        => ipcRenderer.invoke('export-settings-json'),
+    importSettingsJson:      (json)    => ipcRenderer.invoke('import-settings-json', json),
+    resetSettingsToDefaults: ()        => ipcRenderer.invoke('reset-settings-to-defaults'),
     enumerateMediaDevices:   ()        => ipcRenderer.invoke('enumerate-media-devices'),
     saveDevicePermissions:   (cfg)     => ipcRenderer.invoke('save-device-permissions', cfg),
     onRuleNotification:      (cb)      => sub('rule-notification', cb),
@@ -250,13 +300,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setDebugMitmLevel:       (lvl)     => ipcRenderer.invoke('set-debug-mitm-level', lvl),
     onConsoleLog:            (cb)      => sub('console-log', cb),
     saveConsoleLog:          (content) => ipcRenderer.invoke('save-console-log', content),
+    saveConsoleLogJson:      (content) => ipcRenderer.invoke('save-console-log-json', content),
+    saveConsoleLogCsv:       (content) => ipcRenderer.invoke('save-console-log-csv', content),
+    getConsoleLogsFromDb:    (opts)    => ipcRenderer.invoke('get-console-logs-db', opts || {}),
+    getConsoleLogSessions:   ()        => ipcRenderer.invoke('get-console-log-sessions'),
+    findRequestsNearTs:      (payload) => ipcRenderer.invoke('find-requests-near-ts', payload || {}),
+    cupnetLog:               (level, module, message, meta) => ipcRenderer.invoke('cupnet-log', { level, module, message, meta }),
 
     // ── Page Analyzer ────────────────────────────────────────────────────────
     openPageAnalyzer:        ()        => ipcRenderer.invoke('open-page-analyzer'),
     analyzePageForms:        (tabId)   => ipcRenderer.invoke('analyze-page-forms', tabId),
     analyzePageCaptcha:      (tabId)   => ipcRenderer.invoke('analyze-page-captcha', tabId),
-    getCapmonsterSettings:   ()        => ipcRenderer.invoke('get-capmonster-settings'),
-    saveCapmonsterSettings:  (cfg)     => ipcRenderer.invoke('save-capmonster-settings', cfg),
     solveTurnstileCaptcha:   (tabId, captcha, options) => ipcRenderer.invoke('solve-turnstile-captcha', tabId, captcha, options),
     injectTurnstileToken:    (tabId, payload) => ipcRenderer.invoke('inject-turnstile-token', tabId, payload),
     analyzePageMeta:         (tabId)   => ipcRenderer.invoke('analyze-page-meta', tabId),
@@ -273,8 +327,66 @@ contextBridge.exposeInMainWorld('electronAPI', {
     notesGet:                (id, pw)  => ipcRenderer.invoke('notes-get', id, pw),
     notesSave:               (p)       => ipcRenderer.invoke('notes-save', p),
     notesDelete:             (id)      => ipcRenderer.invoke('notes-delete', id),
+    notesPin:                (id, v)   => ipcRenderer.invoke('notes-pin', id, v),
+    notesExport:             (p)       => ipcRenderer.invoke('notes-export', p),
+    notesEmbedRequest:       (data)    => ipcRenderer.invoke('notes-embed-request', data),
+    notesGetRequestForEmbed: (id)     => ipcRenderer.invoke('notes-get-request-for-embed', id),
     onNotesInit:             (cb)      => sub('notes-init', cb),
     onNotesContextUpdate:    (cb)      => sub('notes-context-update', cb),
+    onNotesEmbedBlock:       (cb)      => sub('notes-embed-block', cb),
+
+    // ── Credentials vault ─────────────────────────────────────────────────────
+    openCredentialsWindow:   ()        => ipcRenderer.invoke('open-credentials-window'),
+    credentialsVaultStatus:  ()        => ipcRenderer.invoke('credentials-vault-status'),
+    credentialsVaultSetup:   (p)       => ipcRenderer.invoke('credentials-vault-setup', p),
+    credentialsUnlock:       (pw, vid) => ipcRenderer.invoke('credentials-unlock', pw, vid),
+    credentialsLock:         ()        => ipcRenderer.invoke('credentials-lock'),
+    credentialsList:         (f)       => ipcRenderer.invoke('credentials-list', f),
+    credentialsGet:          (id)      => ipcRenderer.invoke('credentials-get', id),
+    credentialsSave:         (p)       => ipcRenderer.invoke('credentials-save', p),
+    credentialsDelete:       (id, perm) => ipcRenderer.invoke('credentials-delete', id, perm),
+    credentialsFavorite:     (id, v)   => ipcRenderer.invoke('credentials-favorite', id, v),
+    credentialsGetTabProxyIp: ()       => ipcRenderer.invoke('credentials-get-tab-proxy-ip'),
+    credentialsChangeMaster: (p)       => ipcRenderer.invoke('credentials-change-master', p),
+    credentialsImportBatch:  (p)       => ipcRenderer.invoke('credentials-import-batch', p),
+    credentialsExport:       (p)       => ipcRenderer.invoke('credentials-export', p),
+    credentialsSiteMatchCount: (p)     => ipcRenderer.invoke('credentials-site-match-count', p),
+    credentialsSiteMatches:  (p)       => ipcRenderer.invoke('credentials-site-matches', p),
+    credentialsUnlockAndGetMatches: (p) => ipcRenderer.invoke('credentials-unlock-and-get-matches', p || {}),
+    credentialsFillActiveTab: (payload) => ipcRenderer.invoke('credentials-fill-active-tab', payload || {}),
+    // multi-vault management
+    credentialsVaultList:    ()        => ipcRenderer.invoke('credentials-vault-list'),
+    credentialsVaultCreate:  (p)       => ipcRenderer.invoke('credentials-vault-create', p),
+    credentialsVaultSwitch:  (id, pw)  => ipcRenderer.invoke('credentials-vault-switch', id, pw),
+    credentialsVaultDelete:  (id, pw)  => ipcRenderer.invoke('credentials-vault-delete', id, pw),
+    credentialsVaultRename:  (id, n)   => ipcRenderer.invoke('credentials-vault-rename', id, n),
+    // trash
+    credentialsRestore:      (id)      => ipcRenderer.invoke('credentials-restore', id),
+    credentialsPurgeTrash:   ()        => ipcRenderer.invoke('credentials-purge-trash'),
+    credentialsCountTrash:   ()        => ipcRenderer.invoke('credentials-count-trash'),
+    credentialsTypeCounts:   ()        => ipcRenderer.invoke('credentials-type-counts'),
+    // folders
+    credentialsFoldersList:  ()        => ipcRenderer.invoke('credentials-folders-list'),
+    credentialsFolderCreate: (n, pid)  => ipcRenderer.invoke('credentials-folder-create', n, pid),
+    credentialsFolderRename: (id, n)   => ipcRenderer.invoke('credentials-folder-rename', id, n),
+    credentialsFolderDelete: (id)      => ipcRenderer.invoke('credentials-folder-delete', id),
+    credentialsMoveToFolder: (cid, fid) => ipcRenderer.invoke('credentials-move-to-folder', cid, fid),
+    // URIs + custom fields
+    credentialsUrisGet:      (id)      => ipcRenderer.invoke('credentials-uris-get', id),
+    credentialsUrisSave:     (id, u)   => ipcRenderer.invoke('credentials-uris-save', id, u),
+    credentialsFieldsGet:    (id)      => ipcRenderer.invoke('credentials-fields-get', id),
+    credentialsFieldsSave:   (id, f)   => ipcRenderer.invoke('credentials-fields-save', id, f),
+    // vault hint
+    credentialsVaultSetHint: (h)       => ipcRenderer.invoke('credentials-vault-set-hint', h),
+    // capture prompt
+    credentialCaptureConfirm:      ()     => ipcRenderer.invoke('credential-capture-confirm'),
+    credentialCaptureDismiss:       ()     => ipcRenderer.invoke('credential-capture-dismiss'),
+    credentialCaptureUnlockAndSave: (pw)  => ipcRenderer.invoke('credential-capture-unlock-and-save', pw),
+    onShowCredentialSaveBar: (cb)         => sub('show-credential-save-bar', cb),
+    // events
+    onCredentialsInit:       (cb)      => sub('credentials-init', cb),
+    onCredentialsContextUpdate: (cb)   => sub('credentials-context-update', cb),
+    onCredentialsToolbarRefresh: (cb)  => sub('credentials-toolbar-refresh', cb),
 
     // ── API Scout ─────────────────────────────────────────────────────────────
     openIvacScout:           ()        => ipcRenderer.invoke('open-ivac-scout'),

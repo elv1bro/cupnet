@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';">
+    <title>Breakpoint</title>
+    <link rel="stylesheet" href="shared-dark-theme.css">
+    <style>
+        html, body { height: 100%; margin: 0; background: var(--bg0, #0d1117); color: var(--text); font-family: var(--font-sans, system-ui); font-size: 13px; }
+        body { display: flex; flex-direction: column; padding: 12px 14px; box-sizing: border-box; gap: 8px; }
+        h1 { margin: 0 0 4px; font-size: 15px; }
+        .sub { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; word-break: break-all; }
+        label { font-size: 11px; font-weight: 600; color: var(--text-dim); display: block; margin-bottom: 4px; }
+        input, textarea { width: 100%; box-sizing: border-box; padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg1); color: var(--text); font-size: 12px; }
+        textarea { min-height: 120px; font-family: var(--font-mono, monospace); resize: vertical; }
+        .row2 { display: grid; grid-template-columns: 1fr 120px; gap: 8px; }
+        .actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+        .cn-btn { padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg2); color: var(--text); cursor: pointer; font-size: 12px; }
+        .cn-btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+        .cn-btn-danger { border-color: var(--danger, #f85149); color: var(--danger); }
+    </style>
+</head>
+<body>
+    <h1 id="bp-title">Breakpoint</h1>
+    <div class="sub" id="bp-meta"></div>
+    <div class="row2">
+        <div>
+            <label for="bp-url">URL</label>
+            <input type="text" id="bp-url" autocomplete="off" spellcheck="false">
+        </div>
+        <div>
+            <label for="bp-method">Method</label>
+            <input type="text" id="bp-method" autocomplete="off" spellcheck="false">
+        </div>
+    </div>
+    <div>
+        <label for="bp-headers">Headers (JSON object)</label>
+        <textarea id="bp-headers" spellcheck="false"></textarea>
+    </div>
+    <div>
+        <label for="bp-body">Body (UTF-8 text; replaces request body)</label>
+        <textarea id="bp-body" spellcheck="false"></textarea>
+    </div>
+    <div class="actions">
+        <button type="button" class="cn-btn cn-btn-primary" id="bp-forward">Forward</button>
+        <button type="button" class="cn-btn" id="bp-modify">Apply &amp; forward</button>
+        <button type="button" class="cn-btn cn-btn-danger" id="bp-block">Block</button>
+    </div>
+    <script src="breakpoint-renderer.js"></script>
+</body>
+</html>

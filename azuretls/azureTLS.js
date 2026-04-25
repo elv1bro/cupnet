@@ -119,33 +119,17 @@ const azureTLS = ffi.Library(getLibraryPath(), {
     'azuretls_free_response': ['void', [ref.refType(CFfiResponse)]]
 });
 
+let _globalInitDone = false;
+
 class AzureTLSClient {
     constructor(config = {}) {
-        // =======================================================================
-        // ===          КАК ПОЛЬЗОВАТЬСЯ СИСТЕМОЙ КОЛБЭКОВ (ПРИМЕРЫ)          ===
-        // =======================================================================
-        //
-        // Колбэки - это функции, которые вы "регистрируете" в клиенте.
-        // Они автоматически вызываются после каждого ответа, позволяя вам
-        // анализировать ответ и выполнять какие-либо действия, например,
-        // повторять запрос.
-        //
-        // Структура колбэка:
-        // async (response, requestOptions, client) => { ... }
-        //
-        // - response: Объект с результатом запроса { statusCode, body, headers, error }.
-        // - requestOptions: Оригинальные опции, с которыми был вызван запрос.
-        // - client: Экземпляр самого клиента, чтобы можно было вызывать его методы (например, client.setProxy()).
-        //
-        // ВОЗВРАЩАЕМОЕ ЗНАЧЕНИЕ:
-        // - `true`: Сигнал клиенту, что нужно ПОВТОРИТЬ этот же запрос.
-        // - `false` или `undefined`: Ничего не делать, продолжить как обычно.
         this.responseCallbacks = new Map();
-        
-        // Флаг для детального логирования (можно включить через переменную окружения или config)
         this.debugMode = config.debug || process.env.DEBUG_AZURE_TLS === 'true' || process.argv.includes('--debugAzureTls');
 
-        azureTLS.azuretls_init();
+        if (!_globalInitDone) {
+            azureTLS.azuretls_init();
+            _globalInitDone = true;
+        }
 
         // ⚠️ ВАЖНО: Поддерживаем оба варианта имени опции для совместимости
         // По умолчанию устанавливаем true для избежания ошибок TLS pinning

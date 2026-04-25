@@ -106,7 +106,7 @@ function sanitizeOutgoingRequestHeaders(headers) {
     const out = {};
     if (!headers || typeof headers !== 'object') return out;
     for (const [k, v] of Object.entries(headers)) {
-        if (k == null || v === undefined) continue;
+        if (k == null || v == null) continue;
         const name = String(k).trim();
         if (!name || name.startsWith(':')) continue;
         out[k] = v;

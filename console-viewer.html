@@ -5,241 +5,169 @@
     <meta http-equiv="Content-Security-Policy"
           content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
     <title>System Console</title>
-    <style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-:root {
-    --bg0:      #0d1117;
-    --bg1:      #161b27;
-    --bg2:      #1c2236;
-    --bg3:      #222840;
-    --border:   #2a3350;
-    --text:     #c9d3e8;
-    --text-dim: #5c6b8a;
-    --text-hi:  #e8eef8;
-    --accent:   #3b7ef8;
-}
-
-html, body { height: 100%; overflow: hidden; }
-body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    font-size: 12px;
-    background: var(--bg0);
-    color: var(--text);
-    display: flex;
-    flex-direction: column;
-}
-
-/* ── Toolbar ── */
-#cv-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    background: var(--bg1);
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-}
-
-.cv-tab {
-    padding: 4px 14px;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    background: var(--bg2);
-    color: var(--text-dim);
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: 600;
-    transition: all .15s;
-    position: relative;
-}
-.cv-tab:hover { border-color: var(--accent); color: var(--text); }
-.cv-tab.active { border-color: var(--accent); color: var(--accent); background: rgba(59,126,248,0.1); }
-
-.cv-tab .cv-badge {
-    display: inline-block;
-    min-width: 16px;
-    padding: 0 4px;
-    margin-left: 5px;
-    border-radius: 8px;
-    background: var(--bg3);
-    color: var(--text-dim);
-    font-size: 10px;
-    font-weight: 600;
-    text-align: center;
-    line-height: 16px;
-    vertical-align: middle;
-}
-.cv-tab.active .cv-badge { background: rgba(59,126,248,0.2); color: var(--accent); }
-
-.cv-tab .cv-new-dot {
-    display: none;
-    position: absolute;
-    top: 3px; right: 3px;
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: #ef4444;
-}
-.cv-tab.has-new .cv-new-dot { display: block; }
-
-.cv-sep { width: 1px; height: 20px; background: var(--border); flex-shrink: 0; }
-.cv-spacer { flex: 1; }
-
-.cv-search {
-    display: flex;
-    align-items: center;
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 0 8px;
-    height: 26px;
-    gap: 4px;
-    min-width: 180px;
-}
-.cv-search-icon { color: var(--text-dim); font-size: 13px; }
-.cv-search input {
-    background: none; border: none; outline: none;
-    color: var(--text); font-size: 12px;
-    width: 100%;
-}
-.cv-search input::placeholder { color: var(--text-dim); }
-
-.cv-btn {
-    padding: 4px 10px;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    background: var(--bg2);
-    color: var(--text-dim);
-    cursor: pointer;
-    font-size: 11px;
-    transition: all .15s;
-}
-.cv-btn:hover { border-color: var(--accent); color: var(--text-hi); }
-.cv-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(59,126,248,0.1); }
-.cv-btn.danger { border-color: #ef4444; color: #ef4444; }
-.cv-btn.danger:hover { background: rgba(239,68,68,0.1); }
-
-#cv-mitm-toolbar[hidden] {
-    display: none !important;
-}
-#cv-mitm-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-}
-
-.cv-mitm-debug {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-}
-.cv-mitm-debug label {
-    font-size: 11px;
-    color: var(--text-dim);
-    white-space: nowrap;
-}
-.cv-select {
-    min-width: 200px;
-    height: 26px;
-    padding: 0 8px;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    background: var(--bg2);
-    color: var(--text);
-    font-size: 11px;
-    cursor: pointer;
-}
-.cv-select:hover, .cv-select:focus { border-color: var(--accent); outline: none; }
-
-#cv-count {
-    font-size: 11px;
-    color: var(--text-dim);
-    white-space: nowrap;
-}
-
-/* ── Log area ── */
-#cv-log {
-    flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: 4px 0;
-    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
-    font-size: 11.5px;
-    line-height: 1.55;
-}
-
-.cv-line {
-    padding: 0 12px;
-    white-space: pre-wrap;
-    word-break: break-all;
-}
-.cv-line:hover { background: rgba(59,126,248,0.04); }
-
-/* Color coding */
-.cv-line.cv-err  { color: #ef4444; }
-.cv-line.cv-warn { color: #f59e0b; }
-.cv-line.cv-mitm-tcp  { color: var(--text-dim); }
-.cv-line.cv-mitm-conn { color: #60a5fa; }
-.cv-line.cv-mitm-dns { color: #22d3ee; }
-.cv-line.cv-mitm-cfg { color: #93c5fd; }
-.cv-line.cv-mitm-req  { color: #22c55e; }
-.cv-line.cv-mitm-res  { color: #a78bfa; }
-.cv-line.cv-ffi  { color: var(--text-dim); }
-.cv-line.cv-worker { color: #6b7280; }
-.cv-line.cv-retry { color: #f59e0b; }
-.cv-line.cv-main { color: #60a5fa; }
-
-.cv-line .cv-ts {
-    color: var(--text-dim);
-    font-size: 10px;
-    margin-right: 6px;
-    user-select: none;
-}
-
-.cv-highlight { background: rgba(245,158,11,0.25); border-radius: 2px; }
-    </style>
+    <link rel="stylesheet" href="shared-dark-theme.css">
+    <link rel="stylesheet" href="console-viewer.css">
 </head>
 <body>
+<div id="cv-root">
+    <header class="cv-header" id="cv-toolbar">
+        <!-- Row 1: tabs, MITM debug, search+exclude, meta, actions -->
+        <div class="cv-row cv-row-main">
+            <div class="cv-tabs">
+                <button type="button" class="cv-tab" data-tab="all">All <span class="cv-badge" id="badge-all">0</span><span class="cv-new-dot"></span></button>
+                <button type="button" class="cv-tab active" data-tab="mitm">MITM <span class="cv-badge" id="badge-mitm">0</span><span class="cv-new-dot"></span></button>
+                <button type="button" class="cv-tab" data-tab="system">System <span class="cv-badge" id="badge-system">0</span><span class="cv-new-dot"></span></button>
+                <button type="button" class="cv-tab" data-tab="bookmarks">★ <span class="cv-badge" id="badge-bookmarks">0</span></button>
+            </div>
 
-<div id="cv-toolbar">
-    <button class="cv-tab" data-tab="all">All <span class="cv-badge" id="badge-all">0</span><span class="cv-new-dot"></span></button>
-    <button class="cv-tab active" data-tab="mitm">MITM <span class="cv-badge" id="badge-mitm">0</span><span class="cv-new-dot"></span></button>
-    <button class="cv-tab" data-tab="system">System <span class="cv-badge" id="badge-system">0</span><span class="cv-new-dot"></span></button>
+            <div id="cv-mitm-toolbar" class="cv-mitm-wrap">
+                <label class="cv-mitm-label" for="cv-debug-mitm" title="MITM log verbosity (live)">MITM</label>
+                <select id="cv-debug-mitm" class="cv-select cv-select-mitm" autocomplete="off" title="CUPNET_DEBUG_MITM">
+                    <option value="0">0 · off</option>
+                    <option value="1">1 · traffic</option>
+                    <option value="2">2 · +headers</option>
+                    <option value="3">3 · +req body</option>
+                    <option value="4">4 · +res body</option>
+                </select>
+            </div>
 
-    <div id="cv-mitm-toolbar">
-        <div class="cv-sep"></div>
-        <div class="cv-mitm-debug" title="MITM log verbosity (live, no restart)">
-            <label for="cv-debug-mitm">CUPNET_DEBUG_MITM</label>
-            <select id="cv-debug-mitm" class="cv-select" autocomplete="off">
-                <option value="0">0 — off</option>
-                <option value="1">1 — traffic (TCP, CONNECT, requests)</option>
-                <option value="2">2 — + headers</option>
-                <option value="3">3 — + request body</option>
-                <option value="4">4 — + response body</option>
-            </select>
+            <div class="cv-search-line">
+                <div class="cn-search-wrap cv-search-filter">
+                    <svg class="cn-search-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M7 12A5 5 0 1 0 7 2a5 5 0 0 0 0 10zm6 1l-3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                    <input type="text" id="cv-search" placeholder="Filter text…" autocomplete="off" spellcheck="false" aria-label="Filter log text">
+                </div>
+                <input type="text" id="cv-exclude" class="cv-exclude-input" placeholder="Exclude (comma-separated)" title="Comma-separated substrings to hide" aria-label="Exclude patterns">
+                <label class="cv-regex-tick" title="Regular expression">
+                    <input type="checkbox" id="cv-regex"> <span>Regex</span>
+                </label>
+            </div>
+
+            <div class="cv-meta-block">
+                <span id="cv-count" class="cv-muted" aria-live="polite"></span>
+                <select id="cv-db-session" class="cv-select cv-select-session" title="Persisted session from database" aria-label="Persisted session">
+                    <option value="">Live</option>
+                </select>
+            </div>
+
+            <div class="cv-actions">
+                <button type="button" class="cv-icon-btn cv-icon-labeled active" id="cv-autoscroll" title="Follow tail (auto-scroll)" aria-label="Live follow">
+                    <span class="cv-icon-btn__icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M4 7l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                    <span class="cv-icon-btn__lbl">Live</span>
+                </button>
+                <button type="button" class="cv-icon-btn cv-icon-labeled" id="cv-pause" title="Pause capture" aria-label="Pause">
+                    <span class="cv-icon-btn__icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="4" y="3" width="3" height="10" rx="1" fill="currentColor"/><rect x="9" y="3" width="3" height="10" rx="1" fill="currentColor"/></svg></span>
+                    <span class="cv-icon-btn__lbl">Pause</span>
+                </button>
+                <button type="button" class="cv-icon-btn cv-icon-labeled" id="cv-wrap" title="Word wrap" aria-label="Word wrap">
+                    <span class="cv-icon-btn__icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 4h10M3 8h7M3 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                    <span class="cv-icon-btn__lbl">Wrap</span>
+                </button>
+                <button type="button" class="cv-icon-btn cv-icon-labeled" id="cv-group" title="Group consecutive duplicates" aria-label="Group duplicates">
+                    <span class="cv-icon-btn__icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 6h8M4 10h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                    <span class="cv-icon-btn__lbl">Group</span>
+                </button>
+                <span class="cv-actions-sep" aria-hidden="true"></span>
+                <button type="button" class="cv-icon-btn cv-icon-labeled" id="cv-copy" title="Copy filtered lines" aria-label="Copy">
+                    <span class="cv-icon-btn__icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M4 11h-1.5A1.5 1.5 0 0 1 3 9.5v-6A1.5 1.5 0 0 1 4.5 2h6A1.5 1.5 0 0 1 12 3.5V5" stroke="currentColor" stroke-width="1.3"/></svg></span>
+                    <span class="cv-icon-btn__lbl">Copy</span>
+                </button>
+                <button type="button" class="cv-icon-btn cv-icon-labeled" id="cv-save" title="Save as .log" aria-label="Save log">
+                    <span class="cv-icon-btn__icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 14h9a1 1 0 0 0 1-1V6l-3-3H4a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1z" stroke="currentColor" stroke-width="1.3"/><path d="M10 3v3h3M6 9h5M6 12h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></span>
+                    <span class="cv-icon-btn__lbl">Log</span>
+                </button>
+                <button type="button" class="cv-icon-btn cv-icon-labeled" id="cv-save-json" title="Save as JSON" aria-label="Save JSON">
+                    <span class="cv-icon-btn__icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M5 2h6l3 3v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" stroke="currentColor" stroke-width="1.3"/></svg></span>
+                    <span class="cv-icon-btn__lbl">JSON</span>
+                </button>
+                <button type="button" class="cv-icon-btn cv-icon-labeled" id="cv-save-csv" title="Save as CSV" aria-label="Save CSV">
+                    <span class="cv-icon-btn__icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 14h10V5L9 2H3v12z" stroke="currentColor" stroke-width="1.3"/><path d="M9 2v4h4M5 8h6M5 11h6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></span>
+                    <span class="cv-icon-btn__lbl">CSV</span>
+                </button>
+                <button type="button" class="cv-icon-btn cv-icon-labeled danger" id="cv-clear" title="Clear buffer" aria-label="Clear">
+                    <span class="cv-icon-btn__icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+                    <span class="cv-icon-btn__lbl">Clear</span>
+                </button>
+            </div>
         </div>
-        <div class="cv-sep"></div>
+
+        <!-- Row 2: level chips + toggle for more filters -->
+        <div class="cv-row cv-row-levels">
+            <span class="cv-row-label">Level</span>
+            <div class="cv-level-chips" id="cv-level-chips">
+                <span class="cv-chip cv-lvl-error on" data-level="error">Err</span>
+                <span class="cv-chip cv-lvl-warn on" data-level="warn">Warn</span>
+                <span class="cv-chip cv-lvl-info on" data-level="info">Info</span>
+                <span class="cv-chip cv-lvl-debug on" data-level="debug">Dbg</span>
+                <span class="cv-chip on" data-level="trace">Trace</span>
+            </div>
+            <button type="button" class="cv-link-btn" id="cv-toggle-extra-filters" aria-expanded="false" title="Sources and time range">
+                More filters
+            </button>
+        </div>
+
+        <!-- Row 3: collapsible — sources + time (horizontal scroll on small width) -->
+        <div class="cv-row cv-row-extra" id="cv-extra-filters" hidden>
+            <div class="cv-extra-inner">
+                <span class="cv-row-label">Source</span>
+                <div class="cv-source-group" id="cv-source-group">
+                    <label><input type="checkbox" class="cv-src-cb" data-src="mitm" checked> MITM</label>
+                    <label><input type="checkbox" class="cv-src-cb" data-src="system" checked> Sys</label>
+                    <label><input type="checkbox" class="cv-src-cb" data-src="worker" checked> Wrk</label>
+                    <label><input type="checkbox" class="cv-src-cb" data-src="ffi" checked> FFI</label>
+                    <label><input type="checkbox" class="cv-src-cb" data-src="dns" checked> DNS</label>
+                    <label><input type="checkbox" class="cv-src-cb" data-src="main" checked> Main</label>
+                    <label><input type="checkbox" class="cv-src-cb" data-src="app" checked> App</label>
+                </div>
+                <span class="cv-extra-sep"></span>
+                <span class="cv-row-label">Time</span>
+                <div class="cv-time-range">
+                    <input type="datetime-local" id="cv-time-from" class="cv-field-time" step="1" title="From (local)" lang="en">
+                    <span class="cv-time-dash">—</span>
+                    <input type="datetime-local" id="cv-time-to" class="cv-field-time" step="1" title="To (local)" lang="en">
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="cv-main">
+        <div class="cv-log-scroll" id="cv-log-scroll">
+            <div class="cn-empty-state" id="cv-empty">
+                <div class="cn-empty-state-title">No log entries yet</div>
+                <div class="cn-empty-state-sub">Logs from the main process and MITM will appear here. Enable recording to persist logs to the database for this session.</div>
+            </div>
+            <div class="cv-viewport" id="cv-viewport">
+                <div id="cv-log"></div>
+            </div>
+        </div>
+        <aside id="cv-detail" hidden>
+            <div class="cv-detail-head">
+                <span>Line detail</span>
+                <button type="button" class="cn-btn cn-btn-ghost" id="cv-detail-close">Close</button>
+            </div>
+            <div class="cv-detail-body" id="cv-detail-body"></div>
+            <div class="cv-detail-head" id="cv-corr-head" style="display:none">Network (time window)</div>
+            <ul class="cv-corr-list" id="cv-corr-list" style="display:none"></ul>
+        </aside>
     </div>
 
-    <div class="cv-search">
-        <span class="cv-search-icon">⌕</span>
-        <input type="text" id="cv-search" placeholder="Filter…" autocomplete="off" spellcheck="false">
-    </div>
-
-    <span id="cv-count"></span>
-
-    <div class="cv-spacer"></div>
-
-    <button class="cv-btn active" id="cv-autoscroll" title="Auto-scroll">↓ Live</button>
-    <button class="cv-btn" id="cv-pause" title="Pause/Resume capture">⏸ Pause</button>
-    <button class="cv-btn" id="cv-copy" title="Copy visible logs">⎘ Copy</button>
-    <button class="cv-btn" id="cv-save" title="Save logs to file">💾 Save .log</button>
-    <button class="cv-btn danger" id="cv-clear" title="Clear all">✕ Clear</button>
+    <footer id="cv-status-bar">
+        <span id="cv-st-total">Total: 0</span>
+        <span id="cv-st-visible">Visible: 0</span>
+        <span id="cv-st-buffer">Buffer max: 50000</span>
+        <span id="cv-st-rate">Rate: —</span>
+        <span id="cv-st-range">—</span>
+    </footer>
 </div>
 
-<div id="cv-log"></div>
+<div id="cv-ctx-menu" role="menu">
+    <div class="cv-ctx-item" data-act="copy-line">Copy line</div>
+    <div class="cv-ctx-item" data-act="copy-ts">Copy timestamp</div>
+    <div class="cv-ctx-item" data-act="bookmark">Toggle bookmark</div>
+    <div class="cv-ctx-item" data-act="filter-src">Filter by this source</div>
+    <div class="cv-ctx-item" data-act="exclude-line">Exclude this text</div>
+    <div class="cv-ctx-sep"></div>
+    <div class="cv-ctx-item" data-act="correlate">Find nearby requests</div>
+</div>
 
 <script src="console-viewer-renderer.js"></script>
 </body>

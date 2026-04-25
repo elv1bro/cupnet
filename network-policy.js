@@ -34,7 +34,7 @@ const networkPolicy = {
         proxyTestMs: envInt('CUPNET_TIMEOUT_PROXY_TEST_MS', 15000),
     },
     retry: {
-        maxRetries: envInt('CUPNET_RETRY_MAX', 2, 0, 10),
+        maxRetries: envInt('CUPNET_RETRY_MAX', 3, 0, 10),
         baseDelayMs: envInt('CUPNET_RETRY_BASE_MS', 250),
         maxDelayMs: envInt('CUPNET_RETRY_MAX_DELAY_MS', 5000),
         budgetMs: envInt('CUPNET_RETRY_BUDGET_MS', 15000),

@@ -6,13 +6,31 @@
 npm run test:e2e
 ```
 
+Smoke (same as CI):
+
+```bash
+npm run test:e2e:smoke
+```
+
 Выборочно:
 
 ```bash
-npx playwright test tests/e2e/user-agent.e2e.spec.js   # исходящий UA после MITM (Chrome-like)
-npm run test:e2e:windows    # вспомогательные окна
-npm run test:e2e:intercept # block / mock / modifyHeaders
-npm run test:e2e:traffic   # MITM, connect-direct, check-ip-geo, sys log
+npx playwright test tests/e2e/user-agent.e2e.spec.js
+npx playwright test tests/e2e/windows.e2e.spec.js
+npx playwright test tests/e2e/intercept.e2e.spec.js
+npx playwright test tests/e2e/traffic-proxy.e2e.spec.js
+npx playwright test tests/e2e/cookie-manager.e2e.spec.js
+npx playwright test tests/e2e/proxy-profiles.e2e.spec.js
+npx playwright test tests/e2e/har-export.e2e.spec.js
+npx playwright test tests/e2e/credentials.e2e.spec.js
+npx playwright test tests/e2e/settings.e2e.spec.js
+npx playwright test tests/e2e/dns-overrides.e2e.spec.js
+npx playwright test tests/e2e/notes.e2e.spec.js
+npx playwright test tests/e2e/fts-search.e2e.spec.js
+npx playwright test tests/e2e/trace-mode.e2e.spec.js
+npx playwright test tests/e2e/request-editor.e2e.spec.js
+npx playwright test tests/e2e/onboarding.e2e.spec.js
+npx playwright test tests/e2e/p2-features.e2e.spec.js
 ```
 
 Требования: интернет (запросы к `httpbin.org`, `ipinfo.io` для geo/direct-ip), установленные зависимости (`npm ci`).

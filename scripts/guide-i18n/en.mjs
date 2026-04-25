@@ -257,7 +257,7 @@ export default function en(kbdRow) {
     <h2>17) MITM · CA file · Bypass lists</h2>
     <p>The MITM forward proxy terminates TLS with a CupNet-generated CA, logs plaintext where enabled, then re-encrypts upstream via AzureTLS.</p>
     <h3>In-browser trust</h3>
-    <p>Internal BrowserViews automatically trust this CA — you normally <i>do not</i> import anything manually for tabs inside CupNet.</p>
+    <p>Internal tab surfaces (WebContentsView) automatically trust this CA — you normally <i>do not</i> import anything manually for tabs inside CupNet.</p>
     <h3>PEM on disk (external tools)</h3>
     <p>The public certificate is written to your user-data directory:</p>
     <ul>

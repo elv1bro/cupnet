@@ -6,6 +6,38 @@ const db = require('./db');
 const { networkPolicy } = require('./network-policy');
 const { safeCatch, sysLog } = require('./sys-log');
 
+/**
+ * Optional: async (opts, rule, meta) => Promise<{ action?: 'forward'|'block', patch?: object }>
+ * — breakpoint pause (see main-process / breakpoint.html).
+ */
+let _breakpointHandler = null;
+function setBreakpointHandler(fn) {
+    _breakpointHandler = typeof fn === 'function' ? fn : null;
+}
+
+function applyBreakpointPatch(opts, patch) {
+    if (!patch || typeof patch !== 'object') return;
+    if (patch.url != null) opts.url = String(patch.url);
+    if (patch.method != null) opts.method = String(patch.method);
+    if (patch.headers && typeof patch.headers === 'object') {
+        opts.headers = { ...(opts.headers || {}), ...patch.headers };
+    }
+    if (Array.isArray(patch.orderedHeaders)) {
+        opts.orderedHeaders = patch.orderedHeaders.map((pair) => {
+            if (!Array.isArray(pair) || pair.length < 2) return ['', ''];
+            return [String(pair[0]), String(pair[1])];
+        });
+    }
+    if (patch.bodyBase64 != null) {
+        opts.bodyBase64 = String(patch.bodyBase64);
+        opts.body = undefined;
+    } else if (patch.body != null) {
+        opts.body = patch.body;
+        opts.bodyBase64 = undefined;
+    }
+    if (patch.interceptMatchUrl != null) opts.interceptMatchUrl = String(patch.interceptMatchUrl);
+}
+
 const INTERCEPT_SCRIPT_MS = Math.min(
     60_000,
     Math.max(50, Number(process.env.CUPNET_INTERCEPT_SCRIPT_MS || 400) || 400),
@@ -135,6 +167,101 @@ function invalidateRulesCache() {
     _cachedRules = null;
     _cacheTime = 0;
     resyncWebRequestHooks();
+}
+
+function _bumpRuleHit(rule) {
+    if (rule && rule.id != null) {
+        db.incrementInterceptRuleHitAsync(rule.id).catch(() => {});
+    }
+}
+
+function ruleMatchesMethod(rule, method) {
+    const m = String(method || 'GET').toUpperCase();
+    const rm = rule.method != null ? String(rule.method).trim() : '*';
+    if (!rm || rm === '*') return true;
+    return rm.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean).includes(m);
+}
+
+function getHeaderMap(headers) {
+    const h = headers && typeof headers === 'object' ? headers : {};
+    return new Map(Object.entries(h).map(([k, v]) => [String(k).toLowerCase(), String(v)]));
+}
+
+function ruleMatchesExtraConditions(rule, opts) {
+    const p = rule.params || {};
+    const mh = p.matchHeaders;
+    if (Array.isArray(mh) && mh.length) {
+        const hdrMap = getHeaderMap(opts.headers);
+        for (const entry of mh) {
+            if (!entry || typeof entry !== 'object') continue;
+            const key = String(entry.key || '').toLowerCase();
+            if (!key) continue;
+            const op = String(entry.op || 'eq').toLowerCase();
+            const val = entry.value != null ? String(entry.value) : '';
+            const hv = hdrMap.get(key) || '';
+            if (op === 'exists' || op === 'present') {
+                if (!hdrMap.has(key)) return false;
+            } else if (op === 'notexists' || op === 'absent') {
+                if (hdrMap.has(key)) return false;
+            } else if (op === 'contains') {
+                if (!hv.includes(val)) return false;
+            } else if (op === 'regex') {
+                try {
+                    if (!new RegExp(val, 'i').test(hv)) return false;
+                } catch {
+                    return false;
+                }
+            } else {
+                if (hv !== val) return false;
+            }
+        }
+    }
+    const mb = p.matchBody;
+    if (mb && typeof mb === 'object' && mb.value) {
+        let bodyStr = '';
+        if (opts.bodyBase64) {
+            try {
+                bodyStr = Buffer.from(String(opts.bodyBase64), 'base64').toString('utf8');
+            } catch {
+                bodyStr = '';
+            }
+        } else if (opts.body != null) {
+            bodyStr = String(opts.body);
+        }
+        const mode = String(mb.mode || 'contains').toLowerCase();
+        const needle = String(mb.value);
+        if (mode === 'regex') {
+            try {
+                if (!new RegExp(needle).test(bodyStr)) return false;
+            } catch {
+                return false;
+            }
+        } else if (!bodyStr.includes(needle)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function mergeModifyHeadersParams(a, b) {
+    if (!a) return b;
+    if (!b) return a;
+    const reqA = a.requestHeaders || {};
+    const reqB = b.requestHeaders || {};
+    const resA = a.responseHeaders || {};
+    const resB = b.responseHeaders || {};
+    const remReq = [...(a.removeRequestHeaders || []), ...(b.removeRequestHeaders || [])];
+    const remRes = [...(a.removeResponseHeaders || []), ...(b.removeResponseHeaders || [])];
+    return {
+        requestHeaders: { ...reqA, ...reqB },
+        responseHeaders: { ...resA, ...resB },
+        removeRequestHeaders: remReq,
+        removeResponseHeaders: remRes,
+    };
+}
+
+function stopOnMatch(rule) {
+    return rule.stop_on_match !== 0 && rule.stop_on_match !== false;
 }
 
 /**
@@ -314,13 +441,35 @@ function normalizeShortCircuitResponse(sc, dnsOverride) {
     };
 }
 
+/**
+ * MITM wire request is built from `orderedHeaders` only; script rules often mutate `ctx.headers`.
+ * Append any header key present in `headers` but missing from the ordered list (case-insensitive).
+ * @param {Record<string, string>} headers
+ * @param {Array<[string, string]>|undefined} orderedHeaders
+ * @returns {Array<[string, string]>}
+ */
+function mergeHeadersIntoOrdered(headers, orderedHeaders) {
+    const h = headers && typeof headers === 'object' ? headers : {};
+    const list = Array.isArray(orderedHeaders) ? orderedHeaders.map((pair) => [...pair]) : [];
+    const seen = new Set(list.map(([k]) => String(k).toLowerCase()));
+    for (const [k, v] of Object.entries(h)) {
+        if (v == null) continue;
+        const kl = String(k).toLowerCase();
+        if (seen.has(kl)) continue;
+        list.push([k, String(v)]);
+        seen.add(kl);
+    }
+    return list;
+}
+
 function _applyBeforeCtxToMitmOpts(opts, beforeCtx) {
     opts.url = String(beforeCtx.url != null ? beforeCtx.url : opts.url || '');
     opts.method = String(beforeCtx.method != null ? beforeCtx.method : opts.method || 'GET');
     opts.headers = { ...(beforeCtx.headers || {}) };
-    if (Array.isArray(beforeCtx.orderedHeaders)) {
-        opts.orderedHeaders = beforeCtx.orderedHeaders.map((pair) => [...pair]);
-    }
+    const oh = Array.isArray(beforeCtx.orderedHeaders)
+        ? beforeCtx.orderedHeaders.map((pair) => [...pair])
+        : undefined;
+    opts.orderedHeaders = mergeHeadersIntoOrdered(opts.headers, oh);
     if (beforeCtx.bodyBase64 != null && String(beforeCtx.bodyBase64) !== '') {
         opts.bodyBase64 = String(beforeCtx.bodyBase64);
         opts.body = undefined;
@@ -450,20 +599,66 @@ function _patchRequestOptsForMitm(opts, p) {
  * @param {object} opts — копия dnsAdjusted (headers/orderedHeaders можно мутировать).
  *   Если задан `interceptMatchUrl`, правила матчятся по нему (логический URL до DNS‑подмены host→IP).
  * @param {{ rulesOverride?: object[] }|undefined} planOptions
- * @returns {{ done: true, response: object } | { done: false, opts: object, postProcess: object|null }}
+ * @returns {Promise<{ done: true, response: object, responseDelayMs?: number } | { done: false, opts: object, postProcess: object|null, responseDelayMs?: number }>}
  */
-function planMitmIntercept(opts, planOptions) {
+async function planMitmIntercept(opts, planOptions) {
     const wireUrl = String(opts.url || '');
-    /** URL как в браузере (hostname), если MITM подменил host на IP в `wireUrl`. */
     const matchUrl = String(opts.interceptMatchUrl || opts.url || '');
     const rules = (planOptions && Array.isArray(planOptions.rulesOverride))
         ? planOptions.rulesOverride
         : loadRules();
+    let mergedModifyPost = null;
+    let responseDelayMs = 0;
     for (const rule of rules) {
         if (!ruleMatchesUrl(rule.url_pattern, matchUrl)) continue;
         if (bypassInterceptMockBlockForSensitiveUrl(matchUrl)) continue;
+        if (!ruleMatchesMethod(rule, opts.method)) continue;
+        if (!ruleMatchesExtraConditions(rule, opts)) continue;
+
+        let bpResult = null;
+        if (rule.breakpoint_enabled && _breakpointHandler) {
+            try {
+                bpResult = await _breakpointHandler(opts, rule, { matchUrl, wireUrl });
+            } catch (e) {
+                safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.breakpoint.failed', context: { ruleName: rule.name } }, e, 'warn');
+            }
+        }
+        if (bpResult && bpResult.action === 'block') {
+            _bumpRuleHit(rule);
+            _logRuleApplied('mitm', {
+                type: 'block', ruleName: rule.name, url: matchUrl,
+                tabId: null, detail: 'breakpoint',
+            });
+            if (_onRuleMatch) {
+                try {
+                    _onRuleMatch({ type: 'block', ruleName: rule.name, url: matchUrl, tabId: null });
+                } catch (err) {
+                    safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'block', stage: 'mitm' } }, err);
+                }
+            }
+            const dmsBp = Number(rule.delay_ms) || 0;
+            let rdBp = 0;
+            if (dmsBp > 0) rdBp = Math.max(rdBp, Math.min(60000, dmsBp));
+            return {
+                done: true,
+                response: {
+                    statusCode: 403,
+                    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                    bodyBase64: Buffer.from('Blocked by CupNet (breakpoint)', 'utf8').toString('base64'),
+                    dnsOverride: opts.dnsOverride || null,
+                },
+                responseDelayMs: rdBp,
+            };
+        }
+        if (bpResult && bpResult.patch && typeof bpResult.patch === 'object') {
+            applyBreakpointPatch(opts, bpResult.patch);
+        }
+
+        const dms = Number(rule.delay_ms) || 0;
+        if (dms > 0) responseDelayMs = Math.max(responseDelayMs, Math.min(60000, dms));
 
         if (rule.type === 'block') {
+            _bumpRuleHit(rule);
             _logRuleApplied('mitm', {
                 type: 'block', ruleName: rule.name, url: matchUrl,
                 tabId: null, detail: 'short-circuit',
@@ -483,6 +678,7 @@ function planMitmIntercept(opts, planOptions) {
                     bodyBase64: Buffer.from('Blocked by CupNet', 'utf8').toString('base64'),
                     dnsOverride: opts.dnsOverride || null,
                 },
+                responseDelayMs,
             };
         }
 
@@ -491,7 +687,7 @@ function planMitmIntercept(opts, planOptions) {
             const statusCode = rule.params.status || 200;
             let bodyBase64;
             let bodyPreview;
-            let isFile = rule.params.mockSource === 'file';
+            const isFile = rule.params.mockSource === 'file';
 
             if (isFile) {
                 const filePath = rule.params.mockFilePath || '';
@@ -524,6 +720,7 @@ function planMitmIntercept(opts, planOptions) {
                         status: statusCode, mimeType,
                         body: isFile ? `[file: ${rule.params.mockFilePath}]` : String(rule.params.body ?? ''),
                         detail: `${statusCode} ${mimeType}${isFile ? ' [file]' : ''}`, bodyPreview,
+                        ruleId: rule.id,
                     });
                 } catch (err) {
                     safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'mock', stage: 'mitm' } }, err);
@@ -537,6 +734,7 @@ function planMitmIntercept(opts, planOptions) {
                     bodyBase64,
                     dnsOverride: opts.dnsOverride || null,
                 },
+                responseDelayMs,
             };
         }
 
@@ -552,18 +750,23 @@ function planMitmIntercept(opts, planOptions) {
             if (Object.keys(p.responseHeaders || {}).length) dp.push(`RespSet: ${Object.keys(p.responseHeaders).join(', ')}`);
             if ((p.removeResponseHeaders || []).length) dp.push(`RespRemove: ${p.removeResponseHeaders.join(', ')}`);
             const detailStr = dp.join('; ') || 'Headers modified';
+            _bumpRuleHit(rule);
             _logRuleApplied('mitm', {
                 type: 'modifyHeaders', ruleName: rule.name, url: matchUrl,
                 tabId: null, detail: detailStr,
             });
             if (_onRuleMatch) {
                 try {
-                    _onRuleMatch({ type: 'modifyHeaders', ruleName: rule.name, url: matchUrl, tabId: null, detail: detailStr });
+                    _onRuleMatch({ type: 'modifyHeaders', ruleName: rule.name, url: matchUrl, tabId: null, detail: detailStr, ruleId: rule.id });
                 } catch (err) {
                     safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'modifyHeaders', stage: 'mitm' } }, err);
                 }
             }
-            return { done: false, opts, postProcess: hasResp ? p : null };
+            if (hasResp) mergedModifyPost = mergeModifyHeadersParams(mergedModifyPost, p);
+            if (stopOnMatch(rule)) {
+                return { done: false, opts, postProcess: mergedModifyPost, responseDelayMs };
+            }
+            continue;
         }
 
         if (rule.type === 'script') {
@@ -591,13 +794,16 @@ function planMitmIntercept(opts, planOptions) {
                     new Error(errBefore),
                     'warn',
                 );
+                if (rule.id != null) db.setInterceptRuleErrorAsync(rule.id, errBefore).catch(() => {});
                 continue;
             }
+            if (rule.id != null) db.setInterceptRuleErrorAsync(rule.id, null).catch(() => {});
             const sc = normalizeShortCircuitResponse(
                 beforeCtx.shortCircuit,
                 beforeCtx.dnsOverride != null ? beforeCtx.dnsOverride : opts.dnsOverride,
             );
             if (sc) {
+                _bumpRuleHit(rule);
                 _logRuleApplied('mitm', {
                     type: 'script', ruleName: rule.name, url: beforeCtx.url || wireUrl,
                     tabId: null, detail: 'shortCircuit',
@@ -608,12 +814,13 @@ function planMitmIntercept(opts, planOptions) {
                         _onRuleMatch({
                             type: 'script', ruleName: rule.name, url: beforeCtx.url || wireUrl,
                             tabId: null, detail: 'shortCircuit', status: sc.statusCode,
+                            ruleId: rule.id,
                         });
                     } catch (err) {
                         safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'script', stage: 'mitm' } }, err);
                     }
                 }
-                return { done: true, response: sc, postProcess: null };
+                return { done: true, response: sc, postProcess: null, responseDelayMs };
             }
             _applyBeforeCtxToMitmOpts(opts, beforeCtx);
             const requestSnapshot = {
@@ -628,24 +835,27 @@ function planMitmIntercept(opts, planOptions) {
                     _mitmPost: MITM_POST_SCRIPT_AFTER,
                     afterSource: afterSrc,
                     ruleName: rule.name,
+                    ruleId: rule.id,
                     requestSnapshot,
+                    _responseDelayMs: responseDelayMs,
                 }
                 : null;
             const detailStr = hasAfter ? 'script forward + after' : 'script forward';
+            _bumpRuleHit(rule);
             _logRuleApplied('mitm', {
                 type: 'script', ruleName: rule.name, url: opts.url, tabId: null, detail: detailStr,
             });
             if (_onRuleMatch) {
                 try {
-                    _onRuleMatch({ type: 'script', ruleName: rule.name, url: opts.url, tabId: null, detail: detailStr });
+                    _onRuleMatch({ type: 'script', ruleName: rule.name, url: opts.url, tabId: null, detail: detailStr, ruleId: rule.id });
                 } catch (err) {
                     safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'script', stage: 'mitm' } }, err);
                 }
             }
-            return { done: false, opts, postProcess };
+            return { done: false, opts, postProcess, responseDelayMs };
         }
     }
-    return { done: false, opts, postProcess: null };
+    return { done: false, opts, postProcess: mergedModifyPost, responseDelayMs };
 }
 
 function finalizeMitmInterceptResponse(res, ruleParams) {
@@ -696,8 +906,10 @@ async function finalizeMitmInterceptResponseAsync(res, ruleParams) {
                 new Error(err),
                 'warn',
             );
+            if (ruleParams.ruleId != null) db.setInterceptRuleErrorAsync(ruleParams.ruleId, `after: ${err}`).catch(() => {});
             return res;
         }
+        if (ruleParams.ruleId != null) db.setInterceptRuleErrorAsync(ruleParams.ruleId, null).catch(() => {});
         let bodyBase64 = afterCtx.response.bodyBase64;
         if (afterCtx.response.body != null && afterCtx.response.body !== undefined) {
             bodyBase64 = Buffer.from(String(afterCtx.response.body), 'utf8').toString('base64');
@@ -848,4 +1060,5 @@ module.exports = {
     urlMatchesStrictPattern,
     setOnRuleMatch,
     setResolveTabIdFromDetails,
+    setBreakpointHandler,
 };

@@ -9,6 +9,10 @@
 if (!process.versions.electron && process.env.CUPNET_AZURETLS_CHILD_PROCESS == null) {
     process.env.CUPNET_AZURETLS_CHILD_PROCESS = '1';
 }
+/** MITM uses child AzureTLSWorker; without Go binary, allow legacy Node+FFI for this test file only. */
+if (process.env.CUPNET_ALLOW_LEGACY_NODE_WORKER == null) {
+    process.env.CUPNET_ALLOW_LEGACY_NODE_WORKER = '1';
+}
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');

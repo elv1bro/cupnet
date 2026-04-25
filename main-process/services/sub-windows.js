@@ -1,6 +1,9 @@
 'use strict';
 
+const { screen } = require('electron');
 const { getNoteDomainFromUrl } = require('../../note-domain-utils.js');
+const { clearCredentialsVaultSession } = require('../ipc/handlers/credentials-ipc.js');
+const windowStateStore = require('./window-state-store');
 
 /**
  * Secondary BrowserWindows, compare helpers, IVAC scout, DNS/cookie/modal/proxy/rules windows.
@@ -62,17 +65,34 @@ function createSubWindowsApi(d) {
     const createRequestEditorWindow = openRequestEditorNewWindow;
 
     function createLogViewerWindow(sessionId = null) {
-        // Cascade offset: each new window is shifted so it's visibly separate
         const cascadeOffset = d.logViewerWindows.length * 30;
+        const lvDefaults = {
+            width: 1200, height: 860, minWidth: 800, minHeight: 500, isMaximized: false,
+        };
+        let savedLv = windowStateStore.getWindowBounds('logViewer', d.app, lvDefaults);
+        try {
+            const display = screen.getDisplayNearestPoint({
+                x: Number.isFinite(savedLv.x) ? savedLv.x : 0,
+                y: Number.isFinite(savedLv.y) ? savedLv.y : 0,
+            });
+            savedLv = { ...savedLv, ...windowStateStore.sanitizeBounds(savedLv, display) };
+        } catch (_) { /* ignore */ }
+
         const win = new d.BrowserWindow({
-            width: 1200, height: 860, minWidth: 800, minHeight: 500,
+            x: savedLv.x,
+            y: savedLv.y,
+            width: savedLv.width,
+            height: savedLv.height,
+            minWidth: lvDefaults.minWidth,
+            minHeight: lvDefaults.minHeight,
             title: sessionId ? `Network Activity — Session #${sessionId}` : 'Network Activity',
             icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js') }
         });
 
-        // Position with cascade offset relative to main window (or screen center)
-        if (cascadeOffset > 0) {
+        if (savedLv.isMaximized) {
+            try { win.maximize(); } catch (_) { /* ignore */ }
+        } else if (cascadeOffset > 0) {
             const [x, y] = win.getPosition();
             win.setPosition(x + cascadeOffset, y + cascadeOffset);
         }
@@ -93,6 +113,11 @@ function createSubWindowsApi(d) {
             win.webContents.send('update-log-status', payload);
         });
 
+        win.on('close', () => {
+            try {
+                windowStateStore.saveWindowBounds('logViewer', d.app, win);
+            } catch (_) { /* ignore */ }
+        });
         win.on('closed', () => {
             d.logViewerInitSessions.delete(wcId);
             const idx = d.logViewerWindows.indexOf(win);
@@ -328,7 +353,9 @@ function createSubWindowsApi(d) {
         } catch { /* ignore */ }
         if (d.notesWindow && !d.notesWindow.isDestroyed()) {
             d.notesWindow.focus();
-            d.notesWindow.webContents.send('notes-init', { pageUrl, domain });
+            /* Do not send notes-init here — it runs newNote()+loadList() and wipes the open note.
+               First load still gets notes-init in did-finish-load; refocus only updates tab URL context. */
+            d.notesWindow.webContents.send('notes-context-update', { pageUrl, domain });
             return;
         }
         d.notesWindow = new d.BrowserWindow({
@@ -356,6 +383,59 @@ function createSubWindowsApi(d) {
         } catch { /* ignore */ }
         try {
             d.notesWindow.webContents.send('notes-context-update', { pageUrl, domain });
+        } catch { /* ignore */ }
+    }
+
+    function createCredentialsWindow() {
+        let pageUrl = '';
+        let domain = '';
+        try {
+            const active = d.tabManager?.getActiveTab?.();
+            const u = active?.url && /^https?:\/\//i.test(String(active.url)) ? String(active.url) : '';
+            pageUrl = u;
+            domain = u ? getNoteDomainFromUrl(u) : '';
+        } catch { /* ignore */ }
+        if (d.credentialsWindow && !d.credentialsWindow.isDestroyed()) {
+            d.credentialsWindow.focus();
+            try {
+                d.credentialsWindow.webContents.send('credentials-context-update', { pageUrl, domain });
+            } catch { /* ignore */ }
+            return;
+        }
+        d.credentialsWindow = new d.BrowserWindow({
+            width: 960, height: 640, minWidth: 720, minHeight: 480,
+            title: 'Credentials', icon: d.iconPath,
+            webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+        });
+        d.credentialsWindow.loadFile(d.getAssetPath('credentials.html'));
+        d.credentialsWindow.webContents.once('did-finish-load', () => {
+            try {
+                d.credentialsWindow.webContents.send('credentials-init', { pageUrl, domain });
+            } catch { /* ignore */ }
+        });
+        d.credentialsWindow.on('closed', () => {
+            clearCredentialsVaultSession();
+            d.credentialsWindow = null;
+            try {
+                if (d.mainWindow && !d.mainWindow.isDestroyed()) {
+                    d.mainWindow.webContents.send('credentials-toolbar-refresh');
+                }
+            } catch (_) { /* ignore */ }
+        });
+    }
+
+    function broadcastCredentialsWindowContext() {
+        if (!d.credentialsWindow || d.credentialsWindow.isDestroyed()) return;
+        let pageUrl = '';
+        let domain = '';
+        try {
+            const active = d.tabManager?.getActiveTab?.();
+            const u = active?.url && /^https?:\/\//i.test(String(active.url)) ? String(active.url) : '';
+            pageUrl = u;
+            domain = u ? getNoteDomainFromUrl(u) : '';
+        } catch { /* ignore */ }
+        try {
+            d.credentialsWindow.webContents.send('credentials-context-update', { pageUrl, domain });
         } catch { /* ignore */ }
     }
 
@@ -685,12 +765,43 @@ function createSubWindowsApi(d) {
             title: 'Proxy Manager', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false }
         });
+        if (process.env.CUPNET_DEVTOOLS === '1' || String(process.env.CUPNET_DEVTOOLS || '').toLowerCase() === 'true') {
+            d.proxyManagerWindow.webContents.once('did-finish-load', () => {
+                try { d.proxyManagerWindow.webContents.openDevTools({ mode: 'detach' }); } catch (_) { /* ignore */ }
+            });
+        }
         d.proxyManagerWindow.loadFile(d.getAssetPath('proxy-manager.html'));
         d.proxyManagerWindow.webContents.on('did-finish-load', () => {
             d.notifyProxyProfilesList();
             d.notifyProxyStatus();
         });
         d.proxyManagerWindow.on('closed', () => { d.proxyManagerWindow = null; });
+    }
+
+    function createOnboardingWindow() {
+        if (d.onboardingWindow && !d.onboardingWindow.isDestroyed()) {
+            d.onboardingWindow.focus();
+            return;
+        }
+        const parent = d.mainWindow && !d.mainWindow.isDestroyed() ? d.mainWindow : null;
+        d.onboardingWindow = new d.BrowserWindow({
+            width: 540,
+            height: 480,
+            minWidth: 400,
+            minHeight: 360,
+            modal: !!parent,
+            parent: parent || undefined,
+            title: 'Welcome to CupNet',
+            icon: d.iconPath,
+            show: true,
+            webPreferences: {
+                preload: d.path.join(d.cupnetRoot, 'preload.js'),
+                contextIsolation: true,
+                nodeIntegration: false,
+            },
+        });
+        d.onboardingWindow.loadFile(d.getAssetPath('onboarding.html'));
+        d.onboardingWindow.on('closed', () => { d.onboardingWindow = null; });
     }
 
     function createRulesWindow() {
@@ -708,6 +819,43 @@ function createSubWindowsApi(d) {
             }
         });
         d.rulesWindow.on('closed', () => { d.rulesWindow = null; });
+    }
+
+    /**
+     * Breakpoint UI for MITM intercept (see request-interceptor setBreakpointHandler).
+     * @param {{ id: string, snapshot: object, ruleName?: string, matchUrl?: string, wireUrl?: string }} payload
+     */
+    function openBreakpointWindow(payload) {
+        if (!payload || !payload.id) return;
+        const send = () => {
+            try {
+                if (d.breakpointWindow && !d.breakpointWindow.isDestroyed()) {
+                    d.breakpointWindow.webContents.send('breakpoint-set', payload);
+                    d.breakpointWindow.show();
+                    d.breakpointWindow.focus();
+                }
+            } catch (_) { /* ignore */ }
+        };
+        if (d.breakpointWindow && !d.breakpointWindow.isDestroyed()) {
+            if (d.breakpointWindow.webContents.isLoading()) {
+                d.breakpointWindow.webContents.once('did-finish-load', send);
+            } else {
+                send();
+            }
+            return;
+        }
+        d.breakpointWindow = new d.BrowserWindow({
+            width: 680, height: 560, minWidth: 480, minHeight: 420,
+            title: 'Breakpoint', icon: d.iconPath,
+            webPreferences: {
+                preload: d.path.join(d.cupnetRoot, 'breakpoint-preload.js'),
+                contextIsolation: true,
+                nodeIntegration: false,
+            },
+        });
+        d.breakpointWindow.loadFile(d.getAssetPath('breakpoint.html'));
+        d.breakpointWindow.webContents.once('did-finish-load', send);
+        d.breakpointWindow.on('closed', () => { d.breakpointWindow = null; });
     }
 
     return {
@@ -736,6 +884,8 @@ function createSubWindowsApi(d) {
         createPageAnalyzerWindow,
         createNotesWindow,
         broadcastNotesWindowContext,
+        createCredentialsWindow,
+        broadcastCredentialsWindowContext,
         createIvacScoutWindow,
         sendIvacScoutLog,
         getIvacScoutContext,
@@ -752,6 +902,8 @@ function createSubWindowsApi(d) {
         createLoggingModalWindow,
         createProxyManagerWindow,
         createRulesWindow,
+        openBreakpointWindow,
+        createOnboardingWindow,
         reattachInterceptorToAllTabs,
     };
 }

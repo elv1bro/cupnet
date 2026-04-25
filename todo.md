@@ -64,7 +64,7 @@ Generate CA into `app.getPath('userData')` with `0o600` permissions. Delete temp
 | 4.4 | ⬜ | `main.js` | `currentSessionId` race — multiple tabs can create sessions concurrently | Duplicate sessions |
 | 4.5 | ✅ | `main.js` | `_seenRequestIds.clear()` drops ALL IDs — subsequent duplicates logged | Duplicate entries |
 | 4.6 | ✅ | `tab-manager.js` | Misleading JSDoc on `isolateTab` (mentioned cookie copying that doesn't happen) | Developer confusion |
-| 4.7 | ⬜ | `tab-manager.js` | `BrowserView` is deprecated in Electron 30+ — should migrate to `WebContentsView` | Future breakage |
+| 4.7 | ✅ | `tab-manager.js` | Migrated to `WebContentsView` on `BrowserWindow.contentView` (Electron 34+) | — |
 | 4.8 | ⬜ | `main.js` | No graceful shutdown for MITM proxy server — connections may hang | Port stuck on restart |
 
 ---
@@ -91,7 +91,7 @@ Generate CA into `app.getPath('userData')` with `0o600` permissions. Delete temp
 | # | Priority | Description |
 |---|----------|-------------|
 | 6.1 | High | Split `main.js` into: `ipc-handlers.js`, `session-manager.js`, `screenshot-manager.js`, `cdp-logger.js` |
-| 6.2 | High | Migrate from `BrowserView` to `WebContentsView` (Electron 30+) |
+| 6.2 | Done | Migrated from `BrowserView` to `WebContentsView` (Electron 34+) |
 | 6.3 | Medium | Create shared `utils/html-escape.js` for `esc()`, `debounce()`, `truncUrl()` |
 | 6.4 | Medium | Add IPC channel validation — whitelist allowed channels in preload, reject unknown |
 | 6.5 | Low | Add integration tests for proxy connection / tab isolation flows |
@@ -113,5 +113,5 @@ Generate CA into `app.getPath('userData')` with `0o600` permissions. Delete temp
 ## Notes
 
 - Items 2.3 and 2.5 are intentional for MITM proxy functionality but should be scoped narrowly.
-- Item 4.7 (BrowserView deprecation) is the largest refactor — plan 2-3 days.
+- Item 4.7 (WebContentsView migration) is done; rebuild native modules after `npm install`.
 - Item 6.1 (split main.js) can be done incrementally, one module at a time.

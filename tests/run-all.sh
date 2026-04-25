@@ -50,7 +50,6 @@ else
     echo "✗ FAILED: test-dns-mitm.js"
 fi
 run_test tests/test-interceptor.js
-run_test tests/test-rules-engine.js
 run_test tests/test-mitm-integration.js
 
 if [ -f "$ELECTRON_BIN" ]; then

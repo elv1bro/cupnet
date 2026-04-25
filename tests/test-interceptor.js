@@ -79,7 +79,7 @@ test('request-interceptor: ruleMatchesUrl plain URL ignores query (default glob 
     assert.equal(interceptor.ruleMatchesUrl(`${pat}*`, withQ), true);
 });
 
-test('planMitmIntercept: mock uses interceptMatchUrl when wire URL is IP (DNS override)', () => {
+test('planMitmIntercept: mock uses interceptMatchUrl when wire URL is IP (DNS override)', async () => {
     const logical = 'https://atlantis.example.com/v1/applications/capping/serviceLevel';
     const rules = [{
         enabled: true,
@@ -96,7 +96,7 @@ test('planMitmIntercept: mock uses interceptMatchUrl when wire URL is IP (DNS ov
         orderedHeaders: [],
         dnsOverride: { host: 'atlantis.example.com', ip: '203.0.113.50' },
     };
-    const plan = interceptor.planMitmIntercept(withLogical, { rulesOverride: rules });
+    const plan = await interceptor.planMitmIntercept(withLogical, { rulesOverride: rules });
     assert.equal(plan.done, true);
     assert.equal(plan.response.statusCode, 200);
     assert.equal(Buffer.from(plan.response.bodyBase64, 'base64').toString(), '{"mocked":true}');
@@ -107,11 +107,11 @@ test('planMitmIntercept: mock uses interceptMatchUrl when wire URL is IP (DNS ov
         headers: {},
         orderedHeaders: [],
     };
-    const noMatch = interceptor.planMitmIntercept(ipOnly, { rulesOverride: rules });
+    const noMatch = await interceptor.planMitmIntercept(ipOnly, { rulesOverride: rules });
     assert.equal(noMatch.done, false);
 });
 
-test('planMitmIntercept: script before adds header', () => {
+test('planMitmIntercept: script before adds header', async () => {
     const opts = {
         url: 'https://api.example.com/path',
         method: 'GET',
@@ -128,13 +128,13 @@ test('planMitmIntercept: script before adds header', () => {
             afterSource: '',
         },
     }];
-    const plan = interceptor.planMitmIntercept(opts, { rulesOverride: rules });
+    const plan = await interceptor.planMitmIntercept(opts, { rulesOverride: rules });
     assert.equal(plan.done, false);
     assert.equal(plan.postProcess, null);
     assert.equal(plan.opts.headers['X-Script-Test'], '1');
 });
 
-test('planMitmIntercept: script shortCircuit', () => {
+test('planMitmIntercept: script shortCircuit', async () => {
     const opts = {
         url: 'https://api.example.com/z',
         method: 'GET',
@@ -151,7 +151,7 @@ test('planMitmIntercept: script shortCircuit', () => {
             afterSource: '',
         },
     }];
-    const plan = interceptor.planMitmIntercept(opts, { rulesOverride: rules });
+    const plan = await interceptor.planMitmIntercept(opts, { rulesOverride: rules });
     assert.equal(plan.done, true);
     assert.equal(plan.response.statusCode, 222);
     assert.equal(Buffer.from(plan.response.bodyBase64, 'base64').toString(), 'hi');

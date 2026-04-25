@@ -6,28 +6,9 @@
           content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
     <title>Notes</title>
     <link rel="stylesheet" href="./node_modules/quill/dist/quill.snow.css">
+    <link rel="stylesheet" href="shared-dark-theme.css">
     <style>
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-:root {
-    --bg0: #0d1117;
-    --bg1: #161b22;
-    --bg2: #1c2330;
-    --bg3: #21262d;
-    --border: #30363d;
-    --border-light: #3a424d;
-    --text: #e6edf3;
-    --text-dim: #8b949e;
-    --text-muted: #656d76;
-    --accent: #58a6ff;
-    --accent-bg: rgba(88,166,255,0.08);
-    --accent-border: rgba(88,166,255,0.35);
-    --danger: #f85149;
-    --danger-bg: rgba(248,81,73,0.10);
-    --ok: #3fb950;
-    --radius: 8px;
-    --radius-sm: 6px;
-    --transition: 150ms ease;
-}
+*, *::before, *::after { margin: 0; padding: 0; }
 html, body { height: 100%; overflow: hidden; }
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
@@ -74,37 +55,69 @@ body {
 #notes-search-input::placeholder { color: var(--text-muted); }
 #notes-search-input:focus { border-color: var(--accent); outline: none; }
 
-.filter-seg {
+.tag-filter-wrap {
     display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+}
+.tag-filter-lbl {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+}
+#notes-tag-filter {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px;
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
-    overflow: hidden;
     background: var(--bg0);
-}
-.filter-seg button {
-    flex: 1;
-    padding: 5px 8px;
-    border: none;
-    background: transparent;
-    color: var(--text-dim);
+    color: var(--text);
     font-size: 11px;
     font-family: inherit;
     cursor: pointer;
-    transition: background var(--transition), color var(--transition);
 }
-.filter-seg button:hover { color: var(--text); background: var(--bg3); }
-.filter-seg button.active {
-    background: var(--accent-bg);
-    color: var(--accent);
-    font-weight: 600;
+#notes-tag-filter:focus { border-color: var(--accent); outline: none; }
+
+/* Sidebar list: two stacked sections (This site, then All sites) */
+.notes-section {
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(48,54,61,0.65);
 }
-#notes-list-title {
-    padding: 6px 12px 4px;
+#notes-list .notes-section:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+.notes-section-head {
     font-size: 10px;
-    font-weight: 600;
-    color: var(--text-muted);
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.07em;
+    color: var(--text-muted);
+    padding: 6px 12px 2px;
+}
+.notes-section-context {
+    font-size: 10px;
+    color: var(--accent);
+    font-family: ui-monospace, Menlo, monospace;
+    padding: 0 12px 6px;
+    word-break: break-all;
+    line-height: 1.35;
+}
+.notes-section-sub {
+    font-size: 10px;
+    color: var(--text-muted);
+    padding: 0 12px 6px;
+    line-height: 1.35;
+}
+.notes-section-empty {
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 2px 12px 10px;
+    line-height: 1.45;
 }
 #notes-list { flex: 1; overflow-y: auto; min-height: 0; }
 #notes-list::-webkit-scrollbar { width: 6px; }
@@ -155,6 +168,16 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+.ni-pin { margin-right: 4px; font-size: 10px; opacity: 0.9; }
+.ni-tags { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 2px; }
+.ni-tag {
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(88,166,255,0.12);
+    color: var(--accent);
+    font-size: 9px;
+    font-weight: 500;
+}
 #notes-list-empty {
     padding: 16px 12px;
     font-size: 12px;
@@ -177,7 +200,8 @@ body {
 #title-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 6px 8px;
     padding: 8px 12px 6px 12px;
     flex-shrink: 0;
     border-bottom: 1px solid var(--border);
@@ -197,12 +221,81 @@ body {
     flex-shrink: 0;
     transition: background var(--transition), border-color var(--transition);
 }
+/* Icon + short label (title bar actions) */
+.icon-btn.title-action {
+    width: auto;
+    min-width: 0;
+    min-height: 26px;
+    height: auto;
+    padding: 3px 7px;
+    gap: 5px;
+    flex-direction: row;
+}
+.icon-btn.title-action .btn-lbl {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    line-height: 1;
+    white-space: nowrap;
+    color: var(--text-dim);
+}
+.icon-btn.title-action:hover .btn-lbl { color: var(--text); }
+.icon-btn.title-action svg { width: 13px; height: 13px; flex-shrink: 0; }
+.icon-btn.title-action.primary .btn-lbl { color: var(--accent); }
+.icon-btn.title-action.primary:hover .btn-lbl { color: var(--accent); }
+.icon-btn.title-action[aria-pressed="true"] .btn-lbl { color: var(--accent); }
+.icon-btn.danger.title-action:hover .btn-lbl { color: var(--danger); }
 .icon-btn:hover { border-color: var(--border-light); background: var(--bg3); }
 .icon-btn svg { width: 16px; height: 16px; }
 .icon-btn.primary { background: var(--accent-bg); border-color: var(--accent-border); color: var(--accent); }
 .icon-btn.primary:hover { background: rgba(88,166,255,0.18); }
 .icon-btn.danger:hover { background: var(--danger-bg); border-color: rgba(248,81,73,0.35); color: var(--danger); }
 .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.icon-btn[aria-pressed="true"] {
+    background: rgba(88,166,255,0.15);
+    border-color: var(--accent-border);
+    color: var(--accent);
+}
+
+.export-dd { position: relative; flex-shrink: 0; }
+.export-dd summary {
+    list-style: none;
+    cursor: pointer;
+}
+.export-dd summary::-webkit-details-marker { display: none; }
+.export-dd summary.icon-btn.title-action {
+    width: auto;
+    display: inline-flex;
+    align-items: center;
+    list-style: none;
+}
+.export-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    min-width: 140px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 4px 0;
+    z-index: 50;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+    display: none;
+}
+.export-dd[open] .export-menu { display: block; }
+.export-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 6px 12px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+}
+.export-menu button:hover { background: var(--bg3); }
 
 #notes-title-input {
     flex: 1;
@@ -310,12 +403,22 @@ body {
     padding: 8px 16px 8px;
     flex-shrink: 0;
 }
+#editor-header .icon-btn.title-action {
+    min-height: 26px;
+}
 .site-chip-wrap {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex: 1;
     min-width: 120px;
+}
+.site-chip-wrap label,
+#notes-tags-row label {
+    font-size: 11px;
+    color: var(--text-dim);
+    flex-shrink: 0;
+    min-width: 70px;
 }
 #notes-match-input {
     flex: 1;
@@ -337,6 +440,66 @@ body {
     border-color: var(--accent-border);
     color: var(--accent);
 }
+
+#notes-tags-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 16px 8px;
+    flex-shrink: 0;
+}
+#notes-tags-input {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg2);
+    color: var(--text);
+    font-size: 12px;
+    font-family: inherit;
+}
+#notes-tags-input:focus { border-color: var(--accent); outline: none; }
+#notes-tags-input:disabled { opacity: 0.6; }
+
+.word-count {
+    flex-shrink: 0;
+    padding: 4px 16px 0;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+#note-find-bar {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg1);
+    flex-shrink: 0;
+}
+#note-find-bar.visible { display: flex; }
+#note-find-input {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg0);
+    color: var(--text);
+    font-size: 12px;
+}
+#note-find-count { font-size: 11px; color: var(--text-muted); min-width: 52px; }
+.find-nav-btn {
+    padding: 4px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg2);
+    color: var(--text);
+    font-size: 11px;
+    cursor: pointer;
+}
+.find-nav-btn:hover { border-color: var(--accent); }
 
 /* Editor stack + full-area lock overlay */
 #editor-stack {
@@ -418,13 +581,89 @@ body {
 .unlock-form .pw-inline-wrap { max-width: none; }
 #btn-unlock { align-self: center; min-width: 120px; }
 
-/* Quill */
+/* Quill — toolbar (groups separated; tooltips set in notes-renderer.js) */
 .ql-toolbar.ql-snow {
-    background: var(--bg1);
+    background: linear-gradient(180deg, var(--bg2) 0%, var(--bg1) 100%);
     border: none;
     border-bottom: 1px solid var(--border);
-    padding: 5px 8px;
+    padding: 8px 10px 10px;
     flex-shrink: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 0;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.12);
+}
+.ql-toolbar.ql-snow .ql-formats {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 1px;
+    padding: 2px 8px 2px 0;
+    margin: 0 4px 0 0;
+    border-right: 1px solid var(--border);
+}
+
+/* Buttons: icon on top, tiny caption below — all inside the button so clicks work everywhere */
+.ql-toolbar.ql-snow button {
+    display: inline-flex !important;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    width: auto !important;
+    min-width: 26px;
+    height: auto !important;
+    min-height: 30px;
+    padding: 3px 4px 1px;
+    border-radius: 4px;
+}
+.ql-toolbar.ql-snow button svg {
+    float: none !important;
+    width: 16px !important;
+    height: 16px !important;
+    flex-shrink: 0;
+}
+.ql-toolbar.ql-snow .ql-btn-cap {
+    font-size: 8px;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    color: var(--text-muted);
+    text-align: center;
+    max-width: 48px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    user-select: none;
+    pointer-events: none;
+}
+.ql-toolbar.ql-snow button:hover .ql-btn-cap { color: var(--text-dim); }
+.ql-toolbar.ql-snow button.ql-active .ql-btn-cap { color: var(--accent); opacity: 0.7; }
+
+/* Caption under pickers (color / background) */
+.ql-toolbar.ql-snow .ql-picker {
+    position: relative;
+}
+.ql-toolbar.ql-snow .ql-picker-cap {
+    display: block;
+    margin-top: 1px;
+    pointer-events: none;
+}
+
+/* cnRequest icon glyph */
+.ql-toolbar.ql-snow .ql-btn-icon-text {
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--text-dim);
+}
+.ql-toolbar.ql-snow button:hover .ql-btn-icon-text { color: var(--text); }
+.ql-toolbar.ql-snow button.ql-active .ql-btn-icon-text { color: var(--accent); }
+.ql-toolbar.ql-snow .ql-formats:last-child {
+    border-right: none;
+    margin-right: 0;
+    padding-right: 0;
+}
+.ql-toolbar.ql-snow button:hover {
+    background: rgba(88, 166, 255, 0.08);
 }
 .ql-toolbar.ql-snow .ql-stroke { stroke: var(--text-dim); }
 .ql-toolbar.ql-snow .ql-fill { fill: var(--text-dim); }
@@ -498,6 +737,269 @@ body {
     color: var(--text);
     overflow-x: auto;
 }
+/*
+ * Checklist: Quill lays out bullets on li > .ql-ui::before using em-based width/margins only.
+ * Never override those with px / flex / borders — text overlaps the box and rows “wander”.
+ * Do not set li::before (would duplicate the glyph).
+ */
+.ql-editor li[data-list="checked"]::before,
+.ql-editor li[data-list="unchecked"]::before {
+    content: none !important;
+}
+
+/* Checklist glyphs: ~2× visual size (Quill uses li > .ql-ui::before); keep em-relative, no px on li layout */
+.ql-editor li[data-list="unchecked"] > .ql-ui::before,
+.ql-editor li[data-list="checked"] > .ql-ui::before {
+    font-family: 'Segoe UI Symbol', 'Noto Sans Symbols2', 'Apple Symbols', system-ui, sans-serif !important;
+    font-size: 1.85em;
+    line-height: 1;
+    vertical-align: -0.15em;
+}
+.ql-editor li[data-list="unchecked"] > .ql-ui::before {
+    color: var(--text-dim);
+}
+.ql-editor li[data-list="checked"] > .ql-ui::before {
+    color: var(--accent);
+}
+/* cnRequest button has no Quill SVG — icon set via JS (notes-renderer.js) */
+.ql-toolbar.ql-snow button.ql-cnRequest svg { display: none; }
+/* Clear formatting — Quill’s “Tx” / eraser icon; title set in JS */
+.ql-toolbar.ql-snow button.ql-clean {
+    border-radius: 4px;
+}
+
+/* ── Request ID prompt overlay ─────────────────────────────────────────── */
+.cn-prompt-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(3px);
+}
+.cn-prompt-box {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px 16px;
+    width: 360px;
+    max-width: 90%;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+}
+.cn-prompt-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+.cn-prompt-desc {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin: 0 0 12px;
+    line-height: 1.5;
+}
+.cn-prompt-input {
+    width: 100%;
+    padding: 7px 10px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg0);
+    color: var(--text);
+    font-size: 14px;
+    font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    outline: none;
+    box-sizing: border-box;
+}
+.cn-prompt-input:focus { border-color: var(--accent); }
+.cn-prompt-err {
+    font-size: 11px;
+    color: #f87171;
+    min-height: 16px;
+    margin: 6px 0 2px;
+}
+.cn-prompt-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+}
+.cn-prompt-btn {
+    padding: 5px 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg3);
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+}
+.cn-prompt-btn:hover { border-color: var(--text-dim); }
+.cn-prompt-btn--primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
+}
+.cn-prompt-btn--primary:hover { opacity: 0.9; }
+
+/* generic block card */
+.ql-editor .ql-cn-block {
+    margin: 0.6em 0;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg1);
+    user-select: none;
+    overflow: hidden;
+}
+.ql-editor .cn-block-face {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    line-height: 1.35;
+}
+.ql-editor .cn-block-icon {
+    color: var(--accent);
+    flex-shrink: 0;
+    font-size: 12px;
+}
+.ql-editor .cn-block-title {
+    font-weight: 600;
+    color: var(--text);
+}
+.ql-editor .cn-block-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+
+/* ── request card face ─────────────────────────────────────────────────── */
+.ql-editor .cn-block-face--req {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    padding: 10px 14px 6px;
+}
+.cn-req-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.4;
+}
+.cn-req-method {
+    font-weight: 700;
+    flex-shrink: 0;
+    text-transform: uppercase;
+}
+.cn-req-status {
+    flex-shrink: 0;
+    font-weight: 700;
+    border-radius: 3px;
+    padding: 0 5px;
+    font-size: 11px;
+    line-height: 1.55;
+}
+.cn-req-status--ok   { background: rgba(73,204,144,0.18); color: #49cc90; }
+.cn-req-status--redir { background: rgba(252,161,48,0.18); color: #fca130; }
+.cn-req-status--err  { background: rgba(249,62,62,0.18); color: #f93e3e; }
+.cn-req-url {
+    color: var(--text);
+    word-break: break-all;
+    flex: 1;
+}
+.cn-req-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 2px 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    padding-bottom: 2px;
+}
+.cn-req-sep {
+    color: var(--text-muted);
+    opacity: 0.5;
+    margin: 0 2px;
+}
+
+/* ── collapsible sections ──────────────────────────────────────────────── */
+.cn-block-collapse {
+    border-top: 1px solid var(--border);
+}
+.cn-block-collapse-title {
+    display: block;
+    padding: 6px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-dim);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+}
+.cn-block-collapse-title::-webkit-details-marker { display: none; }
+.cn-block-collapse-title::before {
+    content: '\25B6';
+    display: inline-block;
+    width: 12px;
+    font-size: 9px;
+    transition: transform 0.15s;
+    color: var(--text-muted);
+}
+.cn-block-collapse[open] > .cn-block-collapse-title::before {
+    transform: rotate(90deg);
+}
+.cn-block-collapse-body {
+    padding: 0 14px 8px;
+    font-size: 11px;
+    color: var(--text);
+    overflow-x: auto;
+}
+.cn-block-collapse-body pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.5;
+}
+
+/* ── action buttons (always at bottom) ─────────────────────────────────── */
+.cn-block-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px 10px;
+    border-top: 1px solid var(--border);
+}
+.cn-block-act-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 14px;
+    border: none;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.5;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: filter 0.12s;
+    pointer-events: auto;
+    position: relative;
+    z-index: 2;
+}
+.cn-block-act-btn:hover { filter: brightness(1.15); }
+.cn-block-act-btn:active { filter: brightness(0.92); }
+.cn-block-act-btn--blue  { background: #1f6feb; color: #fff; }
+.cn-block-act-btn--green { background: #238636; color: #fff; }
+.cn-block-act-btn--red   { background: #da3633; color: #fff; }
+.cn-block-act-btn--gray  { background: var(--bg3); color: var(--text); }
+
 .ql-editor code {
     background: var(--bg3);
     border-radius: 3px;
@@ -506,7 +1008,9 @@ body {
     font-size: 0.88em;
     color: #f0883e;
 }
-.ql-editor ul, .ql-editor ol { padding-left: 1.5em; margin: 0.3em 0; }
+/* Lists: vertical rhythm only — ol padding-left comes from Quill core (checklist layout is em-based) */
+.ql-editor ul, .ql-editor ol { margin: 0.3em 0; }
+.ql-editor ul { padding-left: 1.5em; }
 .ql-editor li { margin: 0.15em 0; }
 .ql-editor hr { border: none; border-top: 1px solid var(--border); margin: 1em 0; }
 .ql-editor img { max-width: 100%; border-radius: var(--radius-sm); }
@@ -589,12 +1093,13 @@ input[type="checkbox"]#chk-encrypt { position: absolute; width: 0; height: 0; op
                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="7" cy="7" r="4"/><path d="M10.2 10.2L14 14"/></svg>
                     <input type="search" id="notes-search-input" placeholder="Search notes..." autocomplete="off">
                 </div>
-                <div class="filter-seg" role="group" aria-label="List filter">
-                    <button type="button" id="filter-current" class="active" data-value="current">This site</button>
-                    <button type="button" id="filter-all" data-value="all">All</button>
-                </div>
+                <label class="tag-filter-wrap" for="notes-tag-filter">
+                    <span class="tag-filter-lbl">Tag</span>
+                    <select id="notes-tag-filter" title="Filter by tag">
+                        <option value="">All tags</option>
+                    </select>
+                </label>
             </div>
-            <div id="notes-list-title">Notes</div>
             <div id="notes-list"></div>
         </aside>
 
@@ -602,16 +1107,38 @@ input[type="checkbox"]#chk-encrypt { position: absolute; width: 0; height: 0; op
             <input type="checkbox" id="chk-encrypt" tabindex="-1" aria-hidden="true">
 
             <div id="title-row">
-                <button type="button" id="btn-new" class="icon-btn primary" title="New note" aria-label="New note">
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+                <button type="button" id="btn-new" class="icon-btn primary title-action" title="Create a new note" aria-label="New note">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
+                    <span class="btn-lbl">New</span>
                 </button>
                 <input type="text" id="notes-title-input" placeholder="Untitled" autocomplete="off" maxlength="500">
-                <span id="save-status" aria-live="polite"></span>
-                <button type="button" id="btn-save" class="icon-btn" title="Save" aria-label="Save">
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 14h10V5.2L10.8 2H3v12z"/><path d="M10 2v4h3"/><rect x="5" y="7" width="4" height="5" rx="0.5"/></svg>
+                <button type="button" id="btn-pin" class="icon-btn title-action" title="Pin to top of the list" aria-label="Pin note" aria-pressed="false" disabled>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 2l1.2 3.5h3.8l-3 2.3 1.1 3.7L8 10.3l-3.1 2.2 1.1-3.7-3-2.3h3.8L8 2z"/></svg>
+                    <span class="btn-lbl">Pin</span>
                 </button>
-                <button type="button" id="btn-del" class="icon-btn danger" title="Delete note" aria-label="Delete note" disabled>
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h10M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M5 4.5l.5 8.5h5l.5-8.5"/></svg>
+                <button type="button" id="btn-dup" class="icon-btn title-action" title="Duplicate this note" aria-label="Duplicate note" disabled>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5" y="5" width="8" height="8" rx="1"/><path d="M3 11V3h8"/></svg>
+                    <span class="btn-lbl">Copy</span>
+                </button>
+                <details class="export-dd" id="export-dd">
+                    <summary class="icon-btn title-action" title="Save note to a file (Markdown, text, or HTML)" aria-label="Export note">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M8 2v9M5 5l3-3 3 3M3 14h10"/></svg>
+                        <span class="btn-lbl">Export</span>
+                    </summary>
+                    <div class="export-menu" id="export-menu">
+                        <button type="button" data-fmt="md">Markdown (.md)</button>
+                        <button type="button" data-fmt="txt">Plain text (.txt)</button>
+                        <button type="button" data-fmt="html">HTML (.html)</button>
+                    </div>
+                </details>
+                <span id="save-status" aria-live="polite"></span>
+                <button type="button" id="btn-save" class="icon-btn title-action" title="Save note (Ctrl+S)" aria-label="Save">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 14h10V5.2L10.8 2H3v12z"/><path d="M10 2v4h3"/><rect x="5" y="7" width="4" height="5" rx="0.5"/></svg>
+                    <span class="btn-lbl">Save</span>
+                </button>
+                <button type="button" id="btn-del" class="icon-btn danger title-action" title="Delete this note" aria-label="Delete note" disabled>
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5h10M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M5 4.5l.5 8.5h5l.5-8.5"/></svg>
+                    <span class="btn-lbl">Delete</span>
                 </button>
             </div>
 
@@ -629,12 +1156,19 @@ input[type="checkbox"]#chk-encrypt { position: absolute; width: 0; height: 0; op
 
             <div id="editor-header">
                 <div class="site-chip-wrap">
+                    <label for="notes-match-input">Site pattern</label>
                     <input type="text" id="notes-match-input" spellcheck="false" autocomplete="off"
                            placeholder="Site or URL pattern" title="Site / URL pattern">
                 </div>
-                <button type="button" id="btn-lock-toggle" class="icon-btn" title="Encrypt note" aria-label="Encrypt note" aria-pressed="false">
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="9" height="7.5" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>
+                <button type="button" id="btn-lock-toggle" class="icon-btn title-action" title="Encrypt note body with a password" aria-label="Encrypt note" aria-pressed="false">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="7" width="9" height="7.5" rx="1"/><path d="M5 7V5a3 3 0 0 1 6 0v2"/></svg>
+                    <span class="btn-lbl">Encrypt</span>
                 </button>
+            </div>
+
+            <div id="notes-tags-row">
+                <label for="notes-tags-input">Tags</label>
+                <input type="text" id="notes-tags-input" placeholder="Comma-separated (e.g. work, urgent)" spellcheck="false" autocomplete="off">
             </div>
 
             <div id="editor-stack">
@@ -656,9 +1190,19 @@ input[type="checkbox"]#chk-encrypt { position: absolute; width: 0; height: 0; op
                 </div>
                 <div id="editor-empty-hint">Select a note from the list or create a new one.</div>
                 <div id="editor-container">
+                    <div id="note-find-bar" aria-hidden="true">
+                        <span style="font-size:11px;color:var(--text-dim);flex-shrink:0">Find</span>
+                        <input type="search" id="note-find-input" placeholder="Search in note…" autocomplete="off">
+                        <span id="note-find-count"></span>
+                        <button type="button" class="find-nav-btn" id="note-find-prev" title="Previous">Prev</button>
+                        <button type="button" class="find-nav-btn" id="note-find-next" title="Next">Next</button>
+                        <button type="button" class="find-nav-btn" id="note-find-close" title="Close">Esc</button>
+                    </div>
                     <div id="notes-editor"></div>
                 </div>
             </div>
+
+            <div id="notes-word-count" class="word-count" aria-live="polite"></div>
 
             <div id="notes-meta-footer">
                 <button type="button" id="btn-meta-toggle" class="meta-toggle" aria-expanded="false">
@@ -672,7 +1216,23 @@ input[type="checkbox"]#chk-encrypt { position: absolute; width: 0; height: 0; op
         </div>
     </div>
 
+    <!-- Request ID prompt (replaces window.prompt which is unreliable in Electron) -->
+    <div id="cn-req-prompt" class="cn-prompt-overlay" style="display:none">
+        <div class="cn-prompt-box">
+            <div class="cn-prompt-title">Insert Request</div>
+            <p class="cn-prompt-desc">Enter the numeric <b>ID</b> from the Network Activity log (see the ID column or Copy ID button in the detail panel).</p>
+            <input type="text" id="cn-req-prompt-input" class="cn-prompt-input" placeholder="Request ID" autocomplete="off" inputmode="numeric">
+            <div id="cn-req-prompt-err" class="cn-prompt-err"></div>
+            <div class="cn-prompt-actions">
+                <button type="button" id="cn-req-prompt-cancel" class="cn-prompt-btn">Cancel</button>
+                <button type="button" id="cn-req-prompt-ok" class="cn-prompt-btn cn-prompt-btn--primary">Insert</button>
+            </div>
+        </div>
+    </div>
+
     <script src="./node_modules/quill/dist/quill.js"></script>
+    <script src="notes-quill-custom-blocks.js"></script>
+    <script src="toast-notifications.js"></script>
     <script src="notes-renderer.js"></script>
 </body>
 </html>

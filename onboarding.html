@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+    <title>Welcome to CupNet</title>
+    <link rel="stylesheet" href="shared-dark-theme.css">
+    <style>
+        html, body { height: 100%; margin: 0; }
+        body {
+            font-family: var(--font-sans);
+            font-size: 13px;
+            background: var(--bg0);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+        }
+        .onb-head {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg1);
+        }
+        .onb-head h1 { margin: 0; font-size: 16px; font-weight: 600; }
+        .onb-steps { font-size: 11px; color: var(--text-dim); margin-top: 6px; }
+        .onb-body { flex: 1; padding: 20px 22px; overflow: auto; min-height: 0; }
+        .onb-panel { display: none; }
+        .onb-panel.active { display: block; }
+        .onb-panel p { margin: 0 0 12px; line-height: 1.5; color: var(--text-dim); }
+        .onb-panel strong { color: var(--text); }
+        .onb-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            padding: 14px 20px;
+            border-top: 1px solid var(--border);
+            background: var(--bg1);
+        }
+        .onb-btn {
+            padding: 8px 16px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: var(--bg2);
+            color: var(--text);
+            font-size: 13px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .onb-btn-primary {
+            border-color: var(--accent);
+            background: var(--accent-bg);
+            color: var(--accent);
+        }
+        .onb-list { margin: 0; padding-left: 18px; color: var(--text-dim); line-height: 1.55; }
+        .onb-list li { margin-bottom: 8px; }
+        code { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--bg2); border: 1px solid var(--border); }
+    </style>
+</head>
+<body>
+    <header class="onb-head">
+        <h1 id="onb-title">Welcome</h1>
+        <div class="onb-steps" id="onb-step-label">Step 1 of 4</div>
+    </header>
+    <div class="onb-body">
+        <section class="onb-panel active" data-step="0" id="onb-p0">
+            <p><strong>CupNet</strong> is a developer browser with a built-in MITM proxy, TLS fingerprinting, traffic logging, and rules.</p>
+            <ul class="onb-list">
+                <li>Record HTTP(S) to SQLite and export HAR</li>
+                <li>Proxy profiles, DNS overrides, and per-tab isolation</li>
+                <li>Credentials vault and notes for your workflow</li>
+            </ul>
+        </section>
+        <section class="onb-panel" data-step="1" id="onb-p1">
+            <p>CupNet uses a <strong>local root CA</strong> to decrypt HTTPS for logging. The app trusts it automatically.</p>
+            <p>On <strong>other devices</strong> (phone, another PC) that route through this proxy, install the PEM file from Settings → Certificate or use <strong>Download certificate</strong> there.</p>
+            <p>Treat this CA like a password — anyone who trusts it can intercept TLS for you.</p>
+        </section>
+        <section class="onb-panel" data-step="2" id="onb-p2">
+            <p>The default <strong>traffic mode</strong> routes browsing through the local MITM proxy. You can switch <strong>Direct</strong> or connect a proxy profile in <strong>Proxy Manager</strong>.</p>
+            <p>Use <strong>MITM bypass domains</strong> in Settings when a site breaks with interception.</p>
+        </section>
+        <section class="onb-panel" data-step="3" id="onb-p3">
+            <p>Open <strong>Network Activity</strong> from the toolbar to record and inspect requests.</p>
+            <p><strong>Vault</strong> stores logins; the address bar shows suggestions from your log; type <strong>&gt;</strong> (or Ctrl+K / Cmd+K) for commands.</p>
+            <p>Press <strong>Settings</strong> in the toolbar for filters, bypass, and integrations.</p>
+        </section>
+    </div>
+    <footer class="onb-actions">
+        <button type="button" class="onb-btn" id="onb-back">Back</button>
+        <button type="button" class="onb-btn onb-btn-primary" id="onb-next">Next</button>
+    </footer>
+    <script src="toast-notifications.js"></script>
+    <script src="onboarding-renderer.js"></script>
+</body>
+</html>

@@ -5,6 +5,7 @@
     <meta http-equiv="Content-Security-Policy"
           content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
     <title>Network Activity</title>
+    <link rel="stylesheet" href="shared-dark-theme.css">
     <style>
 /* ── Reset & base ────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -494,7 +495,7 @@ select:focus { border-color: var(--accent); }
 .lv-th:last-child { border-right: none; flex: 1; }
 
 /* Column widths */
-.col-idx      { width: 30px;  flex-shrink: 0; }
+.col-idx      { width: 46px;  flex-shrink: 0; }
 .col-method   { width: 48px;  flex-shrink: 0; }
 .col-status   { width: 44px;  flex-shrink: 0; }
 .col-mark     { width: 34px;  flex-shrink: 0; justify-content: center; }
@@ -589,6 +590,65 @@ select:focus { border-color: var(--accent); }
 .lv-row.lv-row-ws { background: rgba(139, 92, 246, 0.06); }
 .lv-row.lv-row-ws:hover { background: rgba(139, 92, 246, 0.11) !important; }
 .lv-row.lv-row-ws.selected { background: rgba(139, 92, 246, 0.2) !important; }
+
+.lv-row.lv-row-browser-event { background: rgba(34, 211, 238, 0.04); }
+.lv-row.lv-row-browser-event:hover { background: rgba(34, 211, 238, 0.09) !important; }
+.lv-row.lv-row-browser-err { background: rgba(239, 68, 68, 0.09); }
+.lv-row.lv-row-browser-warn { background: rgba(245, 158, 11, 0.07); }
+.type-chip.type-browser-act { color: #67e8f9; }
+
+/* Activity — storage (violet, both local + session) */
+.lv-row.lv-row-browser-storage {
+    background: rgba(139, 92, 246, 0.09);
+    border-left: 2px solid rgba(167, 139, 250, 0.55);
+}
+.lv-row.lv-row-browser-storage:hover { background: rgba(139, 92, 246, 0.14) !important; }
+.lv-row.lv-row-browser-storage.selected { background: rgba(139, 92, 246, 0.22) !important; }
+.method-badge.be-method-stg {
+    color: #ede9fe;
+    background: rgba(139, 92, 246, 0.35);
+}
+.lv-status.be-status-loc { color: #ddd6fe; font-weight: 600; }
+.lv-status.be-status-ses { color: #f5d0fe; font-weight: 600; }
+
+/* Activity — console (pastel; default log = light blue) */
+.lv-row.lv-row-browser-console.lv-row-be-lvl-log {
+    background: rgba(56, 189, 248, 0.13);
+    border-left: 2px solid rgba(14, 165, 233, 0.5);
+}
+.lv-row.lv-row-browser-console.lv-row-be-lvl-log:hover { background: rgba(56, 189, 248, 0.19) !important; }
+.lv-row.lv-row-browser-console.lv-row-be-lvl-log.selected { background: rgba(56, 189, 248, 0.26) !important; }
+.lv-row.lv-row-browser-console.lv-row-be-lvl-info {
+    background: rgba(129, 140, 248, 0.11);
+    border-left: 2px solid rgba(99, 102, 241, 0.45);
+}
+.lv-row.lv-row-browser-console.lv-row-be-lvl-info:hover { background: rgba(129, 140, 248, 0.16) !important; }
+.lv-row.lv-row-browser-console.lv-row-be-lvl-warn {
+    background: rgba(251, 191, 36, 0.1);
+    border-left: 2px solid rgba(245, 158, 11, 0.45);
+}
+.lv-row.lv-row-browser-console.lv-row-be-lvl-warn:hover { background: rgba(251, 191, 36, 0.15) !important; }
+.lv-row.lv-row-browser-console.lv-row-be-lvl-error {
+    background: rgba(248, 113, 113, 0.12);
+    border-left: 2px solid rgba(239, 68, 68, 0.5);
+}
+.lv-row.lv-row-browser-console.lv-row-be-lvl-debug {
+    background: rgba(52, 211, 153, 0.09);
+    border-left: 2px solid rgba(16, 185, 129, 0.38);
+}
+.lv-row.lv-row-browser-console.lv-row-be-lvl-trace {
+    background: rgba(148, 163, 184, 0.1);
+    border-left: 2px solid rgba(100, 116, 139, 0.42);
+}
+.method-badge.be-method-log { color: #bae6fd; background: rgba(56, 189, 248, 0.22); }
+.method-badge.be-method-exc { color: #fecaca; background: rgba(248, 113, 113, 0.26); }
+.method-badge.be-method-csp { color: #fde68a; background: rgba(245, 158, 11, 0.22); }
+.lv-status.be-status-inf { color: #c7d2fe; font-weight: 600; }
+.lv-status.be-status-wrn { color: #fde68a; font-weight: 600; }
+.lv-status.be-status-dbg { color: #6ee7b7; font-weight: 600; }
+.lv-status.be-status-trc { color: #cbd5e1; font-weight: 600; }
+.lv-status.be-status-log { color: #7dd3fc; font-weight: 600; }
+.lv-status.be-status-csp { color: #fcd34d; font-weight: 600; }
 
 .lv-td {
     display: flex; align-items: center;
@@ -723,6 +783,27 @@ select:focus { border-color: var(--accent); }
 #lv-detail-empty .empty-icon { font-size: 32px; opacity: 0.4; }
 #lv-detail-empty p { font-size: 12px; opacity: 0.5; }
 
+/* Detail — request / entry id */
+#lv-detail-id-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 8px 14px 6px;
+    border-bottom: 1px solid var(--border2);
+    flex-shrink: 0;
+    background: var(--bg1);
+}
+#lv-detail-id-strip #d-request-id {
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    color: var(--text-hi);
+}
+#lv-detail-id-strip .body-act-btn {
+    font-size: 11px;
+    padding: 3px 8px;
+}
+
 /* Detail — URL bar */
 #lv-detail-url-bar {
     padding: 10px 14px 8px;
@@ -742,6 +823,7 @@ select:focus { border-color: var(--accent); }
     scrollbar-width: none;
 }
 
+#lv-detail.multi-sel #lv-detail-id-strip,
 #lv-detail.multi-sel #lv-detail-meta,
 #lv-detail.multi-sel #lv-replay-bar,
 #lv-detail.multi-sel #lv-mark-panel,
@@ -1490,6 +1572,19 @@ select:focus { border-color: var(--accent); }
         <input type="checkbox" id="hide-screenshot-checkbox"> Hide Screenshot
     </label>
 
+    <!-- Activity Monitor (browser console / storage / exceptions) -->
+    <div class="ms-wrap" id="ms-activity">
+        <button class="ms-btn" id="ms-activity-btn">
+            Activity <span class="ms-badge" id="ms-activity-badge"></span><span class="ms-arrow">▾</span>
+        </button>
+        <div class="ms-drop" id="ms-activity-drop">
+            <label class="ms-opt"><input type="checkbox" value="console" checked> Console</label>
+            <label class="ms-opt"><input type="checkbox" value="exception" checked> Exceptions</label>
+            <label class="ms-opt"><input type="checkbox" value="storage" checked> Storage</label>
+            <label class="ms-opt"><input type="checkbox" value="csp" checked> CSP / Security</label>
+        </div>
+    </div>
+
     <!-- Status multi-select -->
     <div class="ms-wrap" id="ms-status">
         <button class="ms-btn" id="ms-status-btn">
@@ -1546,7 +1641,7 @@ select:focus { border-color: var(--accent); }
 
         <!-- Column header -->
         <div id="lv-list-header">
-            <div class="lv-th col-idx">#</div>
+            <div class="lv-th col-idx">ID</div>
             <div class="lv-th col-method">Method</div>
             <div class="lv-th col-status">Status</div>
             <div class="lv-th col-mark">Mark</div>
@@ -1579,7 +1674,11 @@ select:focus { border-color: var(--accent); }
         <!-- Detail view (hidden until entry selected) -->
         <div id="lv-detail" style="display:none; flex-direction:column; height:100%; overflow:hidden; display:none">
 
-            <!-- URL bar -->
+            <!-- Entry ID + URL -->
+            <div id="lv-detail-id-strip">
+                <span id="d-request-id" class="meta-val" title="Database entry id"></span>
+                <button type="button" id="lv-copy-id-btn" class="body-act-btn">⧉ Copy ID</button>
+            </div>
             <div id="lv-detail-url-bar">
                 <div id="lv-detail-url"></div>
             </div>
@@ -1637,6 +1736,10 @@ select:focus { border-color: var(--accent); }
                     <span id="lv-note-preview" class="mark-preview">No comment</span>
                     <button class="body-act-btn" id="lv-note-open">Full</button>
                 </div>
+                <div class="mark-row">
+                    <span class="mark-title">Notes</span>
+                    <button class="body-act-btn" id="lv-embed-in-note" title="Insert this request as a card into the open note (or a new note if none is selected)">📋 Copy to current note</button>
+                </div>
             </div>
 
             <!-- Screenshot direct view (no tabs) -->
@@ -1650,6 +1753,7 @@ select:focus { border-color: var(--accent); }
                 <button class="lv-tab-btn" data-tab="response">Response</button>
                 <button class="lv-tab-btn" data-tab="raw">Raw</button>
                 <button class="lv-tab-btn" data-tab="messages" id="lv-tab-messages-btn" style="display:none">Messages</button>
+                <button class="lv-tab-btn" data-tab="event" id="lv-tab-event-btn" style="display:none">Event</button>
                 <button class="lv-tab-btn" data-tab="comment">Comment</button>
             </div>
 
@@ -1740,6 +1844,16 @@ select:focus { border-color: var(--accent); }
                         <button class="body-act-btn" id="ws-msg-refresh-btn" title="Reload from database">↻ Refresh</button>
                     </div>
                     <div id="ws-messages-list" class="ws-msg-list"></div>
+                </div>
+
+                <!-- Browser activity (console / storage / exception) -->
+                <div class="lv-tab-content" id="tab-event">
+                    <div class="body-toolbar">
+                        <span>Activity event</span>
+                        <span style="flex:1"></span>
+                        <button class="body-act-btn" id="tab-event-copy-btn" title="Copy JSON detail">⎘ Copy</button>
+                    </div>
+                    <pre id="tab-event-body" class="body-content" style="margin:0;padding:10px 14px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px"></pre>
                 </div>
 
                 <!-- Comment -->

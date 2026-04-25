@@ -36,6 +36,12 @@ const profileListBuiltIn = document.getElementById('profile-list-built-in');
 const editorEmpty   = document.getElementById('editor-empty');
 const editorWrap    = document.getElementById('editor-wrap');
 const editorTitle   = document.getElementById('editor-title');
+
+/** True when the profile editor panel is shown (inline style can be empty; use computed style). */
+function isEditorPanelVisible() {
+    if (!editorWrap) return false;
+    return getComputedStyle(editorWrap).display !== 'none';
+}
 const searchInput   = document.getElementById('search-profiles');
 
 const fName         = document.getElementById('f-name');
@@ -138,6 +144,11 @@ document.querySelectorAll('.tls-tpl-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         const tpl = btn.dataset.tls;
         tlsSetTemplate(tpl);
+        const sync = typeof window !== 'undefined' ? window.cupnetProxyTlsUaSync : null;
+        if (sync && fUa && typeof sync.syncUserAgentFromTlsTemplate === 'function') {
+            const { newUa } = sync.syncUserAgentFromTlsTemplate(tpl, fUa.value);
+            if (newUa != null) fUa.value = newUa;
+        }
         updateFpBadge();
         // Apply immediately so stats panel & live requests reflect the choice
         api.setTlsProfile && api.setTlsProfile(tpl).catch(() => {});
@@ -380,7 +391,7 @@ const editorBodyEl = document.querySelector('.editor-body');
 function wireEditorDirtyListeners() {
     if (!editorBodyEl) return;
     const mark = () => {
-        if (editorWrap?.style.display === 'none') return;
+        if (!isEditorPanelVisible()) return;
         setEditorDirty(true);
     };
     editorBodyEl.addEventListener('input', mark);
@@ -496,7 +507,9 @@ function renderProfileList() {
     );
 
     if (!filtered.length) {
-        profileList.innerHTML = `<div class="empty-list">${q ? 'No matching profiles.' : 'No profiles yet.<br>Click “New” to add one.'}</div>`;
+        profileList.innerHTML = q
+            ? `<div class="empty-list">No matching profiles.</div>`
+            : `<div class="empty-list">No profiles yet.<br><button type="button" class="btn primary sm empty-new-btn">New profile</button></div>`;
         return;
     }
 
@@ -534,19 +547,19 @@ function renderProfileList() {
 }
 
 function tryOpenDirectEditor() {
-    if (selectedId === DIRECT_ID && editorWrap.style.display !== 'none') return;
+    if (selectedId === DIRECT_ID && isEditorPanelVisible()) return;
     if (!confirmDiscardIfDirty()) return;
     openDirectEditor();
 }
 
 function tryOpenEditor(id) {
-    if (selectedId === id && editorWrap.style.display !== 'none') return;
+    if (selectedId === id && isEditorPanelVisible()) return;
     if (!confirmDiscardIfDirty()) return;
     openEditor(id);
 }
 
 function tryOpenNewEditor() {
-    if (isNew && editorWrap.style.display !== 'none') return;
+    if (isNew && isEditorPanelVisible()) return;
     if (!confirmDiscardIfDirty()) return;
     openNewEditor();
 }
@@ -780,18 +793,23 @@ btnSave.addEventListener('click', async () => {
         language:   fLanguage?.value        || null,
         ...tlsGetSaveData(),
     };
-    const result = await api.saveProxyProfileFull(profile);
-    btnSave.disabled = false;
-    if (result.success) {
-        setSaveStatus('Saved ✓', 'ok');
-        selectedId = result.id;
-        isNew      = false;
-        btnDelete.style.display = '';
-        editorTitle.textContent = name;
-        setEditorDirty(false);
-        updateEditorActionButtons();
-    } else {
-        setSaveStatus(`Error: ${result.error}`, 'err');
+    try {
+        const result = await api.saveProxyProfileFull(profile);
+        if (result && result.success) {
+            setSaveStatus('Saved ✓', 'ok');
+            selectedId = result.id;
+            isNew      = false;
+            btnDelete.style.display = '';
+            editorTitle.textContent = name;
+            setEditorDirty(false);
+            updateEditorActionButtons();
+        } else {
+            setSaveStatus(`Error: ${result?.error || 'Save failed'}`, 'err');
+        }
+    } catch (e) {
+        setSaveStatus(`Error: ${e?.message || String(e)}`, 'err');
+    } finally {
+        btnSave.disabled = false;
     }
 });
 
@@ -1002,13 +1020,16 @@ btnEmptyNew?.addEventListener('click', () => tryOpenNewEditor());
 searchInput.addEventListener('input', () => { searchQuery = searchInput.value; renderProfileList(); });
 
 // ─── Add new ──────────────────────────────────────────────────────────────────
-btnAddProfile.addEventListener('click', () => tryOpenNewEditor());
+btnAddProfile?.addEventListener('click', () => tryOpenNewEditor());
+profileList?.addEventListener('click', (e) => {
+    if (e.target.closest('.empty-new-btn')) tryOpenNewEditor();
+});
 
 document.addEventListener('keydown', (e) => {
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key === 's') {
         e.preventDefault();
-        if (editorWrap.style.display !== 'none') btnSave.click();
+        if (isEditorPanelVisible()) btnSave.click();
     }
     if (mod && e.key === 'n') {
         e.preventDefault();
@@ -1016,9 +1037,9 @@ document.addEventListener('keydown', (e) => {
     }
     if (mod && e.shiftKey && e.key.toLowerCase() === 't') {
         e.preventDefault();
-        if (editorWrap.style.display !== 'none' && !btnTest.disabled) btnTest.click();
+        if (isEditorPanelVisible() && !btnTest.disabled) btnTest.click();
     }
-    if (e.key === 'Escape' && editorWrap.style.display !== 'none') {
+    if (e.key === 'Escape' && isEditorPanelVisible()) {
         e.preventDefault();
         if (!confirmDiscardIfDirty()) return;
         closeEditor();
@@ -1026,11 +1047,6 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ─── IPC events ───────────────────────────────────────────────────────────────
-api.onProxyProfilesList((list) => {
-    profiles = list || [];
-    renderProfileList();
-});
-
 api.onProxyStatusChanged((info) => {
     const active    = info?.active;
     const isDirect  = info?.mode === 'direct';
@@ -1125,10 +1141,21 @@ api.onMitmStatsUpdate && api.onMitmStatsUpdate(applyMitmStats);
 api.getMitmStats && api.getMitmStats().then(applyMitmStats).catch(() => {});
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
-api.getProxyProfiles().then(list => {
-    profiles = list || [];
+function reloadProfilesFromMain() {
+    return api.getProxyProfiles().then((list) => {
+        profiles = list || [];
+        renderProfileList();
+    }).catch((e) => {
+        console.error('[proxy-manager] getProxyProfiles failed', e);
+        showToast('Could not load proxy profiles', 'err');
+        renderProfileList();
+    });
+}
+reloadProfilesFromMain();
+api.onProxyProfilesList((list) => {
+    profiles = Array.isArray(list) ? list : [];
     renderProfileList();
-}).catch(() => {});
+});
 
 // Load initial proxy state — select Direct if that's the current mode
 api.getCurrentProxy().then(info => {

@@ -257,7 +257,7 @@ export default function fr(kbdRow) {
     <h2>17) MITM · Fichier CA · Contournements</h2>
     <p>Le proxy MITM termine le TLS avec un CA généré par CupNet, journalise le texte clair si activé, puis rechiffre amont via AzureTLS.</p>
     <h3>Confiance dans l’app</h3>
-    <p>Les BrowserViews internes font confiance au CA automatiquement — import manuel rarement nécessaire pour les onglets CupNet.</p>
+    <p>Les surfaces d’onglet internes (WebContentsView) font confiance au CA automatiquement — import manuel rarement nécessaire pour les onglets CupNet.</p>
     <h3>PEM sur disque (outils externes)</h3>
     <p>Certificat public écrit dans le dossier user-data :</p>
     <ul>

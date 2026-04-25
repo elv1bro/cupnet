@@ -227,59 +227,64 @@ function registerProxyIpc(ctx) {
     });
 
     ctx.ipcMain.handle('save-proxy-profile-full', async (_, profile) => {
-        // profile: { id?, name, template, variables, notes, country }
-        let urlEncrypted = null, urlDisplay = profile.template;
         try {
-            if (ctx.safeStorage.isEncryptionAvailable()) {
-                urlEncrypted = ctx.safeStorage.encryptString(profile.template);
-                // Mask password in display string
-                try {
-                    const u = new URL(profile.template.replace(/\{[^}]+\}/g, 'PLACEHOLDER'));
-                    if (u.password) urlDisplay = profile.template.replace(u.password, '***');
-                } catch (err) {
-                    ctx.safeCatch({ module: 'main', eventCode: 'proxy.profile.parse.failed', context: { op: 'mask-password-template' } }, err, 'info');
+            // profile: { id?, name, template, variables, notes, country }
+            let urlEncrypted = null, urlDisplay = profile.template;
+            try {
+                if (ctx.safeStorage.isEncryptionAvailable()) {
+                    urlEncrypted = ctx.safeStorage.encryptString(profile.template);
+                    // Mask password in display string
+                    try {
+                        const u = new URL(profile.template.replace(/\{[^}]+\}/g, 'PLACEHOLDER'));
+                        if (u.password) urlDisplay = profile.template.replace(u.password, '***');
+                    } catch (err) {
+                        ctx.safeCatch({ module: 'main', eventCode: 'proxy.profile.parse.failed', context: { op: 'mask-password-template' } }, err, 'info');
+                    }
                 }
+            } catch (err) {
+                ctx.safeCatch({ module: 'main', eventCode: 'proxy.profile.encrypt.failed', context: { op: 'save-proxy-profile-full' } }, err);
             }
-        } catch (err) {
-            ctx.safeCatch({ module: 'main', eventCode: 'proxy.profile.encrypt.failed', context: { op: 'save-proxy-profile-full' } }, err);
-        }
 
-        if (profile.id) {
-            await ctx.db.updateProxyProfileByIdAsync(profile.id, {
-                name:          profile.name,
-                url_encrypted: urlEncrypted,
-                url_display:   urlDisplay,
-                is_template:   1,
-                variables:     profile.variables || {},
-                notes:         profile.notes || '',
-                country:       profile.country || '',
-                traffic_mode:  'mitm',
-                user_agent:    profile.user_agent || null,
-                timezone:      profile.timezone   || null,
-                language:      profile.language   || null,
+            if (profile.id) {
+                await ctx.db.updateProxyProfileByIdAsync(profile.id, {
+                    name:          profile.name,
+                    url_encrypted: urlEncrypted,
+                    url_display:   urlDisplay,
+                    is_template:   1,
+                    variables:     profile.variables || {},
+                    notes:         profile.notes || '',
+                    country:       profile.country || '',
+                    traffic_mode:  'mitm',
+                    user_agent:    profile.user_agent || null,
+                    timezone:      profile.timezone   || null,
+                    language:      profile.language   || null,
+                    tls_profile:   profile.tls_profile    || 'chrome',
+                    tls_ja3_mode:  profile.tls_ja3_mode   || 'template',
+                    tls_ja3_custom: profile.tls_ja3_custom || null,
+                });
+                ctx.notifyProxyProfilesList();
+                return { success: true, id: profile.id };
+            }
+
+            const id = await ctx.db.saveProxyProfileAsync(profile.name, urlEncrypted, urlDisplay, {
+                isTemplate: 1,
+                variables:  profile.variables || {},
+                notes:      profile.notes || '',
+                country:    profile.country || '',
+                traffic_mode: 'mitm',
+                user_agent: profile.user_agent || null,
+                timezone:   profile.timezone   || null,
+                language:   profile.language   || null,
                 tls_profile:   profile.tls_profile    || 'chrome',
                 tls_ja3_mode:  profile.tls_ja3_mode   || 'template',
                 tls_ja3_custom: profile.tls_ja3_custom || null,
             });
             ctx.notifyProxyProfilesList();
-            return { success: true, id: profile.id };
+            return { success: true, id };
+        } catch (err) {
+            ctx.safeCatch({ module: 'main', eventCode: 'proxy.profile.save.failed', context: { op: 'save-proxy-profile-full' } }, err);
+            return { success: false, error: err?.message || String(err) };
         }
-
-        const id = await ctx.db.saveProxyProfileAsync(profile.name, urlEncrypted, urlDisplay, {
-            isTemplate: 1,
-            variables:  profile.variables || {},
-            notes:      profile.notes || '',
-            country:    profile.country || '',
-            traffic_mode: 'mitm',
-            user_agent: profile.user_agent || null,
-            timezone:   profile.timezone   || null,
-            language:   profile.language   || null,
-            tls_profile:   profile.tls_profile    || 'chrome',
-            tls_ja3_mode:  profile.tls_ja3_mode   || 'template',
-            tls_ja3_custom: profile.tls_ja3_custom || null,
-        });
-        ctx.notifyProxyProfilesList();
-        return { success: true, id };
     });
 
     ctx.ipcMain.handle('test-proxy-template', async (_, profileId, ephemeralVars) => {
@@ -305,7 +310,18 @@ function registerProxyIpc(ctx) {
     });
 
     // ── Proxy profiles ───────────────────────────────────────────────────────
-    ctx.ipcMain.handle('get-proxy-profiles', async () => ctx.db.getProxyProfiles());
+    ctx.ipcMain.handle('get-proxy-profiles', async () => {
+        try {
+            if (!ctx.db || typeof ctx.db.getProxyProfiles !== 'function') {
+                ctx.sysLog?.('error', 'proxy', 'get-proxy-profiles: database not ready');
+                return [];
+            }
+            return ctx.db.getProxyProfiles();
+        } catch (err) {
+            ctx.safeCatch({ module: 'main', eventCode: 'proxy.profiles.load.failed', context: { op: 'get-proxy-profiles' } }, err);
+            return [];
+        }
+    });
 
     ctx.ipcMain.handle('save-proxy-profile', async (_, name, url, country) => {
         let urlEncrypted = null;
@@ -325,7 +341,8 @@ function registerProxyIpc(ctx) {
         } catch (err) {
             ctx.safeCatch({ module: 'main', eventCode: 'proxy.profile.encrypt.failed', context: { op: 'save-proxy-profile' } }, err);
         }
-        return ctx.db.saveProxyProfileAsync(name, urlEncrypted, urlDisplay, country);
+        const opts = country != null && typeof country === 'object' ? country : { country: country || null };
+        return ctx.db.saveProxyProfileAsync(name, urlEncrypted, urlDisplay, opts);
     });
 
     ctx.ipcMain.handle('get-proxy-profile-url', async (_, id) => {
@@ -337,7 +354,11 @@ function registerProxyIpc(ctx) {
         return null;
     });
 
-    ctx.ipcMain.handle('delete-proxy-profile', async (_, id) => { await ctx.db.deleteProxyProfileAsync(id); return true; });
+    ctx.ipcMain.handle('delete-proxy-profile', async (_, id) => {
+        await ctx.db.deleteProxyProfileAsync(id);
+        ctx.notifyProxyProfilesList();
+        return true;
+    });
 
     ctx.ipcMain.handle('test-proxy-profile', async (_, id) => {
         const row = ctx.db.getProxyProfileEncrypted(id);

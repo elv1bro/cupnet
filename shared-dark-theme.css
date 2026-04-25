@@ -1,0 +1,243 @@
+/**
+ * CupNet shared dark theme — design tokens + layout primitives.
+ * Load before window-specific inline styles so local rules can override.
+ */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+:root {
+  --bg0: #0d1117;
+  --bg1: #161b22;
+  --bg2: #1c2330;
+  --bg3: #21262d;
+  --border: #30363d;
+  --border-light: #3a424d;
+  --border-focus: #58a6ff;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --text-muted: #656d76;
+  --accent: #58a6ff;
+  --accent-bg: rgba(88, 166, 255, 0.08);
+  --accent-border: rgba(88, 166, 255, 0.35);
+  /* Vault / Credentials identity (optional) */
+  --vault-accent: #6366f1;
+  --vault-accent-dim: rgba(99, 102, 241, 0.14);
+  --vault-accent-border: rgba(99, 102, 241, 0.4);
+  --danger: #f85149;
+  --danger-bg: rgba(248, 81, 73, 0.1);
+  --ok: #3fb950;
+  --warn: #d29922;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --transition: 150ms ease;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+  --font-mono: 'SF Mono', ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+}
+
+/* Generic buttons (sub-windows; browser uses styles.css) */
+.cn-btn {
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--transition), border-color var(--transition), opacity var(--transition);
+}
+.cn-btn:hover {
+  background: var(--bg3);
+}
+.cn-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cn-btn-primary {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.cn-btn-primary:hover {
+  background: rgba(88, 166, 255, 0.16);
+}
+.cn-btn-danger {
+  border-color: rgba(248, 81, 73, 0.45);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.cn-btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+.cn-btn-ghost:hover {
+  color: var(--text);
+  background: var(--bg2);
+}
+
+/* Toolbar row */
+.cn-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg1);
+}
+.cn-toolbar-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
+/* Search input wrap */
+.cn-search-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 120px;
+  max-width: 360px;
+}
+.cn-search-wrap input {
+  width: 100%;
+  padding: 6px 10px 6px 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg0);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.cn-search-wrap input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-border);
+}
+.cn-search-wrap .cn-search-icon {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* Badge / pill */
+.cn-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.cn-badge-accent {
+  background: var(--accent-bg);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+.cn-badge-ok {
+  background: rgba(63, 185, 80, 0.12);
+  border-color: rgba(63, 185, 80, 0.35);
+  color: var(--ok);
+}
+
+/* Two-column shell */
+.cn-panel-sidebar {
+  border-right: 1px solid var(--border);
+  background: var(--bg1);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.cn-panel-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg0);
+}
+
+/* Empty state */
+.cn-empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 32px 24px;
+  color: var(--text-dim);
+  gap: 8px;
+}
+.cn-empty-state-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.cn-empty-state-sub {
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 360px;
+}
+
+/* Toast stack anchor (optional; toast-notifications.js appends here) */
+#cn-toast-container {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 99999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  pointer-events: none;
+}
+#cn-toast-container .cn-toast {
+  pointer-events: auto;
+}
+
+.cn-toast {
+  min-width: 220px;
+  max-width: 420px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg1);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  animation: cn-toast-in 0.18s ease;
+}
+.cn-toast-info { border-left: 3px solid var(--accent); }
+.cn-toast-success { border-left: 3px solid var(--ok); }
+.cn-toast-warning { border-left: 3px solid var(--warn); }
+.cn-toast-error { border-left: 3px solid var(--danger); }
+
+@keyframes cn-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

@@ -205,13 +205,11 @@ function redactRequestRecord(record, level, report) {
 }
 
 function pickContext(db) {
-    let rules = [];
     let interceptRules = [];
     let dnsOverrides = [];
-    try { rules = db.getRules ? db.getRules() : []; } catch {}
     try { interceptRules = db.getAllInterceptRules ? db.getAllInterceptRules() : []; } catch {}
     try { dnsOverrides = db.getDnsOverrides ? db.getDnsOverrides() : []; } catch {}
-    return { rules, interceptRules, dnsOverrides };
+    return { interceptRules, dnsOverrides };
 }
 
 function buildBundle({ db, sessionId, requestIds, protectionLevel = 'Raw', appVersion = 'unknown' }) {

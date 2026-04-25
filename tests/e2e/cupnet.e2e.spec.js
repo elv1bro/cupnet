@@ -13,6 +13,7 @@ const {
     navigateAndWait,
     readActiveTabBodyText,
     waitForLoggedCount,
+    waitForActiveTabIsolated,
 } = require('./helpers.js');
 
 const HTTPBIN_GET = 'https://httpbin.org/get';
@@ -88,17 +89,20 @@ test('4) cookies — set на httpbin виден на /cookies', async () => {
 });
 
 test('5) изолированная вкладка — cookie из shared не видна', async () => {
-    await mainWindow.evaluate(() => window.electronAPI.newIsolatedTab());
-    // дать время переключить BrowserView (иначе редкий race с CDP / evaluate)
-    await new Promise((r) => setTimeout(r, 750));
+    await mainWindow.evaluate(async () => {
+        await window.electronAPI.newIsolatedTab();
+    });
+    await waitForActiveTabIsolated(electronApp);
     await navigateAndWait(electronApp, HTTPBIN_COOKIES);
     const text = await readActiveTabBodyText(electronApp);
     expect(text).not.toContain('cupnet_e2e');
 });
 
 test('6) новая вкладка — загрузка httpbin/get', async () => {
-    await mainWindow.evaluate(() => window.electronAPI.newTab(null));
-    await new Promise((r) => setTimeout(r, 500));
+    await mainWindow.evaluate(async () => {
+        await window.electronAPI.newTab(null);
+    });
+    await new Promise((r) => setTimeout(r, 400));
     await navigateAndWait(electronApp, HTTPBIN_GET);
     const text = await readActiveTabBodyText(electronApp);
     expect(text.length).toBeGreaterThan(50);

@@ -1,15 +1,54 @@
 'use strict';
 
+const { isDevtoolsHostileUrl: _rawIsDevtoolsHostileUrl } = require('./devtools-hostile-sites');
+
+/**
+ * Layer-2 trial mode (Anti-Anti-Debug preload shim).
+ * When set to "1", we keep CDP attached on hostile sites and rely on the
+ * preload-injected `__cupnetAntiAntiDebug` IIFE (see preload-view.js +
+ * main-process/services/anti-anti-debug-script.js) to neutralize the page's
+ * `debugger;` / console-trap based detection. Used to verify whether Layer 2
+ * alone is sufficient before promoting to default behavior.
+ *
+ *   CUPNET_AAD_KEEP_CDP=1 npm start    # test mode: CDP on + Layer 2
+ *   npm start                           # safe default: CDP detached + Layer 2
+ */
+const _AAD_KEEP_CDP = process.env.CUPNET_AAD_KEEP_CDP === '1';
+
+function isDevtoolsHostileUrl(url) {
+    if (_AAD_KEEP_CDP) return false;
+    return _rawIsDevtoolsHostileUrl(url);
+}
+
+/** CDP Network.* логирование, очередь записи в БД, rule actions из CDP-пути. */
+
+function _remoteObjectToString(ro) {
+    if (!ro || typeof ro !== 'object') return '';
+    if (ro.unserializableValue != null) return String(ro.unserializableValue);
+    if (ro.value !== undefined && ro.value !== null) {
+        if (typeof ro.value === 'object') {
+            try { return JSON.stringify(ro.value); } catch { return String(ro.description || '[Object]'); }
+        }
+        return String(ro.value);
+    }
+    if (ro.description) return String(ro.description);
+    return '';
+}
+
+function _stackTraceFirstUrl(st) {
+    if (!st || !Array.isArray(st.callFrames) || !st.callFrames.length) return { url: null, line: null };
+    const f = st.callFrames[0];
+    return { url: f.url || null, line: f.lineNumber != null ? f.lineNumber + 1 : null };
+}
+
 /** CDP Network.* логирование, очередь записи в БД, rule actions из CDP-пути. */
 function createCdpNetworkLogging({
     safeCatch,
     shouldFilterUrl,
-    Notification,
     getTabManager,
     getMitmProxy,
     getIsLoggingEnabled,
     getDb,
-    getRulesEngine,
     getSettings,
     getLogViewerWindows,
     broadcastLogEntryToViewers,
@@ -23,42 +62,53 @@ function createCdpNetworkLogging({
     const _trackingLoadAttachedWc = new WeakSet();
     /** DevTools и debugger API на одном webContents в Electron конфликтуют; Network может показывать запросы не той вкладки. */
     const _devtoolsCdpBridgeWc = new WeakSet();
+    /** Per-webContents guard: detach CDP before loading pages that freeze on DevTools/debugger. */
+    const _devtoolsHostileNavGuardWc = new WeakSet();
     /** Per webContents: один набор Map/таймер/очереди — повторный setupNetworkLogging не дублирует интервалы и destroyed */
     const _wcLogState = new WeakMap();
 
-    function handleRuleActions(actions, logEntry) {
-        for (const action of actions) {
-            if (action.type === 'notification') {
-                try {
-                    if (Notification.isSupported()) {
-                        new Notification({
-                            title: `Rule matched: ${action.ruleName || 'unnamed'}`,
-                            body:  (logEntry.url || '').slice(0, 120),
-                        }).show();
-                    }
-                } catch (err) {
-                    safeCatch({ module: 'main', eventCode: 'notification.send.failed', context: { ruleName: action.ruleName || 'unnamed' } }, err, 'info');
-                }
-                const __mw = getMainWindow(); if (__mw && !__mw.isDestroyed()) {
-                    __mw.webContents.send('rule-notification', {
-                        ruleName: action.ruleName || 'unnamed',
-                        url:      logEntry.url || '',
-                    });
-                }
-            }
-            if (action.type === 'highlight') {
-                for (const w of getLogViewerWindows()) {
-                    if (!w.isDestroyed()) w.webContents.send('rule-highlight', {
-                        url: logEntry.url, color: action.color, ruleName: action.ruleName
-                    });
-                }
-            }
-            if (action.type === 'screenshot') {
-                requestScreenshot({ reason: 'rule', meta: { ruleName: action.ruleName || '' } }).catch((err) => {
-                    safeCatch({ module: 'main', eventCode: 'screenshot.capture.failed', context: { reason: 'rule', ruleName: action.ruleName || '' } }, err, 'info');
-                });
-            }
+    function detachCdpForCompatibility(webContents, phase) {
+        if (!webContents || webContents.isDestroyed()) return;
+        try {
+            const dbg = webContents.debugger;
+            dbg.removeAllListeners('message');
+            dbg.removeAllListeners('detach');
+            if (dbg.isAttached()) dbg.detach();
+        } catch (err) {
+            safeCatch({ module: 'main', eventCode: 'cdp.detach.failed', context: { phase } }, err, 'info');
         }
+        _cdpAttachedWc.delete(webContents);
+    }
+
+    function registerDevtoolsHostileNavigationGuard(webContents) {
+        if (!webContents || webContents.isDestroyed()) return;
+        if (_devtoolsHostileNavGuardWc.has(webContents)) return;
+        _devtoolsHostileNavGuardWc.add(webContents);
+
+        const detachIfHostile = (url, phase) => {
+            if (isDevtoolsHostileUrl(url)) detachCdpForCompatibility(webContents, phase);
+        };
+
+        webContents.on('will-navigate', (_event, url) => {
+            detachIfHostile(url, 'devtools-hostile.will-navigate');
+        });
+        webContents.on('did-navigate', (_event, url) => {
+            detachIfHostile(url, 'devtools-hostile.did-navigate');
+            if (isDevtoolsHostileUrl(url)) return;
+
+            const st = _wcLogState.get(webContents);
+            if (!st) return;
+            const loggingEnabled = getIsLoggingEnabled();
+            const activeFp = typeof getActiveFingerprint === 'function' ? getActiveFingerprint() : null;
+            const activityOn = !!(getSettings() && getSettings().activityMonitorEnabled) && loggingEnabled;
+            if (!loggingEnabled && !activeFp && !activityOn) return;
+            setupNetworkLogging(webContents, st.tabId, st.sessionId).catch((err) => {
+                safeCatch({ module: 'main', eventCode: 'cdp.reattach.failed', context: { phase: 'devtools-hostile.did-navigate' } }, err, 'info');
+            });
+        });
+        webContents.once('destroyed', () => {
+            _devtoolsHostileNavGuardWc.delete(webContents);
+        });
     }
 
     function registerWcLoggingTeardownOnce(webContents, state) {
@@ -90,12 +140,15 @@ function createCdpNetworkLogging({
     async function setupNetworkLogging(webContents, tabId, sessionId) {
         if (!webContents || webContents.isDestroyed()) return;
 
+        registerDevtoolsHostileNavigationGuard(webContents);
         wcIdToTabId.set(webContents.id, tabId);
 
         const loggingEnabled = getIsLoggingEnabled();
         const activeFp = typeof getActiveFingerprint === 'function' ? getActiveFingerprint() : null;
-        // Раньше CDP поднимали и без логов ради X-CupNet-*; теперь — ради Emulation.* при активном fingerprint.
-        if (!loggingEnabled && !activeFp) return;
+        /** Activity Monitor CDP domains only while recording — same session as HTTP log. */
+        const activityOn = !!(getSettings() && getSettings().activityMonitorEnabled) && loggingEnabled;
+        // CDP: network log, fingerprint Emulation.*, or Activity Monitor (when recording + setting on).
+        if (!loggingEnabled && !activeFp && !activityOn) return;
 
         let state = _wcLogState.get(webContents);
         if (!state) {
@@ -117,8 +170,15 @@ function createCdpNetworkLogging({
             state.ongoingRequests.clear();
             state.ongoingWebsockets.clear();
             state.extraInfoQueue.clear();
+            state.activityRate = null;
         }
         const { ongoingRequests, ongoingWebsockets, extraInfoQueue } = state;
+
+        const currentUrl = webContents.getURL();
+        if (isDevtoolsHostileUrl(currentUrl)) {
+            detachCdpForCompatibility(webContents, 'devtools-hostile.setup');
+            return;
+        }
 
         if (!_devtoolsCdpBridgeWc.has(webContents)) {
             _devtoolsCdpBridgeWc.add(webContents);
@@ -134,13 +194,14 @@ function createCdpNetworkLogging({
                 }
                 _cdpAttachedWc.delete(webContents);
             });
-            webContents.on('devtools-closed', () => {
+                webContents.on('devtools-closed', () => {
                 if (webContents.isDestroyed()) return;
                 const st = _wcLogState.get(webContents);
                 if (!st) return;
                 const le = getIsLoggingEnabled();
                 const activeFp = typeof getActiveFingerprint === 'function' ? getActiveFingerprint() : null;
-                if (!le && !activeFp) return;
+                const am = !!(getSettings() && getSettings().activityMonitorEnabled) && le;
+                if (!le && !activeFp && !am) return;
                 setupNetworkLogging(webContents, st.tabId, st.sessionId).catch((err) => {
                     safeCatch({ module: 'main', eventCode: 'cdp.reattach.failed', context: { phase: 'devtools-closed' } }, err, 'info');
                 });
@@ -221,6 +282,19 @@ function createCdpNetworkLogging({
             }
         }
 
+        const activityMonitorOn = !!(getSettings() && getSettings().activityMonitorEnabled) && loggingEnabled;
+        if (activityMonitorOn) {
+            await cdp.sendCommand('Runtime.enable', {}).catch((err) => {
+                safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Runtime.enable', tabId: state.tabId } }, err, 'info');
+            });
+            await cdp.sendCommand('Log.enable', {}).catch((err) => {
+                safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Log.enable', tabId: state.tabId } }, err, 'info');
+            });
+            await cdp.sendCommand('DOMStorage.enable', {}).catch((err) => {
+                safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'DOMStorage.enable', tabId: state.tabId } }, err, 'info');
+            });
+        }
+
         function _cupnetRidFromHeaders(headers) {
             if (!headers || typeof headers !== 'object') return null;
             for (const k of Object.keys(headers)) {
@@ -241,6 +315,21 @@ function createCdpNetworkLogging({
             return o;
         }
 
+        const finalizeBrowserActivityLog = (entry) => {
+            entry._cupnetLogSid = state.sessionId;
+            entry._cupnetLogTid = state.tabId;
+            entry._browserEvent = true;
+            state.logQueue.push(entry);
+            if (!state.logQueueScheduled) {
+                state.logQueueScheduled = true;
+                setImmediate(() => {
+                    _processLogQueue().catch((err) => {
+                        safeCatch({ module: 'main', eventCode: 'getDb().write.failed', context: { op: 'processLogQueue.browser', tabId: state.tabId } }, err);
+                    });
+                });
+            }
+        };
+
         const _processLogQueue = async () => {
             state.logQueueScheduled = false;
             const batch = state.logQueue.splice(0, 50);
@@ -251,7 +340,23 @@ function createCdpNetworkLogging({
                 incrementLogEntryCount();
 
                 try {
-                    if (logEntry.type === 'websocket_frame' || logEntry.type === 'websocket_closed' || logEntry.type === 'websocket_error') {
+                    if (logEntry._browserEvent) {
+                        const dbId = await getDb().insertBrowserEventAsync(sid, tid, {
+                            event_type: logEntry.event_type,
+                            level: logEntry.level,
+                            summary: logEntry.summary,
+                            detail: logEntry.detail,
+                            source_url: logEntry.source_url,
+                            source_line: logEntry.source_line,
+                            origin: logEntry.origin,
+                        });
+                        if (dbId) logEntry.id = dbId;
+                        logEntry.url = logEntry.summary || '';
+                        const et = String(logEntry.event_type || '');
+                        if (et === 'exception') logEntry.type = 'exception';
+                        else if (et.startsWith('ls-') || et.startsWith('ss-')) logEntry.type = 'storage';
+                        else logEntry.type = 'browser';
+                    } else if (logEntry.type === 'websocket_frame' || logEntry.type === 'websocket_closed' || logEntry.type === 'websocket_error') {
                         const pl = logEntry.type === 'websocket_closed'
                             ? `__cupnet_ws_meta__:${JSON.stringify({ kind: 'closed', frames: logEntry.framesCount ?? 0 })}`
                             : logEntry.type === 'websocket_error'
@@ -303,24 +408,6 @@ function createCdpNetworkLogging({
                             }
                         } catch (_) { /* ignore */ }
 
-                        const re = getRulesEngine(); if (re) {
-                            try {
-                                const matched = re.evaluate({
-                                    url: logEntry.url,
-                                    method: logEntry.method,
-                                    status: logEntry.response?.statusCode,
-                                    type: logEntry.type,
-                                    duration_ms: logEntry.duration,
-                                    response_body: logEntry.responseBody
-                                });
-                                if (matched.length) {
-                                    const actions = re.buildActions(matched);
-                                    handleRuleActions(actions, logEntry);
-                                }
-                            } catch (err) {
-                                safeCatch({ module: 'main', eventCode: 'rules.engine.failed', context: { tabId: tid, url: logEntry.url || '' } }, err);
-                            }
-                        }
                     }
                 } catch (e) {
                     console.error('[DB] insertRequest failed:', e.message);
@@ -337,7 +424,9 @@ function createCdpNetworkLogging({
                     }
                 }
 
-                ongoingRequests.delete(reqKey);
+                if (!logEntry._browserEvent) {
+                    ongoingRequests.delete(reqKey);
+                }
             }
             if (state.logQueue.length) {
                 state.logQueueScheduled = true;
@@ -388,10 +477,188 @@ function createCdpNetworkLogging({
         };
 
         cdp.on('message', async (_, method, params) => {
-            if (!getIsLoggingEnabled()) return;
+            const logNet = getIsLoggingEnabled();
+            /** Activity + Network CDP events are tied to the same recording session. */
+            if (!logNet) return;
 
+            const activityMonitorEnabled = !!(getSettings() && getSettings().activityMonitorEnabled);
             const settings      = getSettings();
             const filterPatterns = settings.filterPatterns || [];
+            const rateLimit = Math.max(1, Math.min(500, Number(settings.activityMonitorRateLimit) || 100));
+
+            if (activityMonitorEnabled) {
+                if (method === 'Runtime.consoleAPICalled') {
+                    const w = state.activityRate || (state.activityRate = { windowStart: Date.now(), count: 0, suppressed: 0 });
+                    const now = Date.now();
+                    if (now - w.windowStart > 1000) {
+                        if (w.suppressed > 0) {
+                            finalizeBrowserActivityLog({
+                                event_type: 'console',
+                                level: 'info',
+                                summary: `${w.suppressed} console message(s) suppressed (rate limit)`,
+                                detail: JSON.stringify({ suppressed: w.suppressed, rateLimitPerSec: rateLimit }),
+                                source_url: null,
+                                source_line: null,
+                                origin: null,
+                            });
+                        }
+                        w.windowStart = now;
+                        w.count = 0;
+                        w.suppressed = 0;
+                    }
+                    w.count += 1;
+                    if (w.count > rateLimit) {
+                        w.suppressed += 1;
+                        return;
+                    }
+                    const args = params.args || [];
+                    const argStrs = args.map(_remoteObjectToString);
+                    let summary = argStrs.join(' ');
+                    if (summary.length > 500) summary = summary.slice(0, 497) + '...';
+                    const st = _stackTraceFirstUrl(params.stackTrace);
+                    const detail = {
+                        args: args.map((a) => ({ type: a.type, description: a.description, value: a.value })),
+                        stackTrace: params.stackTrace || null,
+                    };
+                    finalizeBrowserActivityLog({
+                        event_type: 'console',
+                        level: String(params.type || 'log'),
+                        summary: summary || '(console)',
+                        detail: JSON.stringify(detail),
+                        source_url: st.url,
+                        source_line: st.line,
+                        origin: null,
+                    });
+                    return;
+                }
+                if (method === 'Runtime.exceptionThrown') {
+                    const ex = params.exceptionDetails || {};
+                    const exc = ex.exception || {};
+                    const msg = String(exc.description || exc.value || ex.message || 'Exception');
+                    const detail = JSON.stringify(ex);
+                    const st = _stackTraceFirstUrl(ex.stackTrace);
+                    finalizeBrowserActivityLog({
+                        event_type: 'exception',
+                        level: 'error',
+                        summary: msg.slice(0, 8000),
+                        detail,
+                        source_url: ex.url || st.url,
+                        source_line: ex.lineNumber != null ? ex.lineNumber + 1 : st.line,
+                        origin: null,
+                    });
+                    return;
+                }
+                if (method === 'Log.entryAdded') {
+                    const e = params.entry || {};
+                    const src = String(e.source || '');
+                    const isCsp = src === 'security' || String(e.text || '').toLowerCase().includes('content security policy');
+                    const et = isCsp ? 'csp-violation' : 'log-entry';
+                    finalizeBrowserActivityLog({
+                        event_type: et,
+                        level: String(e.level || 'info'),
+                        summary: String(e.text || e.message || '').slice(0, 8000) || '(log)',
+                        detail: JSON.stringify(e),
+                        source_url: e.url || null,
+                        source_line: e.lineNumber != null ? e.lineNumber : null,
+                        origin: null,
+                    });
+                    return;
+                }
+                if (method === 'DOMStorage.domStorageItemAdded') {
+                    const sid = params.storageId || {};
+                    const ls = !!sid.isLocalStorage;
+                    const prefix = ls ? 'ls' : 'ss';
+                    const key = String(params.key || '');
+                    const nv = params.newValue != null ? String(params.newValue) : '';
+                    const sum = `${key} = ${nv.length > 200 ? `${nv.slice(0, 200)}…` : nv}`;
+                    const storageKind = ls ? 'localStorage' : 'sessionStorage';
+                    finalizeBrowserActivityLog({
+                        event_type: `${prefix}-set`,
+                        level: 'info',
+                        summary: sum.slice(0, 8000),
+                        detail: JSON.stringify({
+                            key,
+                            newValue: params.newValue,
+                            storageKind,
+                            isLocalStorage: ls,
+                            storageId: sid,
+                        }),
+                        source_url: null,
+                        source_line: null,
+                        origin: sid.securityOrigin || null,
+                    });
+                    return;
+                }
+                if (method === 'DOMStorage.domStorageItemUpdated') {
+                    const sid = params.storageId || {};
+                    const ls = !!sid.isLocalStorage;
+                    const prefix = ls ? 'ls' : 'ss';
+                    const key = String(params.key || '');
+                    const nv = params.newValue != null ? String(params.newValue) : '';
+                    const ov = params.oldValue != null ? String(params.oldValue) : '';
+                    const sum = `${key}: ${ov.length > 100 ? `${ov.slice(0, 100)}…` : ov} → ${nv.length > 100 ? `${nv.slice(0, 100)}…` : nv}`;
+                    const storageKind = ls ? 'localStorage' : 'sessionStorage';
+                    finalizeBrowserActivityLog({
+                        event_type: `${prefix}-set`,
+                        level: 'info',
+                        summary: sum.slice(0, 8000),
+                        detail: JSON.stringify({
+                            key,
+                            oldValue: params.oldValue,
+                            newValue: params.newValue,
+                            storageKind,
+                            isLocalStorage: ls,
+                            storageId: sid,
+                        }),
+                        source_url: null,
+                        source_line: null,
+                        origin: sid.securityOrigin || null,
+                    });
+                    return;
+                }
+                if (method === 'DOMStorage.domStorageItemRemoved') {
+                    const sid = params.storageId || {};
+                    const ls = !!sid.isLocalStorage;
+                    const prefix = ls ? 'ls' : 'ss';
+                    const key = String(params.key || '');
+                    const storageKindRm = ls ? 'localStorage' : 'sessionStorage';
+                    finalizeBrowserActivityLog({
+                        event_type: `${prefix}-remove`,
+                        level: 'info',
+                        summary: `remove ${key}`.slice(0, 8000),
+                        detail: JSON.stringify({
+                            key,
+                            storageKind: storageKindRm,
+                            isLocalStorage: ls,
+                            storageId: sid,
+                        }),
+                        source_url: null,
+                        source_line: null,
+                        origin: sid.securityOrigin || null,
+                    });
+                    return;
+                }
+                if (method === 'DOMStorage.domStorageItemsCleared') {
+                    const sid = params.storageId || {};
+                    const ls = !!sid.isLocalStorage;
+                    const prefix = ls ? 'ls' : 'ss';
+                    const storageKindClr = ls ? 'localStorage' : 'sessionStorage';
+                    finalizeBrowserActivityLog({
+                        event_type: `${prefix}-clear`,
+                        level: 'info',
+                        summary: 'storage cleared',
+                        detail: JSON.stringify({
+                            storageKind: storageKindClr,
+                            isLocalStorage: ls,
+                            storageId: sid,
+                        }),
+                        source_url: null,
+                        source_line: null,
+                        origin: sid.securityOrigin || null,
+                    });
+                    return;
+                }
+            }
 
             if (method === 'Network.webSocketCreated') {
                 if (shouldFilterUrl(params.url, filterPatterns)) return;
@@ -608,7 +875,14 @@ function createCdpNetworkLogging({
             }
         });
 
-        cdp.on('detach', (_reason) => console.log('[CDP] Detached:', _reason));
+        cdp.on('detach', (_reason) => {
+            _cdpAttachedWc.delete(webContents);
+            try {
+                cdp.removeAllListeners('message');
+                cdp.removeAllListeners('detach');
+            } catch (_) { /* ignore */ }
+            console.log('[CDP] Detached:', _reason);
+        });
 
         if (!state.staleCleanupTimer) {
             state.staleCleanupTimer = setInterval(() => {

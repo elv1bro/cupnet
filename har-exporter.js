@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('fs');
 const db = require('./db');
 const { getSessionEgressMeta, formatEgressComment } = require('./session-egress-meta');
 
@@ -74,8 +75,85 @@ function buildCupnetWebSocketMessages(rows) {
 }
 
 /**
- * Sidecar JSON: all ws_events for session (no truncation). Written when CUPNET_HAR_WS_SIDECAR=1.
+ * Build a single HAR entry object from a DB row (same shape as exportHar).
+ * @param {object} full — row from db.queryRequestsFull
+ * @param {number} wsLimit
+ * @returns {object}
  */
+function buildHarEntryFromRow(full, wsLimit) {
+    const reqHeaders  = safeParseObj(full.request_headers);
+    const respHeaders = safeParseObj(full.response_headers);
+
+    const startedDateTime = full.created_at
+        ? new Date(full.created_at).toISOString()
+        : new Date().toISOString();
+
+    const reqBodyRaw = full.request_body || null;
+    const respBodyRaw = full.response_body || null;
+    const reqB64 = _parseB64Prefix(reqBodyRaw);
+    const respB64 = _parseB64Prefix(respBodyRaw);
+    const reqBodyText = reqB64 ? truncateExportText(reqB64) : (reqBodyRaw ? truncateExportText(reqBodyRaw) : null);
+    const respBodyText = respB64 ? truncateExportText(respB64) : (respBodyRaw ? truncateExportText(respBodyRaw) : '');
+    const reqBodySize = reqB64 ? Math.ceil(reqB64.length * 3 / 4) : (reqBodyRaw ? reqBodyRaw.length : -1);
+    const respBodySize = respB64 ? Math.ceil(respB64.length * 3 / 4) : (respBodyRaw ? respBodyRaw.length : -1);
+    const entry = {
+        startedDateTime,
+        time: full.duration_ms || -1,
+        request: {
+            method: full.method || 'GET',
+            url: full.url,
+            httpVersion: 'HTTP/1.1',
+            headers: objToHarHeaders(reqHeaders),
+            queryString: parseQueryString(full.url),
+            cookies: [],
+            headersSize: -1,
+            bodySize: reqBodySize,
+            postData: reqBodyRaw
+                ? { mimeType: getContentType(reqHeaders), text: reqBodyText, ...(reqB64 ? { encoding: 'base64' } : {}) }
+                : undefined
+        },
+        response: {
+            status: full.status || 0,
+            statusText: statusText(full.status),
+            httpVersion: 'HTTP/1.1',
+            headers: objToHarHeaders(respHeaders),
+            cookies: [],
+            content: {
+                size: respBodySize,
+                mimeType: getContentType(respHeaders) || 'application/octet-stream',
+                text: respBodyText,
+                ...(respB64 ? { encoding: 'base64' } : {}),
+            },
+            redirectURL: '',
+            headersSize: -1,
+            bodySize: respBodySize
+        },
+        cache: {},
+        timings: { send: 0, wait: full.duration_ms || -1, receive: 0 },
+        _tabId: full.tab_id,
+        _sessionId: full.session_id
+    };
+    if (String(full.type || '').toLowerCase() === 'websocket' && db.queryWsEvents) {
+        try {
+            const wsRows = db.queryWsEvents(
+                full.session_id,
+                full.tab_id ?? null,
+                full.url || '',
+                null,
+                wsLimit
+            );
+            const wm = buildWebSocketMessagesHar(wsRows);
+            if (wm && wm.length) {
+                entry._webSocketMessages = wm;
+                const cup = buildCupnetWebSocketMessages(wsRows);
+                if (cup && cup.length) entry._cupnetWebSocketMessages = cup;
+            }
+        } catch { /* ignore */ }
+    }
+    return entry;
+}
+
+/** Sidecar JSON: all ws_events for session (no truncation). Written when CUPNET_HAR_WS_SIDECAR=1. */
 function exportWebSocketSidecarPayload(sessionId) {
     const sid = parseInt(String(sessionId), 10);
     if (!sid) return null;
@@ -101,82 +179,15 @@ function exportHar(sessionId, filters = {}) {
     if (sessionId) mergedFilters.sessionId = sessionId;
 
     const total = db.countRequests(mergedFilters);
-    const rows  = db.queryRequestsFull(mergedFilters, total, 0);
+    const batchSize = Math.min(500, Math.max(1, Number(process.env.CUPNET_HAR_EXPORT_BATCH) || 500));
 
     const wsLimit = getExportWsFrameLimit();
     const entries = [];
-    for (const full of rows) {
-
-        const reqHeaders  = safeParseObj(full.request_headers);
-        const respHeaders = safeParseObj(full.response_headers);
-
-        const startedDateTime = full.created_at
-            ? new Date(full.created_at).toISOString()
-            : new Date().toISOString();
-
-        const reqBodyRaw = full.request_body || null;
-        const respBodyRaw = full.response_body || null;
-        const reqB64 = _parseB64Prefix(reqBodyRaw);
-        const respB64 = _parseB64Prefix(respBodyRaw);
-        const reqBodyText = reqB64 ? truncateExportText(reqB64) : (reqBodyRaw ? truncateExportText(reqBodyRaw) : null);
-        const respBodyText = respB64 ? truncateExportText(respB64) : (respBodyRaw ? truncateExportText(respBodyRaw) : '');
-        const reqBodySize = reqB64 ? Math.ceil(reqB64.length * 3 / 4) : (reqBodyRaw ? reqBodyRaw.length : -1);
-        const respBodySize = respB64 ? Math.ceil(respB64.length * 3 / 4) : (respBodyRaw ? respBodyRaw.length : -1);
-        const entry = {
-            startedDateTime,
-            time: full.duration_ms || -1,
-            request: {
-                method: full.method || 'GET',
-                url: full.url,
-                httpVersion: 'HTTP/1.1',
-                headers: objToHarHeaders(reqHeaders),
-                queryString: parseQueryString(full.url),
-                cookies: [],
-                headersSize: -1,
-                bodySize: reqBodySize,
-                postData: reqBodyRaw
-                    ? { mimeType: getContentType(reqHeaders), text: reqBodyText, ...(reqB64 ? { encoding: 'base64' } : {}) }
-                    : undefined
-            },
-            response: {
-                status: full.status || 0,
-                statusText: statusText(full.status),
-                httpVersion: 'HTTP/1.1',
-                headers: objToHarHeaders(respHeaders),
-                cookies: [],
-                content: {
-                    size: respBodySize,
-                    mimeType: getContentType(respHeaders) || 'application/octet-stream',
-                    text: respBodyText,
-                    ...(respB64 ? { encoding: 'base64' } : {}),
-                },
-                redirectURL: '',
-                headersSize: -1,
-                bodySize: respBodySize
-            },
-            cache: {},
-            timings: { send: 0, wait: full.duration_ms || -1, receive: 0 },
-            _tabId: full.tab_id,
-            _sessionId: full.session_id
-        };
-        if (String(full.type || '').toLowerCase() === 'websocket' && db.queryWsEvents) {
-            try {
-                const wsRows = db.queryWsEvents(
-                    full.session_id,
-                    full.tab_id ?? null,
-                    full.url || '',
-                    null,
-                    wsLimit
-                );
-                const wm = buildWebSocketMessagesHar(wsRows);
-                if (wm && wm.length) {
-                    entry._webSocketMessages = wm;
-                    const cup = buildCupnetWebSocketMessages(wsRows);
-                    if (cup && cup.length) entry._cupnetWebSocketMessages = cup;
-                }
-            } catch { /* ignore */ }
+    for (let offset = 0; offset < total; offset += batchSize) {
+        const rows = db.queryRequestsFull(mergedFilters, batchSize, offset);
+        for (const full of rows) {
+            entries.push(buildHarEntryFromRow(full, wsLimit));
         }
-        entries.push(entry);
     }
 
     const egress = sessionId ? getSessionEgressMeta(db, sessionId) : getSessionEgressMeta(db, null);
@@ -258,8 +269,70 @@ function statusText(code) {
     return map[code] || '';
 }
 
+/**
+ * Stream HAR 1.2 JSON to disk without building the full `entries` array in memory.
+ * Output is compact JSON (not pretty-printed).
+ * @param {string} filePath
+ * @param {number|null} sessionId
+ * @param {object} [filters]
+ */
+function exportHarToFileStream(filePath, sessionId, filters = {}) {
+    const mergedFilters = { ...filters };
+    if (sessionId) mergedFilters.sessionId = sessionId;
+
+    const total = db.countRequests(mergedFilters);
+    const batchSize = Math.min(500, Math.max(1, Number(process.env.CUPNET_HAR_EXPORT_BATCH) || 500));
+    const wsLimit = getExportWsFrameLimit();
+
+    const egress = sessionId ? getSessionEgressMeta(db, sessionId) : getSessionEgressMeta(db, null);
+    const baseCreatorComment = 'HTTP/WS export; _webSocketMessages Chrome-style; _cupnetWebSocketMessages full payloads; env CUPNET_HAR_* / CUPNET_EXPORT_WS_FRAME_LIMIT';
+    const creatorComment = formatEgressComment(egress, baseCreatorComment);
+
+    const firstRow = db.queryRequestsFull(mergedFilters, 1, 0);
+    const startedDateTime = firstRow[0]?.created_at
+        ? new Date(firstRow[0].created_at).toISOString()
+        : new Date().toISOString();
+    const pages = [{
+        startedDateTime,
+        id: `page_${sessionId || 'all'}`,
+        title: sessionId ? `Session ${sessionId}` : 'All sessions',
+        pageTimings: { onLoad: -1 }
+    }];
+
+    const cupnetMeta = {
+        egressIp: egress.ip,
+        egressCountry: egress.country,
+        egressLocation: egress.location || null,
+        egressProfile: egress.profile || null,
+        sessionProxyInfo: egress.sessionProxyInfo || null,
+    };
+
+    const creator = { name: 'CupNet', version: '2.0', comment: creatorComment };
+    const browser = { name: 'Electron', version: process.versions.electron || '', comment: '' };
+
+    const fd = fs.openSync(filePath, 'w');
+    try {
+        fs.writeSync(fd, '{"log":{"version":"1.2","creator":' + JSON.stringify(creator) + ',"browser":' + JSON.stringify(browser) + ',"pages":' + JSON.stringify(pages) + ',"entries":[');
+        let first = true;
+        for (let offset = 0; offset < total; offset += batchSize) {
+            const rows = db.queryRequestsFull(mergedFilters, batchSize, offset);
+            for (const full of rows) {
+                const entry = buildHarEntryFromRow(full, wsLimit);
+                if (!first) fs.writeSync(fd, ',');
+                fs.writeSync(fd, JSON.stringify(entry));
+                first = false;
+            }
+        }
+        fs.writeSync(fd, '],"_cupnet":' + JSON.stringify(cupnetMeta) + '}}');
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
 module.exports = {
     exportHar,
+    exportHarToFileStream,
+    buildHarEntryFromRow,
     exportWebSocketSidecarPayload,
     getHarExportMaxChars,
     getExportWsFrameLimit,

@@ -1,5 +1,16 @@
 const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
+// Anti-Anti-Debug shim (Layer 2): main process decides per-URL whether to ship a
+// `debugger`/console-trap-stripping IIFE for the current navigation. Must run
+// FIRST so the page can't observe console.log being patched mid-flight.
+// See main-process/services/{anti-anti-debug-script.js, devtools-hostile-sites.js}.
+try {
+    const aadData = ipcRenderer.sendSync('get-anti-anti-debug-sync', { url: location.href });
+    if (aadData && aadData.script) {
+        webFrame.executeJavaScript(aadData.script);
+    }
+} catch { /* ignore — internal pages, handler not ready, etc. */ }
+
 // Camera filter: inject into main world BEFORE any page scripts.
 // Uses synchronous IPC so it blocks until the script is ready — guaranteed early.
 try {
@@ -18,7 +29,7 @@ ipcRenderer.on('camera-filter-update', (_, payload) => {
     } catch { /* ignore */ }
 });
 
-// Preload for BrowserView tabs (including new-tab.html)
+// Preload for tab WebContentsView pages (including new-tab.html)
 contextBridge.exposeInMainWorld('electronAPI', {
     // Mouse activity tracking
     reportMouseActivity: () => ipcRenderer.send('report-mouse-activity'),
@@ -34,6 +45,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getDirectIp:     ()     => ipcRenderer.invoke('get-direct-ip'),
     getCurrentProxy: ()     => ipcRenderer.invoke('get-current-proxy'),
     getMitmReady:    ()     => ipcRenderer.invoke('mitm-ready-state'),
+    getMitmCaCert:   ()     => ipcRenderer.invoke('mitm-get-ca-cert'),
     openProxyManager:()     => ipcRenderer.invoke('open-proxy-manager'),
     onProxyStatusChanged: (cb) => {
         ipcRenderer.removeAllListeners('proxy-status-changed');
@@ -88,20 +100,44 @@ contextBridge.exposeInMainWorld('electronAPI', {
     extProxySetPort:   (oldPort, newPort) => ipcRenderer.invoke('ext-proxy:set-port', oldPort, newPort),
     extProxySetRedirects: (port, follow) => ipcRenderer.invoke('ext-proxy:set-redirects', port, follow),
 
-    // Settings page
+    // Settings page (must mirror preload.js APIs used by settings.html / settings-renderer.js)
     openSettingsTab:    ()        => ipcRenderer.invoke('open-settings-tab'),
     getSettingsAll:     ()        => ipcRenderer.invoke('get-settings-all'),
+    saveActivityMonitorSettings: (opts) => ipcRenderer.invoke('save-activity-monitor-settings', opts),
+    resetOnboardingWizard: ()     => ipcRenderer.invoke('reset-onboarding-wizard'),
     setPasteUnlock:     (enabled) => ipcRenderer.invoke('set-paste-unlock', enabled),
+    setMaxTabsBeforeWarning: (n) => ipcRenderer.invoke('set-max-tabs-before-warning', n),
+    getHomepage:        ()        => ipcRenderer.invoke('get-homepage'),
+    setHomepage:        (url)     => ipcRenderer.invoke('set-homepage', url),
+    getTraceMode:       ()        => ipcRenderer.invoke('get-trace-mode'),
+    setTraceMode:       (on)      => ipcRenderer.invoke('set-trace-mode', on),
+    getMitmCaCert:      ()        => ipcRenderer.invoke('mitm-get-ca-cert'),
     saveFilterPatterns: (patterns)=> ipcRenderer.invoke('save-filter-patterns', patterns),
     saveBypassDomains:  (domains) => ipcRenderer.invoke('save-bypass-domains', domains),
     saveTrackingSettings:(cfg)    => ipcRenderer.invoke('save-tracking-settings', cfg),
-    getCapmonsterSettings: ()     => ipcRenderer.invoke('get-capmonster-settings'),
-    saveCapmonsterSettings: (cfg) => ipcRenderer.invoke('save-capmonster-settings', cfg),
     solveTurnstileCaptcha: (tabId, captcha, options) => ipcRenderer.invoke('solve-turnstile-captcha', tabId, captcha, options),
     injectTurnstileToken: (tabId, payload) => ipcRenderer.invoke('inject-turnstile-token', tabId, payload),
     getAppMetrics:      ()        => ipcRenderer.invoke('get-app-metrics'),
     enumerateMediaDevices: ()     => ipcRenderer.invoke('enumerate-media-devices'),
     saveDevicePermissions: (cfg) => ipcRenderer.invoke('save-device-permissions', cfg),
+});
+
+/** Page scripts (injected) call this on login form submit — main saves to vault if unlocked. */
+contextBridge.exposeInMainWorld('cupnetCredentials', {
+    reportCapture: (payload) => {
+        try {
+            ipcRenderer.send('credential-form-captured', payload);
+        } catch (_) { /* ignore */ }
+    },
+});
+
+/** Injected storage wrapper (tab-manager) reports localStorage/sessionStorage ops with stack traces. */
+contextBridge.exposeInMainWorld('cupnetStorageActivity', {
+    report: (payload) => {
+        try {
+            ipcRenderer.send('browser-storage-activity', payload);
+        } catch (_) { /* ignore */ }
+    },
 });
 
 let _lastPointerReportTs = 0;

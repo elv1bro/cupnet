@@ -3,6 +3,62 @@
 const { sanitizeOutgoingRequestHeaders } = require('../../../utils');
 
 /**
+ * Build Request Editor prefill from a numeric DB id or an explicit { method, url, headers, body } object.
+ * Notes / log-viewer may pass either form via `open-request-editor`.
+ */
+function buildRequestEditorPrefill(ctx, entryIdOrPayload) {
+    const empty = { method: 'GET', url: '', headers: {}, body: '' };
+    if (entryIdOrPayload == null) return empty;
+
+    const fromDbRow = (req) => {
+        let editorBody = req.request_body || '';
+        if (typeof editorBody === 'string' && editorBody.startsWith('__b64__:')) {
+            editorBody = '[Binary body, base64 in DB]';
+        }
+        return {
+            method: req.method || 'GET',
+            url: req.url || '',
+            headers: req.request_headers ? JSON.parse(req.request_headers) : {},
+            body: editorBody,
+        };
+    };
+
+    if (typeof entryIdOrPayload === 'object' && !Array.isArray(entryIdOrPayload)) {
+        const p = entryIdOrPayload;
+        const rid = p.requestId != null ? Number(p.requestId) : (p.id != null ? Number(p.id) : NaN);
+        if (Number.isFinite(rid) && rid > 0) {
+            try {
+                const req = ctx.db.getRequest(rid);
+                if (req) return fromDbRow(req);
+            } catch (err) {
+                ctx.safeCatch({ module: 'main', eventCode: 'request-editor.prefill.failed', context: { entryId: rid } }, err, 'info');
+            }
+        }
+        let headers = p.headers ?? p.requestHeaders ?? {};
+        if (typeof headers === 'string') {
+            try { headers = JSON.parse(headers); } catch { headers = {}; }
+        }
+        if (!headers || typeof headers !== 'object' || Array.isArray(headers)) headers = {};
+        return {
+            method: String(p.method || 'GET').toUpperCase(),
+            url: String(p.url || ''),
+            headers,
+            body: String(p.body ?? p.requestBody ?? ''),
+        };
+    }
+
+    const id = Number(entryIdOrPayload);
+    if (!Number.isFinite(id) || id <= 0) return empty;
+    try {
+        const req = ctx.db.getRequest(id);
+        if (req) return fromDbRow(req);
+    } catch (err) {
+        ctx.safeCatch({ module: 'main', eventCode: 'request-editor.prefill.failed', context: { entryId: id } }, err, 'info');
+    }
+    return empty;
+}
+
+/**
  * Log viewer, compare, JSONL, rules window, request editor, execute-request.
  * @param {object} ctx
  */
@@ -59,6 +115,33 @@ function registerLogCompareExecuteIpc(ctx) {
         if (liveWin && !liveWin.webContents.isLoading()) {
             sendFocus(liveWin);
         } else if (liveWin) {
+            liveWin.webContents.once('did-finish-load', () => sendFocus(liveWin));
+        }
+        return { success: true };
+    });
+
+    ctx.ipcMain.handle('open-log-viewer-focus-request', (_, requestId) => {
+        const rid = Number(requestId);
+        if (!Number.isFinite(rid) || rid <= 0) return { success: false };
+        const sendFocus = (win) => {
+            if (win && !win.isDestroyed()) {
+                win.webContents.send('focus-request-id', { id: rid });
+            }
+        };
+        let liveWin = ctx.getLiveLogViewerWindow();
+        if (liveWin) {
+            if (liveWin.isMinimized()) liveWin.restore();
+            liveWin.focus();
+            if (liveWin.webContents.isLoading()) {
+                liveWin.webContents.once('did-finish-load', () => sendFocus(liveWin));
+            } else {
+                sendFocus(liveWin);
+            }
+            return { success: true };
+        }
+        ctx.createLogViewerWindow();
+        liveWin = ctx.getLiveLogViewerWindow();
+        if (liveWin) {
             liveWin.webContents.once('did-finish-load', () => sendFocus(liveWin));
         }
         return { success: true };
@@ -216,27 +299,8 @@ function registerLogCompareExecuteIpc(ctx) {
     });
 
     // ── Request Editor ───────────────────────────────────────────────────────
-    ctx.ipcMain.handle('open-request-editor', async (_, entryId) => {
-        let data = { method: 'GET', url: '', headers: {}, body: '' };
-        if (entryId) {
-            try {
-                const req = ctx.db.getRequest(entryId);
-                if (req) {
-                    let editorBody = req.request_body || '';
-                    if (typeof editorBody === 'string' && editorBody.startsWith('__b64__:')) {
-                        editorBody = '[Binary body, base64 in DB]';
-                    }
-                    data = {
-                        method:  req.method  || 'GET',
-                        url:     req.url     || '',
-                        headers: req.request_headers  ? JSON.parse(req.request_headers)  : {},
-                        body:    editorBody,
-                    };
-                }
-            } catch (err) {
-                ctx.safeCatch({ module: 'main', eventCode: 'request-editor.prefill.failed', context: { entryId } }, err, 'info');
-            }
-        }
+    ctx.ipcMain.handle('open-request-editor', async (_, entryIdOrPayload) => {
+        const data = buildRequestEditorPrefill(ctx, entryIdOrPayload);
         ctx.openRequestEditorWindow(data);
         return true;
     });
@@ -255,10 +319,43 @@ function registerLogCompareExecuteIpc(ctx) {
         'keep-alive','upgrade','te','trailer','proxy-authorization','accept-encoding',
     ]);
 
-    ctx.ipcMain.handle('execute-request', async (_, { method, url, headers, body, tlsProfile }) => {
+    /** @type {Map<string, { cancelled: boolean, abort?: () => void }>} */
+    const requestEditorExecState = new Map();
+
+    ctx.ipcMain.handle('cancel-execute-request', (_, cancelToken) => {
+        const tok = String(cancelToken || '');
+        const st = requestEditorExecState.get(tok);
+        if (st) {
+            st.cancelled = true;
+            try { st.abort?.(); } catch { /* ignore */ }
+            try {
+                if (st._cancelReject) st._cancelReject(new Error('Cancelled'));
+            } catch { /* already settled */ }
+        }
+        return true;
+    });
+
+    ctx.ipcMain.handle('execute-request', async (_, payload) => {
+        const {
+            method, url, headers, body, tlsProfile, bodyBase64,
+            cancelToken: cancelTokenRaw,
+        } = payload || {};
+        const cancelToken = String(cancelTokenRaw || `re_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+        const execState = { cancelled: false, abort: null, _cancelReject: null };
+        requestEditorExecState.set(cancelToken, execState);
+
+        const cleanupExec = () => {
+            requestEditorExecState.delete(cancelToken);
+        };
+
+        const cancelPromise = new Promise((_, rej) => {
+            execState._cancelReject = rej;
+        });
+
         const start = Date.now();
         const reqMethod = (method || 'GET').toUpperCase();
         const sanitizedHeaders = sanitizeOutgoingRequestHeaders(headers || {});
+        const reqBodyForLog = bodyBase64 ? '[binary base64 body]' : (body || null);
 
         /** Log the result to DB and forward to open log viewer windows */
         function maybeLog(result) {
@@ -274,7 +371,7 @@ function registerLogCompareExecuteIpc(ctx) {
                     duration:        result.duration || 0,
                     requestHeaders:  headers || {},
                     responseHeaders: result.headers || {},
-                    requestBody:     body || null,
+                    requestBody:     reqBodyForLog,
                     responseBody:    result.body || null,
                     error:           result.error || null,
                 }).then((dbId) => {
@@ -291,7 +388,7 @@ function registerLogCompareExecuteIpc(ctx) {
                             url:          url || '',
                             method:       reqMethod,
                             response:     result.status ? { statusCode: result.status, headers: result.headers || {} } : null,
-                            request:      { headers: headers || {}, body: body || null },
+                            request:      { headers: headers || {}, body: reqBodyForLog },
                             responseBody: result.body || null,
                             duration:     result.duration || 0,
                             error:        result.error || null,
@@ -311,21 +408,36 @@ function registerLogCompareExecuteIpc(ctx) {
             if (ctx.getCurrentTrafficMode() === 'mitm' && ctx.mitmProxy && ctx.mitmProxy.worker && ctx.mitmProxy.worker.ready) {
                 const profile = tlsProfile || ctx.loadSettings().tlsProfile || 'chrome';
                 const currentProxy = ctx.persistentAnonymizedProxyUrl || ctx.loadSettings().currentProxy || null;
-                const res = await ctx.mitmProxy.worker.request({
+                const workerReq = ctx.mitmProxy.worker.request({
                     method:            reqMethod,
                     url,
                     headers:           sanitizedHeaders,
-                    body:              body || undefined,
+                    body:              bodyBase64 ? undefined : (body || undefined),
+                    bodyBase64:        bodyBase64 || undefined,
                     proxy:            currentProxy,
                     browser:          profile,
                     disableRedirects: true,
                     timeout:          ctx.networkPolicy.timeouts.requestEditorMs,
                 });
+                workerReq.catch(() => { /* drain if cancelled */ });
+                let res;
+                try {
+                    res = await Promise.race([workerReq, cancelPromise]);
+                } catch (raceErr) {
+                    if (raceErr && raceErr.message === 'Cancelled') {
+                        const out = { success: false, error: 'Cancelled', cancelled: true, duration: Date.now() - start };
+                        maybeLog(out);
+                        cleanupExec();
+                        return { ...out, cancelToken };
+                    }
+                    throw raceErr;
+                }
+                cleanupExec();
                 const duration = Date.now() - start;
                 if (res.error) {
                     const out = { success: false, error: res.error, duration };
                     maybeLog(out);
-                    return out;
+                    return { ...out, cancelToken };
                 }
                 let respBody = '';
                 if (res.bodyBase64) {
@@ -343,32 +455,76 @@ function registerLogCompareExecuteIpc(ctx) {
                     body: respBody,
                     duration,
                     tlsProfile: profile,
+                    cancelToken,
                 };
                 maybeLog(out);
                 return out;
             }
 
-            // Fallback: Electron net.fetch
+            // Fallback: Electron net.fetch with AbortSignal
             const safe = {};
             for (const [k, v] of Object.entries(sanitizedHeaders)) {
                 if (!EXEC_FORBIDDEN.has(k.toLowerCase())) safe[k] = v;
             }
             const isBodyless = ['GET','HEAD','OPTIONS'].includes(reqMethod);
-            const resp = await ctx.netFetchWithTimeout(url, {
-                method:  reqMethod,
-                headers: safe,
-                body:    isBodyless ? undefined : (body || undefined),
-            }, ctx.networkPolicy.timeouts.requestEditorMs);
+            const ctrl = new AbortController();
+            execState.abort = () => ctrl.abort();
+            const timeoutMs = ctx.networkPolicy.timeouts.requestEditorMs;
+            const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+            let fetchBody;
+            if (!isBodyless) {
+                if (bodyBase64) {
+                    try {
+                        fetchBody = Buffer.from(bodyBase64, 'base64');
+                    } catch {
+                        fetchBody = undefined;
+                    }
+                } else {
+                    fetchBody = body || undefined;
+                }
+            }
+            let resp;
+            try {
+                resp = await Promise.race([
+                    ctx.net.fetch(url, {
+                        method:  reqMethod,
+                        headers: safe,
+                        body:    fetchBody,
+                        signal:  ctrl.signal,
+                    }),
+                    cancelPromise,
+                ]);
+            } catch (fetchErr) {
+                clearTimeout(timer);
+                if (fetchErr && (fetchErr.message === 'Cancelled' || fetchErr.name === 'AbortError' || execState.cancelled)) {
+                    const out = { success: false, error: 'Cancelled', cancelled: true, duration: Date.now() - start };
+                    maybeLog(out);
+                    cleanupExec();
+                    return { ...out, cancelToken };
+                }
+                throw fetchErr;
+            }
+            clearTimeout(timer);
+            cleanupExec();
             const duration = Date.now() - start;
             const respHeaders = {};
             resp.headers.forEach((v, k) => { respHeaders[k] = v; });
             const text = await resp.text();
             const out = { success: true, status: resp.status, statusText: resp.statusText,
-                          headers: respHeaders, body: text, duration };
+                headers: respHeaders, body: text, duration, cancelToken };
             maybeLog(out);
             return out;
         } catch (e) {
-            const out = { success: false, error: e.message, duration: Date.now() - start };
+            cleanupExec();
+            const msg = e && e.message === 'Cancelled' ? 'Cancelled' : (e.message || String(e));
+            const cancelled = msg === 'Cancelled' || (e && e.name === 'AbortError');
+            const out = {
+                success: false,
+                error: msg,
+                cancelled,
+                duration: Date.now() - start,
+                cancelToken,
+            };
             maybeLog(out);
             return out;
         }

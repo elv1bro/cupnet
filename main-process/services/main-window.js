@@ -1,6 +1,9 @@
 'use strict';
 
+const { screen } = require('electron');
 const { confirmOpenAnotherTab } = require('./tab-open-confirm');
+const { isDevtoolsHostileWebContents } = require('./devtools-hostile-sites');
+const windowStateStore = require('./window-state-store');
 
 /**
  * Главное окно браузера и application menu.
@@ -8,6 +11,32 @@ const { confirmOpenAnotherTab } = require('./tab-open-confirm');
  */
 function createMainWindowApi(d) {
     const { sub } = d;
+
+    function toggleActiveTabDevTools() {
+        const tab = d.tabManager?.getActiveTab();
+        const wc = tab?.view?.webContents;
+        if (!wc || wc.isDestroyed()) return false;
+        if (isDevtoolsHostileWebContents(wc)) {
+            if (wc.isDevToolsOpened()) {
+                try { wc.closeDevTools(); } catch (_) { /* ignore */ }
+            }
+            return false;
+        }
+        wc.toggleDevTools();
+        return true;
+    }
+
+    /** Close Notes, Log Viewer, and other auxiliary windows so the process can exit with the browser. */
+    function destroyAllSecondaryWindows(mainWin) {
+        try {
+            const wins = d.BrowserWindow.getAllWindows();
+            for (const win of wins) {
+                if (win && !win.isDestroyed() && win !== mainWin) {
+                    win.destroy();
+                }
+            }
+        } catch (_) { /* ignore */ }
+    }
 
     function confirmExitDialog(win) {
         // E2E / автотесты: Playwright закрывает приложение без блокирующих модалок
@@ -41,8 +70,25 @@ function createMainWindowApi(d) {
 
     function createMainWindow() {
         if (d.startupMetrics.windowCreatedTs === 0) d.startupMetrics.windowCreatedTs = Date.now();
+        const mainDefaults = {
+            width: 1200, height: 800, minWidth: 900, minHeight: 600, isMaximized: true,
+        };
+        let savedMain = windowStateStore.getWindowBounds('main', d.app, mainDefaults);
+        try {
+            const display = screen.getDisplayNearestPoint({
+                x: Number.isFinite(savedMain.x) ? savedMain.x : 0,
+                y: Number.isFinite(savedMain.y) ? savedMain.y : 0,
+            });
+            savedMain = { ...savedMain, ...windowStateStore.sanitizeBounds(savedMain, display) };
+        } catch (_) { /* ignore */ }
+
         d.mainWindow = new d.BrowserWindow({
-            width: 1200, height: 800, minWidth: 900, minHeight: 600,
+            x: savedMain.x,
+            y: savedMain.y,
+            width: savedMain.width,
+            height: savedMain.height,
+            minWidth: mainDefaults.minWidth,
+            minHeight: mainDefaults.minHeight,
             show: false,
             backgroundColor: '#0f1117',
             icon: d.iconPath,
@@ -51,8 +97,10 @@ function createMainWindowApi(d) {
         d.mainWindow.loadFile(d.getAssetPath('browser.html'));
         d.mainWindow.once('ready-to-show', () => {
             applyRuntimeAppIcon();
-            try { d.mainWindow.maximize(); } catch (err) {
-                d.safeCatch({ module: 'main', eventCode: 'window.lifecycle.failed', context: { op: 'maximize' } }, err, 'info');
+            if (savedMain.isMaximized) {
+                try { d.mainWindow.maximize(); } catch (err) {
+                    d.safeCatch({ module: 'main', eventCode: 'window.lifecycle.failed', context: { op: 'maximize' } }, err, 'info');
+                }
             }
             try { d.mainWindow.show(); } catch (err) {
                 d.safeCatch({ module: 'main', eventCode: 'window.lifecycle.failed', context: { op: 'show' } }, err, 'info');
@@ -62,7 +110,7 @@ function createMainWindowApi(d) {
         d.mainWindow.webContents.once('did-finish-load', async () => {
             const s = d.loadSettings();
             d.tabManager.setPasteUnlock(s.pasteUnlock !== false);
-            if (s.bypassDomains?.length) d.applyBypassDomains(s.bypassDomains);
+            d.applyBypassDomains(s.bypassDomains || []);
             if (s.trafficOpts) d.applyTrafficFilters(s.trafficOpts);
 
             const firstTabId = await d.tabManager.createTab(d.persistentAnonymizedProxyUrl || null, d.getNewTabUrl());
@@ -102,7 +150,7 @@ function createMainWindowApi(d) {
             const tab = d.tabManager ? d.tabManager.getActiveTab() : null;
             if (!tab || tab.view.webContents.isDestroyed()) return;
             if (input.key === 'F12' && input.type === 'keyDown') {
-                tab.view.webContents.toggleDevTools();
+                toggleActiveTabDevTools();
                 event.preventDefault();
             }
             if ((input.key === 'F5' || (input.key === 'r' && input.control)) && input.type === 'keyDown') {
@@ -115,12 +163,17 @@ function createMainWindowApi(d) {
         d.mainWindow.on('blur', () => { d.isWindowActive = false; });
         d.mainWindow.on('resize', () => d.tabManager.relayout());
         d.mainWindow.on('close', (e) => {
-            if (d.forceAppQuit) return;
-            if (!confirmExitDialog(d.mainWindow)) {
-                e.preventDefault();
-                return;
+            if (!d.forceAppQuit) {
+                if (!confirmExitDialog(d.mainWindow)) {
+                    e.preventDefault();
+                    return;
+                }
+                d.forceAppQuit = true;
             }
-            d.forceAppQuit = true;
+            destroyAllSecondaryWindows(d.mainWindow);
+            try {
+                windowStateStore.saveWindowBounds('main', d.app, d.mainWindow);
+            } catch (_) { /* ignore */ }
         });
         d.mainWindow.on('closed', () => {
             d.mainWindow = null;
@@ -154,6 +207,7 @@ function createMainWindowApi(d) {
             }
             if (event === 'tab-url-changed' || event === 'tab-switched') {
                 sub.broadcastNotesWindowContext?.();
+                sub.broadcastCredentialsWindowContext?.();
             }
         });
 
@@ -216,6 +270,7 @@ function createMainWindowApi(d) {
                     { label: 'System Console', accelerator: 'CmdOrCtrl+Shift+K', click: () => sub.createConsoleViewerWindow() },
                     { label: 'Page Analyzer', accelerator: 'CmdOrCtrl+Shift+A', click: () => sub.createPageAnalyzerWindow() },
                     { label: 'Notes', accelerator: 'CmdOrCtrl+Shift+N', click: () => sub.createNotesWindow() },
+                    { label: 'Credentials', accelerator: 'CmdOrCtrl+Alt+L', click: () => sub.createCredentialsWindow() },
                     { label: 'API Scout', click: () => sub.createIvacScoutWindow() },
                     { type: 'separator' },
                     { label: 'Enable Logging', type: 'checkbox', checked: d.isLoggingEnabled,
@@ -253,7 +308,7 @@ function createMainWindowApi(d) {
                 { label: 'Force Reload', accelerator: 'CmdOrCtrl+Shift+R',
                   click: () => d.tabManager?.getActiveTab()?.view.webContents.reloadIgnoringCache() },
                 { label: 'Developer Tools (Page)', accelerator: 'F12',
-                  click: () => d.tabManager?.getActiveTab()?.view.webContents.toggleDevTools() },
+                  click: () => toggleActiveTabDevTools() },
                 { label: 'Developer Tools (Shell)', accelerator: 'CmdOrCtrl+Shift+I',
                   click: () => d.mainWindow?.webContents.toggleDevTools() },
                 { type: 'separator' },

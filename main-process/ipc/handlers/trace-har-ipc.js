@@ -17,8 +17,12 @@ function registerTraceHarIpc(ctx) {
         });
         if (canceled) return { success: false, canceled: true };
         try {
-            const har = ctx.harExporter.exportHar(sid);
-            ctx.fs.writeFileSync(filePath, JSON.stringify(har, null, 2));
+            if (typeof ctx.harExporter.exportHarToFileStream === 'function' && process.env.CUPNET_HAR_LEGACY_SYNC !== '1') {
+                ctx.harExporter.exportHarToFileStream(filePath, sid);
+            } else {
+                const har = ctx.harExporter.exportHar(sid);
+                ctx.fs.writeFileSync(filePath, JSON.stringify(har, null, 2));
+            }
             let sidecarPath = null;
             if (process.env.CUPNET_HAR_WS_SIDECAR === '1' && typeof ctx.harExporter.exportWebSocketSidecarPayload === 'function') {
                 const side = ctx.harExporter.exportWebSocketSidecarPayload(sid);

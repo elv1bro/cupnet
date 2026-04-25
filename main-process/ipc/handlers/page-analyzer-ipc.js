@@ -5,7 +5,7 @@ const { buildEndpointReport } = require('../../services/page-analyzer-endpoint-s
 const FETCH_SCRIPT_MS = 25000;
 
 /**
- * Анализ страницы, CapMonster, Turnstile.
+ * Page analysis, Turnstile token injection.
  * @param {object} ctx
  */
 function registerPageAnalyzerIpc(ctx) {
@@ -179,7 +179,7 @@ function registerPageAnalyzerIpc(ctx) {
         if (!err) return fallback;
         const code = String(err.code || 'SOLVER_ERROR');
         const message = String(err.message || fallback.message);
-        const nonRetryable = new Set(['MISSING_API_KEY', 'INVALID_API_KEY', 'MISSING_PAGE_URL', 'MISSING_SITEKEY', 'TASK_NOT_SUPPORTED']);
+        const nonRetryable = new Set(['DISABLED', 'MISSING_API_KEY', 'INVALID_API_KEY', 'MISSING_PAGE_URL', 'MISSING_SITEKEY', 'TASK_NOT_SUPPORTED']);
         return {
             code,
             message,
@@ -188,121 +188,18 @@ function registerPageAnalyzerIpc(ctx) {
         };
     }
 
-    function extractTurnstileSitekey(item = {}) {
-        const direct = String(item.sitekey || '').trim();
-        if (direct) return direct;
-        const iframeSrc = String(item.iframeSrc || '').trim();
-        if (!iframeSrc) return '';
-        try {
-            const u = new URL(iframeSrc);
-            return String(
-                u.searchParams.get('k')
-                || u.searchParams.get('sitekey')
-                || u.searchParams.get('render')
-                || ''
-            ).trim();
-        } catch {
-            return '';
-        }
-    }
-
-    async function discoverTurnstilePayloadFromPage(tabId, fallbackPayload = {}) {
-        const tab = ctx.tabManager.getTab(tabId);
-        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return fallbackPayload;
-        const base = { ...(fallbackPayload || {}) };
-        if (!base.pageUrl) {
-            try { base.pageUrl = tab.view.webContents.getURL() || tab.url || ''; } catch (err) {
-                ctx.safeCatch({ module: 'main', eventCode: 'captcha.context.discovery_failed', context: { field: 'pageUrl', tabId } }, err, 'info');
-            }
-        }
-        if (base.sitekey) return base;
-        try {
-            const data = await tab.view.webContents.executeJavaScript(`(${ctx._analyzeCaptchaScript})()`);
-            const turns = Array.isArray(data?.turnstile) ? data.turnstile : [];
-            const item = turns.find(x => extractTurnstileSitekey(x)) || turns[0] || {};
-            const discoveredSitekey = extractTurnstileSitekey(item);
-            return {
-                ...base,
-                sitekey: discoveredSitekey || base.sitekey || '',
-                action: base.action || item.action || '',
-                cData: base.cData || item.cData || '',
-                iframeSrc: base.iframeSrc || item.iframeSrc || '',
-                pageUrl: base.pageUrl || data?.pageUrl || '',
-            };
-        } catch {
-            return base;
-        }
-    }
-
-    ctx.ipcMain.handle('get-capmonster-settings', () => ctx.getCapmonsterSettings());
-    ctx.ipcMain.handle('save-capmonster-settings', (_, cfg) => {
-        const s = ctx.loadSettings();
-        s.capmonster = ctx.normalizeCapmonsterSettings({ ...(s.capmonster || {}), ...(cfg || {}) });
-        ctx.saveSettings(s);
-        return s.capmonster;
-    });
     ctx.ipcMain.handle('inject-turnstile-token', async (_, tabId, payload) => {
         return await injectTurnstileTokenToTab(tabId, payload || {});
     });
-    ctx.ipcMain.handle('solve-turnstile-captcha', async (_, tabId, captcha, options = {}) => {
-        try {
-            const tab = ctx.tabManager.getTab(tabId);
-            if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) {
-                return { ok: false, error: { code: 'TAB_NOT_FOUND', message: 'Target tab not found.', retryable: false } };
-            }
-            const settings = ctx.getCapmonsterSettings();
-            const merged = {
-                ...settings,
-                ...(options || {}),
-                apiKey: String((options && options.apiKey) || settings.apiKey || '').trim(),
-            };
-            const hydratedCaptcha = await discoverTurnstilePayloadFromPage(tabId, {
-                ...(captcha || {}),
-                sitekey: extractTurnstileSitekey(captcha || {}),
-            });
-            const pageUrl = String(hydratedCaptcha.pageUrl || tab.url || tab.view.webContents.getURL() || '');
-            const sitekey = String(hydratedCaptcha.sitekey || '');
-            const action = String(hydratedCaptcha.action || '');
-            const cData = String(hydratedCaptcha.cData || '');
-            const userAgent = String(tab.view.webContents.getUserAgent() || '');
-
-            const solved = await ctx.solveTurnstileWithCapMonster({
-                apiKey: merged.apiKey,
-                pageUrl,
-                sitekey,
-                action,
-                cData,
-                userAgent,
-                timeoutMs: merged.pollTimeoutMs,
-                pollIntervalMs: merged.pollIntervalMs,
-            });
-
-            let injectResult = { injected: false, submitted: false, updatedCount: 0, reason: 'auto-inject-disabled' };
-            if (merged.autoInject) {
-                injectResult = await injectTurnstileTokenToTab(tabId, {
-                    token: solved.token,
-                    sitekey,
-                    action,
-                    autoSubmit: merged.autoSubmit === true,
-                });
-            }
-
-            return {
-                ok: true,
-                token: solved.token,
-                taskId: solved.taskId,
-                cost: solved.cost,
-                solveCount: solved.solveCount,
-                createdAt: solved.createdAt,
-                endedAt: solved.endedAt,
-                inject: injectResult,
-            };
-        } catch (err) {
-            if (err instanceof ctx.CaptchaSolverError) {
-                return { ok: false, error: formatSolverError(err) };
-            }
-            return { ok: false, error: formatSolverError(new ctx.CaptchaSolverError('SOLVER_ERROR', err?.message || 'Unknown solver error')) };
+    ctx.ipcMain.handle('solve-turnstile-captcha', async (_, tabId) => {
+        const tab = ctx.tabManager.getTab(tabId);
+        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) {
+            return { ok: false, error: { code: 'TAB_NOT_FOUND', message: 'Target tab not found.', retryable: false } };
         }
+        return {
+            ok: false,
+            error: formatSolverError(new ctx.CaptchaSolverError('DISABLED', 'Automated Turnstile solving is not available.')),
+        };
     });
 
     ctx.ipcMain.handle('analyze-page-meta', async (_, tabId) => {

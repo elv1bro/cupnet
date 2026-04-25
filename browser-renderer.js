@@ -8,6 +8,10 @@ const forwardBtn     = document.getElementById('forward-btn');
 const reloadBtn      = document.getElementById('reload-btn');
 const homeBtn        = document.getElementById('home-btn');
 const urlInput       = document.getElementById('url-input');
+const addressBarContainer = document.getElementById('address-bar-container');
+const urlOmniboxDropdown = document.getElementById('url-omnibox-dropdown');
+const URL_INPUT_PLACEHOLDER_DEFAULT = 'Type > for commands, or enter a URL…';
+const URL_INPUT_PLACEHOLDER_OMNIBOX = 'Commands: > filter · URL: type and Enter';
 const logSessionNum  = document.getElementById('log-session-num');
 const logEntryBadge  = document.getElementById('log-entry-badge');
 const logToggleBtn   = document.getElementById('log-toggle-btn');   // recording toggle
@@ -25,6 +29,21 @@ const rulesBtn       = document.getElementById('rules-btn');
 const consoleBtn     = document.getElementById('console-btn');
 const analyzerBtn    = document.getElementById('analyzer-btn');
 const notesBtn       = document.getElementById('notes-btn');
+const credUnifiedWrap = document.getElementById('cred-unified-wrap');
+const credentialsBtn = document.getElementById('credentials-btn');
+const credentialsSiteBadge = document.getElementById('credentials-site-badge');
+const credPopup = document.getElementById('cred-popup');
+const credPopupUnlock = document.getElementById('cred-popup-unlock');
+const credPopupPw = document.getElementById('cred-popup-pw');
+const credPopupUnlockBtn = document.getElementById('cred-popup-unlock-btn');
+const credPopupUnlockErr = document.getElementById('cred-popup-unlock-err');
+const credPopupList = document.getElementById('cred-popup-list');
+const credPopupEmpty = document.getElementById('cred-popup-empty');
+const credPopupOpenVault = document.getElementById('cred-popup-open-vault');
+/** @type {Array<{ id: number, login: string, label: string }>} */
+let credFillMatchesCache = [];
+let credLongPressTimer = null;
+let credLongPressFired = false;
 
 // ─── Proxy pill refs ──────────────────────────────────────────────────────────
 const pbStatusBtn    = document.getElementById('pb-status-btn');
@@ -32,6 +51,12 @@ const pbDot          = document.getElementById('pb-dot');
 const pbName         = document.getElementById('pb-name');
 const pbModeBadge    = document.getElementById('pb-mode-badge');
 const settingsToggle = document.getElementById('settings-toggle-btn');
+
+const statusMitm      = document.getElementById('status-mitm');
+const statusProxy     = document.getElementById('status-proxy');
+const statusIp        = document.getElementById('status-ip');
+const statusRequests  = document.getElementById('status-requests');
+const statusErrors    = document.getElementById('status-errors');
 
 const toastContainer  = document.getElementById('rule-toast-container');
 
@@ -41,10 +66,17 @@ forwardBtn.addEventListener('click', () => api.navForward());
 reloadBtn.addEventListener('click',  () => api.navReload());
 if (homeBtn) homeBtn.addEventListener('click', () => api.navHome());
 
+function isOmniboxDropdownVisible() {
+    const el = document.getElementById('command-palette');
+    return !!(el && !el.classList.contains('hidden'));
+}
+
 urlInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
+    if (!isOmniboxDropdownVisible() && e.key === 'Enter') {
         const raw = urlInput.value.trim();
         if (!raw) return;
+        // Sync with main in case omnibox chrome reserve / overlay state is out of date.
+        hideCommandPalette();
         api.navigateTo(raw);
     }
 });
@@ -64,12 +96,14 @@ api.onURLUpdate((url) => {
     const normalized = _normalizeToolbarUrl(url);
     _setToolbarUrlIfChanged(normalized, { respectFocus: true });
     ssHandleUrlChange(normalized);
+    hideCredPopup();
     scheduleCookiePageBadgeRefresh();
+    scheduleCredentialsToolbarRefresh();
 });
 
 // Navigation started by a link click or JS (will-navigate).
 // Force-update the address bar even if urlInput currently has focus
-// (BrowserView clicks don't transfer focus to the chrome renderer).
+// (Tab WebContentsView clicks don't transfer focus to the chrome renderer).
 api.onTabWillNavigate?.((data) => {
     const active = tabs.find(t => t.isActive);
     if (active && active.id === data.tabId) {
@@ -77,7 +111,9 @@ api.onTabWillNavigate?.((data) => {
         // Force-update + blur: page navigation started, typed draft is no longer relevant.
         _setToolbarUrlIfChanged(normalized, { respectFocus: false, blur: true });
         ssHandleUrlChange(normalized);
+        hideCredPopup();
         scheduleCookiePageBadgeRefresh();
+        scheduleCredentialsToolbarRefresh();
     }
 });
 
@@ -116,6 +152,7 @@ api.onSetLoadingState((loading) => {
 
 // ─── Logging toggle state ─────────────────────────────────────────────────────
 let isLogging = false;
+let _statusLogCount = 0;
 
 function setLoggingVisual(on) {
     isLogging = on;
@@ -138,9 +175,11 @@ function setLoggingVisual(on) {
 api.onUpdateLogStatus((data) => {
     const on = !!(data && data.enabled);
     setLoggingVisual(on);
+    _statusLogCount = (data && Number.isFinite(data.count)) ? data.count : 0;
     if (!on) {
         if (logSessionNum)  logSessionNum.textContent = '#—';
         if (logEntryBadge) { logEntryBadge.style.display = 'none'; logEntryBadge.textContent = '0'; }
+        refreshBrowserStatusBar();
         return;
     }
     if (logSessionNum)  logSessionNum.textContent = `#${data.sessionId}`;
@@ -148,6 +187,7 @@ api.onUpdateLogStatus((data) => {
         logEntryBadge.textContent = data.count >= 1000 ? `${Math.floor(data.count/1000)}k` : data.count;
         logEntryBadge.style.display = data.count > 0 ? '' : 'none';
     }
+    refreshBrowserStatusBar();
 });
 
 logToggleBtn?.addEventListener('click', async (e) => {
@@ -341,6 +381,7 @@ function _scheduleTabUiUpdate(tabData) {
             ssHandleUrlChange(normalized);
         }
         scheduleCookiePageBadgeRefresh();
+        scheduleCredentialsToolbarRefresh();
     });
 }
 
@@ -355,7 +396,11 @@ api.onTabUrlChanged((data) => {
         _setToolbarUrlIfChanged(normalized, { respectFocus: true });
         ssHandleUrlChange(normalized);
     }
-    if (active && active.id === data.tabId) scheduleCookiePageBadgeRefresh();
+    if (active && active.id === data.tabId) {
+        hideCredPopup();
+        scheduleCookiePageBadgeRefresh();
+        scheduleCredentialsToolbarRefresh();
+    }
 });
 
 // ─── Right toolbar actions ────────────────────────────────────────────────────
@@ -443,6 +488,156 @@ async function refreshCookiePageBadge() {
     }
 }
 
+// ─── Credentials toolbar: badge (matches for current site) + Fill button ───
+let _credToolbarTimer = null;
+function scheduleCredentialsToolbarRefresh() {
+    clearTimeout(_credToolbarTimer);
+    _credToolbarTimer = setTimeout(() => { void refreshCredentialsToolbarBadges(); }, 400);
+}
+
+function showCredToolbarToast(message, type) {
+    if (!message) return;
+    if (typeof showToast === 'function') {
+        const t = type || (/could not|error|fail/i.test(String(message)) ? 'error' : 'success');
+        showToast(String(message), { type: t, duration: 3200 });
+        return;
+    }
+    if (!toastContainer) return;
+    const el = document.createElement('div');
+    el.className = 'rule-toast';
+    el.style.whiteSpace = 'pre-wrap';
+    el.textContent = message;
+    toastContainer.appendChild(el);
+    setTimeout(() => {
+        el.classList.add('fade-out');
+        setTimeout(() => el.remove(), 320);
+    }, 3200);
+}
+
+function hideCredPopup() {
+    if (!credPopup) return;
+    credPopup.classList.add('hidden');
+    if (credPopupUnlockErr) {
+        credPopupUnlockErr.textContent = '';
+        credPopupUnlockErr.classList.add('hidden');
+    }
+    if (credPopupPw) credPopupPw.value = '';
+}
+
+function showCredPopupUnlock() {
+    if (!credPopup || !credPopupUnlock) return;
+    credPopup.classList.remove('hidden');
+    credPopupUnlock.classList.remove('hidden');
+    if (credPopupList) credPopupList.classList.add('hidden');
+    if (credPopupEmpty) credPopupEmpty.classList.add('hidden');
+    setTimeout(() => {
+        try {
+            credPopupPw?.focus({ preventScroll: true });
+        } catch {
+            credPopupPw?.focus();
+        }
+    }, 30);
+}
+
+function showCredPopupList(matches) {
+    if (!credPopup || !credPopupList) return;
+    credPopup.classList.remove('hidden');
+    if (credPopupUnlock) credPopupUnlock.classList.add('hidden');
+    if (credPopupEmpty) credPopupEmpty.classList.add('hidden');
+    credPopupList.classList.remove('hidden');
+    credPopupList.innerHTML = (matches || []).map((row) => {
+        const title = row.label || row.login || `Account ${row.id}`;
+        const line2 = row.label && row.login ? row.login : '';
+        return `<button type="button" class="cred-fill-menu-item" role="menuitem" data-cred-id="${row.id}">` +
+            `<span class="cred-fill-menu-title">${escapeHtmlCred(title)}</span>` +
+            (line2 ? `<span class="cred-fill-menu-sub">${escapeHtmlCred(line2)}</span>` : '') +
+            '</button>';
+    }).join('');
+    credPopupList.querySelectorAll('.cred-fill-menu-item').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const id = Number(btn.getAttribute('data-cred-id'));
+            hideCredPopup();
+            try {
+                const res = await api.credentialsFillActiveTab({ credentialId: id });
+                if (res?.success) {
+                    showCredToolbarToast('Filled login and password from vault.', 'success');
+                } else {
+                    showCredToolbarToast(res?.error || 'Could not fill this page.', 'error');
+                }
+            } catch (err) {
+                showCredToolbarToast(String(err?.message || err), 'error');
+            }
+        });
+    });
+}
+
+function showCredPopupEmpty() {
+    if (!credPopup) return;
+    credPopup.classList.remove('hidden');
+    if (credPopupUnlock) credPopupUnlock.classList.add('hidden');
+    if (credPopupList) {
+        credPopupList.classList.add('hidden');
+        credPopupList.innerHTML = '';
+    }
+    if (credPopupEmpty) credPopupEmpty.classList.remove('hidden');
+}
+
+function escapeHtmlCred(s) {
+    return String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/"/g, '&quot;');
+}
+
+async function refreshCredentialsToolbarBadges() {
+    if (!credentialsSiteBadge || !credUnifiedWrap) return;
+    credFillMatchesCache = [];
+    const active = tabs.find(t => t.isActive);
+    const url = active?.url || '';
+    if (!active || ssIsHomePage(url) || !/^https?:\/\//i.test(url)) {
+        credentialsSiteBadge.style.display = 'none';
+        credentialsSiteBadge.textContent = '';
+        credentialsSiteBadge.classList.remove('cred-badge-locked', 'cred-badge-unlocked');
+        return;
+    }
+    if (!api.credentialsSiteMatchCount) {
+        credentialsSiteBadge.style.display = 'none';
+        credentialsSiteBadge.classList.remove('cred-badge-locked', 'cred-badge-unlocked');
+        return;
+    }
+    try {
+        const r = await api.credentialsSiteMatchCount({ pageUrl: url });
+        if (!r || !r.exists) {
+            credentialsSiteBadge.style.display = 'none';
+            credentialsSiteBadge.textContent = '';
+            credentialsSiteBadge.classList.remove('cred-badge-locked', 'cred-badge-unlocked');
+            return;
+        }
+        const n = Number(r.count) || 0;
+        const unlocked = r.unlocked === true;
+        if (n > 0) {
+            credentialsSiteBadge.textContent = n > 99 ? '99+' : String(n);
+            credentialsSiteBadge.style.display = 'inline-flex';
+            credentialsSiteBadge.classList.toggle('cred-badge-unlocked', unlocked);
+            credentialsSiteBadge.classList.toggle('cred-badge-locked', !unlocked);
+            if (unlocked && api.credentialsSiteMatches) {
+                try {
+                    const m = await api.credentialsSiteMatches({ pageUrl: url });
+                    if (Array.isArray(m?.matches)) credFillMatchesCache = m.matches;
+                } catch { /* ignore */ }
+            }
+        } else {
+            credentialsSiteBadge.style.display = 'none';
+            credentialsSiteBadge.textContent = '';
+            credentialsSiteBadge.classList.remove('cred-badge-locked', 'cred-badge-unlocked');
+        }
+    } catch {
+        credentialsSiteBadge.style.display = 'none';
+        credentialsSiteBadge.classList.remove('cred-badge-locked', 'cred-badge-unlocked');
+    }
+}
+
 // Main process took a scheduled screenshot → play flash + reset countdown
 api.onScreenshotTaken(() => {
     ssFlash();
@@ -513,6 +708,278 @@ if (notesBtn) {
     });
 }
 
+async function handleCredentialsToolbarPrimaryClick(ev) {
+    ev.stopPropagation();
+    if (credLongPressFired) {
+        credLongPressFired = false;
+        return;
+    }
+    const active = tabs.find(t => t.isActive);
+    const url = active?.url || '';
+    if (!active || ssIsHomePage(url) || !/^https?:\/\//i.test(url)) {
+        showCredToolbarToast('Open a website to use saved credentials.', 'error');
+        return;
+    }
+    if (!api.credentialsSiteMatchCount) return;
+    let r;
+    try {
+        r = await api.credentialsSiteMatchCount({ pageUrl: url });
+    } catch (e) {
+        showCredToolbarToast(String(e?.message || e), 'error');
+        return;
+    }
+    if (!r?.exists) {
+        api.openCredentialsWindow();
+        return;
+    }
+    const count = Number(r.count) || 0;
+    const unlocked = r.unlocked === true;
+
+    // If the dropdown was left open (e.g. empty state, SPA nav), the first click used to
+    // only dismiss it — do nothing visible. For unlocked + exactly one match, dismiss then fill.
+    const popupVisible = credPopup && !credPopup.classList.contains('hidden');
+    if (popupVisible) {
+        hideCredPopup();
+        if (!(unlocked && count === 1)) {
+            return;
+        }
+    }
+
+    if (!unlocked) {
+        showCredPopupUnlock();
+        return;
+    }
+
+    if (count === 0) {
+        showCredPopupEmpty();
+        return;
+    }
+    if (count === 1) {
+        try {
+            const res = await api.credentialsFillActiveTab({});
+            if (res?.success) {
+                showCredToolbarToast('Filled login and password from vault.', 'success');
+            } else {
+                showCredToolbarToast(res?.error || 'Could not fill this page.', 'error');
+            }
+        } catch (e) {
+            showCredToolbarToast(String(e?.message || e), 'error');
+        }
+        return;
+    }
+    let matches = credFillMatchesCache;
+    if (matches.length !== count && api.credentialsSiteMatches) {
+        try {
+            const m = await api.credentialsSiteMatches({ pageUrl: url });
+            if (Array.isArray(m?.matches)) matches = m.matches;
+        } catch { /* use cache */ }
+    }
+    showCredPopupList(matches);
+}
+
+async function submitCredPopupUnlock() {
+    const active = tabs.find(t => t.isActive);
+    const url = active?.url || '';
+    if (!credPopupPw || !api.credentialsUnlockAndGetMatches) return;
+    const pw = credPopupPw.value;
+    if (credPopupUnlockErr) {
+        credPopupUnlockErr.textContent = '';
+        credPopupUnlockErr.classList.add('hidden');
+    }
+    try {
+        const r = await api.credentialsUnlockAndGetMatches({ password: pw, pageUrl: url });
+        if (!r?.success) {
+            if (credPopupUnlockErr) {
+                credPopupUnlockErr.textContent = r?.error || 'Unlock failed';
+                credPopupUnlockErr.classList.remove('hidden');
+            }
+            return;
+        }
+        credPopupPw.value = '';
+        void scheduleCredentialsToolbarRefresh();
+        const matches = Array.isArray(r.matches) ? r.matches : [];
+        if (matches.length === 0) {
+            showCredPopupEmpty();
+            return;
+        }
+        if (matches.length === 1) {
+            hideCredPopup();
+            try {
+                const res = await api.credentialsFillActiveTab({ credentialId: matches[0].id });
+                if (res?.success) {
+                    showCredToolbarToast('Filled login and password from vault.', 'success');
+                } else {
+                    showCredToolbarToast(res?.error || 'Could not fill this page.', 'error');
+                }
+            } catch (e) {
+                showCredToolbarToast(String(e?.message || e), 'error');
+            }
+            return;
+        }
+        showCredPopupList(matches);
+    } catch (e) {
+        if (credPopupUnlockErr) {
+            credPopupUnlockErr.textContent = String(e?.message || e);
+            credPopupUnlockErr.classList.remove('hidden');
+        }
+    }
+}
+
+if (credentialsBtn) {
+    credentialsBtn.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        credLongPressFired = false;
+        clearTimeout(credLongPressTimer);
+        credLongPressTimer = setTimeout(() => {
+            credLongPressTimer = null;
+            credLongPressFired = true;
+            hideCredPopup();
+            api.openCredentialsWindow();
+        }, 500);
+    });
+    credentialsBtn.addEventListener('pointerup', () => {
+        clearTimeout(credLongPressTimer);
+        credLongPressTimer = null;
+    });
+    credentialsBtn.addEventListener('pointerleave', () => {
+        clearTimeout(credLongPressTimer);
+        credLongPressTimer = null;
+    });
+    credentialsBtn.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        hideCredPopup();
+        api.openCredentialsWindow();
+    });
+    credentialsBtn.addEventListener('click', (ev) => void handleCredentialsToolbarPrimaryClick(ev));
+}
+
+if (credPopupUnlockBtn) {
+    credPopupUnlockBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void submitCredPopupUnlock();
+    });
+}
+if (credPopupPw) {
+    credPopupPw.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            void submitCredPopupUnlock();
+        }
+    });
+    credPopupPw.addEventListener('click', (e) => e.stopPropagation());
+}
+if (credPopupOpenVault) {
+    credPopupOpenVault.addEventListener('click', (e) => {
+        e.stopPropagation();
+        hideCredPopup();
+        api.openCredentialsWindow();
+    });
+}
+if (credPopup) {
+    credPopup.addEventListener('click', (e) => e.stopPropagation());
+}
+document.addEventListener('click', (e) => {
+    if (credUnifiedWrap && credUnifiedWrap.contains(e.target)) return;
+    hideCredPopup();
+});
+
+if (api.onCredentialsToolbarRefresh) {
+    api.onCredentialsToolbarRefresh(() => scheduleCredentialsToolbarRefresh());
+}
+
+// ─── Credential save bar (auto-capture prompt) ───────────────────────────────
+const credSaveBar     = document.getElementById('credential-save-bar');
+const credSaveDomain  = document.getElementById('cred-save-domain');
+const credSaveLogin   = document.getElementById('cred-save-login');
+const credSaveUnlockRow = document.getElementById('cred-save-unlock-row');
+const credSavePw      = document.getElementById('cred-save-pw');
+const credSaveYes     = document.getElementById('cred-save-yes');
+const credSaveNever   = document.getElementById('cred-save-never');
+const credSaveDismiss = document.getElementById('cred-save-dismiss');
+
+/** Extra space above the tab WebContentsView when the credential save bar is visible. */
+const CRED_SAVE_BAR_RESERVE_PX = 36;
+
+function getCredSaveBarReservePx() {
+    return credSaveBar && !credSaveBar.classList.contains('hidden') ? CRED_SAVE_BAR_RESERVE_PX : 0;
+}
+
+async function applyChromeToolbarReserve() {
+    try {
+        await api.setToolbarHeight(getCredSaveBarReservePx());
+    } catch (_) { /* ignore */ }
+}
+
+function hideCredSaveBar() {
+    if (credSaveBar) credSaveBar.classList.add('hidden');
+    if (credSavePw) credSavePw.value = '';
+    void applyChromeToolbarReserve();
+}
+
+if (api.onShowCredentialSaveBar) {
+    api.onShowCredentialSaveBar((data) => {
+        if (!credSaveBar) return;
+        credSaveBar.classList.remove('hidden');
+        if (credSaveDomain) credSaveDomain.textContent = data.domain || '';
+        if (credSaveLogin) credSaveLogin.textContent = data.login ? `(${data.login})` : '';
+        if (data.needsUnlock) {
+            if (credSaveUnlockRow) { credSaveUnlockRow.classList.remove('hidden'); credSaveUnlockRow.style.display = 'flex'; }
+            if (credSaveYes) credSaveYes.textContent = 'Unlock & Save';
+            setTimeout(() => credSavePw?.focus(), 60);
+        } else {
+            if (credSaveUnlockRow) { credSaveUnlockRow.classList.add('hidden'); credSaveUnlockRow.style.display = 'none'; }
+            if (credSaveYes) credSaveYes.textContent = 'Save';
+        }
+        void applyChromeToolbarReserve();
+    });
+}
+
+if (credSaveYes) {
+    credSaveYes.addEventListener('click', async () => {
+        const needsUnlock = credSaveUnlockRow && !credSaveUnlockRow.classList.contains('hidden');
+        if (needsUnlock) {
+            const pw = credSavePw?.value || '';
+            if (!pw) { credSavePw?.focus(); return; }
+            const res = await api.credentialCaptureUnlockAndSave(pw);
+            if (res.success) {
+                hideCredSaveBar();
+                if (typeof showToast === 'function') showToast('Password saved to vault', { type: 'success' });
+            } else {
+                if (typeof showToast === 'function') showToast(res.error || 'Failed', { type: 'error' });
+            }
+        } else {
+            const res = await api.credentialCaptureConfirm();
+            if (res.success) {
+                hideCredSaveBar();
+                if (typeof showToast === 'function') showToast('Password saved to vault', { type: 'success' });
+            } else {
+                if (typeof showToast === 'function') showToast(res.error || 'Failed', { type: 'error' });
+            }
+        }
+    });
+}
+
+if (credSaveNever) {
+    credSaveNever.addEventListener('click', async () => {
+        await api.credentialCaptureDismiss();
+        hideCredSaveBar();
+    });
+}
+
+if (credSaveDismiss) {
+    credSaveDismiss.addEventListener('click', async () => {
+        await api.credentialCaptureDismiss();
+        hideCredSaveBar();
+    });
+}
+
+if (credSavePw) {
+    credSavePw.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') credSaveYes?.click();
+        if (e.key === 'Escape') { hideCredSaveBar(); api.credentialCaptureDismiss(); }
+    });
+}
+
 // ─── Favicon support ──────────────────────────────────────────────────────────
 function getFaviconHtml(tab) {
     if (tab.faviconUrl) {
@@ -556,7 +1023,10 @@ function _renderPill() {
     pbDot.classList.remove('active', 'direct', 'isolated');
 
     const info = _lastProxyInfo;
-    if (!info) return;
+    if (!info) {
+        refreshBrowserStatusBar();
+        return;
+    }
     const active = !!info.active;
     const label  = (info.displayProxyName || info.proxyName || 'Proxy');
 
@@ -588,6 +1058,7 @@ function _renderPill() {
         : 'No proxy — click to set up';
 
     _renderModeBadge(info);
+    refreshBrowserStatusBar();
 }
 
 function _renderModeBadge(_info) {
@@ -600,6 +1071,51 @@ function updateProxyStatus(info) {
     if (!info) return;
     _lastProxyInfo = info;
     _renderPill();
+}
+
+function refreshBrowserStatusBar() {
+    if (!statusMitm && !statusProxy) return;
+
+    if (typeof api.getMitmStats === 'function') {
+        api.getMitmStats().then((st) => {
+            const ready = st && st.workerReady !== false;
+            if (statusMitm) statusMitm.textContent = `MITM: ${ready ? 'Active' : 'Starting'}`;
+            if (statusErrors) statusErrors.textContent = `Errors: ${st && st.errors != null ? st.errors : '—'}`;
+        }).catch(() => {
+            if (statusMitm) statusMitm.textContent = 'MITM: —';
+        });
+    }
+
+    const info = _lastProxyInfo;
+    if (statusProxy) {
+        if (!info) {
+            statusProxy.textContent = 'Proxy: —';
+        } else {
+            const active = !!info.active;
+            const label = active ? (info.displayProxyName || info.proxyName || 'Proxy') : 'Direct';
+            statusProxy.textContent = `Proxy: ${label}`;
+        }
+    }
+
+    if (statusIp) {
+        let txt = '—';
+        if (info?.active && _proxyIpGeo && _proxyIpGeo.ip) {
+            const loc = [_proxyIpGeo.city, _proxyIpGeo.country].filter(Boolean).join(', ');
+            txt = _proxyIpGeo.ip + (loc ? ' · ' + loc : '');
+        } else if (info && !info.active && _directIpGeo && _directIpGeo.ip) {
+            const loc = [_directIpGeo.city, _directIpGeo.country].filter(Boolean).join(', ');
+            txt = _directIpGeo.ip + (loc ? ' · ' + loc : '');
+        } else if (info && !info.active && _directIpGeo && _directIpGeo._tried) {
+            txt = '—';
+        } else if (info && !info.active) {
+            txt = 'checking…';
+        }
+        statusIp.textContent = `IP: ${txt}`;
+    }
+
+    if (statusRequests) {
+        statusRequests.textContent = `Requests: ${isLogging ? _statusLogCount : 0}`;
+    }
 }
 
 function _activeTabIdForIpGeo() {
@@ -654,7 +1170,9 @@ function _onActiveTabChanged(tabData) {
         }).catch(() => {});
     }
     if (!_lastProxyInfo?.active) _fetchDirectIpGeo();
+    hideCredPopup();
     scheduleCookiePageBadgeRefresh();
+    scheduleCredentialsToolbarRefresh();
 }
 
 // Click opens Proxy Manager
@@ -673,6 +1191,10 @@ api.getCurrentProxy().then((info) => {
     updateProxyStatus(info);
     if (info?.active) _fetchProxyIpGeo();
 }).catch(() => {});
+
+setInterval(() => {
+    refreshBrowserStatusBar();
+}, 8000);
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 settingsToggle?.addEventListener('click', () => {
@@ -772,9 +1294,12 @@ api.onToolbarActivityBadgeReset?.((tool) => {
 
 
 // ─── Hotkey-driven IPC from main process ──────────────────────────────────────
+/** Set from omnibox block: open suggestions when main focuses the address bar (Ctrl+L). */
+let _focusUrlBarOmniboxExtra = null;
 api.onFocusUrlBar?.(() => {
     urlInput.focus();
     urlInput.select();
+    if (typeof _focusUrlBarOmniboxExtra === 'function') _focusUrlBarOmniboxExtra();
 });
 
 api.onSwitchTabRel?.((delta) => {
@@ -813,7 +1338,7 @@ document.addEventListener('mousemove', () => {
 });
 
 // ─── Init: fetch current tabs ─────────────────────────────────────────────────
-api.getTabs().then(td => { renderTabs(td); _onActiveTabChanged(td); scheduleCookiePageBadgeRefresh(); }).catch(() => {});
+api.getTabs().then(td => { renderTabs(td); _onActiveTabChanged(td); scheduleCookiePageBadgeRefresh(); scheduleCredentialsToolbarRefresh(); }).catch(() => {});
 
 // ─── Window switcher overlay (Ctrl+` from main) ─────────────────────────────
 const winSwitcherOverlay = document.getElementById('win-switcher-overlay');
@@ -843,7 +1368,32 @@ const WIN_SWITCHER_CODE_TO_SLOT = new Map(WIN_SWITCHER_KEY_CODES.map((c, i) => [
 const WIN_SWITCHER_HINT_LINE1 =
     '4×3 grid: 1–3 / QWE / ASD / ZXC — pick a window; More… on the last key when needed';
 const WIN_SWITCHER_HINT_LINE2 =
-    'Esc: back from More, or close on the first page · Ctrl+` — open from any CupNet window';
+    'Arrow keys move · Enter to focus · Esc: back from More, or close · Ctrl+` — open from any CupNet window';
+
+/** Keyboard highlight (0–11) in the 4×3 grid; reset when switching pages or closing. */
+let _winSwitcherKeyboardSlot = 0;
+
+function _winSwitcherMoveGrid(slot, dir) {
+    const row = Math.floor(slot / 3);
+    const col = slot % 3;
+    if (dir === 'up') {
+        if (row >= 1) return slot - 3;
+        return slot;
+    }
+    if (dir === 'down') {
+        if (row <= 2) return slot + 3;
+        return slot;
+    }
+    if (dir === 'left') {
+        if (col >= 1) return slot - 1;
+        return slot;
+    }
+    if (dir === 'right') {
+        if (col <= 1) return slot + 1;
+        return slot;
+    }
+    return slot;
+}
 
 const CUPNET_LOGO_FALLBACK_SVG =
     '<svg viewBox="0 0 32 32" class="win-switcher-cupnet-fallback" aria-hidden="true"><defs><linearGradient id="wscg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#60a5fa"/><stop offset="100%" stop-color="#3b82f6"/></linearGradient></defs><rect width="32" height="32" rx="8" fill="url(#wscg)"/><path fill="#fff" d="M9 10.5c0-1.1.9-2 2-2h6.5c2.5 0 4.5 2 4.5 4.5S20 17.5 17.5 17.5H13v3h7v2.5H12c-1.1 0-2-.9-2-2v-5c0-1.1.9-2 2-2h4.5c1.4 0 2.5-1.1 2.5-2.5S18.4 9 17 9H11v1.5z"/></svg>';
@@ -1080,6 +1630,7 @@ function buildSwitcherTile(slot, keyLabel) {
         row.appendChild(previewWrap);
         row.addEventListener('click', () => {
             _winSwitcherPageOffset += 11;
+            _winSwitcherKeyboardSlot = 0;
             renderWindowSwitcher();
         });
         return row;
@@ -1133,8 +1684,14 @@ function renderWindowSwitcher() {
     for (let slot = 0; slot < 12; slot++) {
         const kind = getSwitcherSlotKind(slot, total, _winSwitcherPageOffset);
         const label = WIN_SWITCHER_KEY_LABELS[slot];
-        winSwitcherList.appendChild(buildSwitcherTile(kind, label));
+        const tile = buildSwitcherTile(kind, label);
+        if (slot === _winSwitcherKeyboardSlot) tile.classList.add('win-switcher-tile--kbd-focus');
+        winSwitcherList.appendChild(tile);
     }
+    try {
+        const el = winSwitcherList.querySelector('.win-switcher-tile--kbd-focus');
+        el?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    } catch (e) { /* ignore */ }
 }
 
 function hideWindowSwitcher() {
@@ -1145,6 +1702,7 @@ function hideWindowSwitcher() {
         _winSwitcherRefreshTimer = null;
     }
     _winSwitcherPageOffset = 0;
+    _winSwitcherKeyboardSlot = 0;
     try { api.setWindowSwitcherOverlayVisible?.(false); } catch (_) { /* ignore */ }
     winSwitcherOverlay.classList.remove('win-switcher-overlay--open');
     winSwitcherOverlay.setAttribute('aria-hidden', 'true');
@@ -1165,15 +1723,55 @@ function onWindowSwitcherKeydown(e) {
         hideWindowSwitcher();
         return;
     }
+    const total = _winSwitcherCache.length;
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        _winSwitcherKeyboardSlot = _winSwitcherMoveGrid(_winSwitcherKeyboardSlot, 'down');
+        renderWindowSwitcher();
+        return;
+    }
+    if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        _winSwitcherKeyboardSlot = _winSwitcherMoveGrid(_winSwitcherKeyboardSlot, 'up');
+        renderWindowSwitcher();
+        return;
+    }
+    if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        _winSwitcherKeyboardSlot = _winSwitcherMoveGrid(_winSwitcherKeyboardSlot, 'left');
+        renderWindowSwitcher();
+        return;
+    }
+    if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        _winSwitcherKeyboardSlot = _winSwitcherMoveGrid(_winSwitcherKeyboardSlot, 'right');
+        renderWindowSwitcher();
+        return;
+    }
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        if (total === 0) return;
+        const kind = getSwitcherSlotKind(_winSwitcherKeyboardSlot, total, _winSwitcherPageOffset);
+        if (kind.type === 'empty') return;
+        if (kind.type === 'more') {
+            _winSwitcherPageOffset += 11;
+            _winSwitcherKeyboardSlot = 0;
+            renderWindowSwitcher();
+            return;
+        }
+        api.focusWindowById(_winSwitcherCache[kind.index].id).catch(() => {});
+        hideWindowSwitcher();
+        return;
+    }
     const slot = WIN_SWITCHER_CODE_TO_SLOT.get(e.code);
     if (slot === undefined) return;
-    const total = _winSwitcherCache.length;
     if (total === 0) return;
     const kind = getSwitcherSlotKind(slot, total, _winSwitcherPageOffset);
     if (kind.type === 'empty') return;
     if (kind.type === 'more') {
         e.preventDefault();
         _winSwitcherPageOffset += 11;
+        _winSwitcherKeyboardSlot = 0;
         renderWindowSwitcher();
         return;
     }
@@ -1185,6 +1783,7 @@ function onWindowSwitcherKeydown(e) {
 async function showWindowSwitcher() {
     if (!winSwitcherOverlay || !winSwitcherList) return;
     _winSwitcherPageOffset = 0;
+    _winSwitcherKeyboardSlot = 0;
     const loadGen = ++_winSwitcherPreviewLoadGen;
     let res = { windows: [] };
     try { res = await api.getOpenWindows({ includePreviews: false }); } catch (_) { /* ignore */ }
@@ -1249,3 +1848,379 @@ document.getElementById('win-switcher-toolbar-btn')?.addEventListener('click', (
         showWindowSwitcher();
     }
 });
+
+// ─── Omnibox: `>` = commands; otherwise URL + suggestions (top hosts from log) ──
+const commandPaletteEl = document.getElementById('command-palette');
+const commandPaletteBackdrop = document.getElementById('command-palette-backdrop');
+let commandPaletteActiveIdx = 0;
+/** @type {Array<{ kind: 'cmd', label: string, category?: string, shortcut?: string, run: function } | { kind: 'url', label: string, sub?: string, url: string }>} */
+let omniboxRows = [];
+let cachedTopHosts = [];
+let _topHostsFetchedAt = 0;
+const TOP_HOSTS_TTL_MS = 60000;
+
+const OMNIBOX_QUICK_LINKS = [
+    { label: 'CupNet start page', keywords: 'home new tab dashboard', url: 'cupnet://newtab' },
+    { label: 'Settings', keywords: 'preferences options', url: 'cupnet://settings' },
+    { label: 'User guide', keywords: 'help documentation manual', url: 'cupnet://guide' },
+];
+
+function isCommandMode() {
+    return String(urlInput?.value || '').trimStart().startsWith('>');
+}
+
+function getCommandFilterQuery() {
+    const v = String(urlInput?.value || '');
+    const i = v.indexOf('>');
+    if (i < 0) return '';
+    return v.slice(i + 1).trim();
+}
+
+function _cupnetFuzzyMatch(query, text) {
+    const q = String(query || '').toLowerCase().trim();
+    const t = String(text || '').toLowerCase();
+    if (!q) return true;
+    if (t.includes(q)) return true;
+    let qi = 0;
+    for (let i = 0; i < t.length && qi < q.length; i++) {
+        if (t[i] === q[qi]) qi++;
+    }
+    return qi === q.length;
+}
+
+function getCommandPaletteCommands() {
+    const active = tabs.find((x) => x.isActive);
+    const activeTabId = active?.id;
+    /** Curated list (not auto-generated from preload). `keywords` improves search. */
+    return [
+        { label: 'Back', category: 'Navigation', keywords: 'history previous', shortcut: '', run: () => api.navBack?.() },
+        { label: 'Forward', category: 'Navigation', keywords: 'history next', shortcut: '', run: () => api.navForward?.() },
+        { label: 'Reload page', category: 'Navigation', keywords: 'refresh', shortcut: '', run: () => api.navReload?.() },
+        { label: 'Home', category: 'Navigation', keywords: 'start', shortcut: '', run: () => api.navHome?.() },
+        { label: 'New tab', category: 'Navigation', keywords: '', shortcut: 'Ctrl+T', run: () => api.newTab() },
+        { label: 'New isolated tab', category: 'Navigation', keywords: 'session isolate incognito', shortcut: '', run: () => api.newIsolatedTab?.() },
+        { label: 'Close active tab', category: 'Navigation', keywords: '', shortcut: '', run: () => {
+            if (activeTabId != null) void api.closeTab?.(activeTabId);
+        } },
+        { label: 'Focus address bar', category: 'Navigation', keywords: 'url omnibox location', shortcut: 'Ctrl+L', run: () => { urlInput.focus(); urlInput.select(); } },
+        { label: 'Open Settings', category: 'Navigation', keywords: 'preferences options', shortcut: 'Ctrl+,', run: () => api.openSettingsTab?.() },
+        { label: 'Open CupNet Guide', category: 'Navigation', keywords: 'help documentation manual', shortcut: '', run: () => api.navigateTo?.('cupnet://guide') },
+        { label: 'Open start page', category: 'Navigation', keywords: 'new tab dashboard', shortcut: '', run: () => api.navigateTo?.('cupnet://newtab') },
+
+        { label: 'Take screenshot', category: 'Page', keywords: 'capture screen shot', shortcut: '', run: () => { void api.takeScreenshot?.('click').catch(() => {}); } },
+        { label: 'Import session bundle', category: 'Tools', keywords: 'har zip restore', shortcut: '', run: () => { void api.importBundle?.().catch(() => {}); } },
+        { label: 'Toggle trace mode', category: 'Logging', keywords: 'full capture request response', shortcut: '', run: async () => {
+            try {
+                const on = await api.getTraceMode?.();
+                await api.setTraceMode?.(!on);
+            } catch (_) { /* ignore */ }
+        } },
+        { label: 'Open Network Activity', category: 'Tools', keywords: 'log viewer database requests', shortcut: '', run: () => api.openLogViewer() },
+        { label: 'Open Proxy Manager', category: 'Tools', keywords: 'profile tls fingerprint chain', shortcut: '', run: () => api.openProxyManager() },
+        { label: 'Disconnect proxy', category: 'Proxy', keywords: 'offline mitm', shortcut: '', run: () => { void api.disconnectProxy?.().catch(() => {}); } },
+        { label: 'Connect direct (no upstream proxy)', category: 'Proxy', keywords: 'direct tls local', shortcut: '', run: () => { void api.connectDirect?.().catch(() => {}); } },
+        { label: 'Open Rules & Interceptor', category: 'Tools', keywords: 'highlight mock block', shortcut: '', run: () => api.openRulesWindow() },
+        { label: 'Open Cookie Manager', category: 'Tools', keywords: 'storage jar', shortcut: '', run: () => api.openCookieManager(activeTabId) },
+        { label: 'Open DNS Manager', category: 'Tools', keywords: 'hosts override', shortcut: '', run: () => api.openDnsManager() },
+        { label: 'Open Request Editor', category: 'Tools', keywords: 'replay http', shortcut: '', run: () => api.openRequestEditor() },
+        { label: 'Open Request Editor (new window)', category: 'Tools', keywords: 'replay separate', shortcut: '', run: () => { void api.openRequestEditorNewWindow?.().catch(() => {}); } },
+        { label: 'Open System Console', category: 'Tools', keywords: 'stdout stderr debug', shortcut: '', run: () => api.openConsoleViewer() },
+        { label: 'Open Page Analyzer', category: 'Tools', keywords: 'forms captcha meta', shortcut: '', run: () => api.openPageAnalyzer() },
+        { label: 'Open Notes', category: 'Tools', keywords: 'scratchpad quill', shortcut: '', run: () => api.openNotesWindow() },
+        { label: 'Open Credentials vault', category: 'Tools', keywords: 'passwords secrets vault', shortcut: 'Ctrl+Alt+L', run: () => api.openCredentialsWindow() },
+        { label: 'Autofill credentials (active tab)', category: 'Tools', keywords: 'fill login password', shortcut: '', run: () => { void api.credentialsFillActiveTab?.({}).catch(() => {}); } },
+        { label: 'Open Compare viewer', category: 'Tools', keywords: 'diff two requests', shortcut: '', run: () => api.openCompareViewer() },
+        { label: 'Open Trace viewer', category: 'Tools', keywords: 'full body', shortcut: '', run: () => api.openTraceViewer() },
+        { label: 'Open DevTools (active tab)', category: 'Tools', keywords: 'inspector chromium', shortcut: '', run: () => api.openDevTools() },
+        { label: 'Open API Scout', category: 'Tools', keywords: 'ivac har dump', shortcut: '', run: () => api.openIvacScout() },
+        { label: 'Toggle session recording', category: 'Logging', keywords: 'logging pause resume', shortcut: '', run: () => logToggleBtn?.click() },
+        { label: 'Show my public IP', category: 'Proxy', keywords: 'wan address geoip', shortcut: '', run: async () => {
+            try {
+                const ip = await api.getDirectIp?.();
+                if (typeof showToast === 'function' && ip) showToast(String(ip), { type: 'info' });
+            } catch (_) { /* ignore */ }
+        } },
+        { label: 'Check IP / Geo (active tab)', category: 'Proxy', keywords: 'egress proxy ip', shortcut: '', run: () => {
+            if (activeTabId != null && api.checkIpGeo) void api.checkIpGeo(activeTabId);
+        } },
+        { label: 'Reset first-run welcome wizard', category: 'App', keywords: 'onboarding tutorial', shortcut: '', run: () => { void api.resetOnboardingWizard?.().catch(() => {}); } },
+
+        { label: 'Window switcher', category: 'Windows', keywords: 'alt-tab overview', shortcut: 'Ctrl+`', run: () => showWindowSwitcher() },
+    ];
+}
+
+async function refreshTopHostsIfStale() {
+    if (Date.now() - _topHostsFetchedAt < TOP_HOSTS_TTL_MS && cachedTopHosts.length) return;
+    try {
+        const rows = await api.getOmniboxTopHosts?.(16);
+        cachedTopHosts = Array.isArray(rows) ? rows : [];
+    } catch {
+        cachedTopHosts = [];
+    }
+    _topHostsFetchedAt = Date.now();
+}
+
+function getOmniboxHintText() {
+    if (isCommandMode()) {
+        return '↑↓ select · Enter run command · Shift+Enter open rest as URL · Esc';
+    }
+    return '↑↓ select · Enter open · Shift+Enter search · Type > for commands · Esc';
+}
+
+function buildOmniboxOverlayPayload() {
+    const addr = addressBarContainer;
+    const r = addr ? addr.getBoundingClientRect() : { left: 12, width: 400, bottom: 95 };
+    const left = Math.max(0, Math.round(r.left));
+    const width = Math.max(120, Math.round(r.width));
+    /** Align dropdown under the address field; overlay view starts at tab top (see tab-manager TOOLBAR_HEIGHT + cred reserve). */
+    const tabSurfaceTop = 95 + getCredSaveBarReservePx();
+    const topGap = Math.max(4, Math.round(r.bottom) - tabSurfaceTop + 4);
+    const hint = getOmniboxHintText();
+    if (!omniboxRows.length) {
+        return {
+            left,
+            width,
+            topGap,
+            hint,
+            emptyText: isCommandMode()
+                ? 'No commands match'
+                : 'No suggestions — browse to build history',
+            items: [],
+        };
+    }
+    const items = omniboxRows.map((row, i) => ({
+        label: row.label,
+        sub: row.kind === 'cmd' ? (row.category || '') : (row.sub || ''),
+        shortcut: row.shortcut || '',
+        active: i === commandPaletteActiveIdx,
+    }));
+    return { left, width, topGap, hint, items };
+}
+
+function renderOmniboxList() {
+    if (!commandPaletteEl) return;
+    if (isCommandMode()) {
+        const q = getCommandFilterQuery();
+        const all = getCommandPaletteCommands();
+        const cmds = all.filter((c) => _cupnetFuzzyMatch(q, `${c.label} ${c.category} ${c.keywords || ''}`));
+        omniboxRows = cmds.map((c) => ({
+            kind: 'cmd',
+            label: c.label,
+            category: c.category,
+            shortcut: c.shortcut,
+            run: c.run,
+        }));
+        commandPaletteActiveIdx = Math.min(commandPaletteActiveIdx, Math.max(0, omniboxRows.length - 1));
+    } else {
+        const q = (urlInput?.value || '').trim().toLowerCase();
+        const quick = OMNIBOX_QUICK_LINKS.filter((x) => _cupnetFuzzyMatch(q, `${x.label} ${x.keywords}`))
+            .map((x) => ({ kind: 'url', label: x.label, sub: 'Quick link', url: x.url }));
+        const hosts = cachedTopHosts
+            .filter((h) => !q || _cupnetFuzzyMatch(q, h.host))
+            .map((h) => ({
+                kind: 'url',
+                label: h.host,
+                sub: `${h.count} in log`,
+                url: `https://${h.host}`,
+            }));
+        omniboxRows = [...quick, ...hosts].slice(0, 24);
+        commandPaletteActiveIdx = Math.min(commandPaletteActiveIdx, Math.max(0, omniboxRows.length - 1));
+    }
+    void api.updateOmniboxOverlay?.(buildOmniboxOverlayPayload());
+}
+
+function runOmniboxIndex(idx) {
+    const row = omniboxRows[idx];
+    if (!row) return;
+    hideCommandPalette();
+    try {
+        if (row.kind === 'cmd') row.run();
+        else if (row.kind === 'url') api.navigateTo(row.url);
+    } catch (e) {
+        console.error('[Omnibox]', e);
+        if (typeof showToast === 'function') showToast(String(e?.message || e), { type: 'error' });
+    }
+}
+
+async function showOmniboxOverlayShell() {
+    if (!commandPaletteEl || !urlInput) return;
+    commandPaletteEl.classList.remove('hidden');
+    commandPaletteEl.setAttribute('aria-hidden', 'false');
+    urlOmniboxDropdown?.classList.add('hidden');
+    urlOmniboxDropdown?.setAttribute('aria-hidden', 'true');
+    addressBarContainer?.classList.add('omnibox-open');
+    urlInput.placeholder = URL_INPUT_PLACEHOLDER_OMNIBOX;
+    urlInput.setAttribute('aria-expanded', 'true');
+    try {
+        await api.showOmniboxOverlay?.();
+    } catch (_) { /* ignore */ }
+}
+
+/** Focus address bar + `>` + command list (Cmd/Ctrl+K). */
+async function openCommandOmniboxHotkey() {
+    if (!commandPaletteEl || !urlInput) return;
+    if (isOmniboxDropdownVisible() && isCommandMode() && String(urlInput.value || '').trim() === '>') {
+        hideCommandPalette();
+        return;
+    }
+    await showOmniboxOverlayShell();
+    urlInput.value = '>';
+    commandPaletteActiveIdx = 0;
+    renderOmniboxList();
+    setTimeout(() => {
+        urlInput.focus();
+        urlInput.setSelectionRange(1, 1);
+    }, 0);
+}
+
+/** Suggestions for normal URL mode (focus / Ctrl+L). */
+async function openNavOmniboxOnFocus() {
+    if (!commandPaletteEl || !urlInput || isCommandMode()) return;
+    await showOmniboxOverlayShell();
+    commandPaletteActiveIdx = 0;
+    renderOmniboxList();
+    void refreshTopHostsIfStale().then(() => {
+        if (!isOmniboxDropdownVisible() || isCommandMode()) return;
+        renderOmniboxList();
+    });
+}
+
+async function onUrlInputOmnibox() {
+    if (isCommandMode()) {
+        if (!isOmniboxDropdownVisible()) await showOmniboxOverlayShell();
+        commandPaletteActiveIdx = 0;
+        renderOmniboxList();
+        return;
+    }
+    if (isOmniboxDropdownVisible()) {
+        commandPaletteActiveIdx = 0;
+        renderOmniboxList();
+    }
+}
+
+function hideCommandPalette() {
+    if (!commandPaletteEl) return;
+    try {
+        void api.hideOmniboxOverlay?.();
+    } catch (_) { /* ignore */ }
+    commandPaletteEl.classList.add('hidden');
+    commandPaletteEl.setAttribute('aria-hidden', 'true');
+    urlOmniboxDropdown?.classList.add('hidden');
+    urlOmniboxDropdown?.setAttribute('aria-hidden', 'true');
+    addressBarContainer?.classList.remove('omnibox-open');
+    if (urlInput) {
+        urlInput.placeholder = URL_INPUT_PLACEHOLDER_DEFAULT;
+        urlInput.setAttribute('aria-expanded', 'false');
+        const active = tabs.find((t) => t.isActive);
+        if (active) urlInput.value = _normalizeToolbarUrl(active.url || '');
+    }
+    omniboxRows = [];
+    void applyChromeToolbarReserve();
+}
+
+_focusUrlBarOmniboxExtra = () => {
+    void openNavOmniboxOnFocus();
+};
+
+urlInput.addEventListener('input', () => {
+    void onUrlInputOmnibox();
+});
+
+urlInput.addEventListener('focus', () => {
+    void (async () => {
+        if (isCommandMode()) {
+            if (!isOmniboxDropdownVisible()) await showOmniboxOverlayShell();
+            renderOmniboxList();
+            return;
+        }
+        await openNavOmniboxOnFocus();
+    })();
+});
+
+api.onToggleCommandPalette?.(() => {
+    void openCommandOmniboxHotkey();
+});
+
+api.onOmniboxOverlaySelect?.((idx) => {
+    const i = Number(idx);
+    if (Number.isFinite(i)) runOmniboxIndex(i);
+});
+api.onOmniboxOverlayDismiss?.(() => {
+    hideCommandPalette();
+});
+api.onForceCloseOmnibox?.(() => {
+    if (!commandPaletteEl || commandPaletteEl.classList.contains('hidden')) return;
+    hideCommandPalette();
+});
+
+/** Capture phase: arrows / Enter when omnibox is open (list is under address bar). */
+function onCommandPaletteGlobalKeydown(e) {
+    if (!commandPaletteEl || commandPaletteEl.classList.contains('hidden')) return;
+    if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (omniboxRows.length) {
+            commandPaletteActiveIdx = Math.min(omniboxRows.length - 1, commandPaletteActiveIdx + 1);
+            renderOmniboxList();
+        }
+        return;
+    }
+    if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        e.stopPropagation();
+        commandPaletteActiveIdx = Math.max(0, commandPaletteActiveIdx - 1);
+        renderOmniboxList();
+        return;
+    }
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        const raw = (urlInput?.value || '').trim();
+        if (isCommandMode()) {
+            if (e.shiftKey) {
+                const rest = raw.replace(/^>\s*/, '').trim();
+                if (rest) api.navigateTo(rest);
+                hideCommandPalette();
+                return;
+            }
+            if (omniboxRows.length) runOmniboxIndex(commandPaletteActiveIdx);
+            return;
+        }
+        if (e.shiftKey) {
+            if (raw) api.navigateTo(raw);
+            hideCommandPalette();
+            return;
+        }
+        if (omniboxRows.length) {
+            runOmniboxIndex(commandPaletteActiveIdx);
+            return;
+        }
+        if (raw) api.navigateTo(raw);
+        hideCommandPalette();
+    }
+}
+document.addEventListener('keydown', onCommandPaletteGlobalKeydown, true);
+
+commandPaletteBackdrop?.addEventListener('click', hideCommandPalette);
+
+let _omniboxResizeTimer = null;
+window.addEventListener('resize', () => {
+    if (!isOmniboxDropdownVisible()) return;
+    clearTimeout(_omniboxResizeTimer);
+    _omniboxResizeTimer = setTimeout(() => {
+        void api.updateOmniboxOverlay?.(buildOmniboxOverlayPayload());
+    }, 80);
+});
+
+document.addEventListener('keydown', (e) => {
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && e.key === ',') {
+        e.preventDefault();
+        api.openSettingsTab?.();
+        return;
+    }
+    if (e.key === 'Escape' && commandPaletteEl && !commandPaletteEl.classList.contains('hidden')) {
+        e.preventDefault();
+        hideCommandPalette();
+    }
+}, true);

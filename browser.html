@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
     <title>[CupNet]</title>
+    <link rel="stylesheet" href="shared-dark-theme.css">
     <link rel="stylesheet" href="styles.css">
     <script src="cookies-page-match.js"></script>
 </head>
@@ -67,10 +68,14 @@
         <span id="pb-mode-badge" class="pb-mode-badge" style="display:none"></span>
     </button>
 
-    <!-- Address bar -->
-    <div class="address-bar-container">
-        <input type="text" id="url-input" placeholder="Search or enter address…" autocomplete="off" spellcheck="false">
+    <!-- Address bar + command palette (omnibox: same field, Cmd/Ctrl+K) -->
+    <div class="address-bar-container" id="address-bar-container">
+        <input type="text" id="url-input" placeholder="Type &gt; for commands, or enter a URL…" autocomplete="off" spellcheck="false" aria-autocomplete="list" aria-controls="command-palette-list" aria-expanded="false">
         <div id="loading-indicator"></div>
+        <div id="url-omnibox-dropdown" class="url-omnibox-dropdown hidden" aria-hidden="true">
+            <ul id="command-palette-list" class="command-palette-list" role="listbox" aria-label="Commands"></ul>
+            <div id="url-omnibox-hint" class="command-palette-hint"></div>
+        </div>
     </div>
 
     <!-- ── Unified tool dock ── -->
@@ -170,6 +175,35 @@
             <span class="tool-label">Notes</span>
         </button>
 
+        <!-- Credentials: unified fill + vault (long-press / right-click opens full vault) -->
+        <div class="cred-unified-wrap" id="cred-unified-wrap">
+            <button type="button" id="credentials-btn" class="tool-btn" style="position:relative" title="Credentials · Click to fill · Long-press or right-click for full vault · Ctrl+Alt+L">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M8 1.5a4 4 0 0 0-4 4v2H3a1 1 0 0 0-1 1v5a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1h-1v-2a4 4 0 0 0-4-4z"/>
+                    <circle cx="8" cy="6.5" r="1.3" fill="currentColor" stroke="none"/>
+                </svg>
+                <span class="tool-label">Creds</span>
+                <span id="credentials-site-badge" class="rules-hit-badge cred-site-badge" aria-hidden="true"></span>
+            </button>
+            <div id="cred-popup" class="cred-popup hidden" role="dialog" aria-label="Credentials for this site">
+                <div id="cred-popup-unlock" class="cred-popup-section hidden">
+                    <label class="cred-popup-label" for="cred-popup-pw">Master password</label>
+                    <div class="cred-popup-unlock-row">
+                        <input type="password" id="cred-popup-pw" class="cred-popup-input" placeholder="Master password" autocomplete="current-password" spellcheck="false">
+                        <button type="button" id="cred-popup-unlock-btn" class="cred-popup-primary-btn">Unlock</button>
+                    </div>
+                    <p id="cred-popup-unlock-err" class="cred-popup-err hidden" role="alert"></p>
+                </div>
+                <div id="cred-popup-list" class="cred-popup-section cred-popup-list hidden" role="menu"></div>
+                <div id="cred-popup-empty" class="cred-popup-section cred-popup-empty hidden">
+                    <p class="cred-popup-empty-text">No saved credentials for this page.</p>
+                </div>
+                <div class="cred-popup-footer">
+                    <button type="button" id="cred-popup-open-vault" class="cred-popup-link-btn">Open Vault…</button>
+                </div>
+            </div>
+        </div>
+
         <!-- System Console -->
         <button id="console-btn" class="tool-btn" title="System Console · Ctrl+Shift+K">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -194,8 +228,30 @@
     </div>
 </div>
 
+<!-- Credential save bar (auto-capture prompt) -->
+<div id="credential-save-bar" class="cred-save-bar hidden">
+    <div class="cred-save-inner">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:16px;height:16px;flex-shrink:0"><path d="M8 1l5.5 3v4c0 3.6-2.4 7-5.5 8-3.1-1-5.5-4.4-5.5-8V4L8 1z"/></svg>
+        <span id="cred-save-text">Save password for <b id="cred-save-domain"></b>?</span>
+        <span id="cred-save-login" style="color:var(--text-muted);font-size:12px;margin-left:4px"></span>
+        <div id="cred-save-unlock-row" class="hidden" style="display:flex;align-items:center;gap:6px;margin-left:8px">
+            <input type="password" id="cred-save-pw" placeholder="Master password" style="font-size:12px;padding:3px 8px;width:160px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border);border-radius:4px;">
+        </div>
+        <div style="display:flex;gap:6px;margin-left:auto">
+            <button type="button" id="cred-save-yes" class="cred-save-btn cred-save-btn-primary">Save</button>
+            <button type="button" id="cred-save-never" class="cred-save-btn">Never</button>
+            <button type="button" id="cred-save-dismiss" class="cred-save-btn cred-save-btn-dismiss" title="Dismiss">&times;</button>
+        </div>
+    </div>
+</div>
+
 <!-- Rule notification toasts -->
 <div id="rule-toast-container"></div>
+
+<!-- Command palette backdrop only (omnibox list lives under #address-bar-container) -->
+<div id="command-palette" class="command-palette command-palette--backdrop-only hidden" aria-hidden="true">
+    <div class="command-palette-backdrop" id="command-palette-backdrop" aria-hidden="true"></div>
+</div>
 
 <!-- Window switcher overlay (Ctrl+`) -->
 <div id="win-switcher-overlay" class="win-switcher-overlay" aria-hidden="true">
@@ -205,6 +261,20 @@
     </div>
 </div>
 
+<footer id="browser-status-bar" class="browser-status-bar" role="status" aria-live="polite">
+    <span id="status-mitm" class="browser-status-item" title="MITM proxy">MITM: —</span>
+    <span class="browser-status-sep" aria-hidden="true">·</span>
+    <span id="status-proxy" class="browser-status-item" title="Proxy">Proxy: —</span>
+    <span class="browser-status-sep" aria-hidden="true">·</span>
+    <span id="status-ip" class="browser-status-item" title="Egress IP">IP: —</span>
+    <span class="browser-status-sep" aria-hidden="true">·</span>
+    <span id="status-requests" class="browser-status-item" title="Logged requests">Requests: —</span>
+    <span class="browser-status-sep" aria-hidden="true">·</span>
+    <span id="status-errors" class="browser-status-item" title="MITM / worker errors (recent)">Errors: —</span>
+</footer>
+
+<script src="toast-notifications.js"></script>
+<script src="keyboard-shortcuts.js"></script>
 <script src="browser-renderer.js"></script>
 </body>
 </html>

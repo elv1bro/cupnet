@@ -23,12 +23,12 @@ ELECTRON_RUN_AS_NODE= npm start
 ```
 main.js                  — главный процесс Electron
 ├── db.js                — SQLite база данных (better-sqlite3)
-├── tab-manager.js       — управление вкладками (BrowserView)
+├── tab-manager.js       — управление вкладками (WebContentsView)
 ├── request-interceptor.js — перехват запросов по сессии
 ├── rules-engine.js      — движок правил (условия → действия)
 ├── har-exporter.js      — экспорт в HAR 1.2
 ├── preload.js           — IPC-мост для browser.html / proxy-selector.html
-└── preload-view.js      — минимальный preload для BrowserView-вкладок
+└── preload-view.js      — минимальный preload для вкладок (WebContentsView)
 
 browser.html             — главное окно (тулбар + таб-бар)
 browser-renderer.js      — логика тулбара и таб-бара
@@ -76,7 +76,7 @@ quick-proxy-change.html  — быстрая смена прокси
 
 ### 2. Многовкладочность (`tab-manager.js`)
 
-- Каждая вкладка — отдельный `BrowserView` с изолированной `session.fromPartition`
+- Каждая вкладка — отдельный `WebContentsView` с изолированной `session.fromPartition`
 - Вкладки не разделяют cookies, кэш и прокси-настройки
 - При создании вкладки автоматически применяется текущий прокси
 - Таб-бар рендерится в `browser.html` динамически через IPC
@@ -222,7 +222,7 @@ quick-proxy-change.html  — быстрая смена прокси
 **Кнопки действий** (SVG-иконка + текстовая подпись):
 - `Log` — открывает Network Activity Log
 - `Screen` — делает скриншот активной вкладки
-- `DevTools` — открывает Chrome DevTools для активной BrowserView-вкладки
+- `DevTools` — открывает Chrome DevTools для активной вкладки (WebContentsView)
 
 **DevTools (исправлено):**  
 `F12` и `Cmd+Shift+I` (Shell) открывают DevTools правильного контекста. Меню → View:
@@ -235,7 +235,7 @@ quick-proxy-change.html  — быстрая смена прокси
 
 | Проблема | Решение |
 |---|---|
-| DevTools открывался для `browser.html` вместо сайта | Кастомный обработчик `toggleDevTools` на активный BrowserView |
+| DevTools открывался для `browser.html` вместо сайта | Кастомный обработчик `toggleDevTools` на активный WebContentsView |
 | `TOOLBAR_HEIGHT = 120px` при реальных 95px | Исправлено на 95 (35 tab-bar + 60 toolbar) — убран зазор |
 | `did-finish-load` с `.on()` создавал дублирующие вкладки при reload | Заменено на `.once()` |
 | Индикатор загрузки не работал | `did-start-loading` / `did-stop-loading` форвардятся в toolbar |

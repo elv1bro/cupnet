@@ -1,15 +1,21 @@
 'use strict';
 /**
- * Персистентные настройки приложения (settings.json), CapMonster (M7), кэш в памяти.
- * Синхронизация effectiveTrafficMode → main-процесс через configure({ onEffectiveTrafficModeLoaded }).
+ * Persistent app settings (settings.json), in-memory cache.
+ * Sync effectiveTrafficMode → main process via configure({ onEffectiveTrafficModeLoaded }).
  */
 const path = require('path');
 const fs = require('fs');
-const { app, safeStorage } = require('electron');
+const { app } = require('electron');
 const { normalizeTrafficMode } = require('../../traffic-mode-router');
 const { sysLog } = require('../../sys-log');
 
+/** Schema version in settings.json — bump when adding migrations. */
+const CURRENT_SETTINGS_VERSION = 1;
+
 const SETTINGS_DEFAULTS = {
+    _version: CURRENT_SETTINGS_VERSION,
+    /** First-launch welcome wizard; forced false when no settings.json yet. */
+    onboardingComplete: true,
     lastLogPath: null,
     filterPatterns: ['*google.com*', '*cloudflare.com*', '*analytics*', '*tracking*'],
     homepage: '',
@@ -31,7 +37,7 @@ const SETTINGS_DEFAULTS = {
         cooldownMs: 2000,
         maxPerMinute: 12,
     },
-    bypassDomains: ['challenges.cloudflare.com'],
+    bypassDomains: [],
     trafficOpts: {
         trafficEnabled: false,
         blockImages: false,
@@ -46,23 +52,22 @@ const SETTINGS_DEFAULTS = {
             '*.hcaptcha.com', 'turnstile.com', '*.turnstile.com',
         ],
     },
-    capmonster: {
-        apiKey: '',
-        autoInject: true,
-        autoSubmit: false,
-        pollTimeoutMs: 90000,
-        pollIntervalMs: 3000,
-    },
     /** Camera: enforce only all|none via session handlers; custom + order are UI / notes (stealth). */
     devicePermissions: {
         cameraMode: 'all',
         cameraPriority: [],
         cameraDisabledIds: [],
-        /** Совпадение по label — deviceId в Chromium зависит от origin (file:// vs https://). */
+        /** Match by label — deviceId in Chromium depends on origin (file:// vs https://). */
         cameraDisabledLabels: [],
         microphoneMode: 'all',
         microphonePriority: [],
     },
+    /** Log-viewer Activity Monitor: console, exceptions, storage, CSP (CDP Runtime/Log/DOMStorage). */
+    activityMonitorEnabled: false,
+    /** Max console API events per tab per second before coalescing into one "suppressed" row. */
+    activityMonitorRateLimit: 100,
+    /** Optional inject: wrap localStorage/sessionStorage for stack traces (not implemented in CDP path). */
+    activityMonitorStorageStackTraces: false,
 };
 
 let _cached = null;
@@ -100,7 +105,7 @@ function normalizeTrackingSettings(raw) {
     };
 }
 
-/** Доп. домены для captcha whitelist (старые settings.json без них ломали Turnstile при blockImages). */
+/** Extra domains for captcha whitelist (older settings.json without them broke Turnstile with blockImages). */
 const CAPTCHA_WL_RECOMMENDED = ['*.cloudflare.com', 'turnstile.com', '*.turnstile.com'];
 
 function normalizeTrafficOpts(raw) {
@@ -154,19 +159,6 @@ function normalizeMaxTabsBeforeWarning(raw) {
     return SETTINGS_DEFAULTS.maxTabsBeforeWarning;
 }
 
-function normalizeCapmonsterSettings(raw) {
-    const base = SETTINGS_DEFAULTS.capmonster;
-    const src = raw && typeof raw === 'object' ? raw : {};
-    return {
-        apiKey: String(src.apiKey || '').trim(),
-        autoInject: src.autoInject !== false,
-        autoSubmit: src.autoSubmit === true,
-        pollTimeoutMs: Math.max(30000, Math.min(180000, Number(src.pollTimeoutMs) || base.pollTimeoutMs)),
-        pollIntervalMs: Math.max(1000, Math.min(10000, Number(src.pollIntervalMs) || base.pollIntervalMs)),
-    };
-}
-
-/** Serialize settings for disk; encrypt CapMonster API key when safeStorage is available (M7). */
 function settingsForDisk(s) {
     let out;
     try {
@@ -174,37 +166,7 @@ function settingsForDisk(s) {
     } catch {
         return s;
     }
-    if (out.capmonster && typeof out.capmonster === 'object' && safeStorage.isEncryptionAvailable()) {
-        const key = String(out.capmonster.apiKey || '').trim();
-        if (key) {
-            try {
-                out.capmonster = {
-                    ...out.capmonster,
-                    apiKeyEnc: safeStorage.encryptString(key).toString('base64'),
-                    apiKey: '',
-                };
-            } catch (e) {
-                sysLog('warn', 'settings', 'capmonster encrypt failed: ' + (e?.message || e));
-            }
-        } else {
-            delete out.capmonster.apiKeyEnc;
-        }
-    }
     return out;
-}
-
-function hydrateCapmonsterFromDisk(rawCm) {
-    const base = normalizeCapmonsterSettings(rawCm);
-    if (rawCm && typeof rawCm === 'object' && rawCm.apiKeyEnc && typeof rawCm.apiKeyEnc === 'string'
-        && safeStorage.isEncryptionAvailable()) {
-        try {
-            const plain = safeStorage.decryptString(Buffer.from(rawCm.apiKeyEnc, 'base64'));
-            base.apiKey = String(plain || '').trim();
-        } catch (e) {
-            sysLog('warn', 'settings', 'capmonster decrypt failed: ' + (e?.message || e));
-        }
-    }
-    return base;
 }
 
 function _syncTrafficModeFromSettings() {
@@ -213,23 +175,111 @@ function _syncTrafficModeFromSettings() {
     }
 }
 
+/**
+ * Apply migrations from disk `raw` to current schema. Mutates conceptual copy; returns normalized flags.
+ * @param {object} raw
+ * @returns {{ migrated: boolean }}
+ */
+function migrateSettingsVersion(raw) {
+    let v = Number(raw._version);
+    if (!Number.isFinite(v) || v < 1) v = 0;
+    let migrated = false;
+    if (v < 1) {
+        migrated = true;
+        v = 1;
+    }
+    raw._version = CURRENT_SETTINGS_VERSION;
+    return { migrated };
+}
+
+function materializeSettingsFromRaw(raw) {
+    const merged = {
+        ...SETTINGS_DEFAULTS,
+        ...raw,
+        trafficOpts: normalizeTrafficOpts(raw.trafficOpts),
+        tracking: normalizeTrackingSettings(raw.tracking),
+        devicePermissions: normalizeDevicePermissions(raw.devicePermissions),
+        maxTabsBeforeWarning: normalizeMaxTabsBeforeWarning(raw),
+        activityMonitorEnabled: raw.activityMonitorEnabled === true,
+        activityMonitorRateLimit: Math.max(50, Math.min(500, Number(raw.activityMonitorRateLimit) || SETTINGS_DEFAULTS.activityMonitorRateLimit)),
+        activityMonitorStorageStackTraces: raw.activityMonitorStorageStackTraces === true,
+    };
+    merged._version = CURRENT_SETTINGS_VERSION;
+    if (merged.effectiveTrafficMode === 'browser_proxy') {
+        merged.effectiveTrafficMode = 'mitm';
+    }
+    delete merged.capmonster;
+    return merged;
+}
+
+/**
+ * Build a fresh settings object (factory reset). Does not touch disk.
+ */
+function buildFactoryResetSettings() {
+    return materializeSettingsFromRaw({
+        ...SETTINGS_DEFAULTS,
+        trafficOpts: {},
+        tracking: undefined,
+        devicePermissions: {},
+        onboardingComplete: true,
+    });
+}
+
+/**
+ * Export-safe snapshot (no secrets).
+ */
+function exportSettingsSafe(s) {
+    const out = JSON.parse(JSON.stringify(s || SETTINGS_DEFAULTS));
+    out._exportMeta = {
+        app: 'CupNet',
+        exportedAt: new Date().toISOString(),
+        settingsVersion: CURRENT_SETTINGS_VERSION,
+    };
+    return out;
+}
+
+/**
+ * Deep-merge imported JSON into current settings. Unknown keys ignored at top level selectively.
+ * @param {object} current from loadSettings()
+ * @param {object} imported parsed object
+ */
+function mergeImportedSettings(current, imported) {
+    if (!imported || typeof imported !== 'object') return current;
+    const importedClean = { ...imported };
+    delete importedClean._exportMeta;
+    const next = { ...current };
+    const keys = [
+        'filterPatterns', 'homepage', 'maxTabsBeforeWarning', 'pasteUnlock', 'traceMode',
+        'currentProxy', 'effectiveTrafficMode', 'bypassDomains', 'onboardingComplete',
+        'activityMonitorEnabled', 'activityMonitorRateLimit', 'activityMonitorStorageStackTraces',
+        'lastLogPath',
+    ];
+    for (const k of keys) {
+        if (importedClean[k] !== undefined) next[k] = importedClean[k];
+    }
+    if (importedClean.tracking && typeof importedClean.tracking === 'object') {
+        next.tracking = normalizeTrackingSettings({ ...current.tracking, ...importedClean.tracking });
+    }
+    if (importedClean.trafficOpts && typeof importedClean.trafficOpts === 'object') {
+        next.trafficOpts = normalizeTrafficOpts({ ...current.trafficOpts, ...importedClean.trafficOpts });
+    }
+    if (importedClean.devicePermissions && typeof importedClean.devicePermissions === 'object') {
+        next.devicePermissions = normalizeDevicePermissions({ ...current.devicePermissions, ...importedClean.devicePermissions });
+    }
+    next._version = CURRENT_SETTINGS_VERSION;
+    return materializeSettingsFromRaw(next);
+}
+
 function loadSettings() {
     if (_cached) return _cached;
     const settingsFilePath = getSettingsFilePath();
     try {
         if (fs.existsSync(settingsFilePath)) {
             const raw = JSON.parse(fs.readFileSync(settingsFilePath, 'utf8'));
-            _cached = {
-                ...SETTINGS_DEFAULTS,
-                ...raw,
-                trafficOpts: normalizeTrafficOpts(raw.trafficOpts),
-                tracking: normalizeTrackingSettings(raw.tracking),
-                capmonster: hydrateCapmonsterFromDisk(raw.capmonster),
-                devicePermissions: normalizeDevicePermissions(raw.devicePermissions),
-                maxTabsBeforeWarning: normalizeMaxTabsBeforeWarning(raw),
-            };
-            if (_cached.effectiveTrafficMode === 'browser_proxy') {
-                _cached.effectiveTrafficMode = 'mitm';
+            const hadBrowserProxy = raw.effectiveTrafficMode === 'browser_proxy';
+            const { migrated } = migrateSettingsVersion(raw);
+            _cached = materializeSettingsFromRaw(raw);
+            if (migrated || hadBrowserProxy) {
                 saveSettings(_cached);
             }
             _syncTrafficModeFromSettings();
@@ -242,10 +292,12 @@ function loadSettings() {
         ...SETTINGS_DEFAULTS,
         trafficOpts: normalizeTrafficOpts({}),
         tracking: normalizeTrackingSettings(),
-        capmonster: normalizeCapmonsterSettings(),
         devicePermissions: normalizeDevicePermissions(),
         maxTabsBeforeWarning: SETTINGS_DEFAULTS.maxTabsBeforeWarning,
+        activityMonitorRateLimit: SETTINGS_DEFAULTS.activityMonitorRateLimit,
     };
+    _cached._version = CURRENT_SETTINGS_VERSION;
+    _cached.onboardingComplete = false;
     _syncTrafficModeFromSettings();
     return _cached;
 }
@@ -270,6 +322,7 @@ function cancelPendingSave() {
 
 module.exports = {
     SETTINGS_DEFAULTS,
+    CURRENT_SETTINGS_VERSION,
     configure,
     getCached,
     getSettingsFilePath,
@@ -278,7 +331,9 @@ module.exports = {
     cancelPendingSave,
     normalizeTrackingSettings,
     normalizeTrafficOpts,
-    normalizeCapmonsterSettings,
     normalizeDevicePermissions,
     normalizeMaxTabsBeforeWarning,
+    buildFactoryResetSettings,
+    exportSettingsSafe,
+    mergeImportedSettings,
 };

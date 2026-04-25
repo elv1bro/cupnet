@@ -23,6 +23,20 @@ console.log = (...args) => process.stderr.write(args.join(' ') + '\n');
 
 const MITM_DEBUG = process.env.CUPNET_MITM_DEBUG === '1';
 const WORKER_VERBOSE = process.env.CUPNET_WORKER_VERBOSE === '1';
+/** Optional one-line operational logs to stderr (HTTP/2 vs HTTP/1.1 fallback, attempts). Set CUPNET_AZURETLS_LOG=1 */
+const AZURE_OP_LOG =
+    process.env.CUPNET_AZURETLS_LOG === '1' ||
+    String(process.env.CUPNET_AZURETLS_LOG || '').toLowerCase() === 'true';
+
+function trimOpUrl(u, max = 140) {
+    const s = String(u || '');
+    return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+function opLog(line) {
+    if (!AZURE_OP_LOG) return;
+    process.stderr.write(`[azure-worker] op ${line}\n`);
+}
 function headerMap(orderedHeaders) {
     const m = {};
     for (const [k, v] of (orderedHeaders || [])) m[k.toLowerCase()] = v;
@@ -112,15 +126,22 @@ function http2FingerprintForBrowser(browser) {
     return BROWSER_PROFILES.chrome.http2;
 }
 
-/** Пул AzureTLSClient на ключ (browser+proxy+ja3): одна нативная сессия не выдерживает параллельных request(). */
+/**
+ * Pool AzureTLSClient by (browser+proxy+ja3+tabId). Parallel requests need multiple clients per key.
+ * tabId must be part of the key: reusing the same native client across tabs leaked HTTP state
+ * (e.g. cookies on reused connections) while Electron cookie jars stayed per-partition.
+ */
 const BORROW_ABORT = Symbol('cupnet.worker.borrow_abort');
 const pools = new Map();
 const poolLru = [];
+const IDLE_CLIENT_TTL_MS = 25_000;
+const poolLastActivity = new Map();
 
 function touchPoolKey(key) {
     const idx = poolLru.indexOf(key);
     if (idx !== -1) poolLru.splice(idx, 1);
     poolLru.push(key);
+    poolLastActivity.set(key, Date.now());
 }
 
 function createAzureClient(profileName, proxy) {
@@ -150,6 +171,7 @@ function evictPoolsIfNeeded() {
             }
             pool.idle.length = 0;
             pools.delete(evictKey);
+            poolLastActivity.delete(evictKey);
             poolLru.shift();
         } else {
             break;
@@ -157,14 +179,37 @@ function evictPoolsIfNeeded() {
     }
 }
 
+function evictIdleClients() {
+    const now = Date.now();
+    for (const [key, pool] of pools) {
+        if (pool.inUse > 0 || pool.waiters.length > 0) continue;
+        const lastActive = poolLastActivity.get(key) || 0;
+        if (now - lastActive < IDLE_CLIENT_TTL_MS) continue;
+        for (const c of pool.idle) {
+            try { c.close(); } catch (_) {}
+        }
+        pool.idle.length = 0;
+        pools.delete(key);
+        poolLastActivity.delete(key);
+        const idx = poolLru.indexOf(key);
+        if (idx !== -1) poolLru.splice(idx, 1);
+    }
+}
+
+setInterval(evictIdleClients, 10_000).unref();
+
 function poolJa3Segment(ja3) {
     const s = ja3 != null ? String(ja3).trim() : '';
     return s ? `j:${s}` : 't';
 }
 
-async function borrowClient(browser, proxy, ja3) {
+async function borrowClient(browser, proxy, ja3, tabId) {
     const profileName = browser || 'chrome';
-    const key = `${profileName}::${proxy || ''}::${poolJa3Segment(ja3)}`;
+    const tabSeg =
+        tabId != null && String(tabId).trim() !== ''
+            ? `tab:${String(tabId)}`
+            : 'tab:__shared__';
+    const key = `${profileName}::${proxy || ''}::${poolJa3Segment(ja3)}::${tabSeg}`;
     const max = networkPolicy.concurrency.workerFfiConcurrency;
     touchPoolKey(key);
     let pool = pools.get(key);
@@ -178,10 +223,16 @@ async function borrowClient(browser, proxy, ja3) {
         if (pool.idle.length) {
             const c = pool.idle.pop();
             pool.inUse++;
+            // #region agent log
+            fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',location:'azure-tls-worker.js:borrowClient-idle',message:'borrowed IDLE client',data:{key,idleLeft:pool.idle.length,inUse:pool.inUse,sessionId:String(c.sessionId||'?')},timestamp:Date.now()})}).catch(()=>{});
+            // #endregion
             return { client: c, key };
         }
         if (pool.inUse < max) {
             pool.inUse++;
+            // #region agent log
+            fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',location:'azure-tls-worker.js:borrowClient-new',message:'creating NEW client',data:{key,inUse:pool.inUse,max,profileName},timestamp:Date.now()})}).catch(()=>{});
+            // #endregion
             return { client: createAzureClient(profileName, proxy), key };
         }
         const c = await new Promise((resolve) => pool.waiters.push(resolve));
@@ -224,6 +275,7 @@ function closeAllPoolClients() {
     }
     pools.clear();
     poolLru.length = 0;
+    poolLastActivity.clear();
 }
 
 let awaitClear = false;
@@ -293,7 +345,7 @@ async function handleLine(line) {
         return;
     }
 
-    const { id, method, url, headers, orderedHeaders, body, bodyBase64, proxy, browser, ja3, disableRedirects, forceHttp1 } = req;
+    const { id, method, url, headers, orderedHeaders, body, bodyBase64, proxy, browser, ja3, disableRedirects, forceHttp1, tabId, maxRetries } = req;
 
     // Control commands
     if (id === '__clear_sessions__') {
@@ -311,60 +363,235 @@ async function handleLine(line) {
     }
 
     await waitIfClearing();
-    let poolKey;
-    let client;
-    try {
-        ({ client, key: poolKey } = await borrowClient(browser, proxy, ja3));
-        httpInflight++;
 
-        if (ja3) {
-            try { client.applyJA3(ja3); } catch (err) {
-                safeCatch({ module: 'azure-tls-worker', eventCode: 'worker.ja3.apply_failed', context: { browser: browser || 'chrome' } }, err);
+    const retryLimit = Number(maxRetries) || 0;
+    const isIdempotent = /^(GET|HEAD|OPTIONS)$/i.test(method || 'GET');
+    const CONNECTION_ERRORS = /\bEOF\b|connection reset|ECONNRESET|ETIMEDOUT|ECONNREFUSED|broken pipe/i;
+
+    let lastError = null;
+    let hadConnError = false;
+    for (let attempt = 0; attempt <= retryLimit; attempt++) {
+        let poolKey;
+        let client;
+        const effectiveForceHttp1 = forceHttp1 === true;
+        try {
+            ({ client, key: poolKey } = await borrowClient(browser, proxy, ja3, tabId));
+            httpInflight++;
+
+            if (ja3) {
+                try { client.applyJA3(ja3); } catch (err) {
+                    safeCatch({ module: 'azure-tls-worker', eventCode: 'worker.ja3.apply_failed', context: { browser: browser || 'chrome' } }, err);
+                }
             }
-        }
 
-        const opts = {
-            method:           method  || 'GET',
-            url,
-            headers:          headers || undefined,
-            orderedHeaders:   orderedHeaders || undefined,
-            body:             bodyBase64 ? undefined : (body || undefined),
-            body_base64:      bodyBase64 || undefined,
-            proxy:            proxy   || undefined,
-            timeout:          networkPolicy.timeouts.upstreamRequestMs,
-            maxRetries:       0,
-            disableRedirects: disableRedirects === true,
-            maxRedirects:     disableRedirects === true ? 0 : undefined,
-            forceHttp1:       forceHttp1 === true,
-        };
-        if (WORKER_VERBOSE) {
-            process.stderr.write(`[worker-dbg] request: disableRedirects=${disableRedirects} forceHttp1=${!!opts.forceHttp1} url=${url}\n`);
-        }
-        debugLog(req, opts);
-
-        const result = await client.request(opts);
-
-        if (WORKER_VERBOSE) process.stderr.write(`[worker-dbg] response: status=${result.statusCode} url=${url} error=${result.error||''}\n`);
-        if (WORKER_VERBOSE && result.headers) {
-            const setCookie = result.headers['set-cookie'] || result.headers['Set-Cookie'] || '';
-            const location  = result.headers['location']  || result.headers['Location']  || '';
-            if (setCookie || location || result.statusCode >= 300) {
-                process.stderr.write(`[worker-dbg]   set-cookie=${setCookie} location=${location}\n`);
+            const opts = {
+                method:           method  || 'GET',
+                url,
+                headers:          headers || undefined,
+                orderedHeaders:   orderedHeaders || undefined,
+                body:             bodyBase64 ? undefined : (body || undefined),
+                body_base64:      bodyBase64 || undefined,
+                proxy:            proxy   || undefined,
+                timeout:          networkPolicy.timeouts.upstreamRequestMs,
+                maxRetries:       0,
+                disableRedirects: disableRedirects === true,
+                maxRedirects:     disableRedirects === true ? 0 : undefined,
+                forceHttp1:       effectiveForceHttp1,
+            };
+            if (WORKER_VERBOSE) {
+                process.stderr.write(`[worker-dbg] request: disableRedirects=${disableRedirects} forceHttp1=${!!opts.forceHttp1} url=${url}\n`);
             }
-        }
+            debugLog(req, opts);
 
-        send({ id, statusCode: result.statusCode, bodyBase64: result.bodyBase64 || '', headers: result.headers, error: result.error || null });
-    } catch (e) {
-        send({ id, statusCode: 0, body: null, headers: {}, error: e.message });
-    } finally {
-        if (client && poolKey) releaseClient(poolKey, client);
-        decHttpInflight();
+            if (AZURE_OP_LOG) {
+                opLog(
+                    `start ${method || 'GET'} ${effectiveForceHttp1 ? 'http1.1' : 'h2'} attempt=${attempt + 1}/${retryLimit + 1} tab=${tabId || '-'} url=${trimOpUrl(url)}`
+                );
+            }
+
+            // #region agent log
+            const _t0ffi = Date.now();
+            fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'ALL',location:'azure-tls-worker.js:pre-ffi',message:'before FFI call',data:{url,method:method||'GET',attempt,retryLimit,forceHttp1:effectiveForceHttp1,poolKey,clientSessionId:String(client.sessionId||'?'),proxy:proxy||null,tabId:tabId||null},timestamp:_t0ffi})}).catch(()=>{});
+            // #endregion
+
+            const result = await client.request(opts);
+
+            // #region agent log
+            const _t1ffi = Date.now();
+            const _connHdrs = result.headers ? {connection:result.headers['connection']||result.headers['Connection']||'',server:result.headers['server']||result.headers['Server']||'',keepAlive:result.headers['keep-alive']||result.headers['Keep-Alive']||'',altSvc:result.headers['alt-svc']||result.headers['Alt-Svc']||''} : {};
+            fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'ALL',location:'azure-tls-worker.js:post-ffi',message:'after FFI call',data:{url,status:result.statusCode,error:result.error||null,elapsedMs:_t1ffi-_t0ffi,forceHttp1:effectiveForceHttp1,attempt,finalUrl:result.url||'',connHeaders:_connHdrs},timestamp:_t1ffi})}).catch(()=>{});
+            // #endregion
+
+            if (WORKER_VERBOSE) process.stderr.write(`[worker-dbg] response: status=${result.statusCode} url=${url} error=${result.error||''}\n`);
+            if (WORKER_VERBOSE && result.headers) {
+                const setCookie = result.headers['set-cookie'] || result.headers['Set-Cookie'] || '';
+                const location  = result.headers['location']  || result.headers['Location']  || '';
+                if (setCookie || location || result.statusCode >= 300) {
+                    process.stderr.write(`[worker-dbg]   set-cookie=${setCookie} location=${location}\n`);
+                }
+            }
+
+            const hasConnError = result.error && CONNECTION_ERRORS.test(result.error);
+            if (hasConnError && isIdempotent) {
+                console.error(`[azure-worker] conn_err ${result.error} — fresh-client retry`);
+                try { client.close(); } catch (_) {}
+                const pool = pools.get(poolKey);
+                if (pool) pool.inUse = Math.max(0, pool.inUse - 1);
+                client = null;
+                decHttpInflight();
+
+                // Step A: fresh client with original orderedHeaders (UA now guaranteed by MITM)
+                const freshClient = createAzureClient(browser || 'chrome', proxy);
+                const _brT0 = Date.now();
+                try {
+                    const freshRes = await freshClient.request({
+                        method: method || 'GET', url, maxRetries: 0,
+                        timeout: networkPolicy.timeouts.upstreamRequestMs,
+                        headers:        headers || undefined,
+                        orderedHeaders: orderedHeaders || undefined,
+                        disableRedirects: disableRedirects === true,
+                        maxRedirects:     disableRedirects === true ? 0 : undefined,
+                    });
+                    // #region agent log
+                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_UA',location:'azure-tls-worker.js:fresh-retry-ok',message:'fresh retry OK',data:{url,status:freshRes.statusCode,error:freshRes.error||null,elapsedMs:Date.now()-_brT0},timestamp:Date.now()})}).catch(()=>{});
+                    // #endregion
+                    send({ id, statusCode: freshRes.statusCode, bodyBase64: freshRes.bodyBase64 || '', headers: freshRes.headers, error: freshRes.error || null });
+                    releaseClient(poolKey, freshClient);
+                    return;
+                } catch (retryErr) {
+                    // #region agent log
+                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_UA',location:'azure-tls-worker.js:fresh-retry-fail',message:'fresh retry FAILED',data:{url,error:retryErr.message,elapsedMs:Date.now()-_brT0},timestamp:Date.now()})}).catch(()=>{});
+                    // #endregion
+                    try { freshClient.close(); } catch (_) {}
+                }
+
+                // Step B: bare request (session defaults) as last resort
+                const bareClient = createAzureClient(browser || 'chrome', proxy);
+                const _brT1 = Date.now();
+                try {
+                    const bareRes = await bareClient.request({
+                        method: method || 'GET', url, maxRetries: 0,
+                        timeout: networkPolicy.timeouts.upstreamRequestMs,
+                        disableRedirects: disableRedirects === true,
+                        maxRedirects:     disableRedirects === true ? 0 : undefined,
+                    });
+                    // #region agent log
+                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_BARE',location:'azure-tls-worker.js:bare-ok',message:'bare request OK',data:{url,status:bareRes.statusCode,error:bareRes.error||null,elapsedMs:Date.now()-_brT1},timestamp:Date.now()})}).catch(()=>{});
+                    // #endregion
+                    send({ id, statusCode: bareRes.statusCode, bodyBase64: bareRes.bodyBase64 || '', headers: bareRes.headers, error: bareRes.error || null });
+                    try { bareClient.close(); } catch (_) {}
+                    return;
+                } catch (bareErr) {
+                    // #region agent log
+                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_BARE',location:'azure-tls-worker.js:bare-fail',message:'bare request FAILED',data:{url,error:bareErr.message,elapsedMs:Date.now()-_brT1},timestamp:Date.now()})}).catch(()=>{});
+                    // #endregion
+                    try { bareClient.close(); } catch (_) {}
+                    send({ id, statusCode: 0, body: null, headers: {}, error: bareErr.message });
+                    return;
+                }
+            }
+
+            if (AZURE_OP_LOG) {
+                opLog(
+                    `done status=${result.statusCode || 0} err=${result.error || '-'} ${effectiveForceHttp1 ? 'http1.1' : 'h2'} url=${trimOpUrl(url)}`
+                );
+            }
+
+            send({ id, statusCode: result.statusCode, bodyBase64: result.bodyBase64 || '', headers: result.headers, error: result.error || null });
+            releaseClient(poolKey, client);
+            client = null;
+            decHttpInflight();
+            return;
+        } catch (e) {
+            // #region agent log
+            fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'ALL',location:'azure-tls-worker.js:post-ffi-error',message:'FFI threw',data:{url,error:e.message,forceHttp1:effectiveForceHttp1,attempt,hadConnError,clientSessionId:String(client?.sessionId||'?')},timestamp:Date.now()})}).catch(()=>{});
+            // #endregion
+            lastError = e;
+            const isConnErr = CONNECTION_ERRORS.test(e.message || '');
+            if (isConnErr && isIdempotent) {
+                console.error(`[azure-worker] exc ${e.message} — fresh-client retry`);
+                if (client) {
+                    try { client.close(); } catch (_) {}
+                    const pool = pools.get(poolKey);
+                    if (pool) pool.inUse = Math.max(0, pool.inUse - 1);
+                }
+                decHttpInflight();
+
+                // Step A: fresh client with original orderedHeaders (UA now guaranteed by MITM)
+                const freshClient = createAzureClient(browser || 'chrome', proxy);
+                const _brT0e = Date.now();
+                try {
+                    const freshRes = await freshClient.request({
+                        method: method || 'GET', url, maxRetries: 0,
+                        timeout: networkPolicy.timeouts.upstreamRequestMs,
+                        headers:        headers || undefined,
+                        orderedHeaders: orderedHeaders || undefined,
+                        disableRedirects: disableRedirects === true,
+                        maxRedirects:     disableRedirects === true ? 0 : undefined,
+                    });
+                    // #region agent log
+                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_UA',location:'azure-tls-worker.js:exc-fresh-retry-ok',message:'fresh retry (exc) OK',data:{url,status:freshRes.statusCode,error:freshRes.error||null,elapsedMs:Date.now()-_brT0e},timestamp:Date.now()})}).catch(()=>{});
+                    // #endregion
+                    send({ id, statusCode: freshRes.statusCode, bodyBase64: freshRes.bodyBase64 || '', headers: freshRes.headers, error: freshRes.error || null });
+                    releaseClient(poolKey, freshClient);
+                    return;
+                } catch (retryErr) {
+                    // #region agent log
+                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_UA',location:'azure-tls-worker.js:exc-fresh-retry-fail',message:'fresh retry (exc) FAILED',data:{url,error:retryErr.message,elapsedMs:Date.now()-_brT0e},timestamp:Date.now()})}).catch(()=>{});
+                    // #endregion
+                    try { freshClient.close(); } catch (_) {}
+                }
+
+                // Step B: bare request (session defaults) as last resort
+                const bareClient = createAzureClient(browser || 'chrome', proxy);
+                const _brT1e = Date.now();
+                try {
+                    const bareRes = await bareClient.request({
+                        method: method || 'GET', url, maxRetries: 0,
+                        timeout: networkPolicy.timeouts.upstreamRequestMs,
+                        disableRedirects: disableRedirects === true,
+                        maxRedirects:     disableRedirects === true ? 0 : undefined,
+                    });
+                    // #region agent log
+                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_BARE',location:'azure-tls-worker.js:exc-bare-ok',message:'bare request (exc) OK',data:{url,status:bareRes.statusCode,error:bareRes.error||null,elapsedMs:Date.now()-_brT1e},timestamp:Date.now()})}).catch(()=>{});
+                    // #endregion
+                    send({ id, statusCode: bareRes.statusCode, bodyBase64: bareRes.bodyBase64 || '', headers: bareRes.headers, error: bareRes.error || null });
+                    try { bareClient.close(); } catch (_) {}
+                    return;
+                } catch (bareErr) {
+                    // #region agent log
+                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_BARE',location:'azure-tls-worker.js:exc-bare-fail',message:'bare request (exc) FAILED',data:{url,error:bareErr.message,elapsedMs:Date.now()-_brT1e},timestamp:Date.now()})}).catch(()=>{});
+                    // #endregion
+                    try { bareClient.close(); } catch (_) {}
+                    send({ id, statusCode: 0, body: null, headers: {}, error: bareErr.message });
+                    return;
+                }
+            }
+            send({ id, statusCode: 0, body: null, headers: {}, error: e.message });
+            if (client && poolKey) releaseClient(poolKey, client);
+            decHttpInflight();
+            return;
+        }
     }
+    send({ id, statusCode: 0, body: null, headers: {}, error: lastError?.message || 'Retry exhausted' });
 }
 
 function send(obj) {
     process.stdout.write(JSON.stringify(obj) + '\n');
 }
+
+// #region agent log — env/FD diagnostics at startup
+{
+    const fs = require('fs');
+    let fdCount = 0;
+    try { fdCount = fs.readdirSync('/dev/fd').length; } catch (_) {}
+    const proxyEnv = {};
+    for (const k of ['http_proxy','https_proxy','HTTP_PROXY','HTTPS_PROXY','no_proxy','NO_PROXY','ALL_PROXY','ELECTRON_RUN_AS_NODE','NODE_EXTRA_CA_CERTS','UV_THREADPOOL_SIZE','GODEBUG','GOMAXPROCS','GOTRACEBACK']) {
+        if (process.env[k] !== undefined) proxyEnv[k] = process.env[k];
+    }
+    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'ENV',location:'azure-tls-worker.js:startup',message:'worker env at startup',data:{pid:process.pid,ppid:process.ppid,nodeVersion:process.version,execPath:process.execPath,cwd:process.cwd(),fdCount,proxyEnv,argv:process.argv},timestamp:Date.now()})}).catch(()=>{});
+}
+// #endregion
 
 // Signal ready
 send({ id: '__init__', status: 'ready' });
