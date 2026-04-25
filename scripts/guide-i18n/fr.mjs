@@ -17,7 +17,7 @@ export default function fr(kbdRow) {
     <h2>En bref</h2>
     <ul>
         <li><b>Présentation :</b> navigateur Electron où le trafic des onglets passe par la pile CupNet : proxy amont facultatif, MITM HTTPS sur le port <b>8877</b>, TLS sortant via le worker <b>AzureTLS</b> (profil JA3 / HTTP2).</li>
-        <li><b>Journaux :</b> requêtes enregistrées dans <b>SQLite</b> (CDP + chemin MITM). Le bouton <b>REC</b> dans la barre d'outils met en pause/reprise ; <b>Log</b> ouvre le visualiseur (FTS, HAR, replay, trace, comparaison).</li>
+        <li><b>Journaux :</b> requêtes enregistrées dans <b>SQLite</b> (CDP + chemin MITM). Le bouton <b>REC</b> dans la barre d'outils met en pause/reprise ; <b>Log</b> ouvre le visualiseur (FTS, HAR, replay, comparaison).</li>
         <li><b>Gestionnaire de proxies :</b> profils chiffrés ( trousseau OS), <b>Appliquer globalement</b> ou <b>Appliquer à l'onglet actif</b>, statistiques MITM en direct dans la barre supérieure.</li>
         <li><b>Barre d'outils :</b> DNS, éditeur de requêtes, règles &amp; interception, analyseur de page, console système, paramètres (fenêtre séparée).</li>
         <li><b>Page nouvel onglet :</b> recherche, liens rapides, carte proxy/IP (badge MITM, portée par onglet), interrupteur cookies <b>Partagé / Isolé</b>, <b>proxy externe</b> pour curl/scripts.</li>
@@ -34,7 +34,7 @@ export default function fr(kbdRow) {
     <a href="#fingerprint">4. Empreinte &amp; TLS</a>
     <a href="#toolbar">5. Barre d'outils</a>
     <a href="#hotkeys">6. Raccourcis</a>
-    <a href="#logs">7. Journaux · Trace · Comparer</a>
+    <a href="#logs">7. Journaux · Comparer</a>
     <a href="#editor">8. Éditeur de requêtes</a>
     <a href="#rules">9. Règles &amp; interception</a>
     <a href="#cookies">10. Gestionnaire de cookies</a>
@@ -158,14 +158,13 @@ export default function fr(kbdRow) {
 </div>
 
 <div id="logs" class="g-card">
-    <h2>7) Journaux · Trace · Comparer</h2>
+    <h2>7) Journaux · Comparer</h2>
     <p>HTTP(S)/WebSocket partent dans SQLite : URL, méthode, en-têtes, corps (binaire pris en charge), durées, captures en lignes spéciales.</p>
     <ul>
         <li><b>Filtres</b> — méthode, statut, type MIME, onglet, session.</li>
         <li><b>FTS</b> — recherche plein texte URL + corps réponse.</li>
         <li><b>Export HAR</b> — HAR 1.2 (Charles, DevTools…).</li>
         <li><b>Replay</b> — envoyer la sélection vers l’éditeur.</li>
-        <li><b>Trace</b> — instantanés complets req/rép ; ⌘/Ctrl-clic ouvre la fenêtre Trace.</li>
         <li><b>Comparer</b> — slots gauche/droit puis fenêtre de diff.</li>
         <li><b>Sessions</b> — renommer, basculer, supprimer.</li>
     </ul>

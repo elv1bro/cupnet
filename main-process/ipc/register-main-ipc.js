@@ -15,7 +15,6 @@ const { registerPageAnalyzerIpc } = require('./handlers/page-analyzer-ipc');
 const { registerMiscIpc } = require('./handlers/misc-ipc');
 const { registerProxyIpc } = require('./handlers/proxy-ipc');
 const { registerScreenshotsIpc } = require('./handlers/screenshots-ipc');
-const { registerTraceViewerIpc } = require('./handlers/trace-viewer-ipc');
 const { registerCookiesDnsIpc } = require('./handlers/cookies-dns-ipc');
 const { registerLogCompareExecuteIpc } = require('./handlers/log-compare-execute-ipc');
 const { registerSettingsToolbarIpc } = require('./handlers/settings-toolbar-ipc');
@@ -41,7 +40,6 @@ function registerMainProcessIpc(ctx) {
     registerMiscIpc(ctx);
     registerProxyIpc(ctx);
     registerScreenshotsIpc(ctx);
-    registerTraceViewerIpc(ctx);
     registerCookiesDnsIpc(ctx);
     registerLogCompareExecuteIpc(ctx);
     registerSettingsToolbarIpc(ctx);

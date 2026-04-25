@@ -24,10 +24,10 @@ CupNet уже выглядит как сильный инженерный инс
 
 | Группа | Где ценность максимальна | Плюсы | Минусы/риски | Чего не хватает |
 |---|---|---|---|---|
-| QA / Test Automation | Воспроизводимость багов, triage flaky тестов | Intercept/mock, trace, HAR, управление cookies, правила | Нет "готовых QA-шаблонов" сценариев, ручной flow | Test presets, replay suites, экспорт "bug packet" |
+| QA / Test Automation | Воспроизводимость багов, triage flaky тестов | Intercept/mock, лог запросов, HAR, управление cookies, правила | Нет "готовых QA-шаблонов" сценариев, ручной flow | Test presets, replay suites, экспорт "bug packet" |
 | Web / Backend Dev | Отладка API, auth/cookies/headers, повтор запросов | Единая среда для перехвата и проверки гипотез, быстрый cycle | Шум интерфейса при сложных кейсах, мало быстрых guided-path | Dev shortcuts, comparison mode, "diff by request" UX |
-| Security / AppSec | Анализ клиентского поведения и HTTP attack surface | MITM, interception, fingerprint profile, trace | Недостаточно controls для enterprise-security | Audit trail, sensitive-data redaction, policy mode |
-| Support / SRE | Расследование инцидентов, handoff между командами | Логи, trace, HAR экспорт, события правил | Нет стандартизированного incident пакета | Incident bundle, case timeline, correlation tags |
+| Security / AppSec | Анализ клиентского поведения и HTTP attack surface | MITM, interception, fingerprint profile, лог запросов | Недостаточно controls для enterprise-security | Audit trail, sensitive-data redaction, policy mode |
+| Support / SRE | Расследование инцидентов, handoff между командами | Логи, HAR экспорт, события правил | Нет стандартизированного incident пакета | Incident bundle, case timeline, correlation tags |
 | Anti-fraud / Anti-bot | Гипотезы по fingerprint/proxy behavior | TLS profile, proxy templates, rules/interceptor | Недостаточно автоматизации серий экспериментов | Experiment runner, run-to-run compare, scenario scripts |
 | Tech Leads / Managers | Внедрение внутреннего инструмента в команды | Потенциально высокий ROI на debug/triage | Высокий риск "локального инструмента одного человека" | Onboarding path, ownership model, KPI dashboard |
 
@@ -41,7 +41,7 @@ CupNet уже выглядит как сильный инженерный инс
 
 **Плюсы**
 - Mock/block/modify rules помогают изолировать проблемный внешний фактор.
-- Trace + HAR ускоряют ретроспективу "что пошло не так".
+- Лог запросов + HAR ускоряют ретроспективу "что пошло не так".
 - Cookie manager и tab isolation полезны для сценариев state-dependent багов.
 
 **Минусы**
@@ -50,7 +50,7 @@ CupNet уже выглядит как сильный инженерный инс
 - Не хватает "step-by-step" flow для нового QA в команде.
 
 **Чего не хватает**
-- "QA Repro Pack": URL + cookies + selected requests + rules + trace в одном экспорте.
+- "QA Repro Pack": URL + cookies + selected requests + rules в одном экспорте.
 - Набор встроенных QA шаблонов interception.
 - Batch replay для группы запросов в рамках сценария.
 
@@ -70,7 +70,7 @@ CupNet уже выглядит как сильный инженерный инс
 **Плюсы**
 - Удобно проверять гипотезы через interception/rules без модификации сервиса.
 - Сочетание browser контекста + network данных в одном месте.
-- HAR/trace и request editor дают практический цикл "увидел -> изменил -> проверил".
+- HAR и request editor дают практический цикл "увидел -> изменил -> проверил".
 
 **Минусы**
 - Высокая когнитивная нагрузка при первых сессиях.
@@ -98,7 +98,7 @@ CupNet уже выглядит как сильный инженерный инс
 **Плюсы**
 - MITM + interception дают полезную поверхность для динамических проверок.
 - TLS profile/fingerprint полезен для исследования клиентской идентичности.
-- Trace data повышает качество доказательной базы в security findings.
+- Подробный лог запросов повышает качество доказательной базы в security findings.
 
 **Минусы/риски**
 - Недостаточно встроенных механизмов redaction для чувствительных данных.
@@ -124,7 +124,7 @@ CupNet уже выглядит как сильный инженерный инс
 - Основная ценность: быстро локализовать и передать артефакты дальше.
 
 **Плюсы**
-- Сильный базовый стек: timeline запросов, trace, HAR, replay.
+- Сильный базовый стек: timeline запросов, HAR, replay.
 - Можно быстро показать "симптом в трафике" для handoff в dev.
 
 **Минусы**

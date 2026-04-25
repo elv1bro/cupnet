@@ -389,19 +389,6 @@ test('getSessionsWithStats: empty sessions excluded (HAVING COUNT > 0)', () => {
     assert.ok(!list.find(s => s.id === empty.id), 'Empty session should not appear in stats');
 });
 
-test('insertTraceEntryQueued: enqueues and writes trace row', async () => {
-    const id = await db.insertTraceEntryQueued({
-        ts: new Date().toISOString(),
-        method: 'GET',
-        url: 'https://trace.queue.test',
-        requestHeaders: { a: 'b' },
-        responseHeaders: { c: 'd' },
-        status: 200,
-        duration: 12,
-    });
-    assert.ok(typeof id === 'number' && id > 0, 'Queued trace write should return id');
-});
-
 test('async write-path: createSessionAsync/insertRequestAsync works', async () => {
     const s = await db.createSessionAsync('async-proxy', 'tab_async');
     assert.ok(s && s.id > 0, 'createSessionAsync should return session');
@@ -417,12 +404,18 @@ test('async write-path: createSessionAsync/insertRequestAsync works', async () =
 });
 
 test('write queue stats expose high/low depths and drops', async () => {
-    await db.insertTraceEntryQueued({
-        ts: new Date().toISOString(),
-        method: 'GET',
-        url: 'https://trace.queue.stats.test',
-        status: 200,
-    });
+    await db.insertRequestAsync(
+        (await db.createSessionAsync('queue-stats-warmup', 'tab_q')).id,
+        'tab_q',
+        {
+            requestId: 'queue-stats-warmup-1',
+            url: 'https://queue.stats.warmup.test',
+            method: 'GET',
+            status: 200,
+            type: 'xhr',
+            duration: 1,
+        }
+    );
     const stats = db.getWriteQueueStats();
     assert.equal(typeof stats.highPriorityDepth, 'number');
     assert.equal(typeof stats.lowPriorityDepth, 'number');

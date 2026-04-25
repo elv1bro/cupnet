@@ -24,6 +24,14 @@ function registerMiscIpc(ctx) {
 
     ctx.ipcMain.handle('check-ip-geo', async (_, tabId) => ctx.checkCurrentIpGeo(tabId));
 
+    ctx.ipcMain.handle('get-homepage', async () => ctx.settingsStore.getCached()?.homepage || '');
+    ctx.ipcMain.handle('set-homepage', async (_, url) => {
+        const settings = ctx.loadSettings();
+        settings.homepage = (url || '').trim();
+        ctx.saveSettings(settings);
+        return true;
+    });
+
     ctx.ipcMain.handle('get-direct-ip', async () => {
         try {
             const directSess = ctx.session.fromPartition('direct-ip-check');
@@ -112,11 +120,6 @@ function registerMiscIpc(ctx) {
         if (ctx.logViewerWindows && Array.isArray(ctx.logViewerWindows)) {
             for (const w of ctx.logViewerWindows) {
                 if (w && !w.isDestroyed() && win.id === w.id) return 'log-viewer';
-            }
-        }
-        if (ctx.traceWindows && Array.isArray(ctx.traceWindows)) {
-            for (const w of ctx.traceWindows) {
-                if (w && !w.isDestroyed() && win.id === w.id) return 'trace-viewer';
             }
         }
         if (ctx.requestEditorWindow && !ctx.requestEditorWindow.isDestroyed() && win.id === ctx.requestEditorWindow.id) {

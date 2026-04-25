@@ -59,7 +59,6 @@
   "createProxyManagerWindow",
   "createRequestEditorWindow",
   "createRulesWindow",
-  "createTraceViewerWindow",
   "currentSessionId",
   "db",
   "dialog",
@@ -140,7 +139,6 @@
   "sysLog",
   "tabManager",
   "testProxy",
-  "traceWindows",
   "uiPrefsStore",
   "withTimeout"
 ]

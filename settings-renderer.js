@@ -49,7 +49,6 @@ const spHomepageErr = document.getElementById('sp-homepage-url-err');
 const spOnboardingStatus = document.getElementById('sp-onboarding-status');
 const spResetOnboarding = document.getElementById('sp-reset-onboarding');
 const spEffectiveTraffic = document.getElementById('sp-effective-traffic');
-const spTraceMode = document.getElementById('sp-trace-mode');
 const spActivityMonitorEnabled = document.getElementById('sp-activity-monitor-enabled');
 const spActivityRate = document.getElementById('sp-activity-rate');
 const spActivityRateVal = document.getElementById('sp-activity-rate-val');
@@ -810,19 +809,6 @@ spResetOnboarding?.addEventListener('click', async () => {
     }
 });
 
-spTraceMode?.addEventListener('change', async () => {
-    if (!api.setTraceMode) return;
-    beginSave();
-    try {
-        await api.setTraceMode(!!spTraceMode.checked);
-        endSave(true);
-    } catch (e) {
-        const msg = e && e.message ? String(e.message) : 'Could not update trace mode';
-        if (typeof showToast === 'function') showToast(msg, { type: 'error' });
-        endSave(false, msg);
-    }
-});
-
 spActivityRate?.addEventListener('input', () => {
     if (spActivityRateVal) spActivityRateVal.textContent = String(spActivityRate.value || '');
     scheduleActivityMonitorSave();
@@ -1031,12 +1017,6 @@ async function init() {
             try {
                 const hp = await api.getHomepage();
                 spHomepageUrl.value = hp != null ? String(hp) : '';
-            } catch { /* ignore */ }
-        }
-        if (api.getTraceMode && spTraceMode) {
-            try {
-                const tr = await api.getTraceMode();
-                spTraceMode.checked = !!tr;
             } catch { /* ignore */ }
         }
         if (spActivityMonitorEnabled) spActivityMonitorEnabled.checked = data?.activityMonitorEnabled === true;

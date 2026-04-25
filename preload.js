@@ -115,18 +115,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openSessionInNewWindow:  (id)      => ipcRenderer.invoke('open-session-in-new-window', id),
     getInitialSessionId:     ()        => ipcRenderer.invoke('get-initial-session-id'),
 
-    // ── Trace mode ────────────────────────────────────────────────────────────
-    getTraceMode:            ()       => ipcRenderer.invoke('get-trace-mode'),
-    setTraceMode:            (on)     => ipcRenderer.invoke('set-trace-mode', on),
-    getTracePath:            ()       => ipcRenderer.invoke('get-trace-path'),
-    openTraceFile:           ()       => ipcRenderer.invoke('open-trace-file'),
-    openTraceViewer:         ()       => ipcRenderer.invoke('open-trace-viewer'),
-    hasTraceData:            ()       => ipcRenderer.invoke('has-trace-data'),
-    getTraceEntries:         (l, o)   => ipcRenderer.invoke('get-trace-entries', l, o),
-    getTraceEntry:           (id)     => ipcRenderer.invoke('get-trace-entry', id),
-    countTraceEntries:       ()       => ipcRenderer.invoke('count-trace-entries'),
-    clearTraceEntries:       ()       => ipcRenderer.invoke('clear-trace-entries'),
-    onNewTraceEntry:         (cb)     => sub('new-trace-entry', cb),
     onSysLogEntry:           (cb)     => sub('sys-log-entry', cb),
 
     // ── Logging toggle ─────────────────────────────────────────────────────────

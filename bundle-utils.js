@@ -234,11 +234,6 @@ function buildBundle({ db, sessionId, requestIds, protectionLevel = 'Raw', appVe
         ? Number(sessionId)
         : (normalized[0]?.session_id != null ? Number(normalized[0].session_id) : null);
 
-    let traceEntries = [];
-    try {
-        if (db.getTraceEntriesBySession && sessionId) traceEntries = db.getTraceEntriesBySession(Number(sessionId), maxRows, 0);
-    } catch {}
-
     let websocketEvents = [];
     try {
         const rawWs = collectWsEventsForBundle(db, sessionId, rows, partialExport);
@@ -270,7 +265,6 @@ function buildBundle({ db, sessionId, requestIds, protectionLevel = 'Raw', appVe
         },
         traffic: {
             requests: redacted,
-            trace: traceEntries,
             websocketEvents,
         },
         context: pickContext(db),

@@ -125,40 +125,6 @@ async function startMitmProxy() {
                 });
             }
 
-            // Trace mode: full request/response to DB + live update to trace window
-            const s = cachedSettings || loadSettings();
-            if (s.traceMode && db) {
-                try {
-                    const traceRow = {
-                        ts: new Date().toISOString(),
-                        method: entry.method,
-                        url: entry.url,
-                        requestHeaders: entry.requestHeaders || {},
-                        requestBody: entry.requestBody || null,
-                        status: entry.status,
-                        responseHeaders: entry.responseHeaders || {},
-                        responseBody: entry.responseBody,
-                        duration: entry.duration,
-                        tabId: tabId || null,
-                        sessionId: sessionId != null ? sessionId : null,
-                        browser: s.tlsProfile || 'chrome',
-                        proxy: persistentAnonymizedProxyUrl ? '(set)' : null,
-                    };
-                    const insertPromise = typeof db.insertTraceEntryQueued === 'function'
-                        ? db.insertTraceEntryQueued(traceRow)
-                        : db.insertTraceEntryAsync(traceRow);
-                    insertPromise.then((traceId) => {
-                        if (!traceId || traceWindows.length === 0) return;
-                        const summary = { id: traceId, ts: traceRow.ts, method: entry.method, url: entry.url, status: entry.status, duration_ms: entry.duration };
-                        for (const w of traceWindows) {
-                            if (!w.isDestroyed()) w.webContents.send('new-trace-entry', summary);
-                        }
-                    }).catch((err) => {
-                        safeCatch({ module: 'main', eventCode: 'db.write.failed', context: { op: 'insertTraceEntryQueued' } }, err);
-                    });
-                } catch (e) { console.error('[trace] insert failed:', e.message); }
-            }
-
             if (!isLoggingEnabled || !db) return;
             if (mitmProxy) return;
             if (!tabId || sessionId == null) return;
@@ -299,7 +265,6 @@ let mainWindow                 = null;
 let forceAppQuit               = false;
 let logViewerWindow            = null; // kept for backward-compat (first window reference)
 const logViewerWindows         = [];   // all open log-viewer windows
-const traceWindows            = [];   // all open trace-viewer windows
 // Map<webContentsId, sessionId|null> for log-viewer windows opened on a specific session
 const logViewerInitSessions    = new Map();
 let rulesWindow                = null;
@@ -732,7 +697,6 @@ const SETTINGS_DEFAULTS = {
     filterPatterns: ['*google.com*', '*cloudflare.com*', '*analytics*', '*tracking*'],
     homepage: '',
     pasteUnlock: true,
-    traceMode: false,
     currentProxy: '',
     effectiveTrafficMode: 'mitm',
     tracking: {
@@ -2313,20 +2277,6 @@ function getLiveLogViewerWindow() {
     ) || null;
 }
 
-function createTraceViewerWindow() {
-    const win = new BrowserWindow({
-        width: 1100, height: 720, minWidth: 700, minHeight: 400,
-        title: 'Trace', icon: iconPath,
-        webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
-    });
-    win.loadFile(getAssetPath('trace-viewer.html'));
-    traceWindows.push(win);
-    win.on('closed', () => {
-        const idx = traceWindows.indexOf(win);
-        if (idx !== -1) traceWindows.splice(idx, 1);
-    });
-}
-
 function createConsoleViewerWindow() {
     if (consoleViewerWindow && !consoleViewerWindow.isDestroyed()) {
         consoleViewerWindow.focus();
@@ -3185,11 +3135,6 @@ function buildMenu() {
             { type: 'separator' },
             { label: 'Next Tab', accelerator: 'Ctrl+Tab', click: () => { mainWindow?.webContents.send('switch-tab-rel', 1); }},
             { label: 'Previous Tab', accelerator: 'Ctrl+Shift+Tab', click: () => { mainWindow?.webContents.send('switch-tab-rel', -1); }},
-            { type: 'separator' },
-            { label: 'Trace', click: () => {
-                const s = cachedSettings || loadSettings();
-                if (s.traceMode || (db && db.countTraceEntries() > 0)) createTraceViewerWindow();
-            }}
         ]}
     ]);
     Menu.setApplicationMenu(menu);
@@ -3827,7 +3772,6 @@ app.whenReady().then(async () => {
                 exportedAt: bundle.meta?.exportedAt || null,
                 protectionLevel: bundle.meta?.protectionLevel || 'Raw',
                 requests: Array.isArray(bundle.traffic?.requests) ? bundle.traffic.requests.length : 0,
-                trace: Array.isArray(bundle.traffic?.trace) ? bundle.traffic.trace.length : 0,
                 websocketEvents: Array.isArray(bundle.traffic?.websocketEvents) ? bundle.traffic.websocketEvents.length : 0,
             };
             return { success: true, filePath: filePaths[0], preview, bundle };
@@ -4695,47 +4639,6 @@ app.whenReady().then(async () => {
             clipboard.writeImage(nativeImage.createFromBuffer(Buffer.from(imageData, 'base64')));
             return { success: true };
         } catch (err) { return { success: false, error: err.message }; }
-    });
-
-    // ── Trace mode (full req/res to cupnet-trace.jsonl) ───────────────────────
-    ipcMain.handle('get-trace-mode', async () => (cachedSettings || loadSettings()).traceMode === true);
-    ipcMain.handle('set-trace-mode', async (_, enabled) => {
-        const s = loadSettings();
-        s.traceMode = !!enabled;
-        saveSettings(s);
-        return true;
-    });
-    ipcMain.handle('get-trace-path', async () => path.join(app.getPath('userData'), 'cupnet-trace.jsonl'));
-    ipcMain.handle('open-trace-file', async () => {
-        const p = path.join(app.getPath('userData'), 'cupnet-trace.jsonl');
-        if (fs.existsSync(p)) shell.openPath(p);
-        else shell.showItemInFolder(app.getPath('userData'));
-        return true;
-    });
-    ipcMain.handle('has-trace-data', async () => {
-        const s = cachedSettings || loadSettings();
-        if (s.traceMode) return true;
-        return db && db.countTraceEntries() > 0;
-    });
-    ipcMain.handle('open-trace-viewer', () => {
-        const live = traceWindows.find(w => !w.isDestroyed());
-        if (live) { if (live.isMinimized()) live.restore(); live.focus(); return; }
-        const s = cachedSettings || loadSettings();
-        if (!s.traceMode && (!db || db.countTraceEntries() === 0)) return;
-        createTraceViewerWindow();
-    });
-    ipcMain.handle('get-trace-entries', async (_, limit, offset) => {
-        return db ? db.queryTraceEntries(limit ?? 300, offset ?? 0) : [];
-    });
-    ipcMain.handle('get-trace-entry', async (_, id) => {
-        return db ? db.getTraceEntry(id) : null;
-    });
-    ipcMain.handle('count-trace-entries', async () => {
-        return db ? db.countTraceEntries() : 0;
-    });
-    ipcMain.handle('clear-trace-entries', async () => {
-        if (db) db.clearTraceEntries();
-        return true;
     });
 
     // ── Homepage ─────────────────────────────────────────────────────────────

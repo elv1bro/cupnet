@@ -17,7 +17,7 @@ export default function en(kbdRow) {
     <h2>In brief</h2>
     <ul>
         <li><b>What it is:</b> Electron browser where tab traffic goes through CupNet’s stack: optional upstream proxy, HTTPS MITM on port <b>8877</b>, outbound TLS via <b>AzureTLS</b> worker (spoofed JA3 / HTTP2 profile).</li>
-        <li><b>Logs:</b> Requests are recorded to <b>SQLite</b> (CDP + MITM path). Toggle <b>REC</b> on the toolbar to pause/resume logging; open <b>Log</b> for the viewer (FTS, HAR, replay, trace, compare).</li>
+        <li><b>Logs:</b> Requests are recorded to <b>SQLite</b> (CDP + MITM path). Toggle <b>REC</b> on the toolbar to pause/resume logging; open <b>Log</b> for the viewer (FTS, HAR, replay, compare).</li>
         <li><b>Proxy Manager:</b> Saved profiles (encrypted with OS keychain), <b>Apply globally</b> or <b>Apply to active tab</b>, live MITM stats in the header bar.</li>
         <li><b>Toolbar:</b> DNS overrides, Request Editor, Rules &amp; intercept, Page Analyzer, System Console, Settings (separate window).</li>
         <li><b>New Tab page:</b> Search, Quick Links, proxy/IP widget (MITM badge, per-tab scope), <b>Shared / Isolated</b> cookie toggle, <b>External proxy</b> for curl/scripts.</li>
@@ -34,7 +34,7 @@ export default function en(kbdRow) {
     <a href="#fingerprint">4. Fingerprint &amp; TLS</a>
     <a href="#toolbar">5. Toolbar</a>
     <a href="#hotkeys">6. Hotkeys</a>
-    <a href="#logs">7. Network logs · Trace · Compare</a>
+    <a href="#logs">7. Network logs · Compare</a>
     <a href="#editor">8. Request Editor</a>
     <a href="#rules">9. Highlight Rules &amp; Intercept</a>
     <a href="#cookies">10. Cookie Manager</a>
@@ -158,14 +158,13 @@ export default function en(kbdRow) {
 </div>
 
 <div id="logs" class="g-card">
-    <h2>7) Network logs · Trace · Compare</h2>
+    <h2>7) Network logs · Compare</h2>
     <p>HTTP(S)/WebSocket events land in SQLite: URL, method, headers, bodies (incl. binary-safe storage), timings, screenshots as special rows.</p>
     <ul>
         <li><b>Filters</b> — method, status, content-type, tab, session.</li>
         <li><b>FTS</b> — full-text search on URL + response body text.</li>
         <li><b>Export HAR</b> — HAR 1.2 compatible with Charles / DevTools / etc.</li>
         <li><b>Replay</b> — send selection into the Request Editor.</li>
-        <li><b>Trace</b> — button stores full request/response snapshots; ⌘/Ctrl-click opens the Trace viewer window.</li>
         <li><b>Compare</b> — add entries to left/right slots, then open the Compare window to diff two requests.</li>
         <li><b>Sessions</b> — rename, switch, delete logging sessions.</li>
     </ul>

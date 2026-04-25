@@ -67,7 +67,6 @@ const exportHarBtn   = document.getElementById('export-har-btn');
 const exportBundleBtn = document.getElementById('export-bundle-btn');
 const exportSiteZipBtn = document.getElementById('export-site-zip-btn');
 const importBundleBtn = document.getElementById('import-bundle-btn');
-const traceModeBtn  = document.getElementById('trace-mode-btn');
 const openRulesBtn   = document.getElementById('open-rules-btn');
 const clearLogsBtn   = document.getElementById('clear-logs');
 const replayBar      = document.getElementById('lv-replay-bar');
@@ -3112,7 +3111,6 @@ importBundleBtn?.addEventListener('click', async () => {
             `Exported: ${preview.exportedAt || 'n/a'}\n` +
             `Protection: ${preview.protectionLevel}\n` +
             `Requests: ${preview.requests || 0}\n` +
-            `Trace: ${preview.trace || 0}\n` +
             `WebSocket frames: ${preview.websocketEvents ?? 0}\n\n` +
             'Restore this context into current log viewer?'
         );
@@ -3179,25 +3177,6 @@ api.onFocusRequestId?.(({ id }) => {
     };
     pick();
 });
-
-// Trace mode: full req/res to DB, ⌘/Ctrl+click opens Trace window
-async function updateTraceBtnState() {
-    if (!traceModeBtn || !api.getTraceMode) return;
-    const on = await api.getTraceMode();
-    traceModeBtn.classList.toggle('active', on);
-    traceModeBtn.title = on ? 'Trace ON — ⌘/Ctrl+click to open Trace window' : 'Trace: full req/res to DB. ⌘/Ctrl+click to open Trace window';
-}
-traceModeBtn?.addEventListener('click', async (e) => {
-    if (!api.setTraceMode) return;
-    if (e.ctrlKey || e.metaKey) {
-        api.openTraceViewer?.();
-        return;
-    }
-    const on = !traceModeBtn.classList.contains('active');
-    await api.setTraceMode(on);
-    updateTraceBtnState();
-});
-if (api.getTraceMode) updateTraceBtnState();
 
 // ─── Live events ──────────────────────────────────────────────────────────────
 api.onNewLogEntry((entry) => addEntry(entry));

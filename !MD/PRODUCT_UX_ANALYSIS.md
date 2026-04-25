@@ -16,7 +16,7 @@
 - **Proxy profiles** — шифрование через `safeStorage`, TLS-профиль, User-Agent, timezone, language на профиль
 - **Изолированные вкладки** — `session.fromPartition`, отдельные cookies/cache на вкладку
 
-**Окна приложения:** `browser.html` (главное), `log-viewer.html`, `proxy-manager.html`, `rules.html`, `cookie-manager.html`, `request-editor.html`, `modal-logging.html`, `quick-proxy-change.html`, `trace-viewer.html`, `new-tab.html` (стартовая), `index.html` (User Manual).
+**Окна приложения:** `browser.html` (главное), `log-viewer.html`, `proxy-manager.html`, `rules.html`, `cookie-manager.html`, `request-editor.html`, `modal-logging.html`, `quick-proxy-change.html`, `new-tab.html` (стартовая), `index.html` (User Manual).
 
 **Признак из кода:** `browser.html` — proxy pill, log pill (REC toggle + Log #N), url-input, tool dock (DevTools, Cookies, Screenshot, Rules, Request Editor).
 
@@ -81,11 +81,6 @@
 2. Отдельные cookies, cache, без наследования от shared session
 3. Для мультиаккаунта / тестов
 
-### Flow 6: Trace mode
-
-1. Включение trace → полный request/response в `trace_entries`, live-обновление
-2. Trace viewer — отдельное окно для просмотра
-
 ---
 
 ## 4. Сильные стороны продукта
@@ -124,7 +119,7 @@
 
 5. **Нет индикатора прокси в адресной строке** — ROADMAP 1.3: пользователь не видит, через какой прокси работает вкладка, пока не откроет Proxy Manager.
 
-6. **Много окон** — browser, log-viewer, proxy-manager, rules, cookie-manager, request-editor, modal-logging, quick-proxy-change, trace-viewer. Легко потеряться.
+6. **Много окон** — browser, log-viewer, proxy-manager, rules, cookie-manager, request-editor, modal-logging, quick-proxy-change. Легко потеряться.
 
 7. **index.html устарел** — «Logs: logs/YYYY-MM-DD/*.jsonl» — сейчас SQLite. «Documentation version: v2025.08.14».
 

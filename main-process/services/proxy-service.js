@@ -139,40 +139,7 @@ function createProxyMitmService(d) {
                     });
                 }
 
-                const s2 = d.settingsStore.getCached() || d.loadSettings();
                 const db = d.getDb();
-                if (s2.traceMode && db) {
-                    try {
-                        const traceRow = {
-                            ts: new Date().toISOString(),
-                            method: entry.method,
-                            url: entry.url,
-                            requestHeaders: entry.requestHeaders || {},
-                            requestBody: entry.requestBody || null,
-                            status: entry.status,
-                            responseHeaders: entry.responseHeaders || {},
-                            responseBody: entry.responseBody,
-                            duration: entry.duration,
-                            tabId: tabId || null,
-                            sessionId: sessionId != null ? sessionId : null,
-                            browser: s2.tlsProfile || 'chrome',
-                            proxy: d.getPersistentAnonymizedProxyUrl() ? '(set)' : null,
-                        };
-                        const insertPromise = typeof db.insertTraceEntryQueued === 'function'
-                            ? db.insertTraceEntryQueued(traceRow)
-                            : db.insertTraceEntryAsync(traceRow);
-                        insertPromise.then((traceId) => {
-                            if (!traceId || d.getTraceWindows().length === 0) return;
-                            const summary = { id: traceId, ts: traceRow.ts, method: entry.method, url: entry.url, status: entry.status, duration_ms: entry.duration };
-                            for (const w of d.getTraceWindows()) {
-                                if (!w.isDestroyed()) w.webContents.send('new-trace-entry', summary);
-                            }
-                        }).catch((err) => {
-                            d.safeCatch({ module: 'main', eventCode: 'db.write.failed', context: { op: 'insertTraceEntryQueued' } }, err);
-                        });
-                    } catch (e) { console.error('[trace] insert failed:', e.message); }
-                }
-
                 if (!d.getIsLoggingEnabled() || !db) return;
                 // В MITM CDP иногда не даёт loadingFinished/getResponseBody — строка терялась. Пишем из MITM;
                 // дубликат от CDP отсекается в cdp-network-logging (mitm-cdp-dedup).

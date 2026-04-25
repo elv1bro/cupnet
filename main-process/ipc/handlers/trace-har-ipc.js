@@ -163,7 +163,6 @@ function registerTraceHarIpc(ctx) {
                 exportedAt: bundle.meta?.exportedAt || null,
                 protectionLevel: bundle.meta?.protectionLevel || 'Raw',
                 requests: Array.isArray(bundle.traffic?.requests) ? bundle.traffic.requests.length : 0,
-                trace: Array.isArray(bundle.traffic?.trace) ? bundle.traffic.trace.length : 0,
                 websocketEvents: Array.isArray(bundle.traffic?.websocketEvents) ? bundle.traffic.websocketEvents.length : 0,
             };
             return { success: true, filePath: filePaths[0], preview, bundle };

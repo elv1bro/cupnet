@@ -4,7 +4,6 @@
 
 - `CUPNET_FF_PROXY_BREAKER`
 - `CUPNET_FF_PROXY_HEALTH_WEIGHTED`
-- `CUPNET_FF_DB_TRACE_QUEUE`
 
 ## План выката
 
@@ -12,8 +11,7 @@
    - Включить breaker + health weighting.
    - Мониторить `proxy.connect_failed`, `proxy.circuit_opened`, `worker.overloaded`.
 2. **Stage 2 (50%)**
-   - Включить DB trace queue.
-   - Следить за `dbTraceQueueDepth`, p95 latency.
+   - Следить за p95 latency и глубиной очередей записи в БД.
 3. **Stage 3 (100%)**
    - Оставить SLO alerts включенными.
    - Валидировать отсутствие роста error budget.

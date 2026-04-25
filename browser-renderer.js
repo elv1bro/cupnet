@@ -1403,7 +1403,6 @@ const WIN_SWITCHER_KIND_LABELS = {
     'cupnet-main': 'CupNet',
     devtools: 'DevTools',
     'log-viewer': 'Log viewer',
-    'trace-viewer': 'Trace viewer',
     'cookie-manager': 'Cookie manager',
     'dns-manager': 'DNS manager',
     'proxy-manager': 'Proxy manager',
@@ -1473,7 +1472,6 @@ const WIN_SWITCHER_ICONS = {
     'cupnet-main': '',
     devtools: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 4.5L2 8l3.5 3.5"/><path d="M10.5 4.5L14 8l-3.5 3.5"/><path d="M9.5 2.5l-3 11"/></svg>',
     'log-viewer': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 4h12"/><path d="M2 8h7"/><path d="M2 12h10"/></svg>',
-    'trace-viewer': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h2l2-6 2 6h2l2-8 2 8h2"/></svg>',
     'cookie-manager': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><circle cx="6" cy="6.5" r="0.9" fill="currentColor" stroke="none"/><circle cx="10" cy="7" r="0.9" fill="currentColor" stroke="none"/><circle cx="7" cy="10.5" r="0.9" fill="currentColor" stroke="none"/><circle cx="10.5" cy="10.5" r="0.7" fill="currentColor" stroke="none"/></svg>',
     'dns-manager': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11"/><path d="M8 2.5a8.2 8.2 0 0 1 0 11"/><path d="M8 2.5a8.2 8.2 0 0 0 0 11"/></svg>',
     'proxy-manager': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5" cy="8" r="2.5"/><circle cx="11" cy="8" r="2.5"/><path d="M7.3 8h1.4"/></svg>',
@@ -1909,12 +1907,6 @@ function getCommandPaletteCommands() {
 
         { label: 'Take screenshot', category: 'Page', keywords: 'capture screen shot', shortcut: '', run: () => { void api.takeScreenshot?.('click').catch(() => {}); } },
         { label: 'Import session bundle', category: 'Tools', keywords: 'har zip restore', shortcut: '', run: () => { void api.importBundle?.().catch(() => {}); } },
-        { label: 'Toggle trace mode', category: 'Logging', keywords: 'full capture request response', shortcut: '', run: async () => {
-            try {
-                const on = await api.getTraceMode?.();
-                await api.setTraceMode?.(!on);
-            } catch (_) { /* ignore */ }
-        } },
         { label: 'Open Network Activity', category: 'Tools', keywords: 'log viewer database requests', shortcut: '', run: () => api.openLogViewer() },
         { label: 'Open Proxy Manager', category: 'Tools', keywords: 'profile tls fingerprint chain', shortcut: '', run: () => api.openProxyManager() },
         { label: 'Disconnect proxy', category: 'Proxy', keywords: 'offline mitm', shortcut: '', run: () => { void api.disconnectProxy?.().catch(() => {}); } },
@@ -1930,7 +1922,6 @@ function getCommandPaletteCommands() {
         { label: 'Open Credentials vault', category: 'Tools', keywords: 'passwords secrets vault', shortcut: 'Ctrl+Alt+L', run: () => api.openCredentialsWindow() },
         { label: 'Autofill credentials (active tab)', category: 'Tools', keywords: 'fill login password', shortcut: '', run: () => { void api.credentialsFillActiveTab?.({}).catch(() => {}); } },
         { label: 'Open Compare viewer', category: 'Tools', keywords: 'diff two requests', shortcut: '', run: () => api.openCompareViewer() },
-        { label: 'Open Trace viewer', category: 'Tools', keywords: 'full body', shortcut: '', run: () => api.openTraceViewer() },
         { label: 'Open DevTools (active tab)', category: 'Tools', keywords: 'inspector chromium', shortcut: '', run: () => api.openDevTools() },
         { label: 'Open API Scout', category: 'Tools', keywords: 'ivac har dump', shortcut: '', run: () => api.openIvacScout() },
         { label: 'Toggle session recording', category: 'Logging', keywords: 'logging pause resume', shortcut: '', run: () => logToggleBtn?.click() },

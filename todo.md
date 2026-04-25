@@ -46,7 +46,7 @@ Generate CA into `app.getPath('userData')` with `0o600` permissions. Delete temp
 | 3.2 | ✅ | `har-exporter.js` | N+1 query — `getRequest(id)` called per row | Slow HAR export |
 | 3.3 | ✅ | `main.js` | `loadSettings()` sync file I/O on every CDP event | Main thread blocking |
 | 3.4 | ✅ | `quick-proxy-change.js` | `mousemove` fires IPC on every pixel | IPC flood |
-| 3.5 | ✅ | `db.js` | Missing indexes on `ws_events.session_id`, `screenshots.session_id`, `trace_entries.session_id` | Slow queries |
+| 3.5 | ✅ | `db.js` | Missing indexes on `ws_events.session_id`, `screenshots.session_id` | Slow queries |
 | 3.6 | ✅ | `db.js` | Screenshots stored as base64 TEXT (33% larger than binary) | Wasted disk |
 | 3.7 | ⬜ | `main.js` | `captureScreenshot` runs on a timer for all tabs — no check if tab is visible | Wasted CPU |
 | 3.8 | ⬜ | `log-viewer-renderer.js` | Renders ALL log entries into DOM at once (no virtualization) | UI freeze on 10k+ entries |

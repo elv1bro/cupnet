@@ -314,11 +314,6 @@ function createMainWindowApi(d) {
                 { type: 'separator' },
                 { label: 'Next Tab', accelerator: 'Ctrl+Tab', click: () => { d.mainWindow?.webContents.send('switch-tab-rel', 1); }},
                 { label: 'Previous Tab', accelerator: 'Ctrl+Shift+Tab', click: () => { d.mainWindow?.webContents.send('switch-tab-rel', -1); }},
-                { type: 'separator' },
-                { label: 'Trace', click: () => {
-                    const s = d.settingsStore.getCached() || d.loadSettings();
-                    if (s.traceMode || (d.db && d.db.countTraceEntries() > 0)) sub.createTraceViewerWindow();
-                }},
             ]},
         ]);
         d.Menu.setApplicationMenu(menu);

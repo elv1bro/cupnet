@@ -69,7 +69,6 @@ const networkPolicy = {
         busyMaxDelayMs: envInt('CUPNET_DB_BUSY_MAX_DELAY_MS', 120, 1, 2000),
         writeQueueMaxHigh: envInt('CUPNET_DB_WRITE_QUEUE_MAX_HIGH', 20000, 100, 200000),
         writeQueueMaxLow: envInt('CUPNET_DB_WRITE_QUEUE_MAX_LOW', 5000, 100, 50000),
-        traceQueueMax: envInt('CUPNET_DB_TRACE_QUEUE_MAX', 5000, 1, 50000),
     },
     slo: {
         enabled: envBool('CUPNET_SLO_ALERTS_ENABLED', true),
@@ -80,7 +79,6 @@ const networkPolicy = {
     featureFlags: {
         proxyBreaker: envBool('CUPNET_FF_PROXY_BREAKER', true),
         proxyHealthWeighted: envBool('CUPNET_FF_PROXY_HEALTH_WEIGHTED', true),
-        dbTraceQueue: envBool('CUPNET_FF_DB_TRACE_QUEUE', true),
     },
 };
 

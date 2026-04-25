@@ -137,7 +137,7 @@ quick-proxy-change.html  — быстрая смена прокси
 - **`CUPNET_EXPORT_WS_FRAME_LIMIT`** — максимум фреймов, подгружаемых из БД на одно соединение / в sidecar (по умолчанию 5 000 000)
 - **`CUPNET_HAR_WS_SIDECAR=1`** — дополнительно пишется `<имя>-websocket.json` рядом с `.har` со всеми строками `ws_events` сессии (`schema: cupnet.ws_sidecar.v1`)
 
-**Incident bundle** (`bundle-utils.js`): `traffic.websocketEvents` использует те же лимиты фреймов; объём HTTP/trace задаётся **`CUPNET_BUNDLE_MAX_ROWS`** (по умолчанию 50 000).
+**Incident bundle** (`bundle-utils.js`): `traffic.websocketEvents` использует те же лимиты фреймов; объём HTTP-записей задаётся **`CUPNET_BUNDLE_MAX_ROWS`** (по умолчанию 50 000).
 
 ---
 

@@ -103,7 +103,6 @@ let mainWindow                 = null;
 let forceAppQuit               = false;
 let logViewerWindow            = null; // kept for backward-compat (first window reference)
 const logViewerWindows         = [];   // all open log-viewer windows
-const traceWindows            = [];   // all open trace-viewer windows
 // Map<webContentsId, sessionId|null> for log-viewer windows opened on a specific session
 const logViewerInitSessions    = new Map();
 let rulesWindow                = null;
@@ -193,7 +192,6 @@ function syncAppContextSnapshot() {
 
     appCtx.windows.main = mainWindow;
     appCtx.windows.logViewers = logViewerWindows;
-    appCtx.windows.traceViewers = traceWindows;
     appCtx.windows.rules = rulesWindow;
     appCtx.windows.proxyManager = proxyManagerWindow;
     appCtx.windows.cookieManager = cookieManagerWindow;
@@ -520,7 +518,6 @@ const proxySvc = createProxyMitmService({
     getTabManager: () => tabManager,
     getCurrentSessionId: () => currentSessionId,
     getDb: () => db,
-    getTraceWindows: () => traceWindows,
     getPersistentAnonymizedProxyUrl: () => persistentAnonymizedProxyUrl,
     getIsLoggingEnabled: () => isLoggingEnabled,
     recordLatencySample: _recordLatencySample,
@@ -594,7 +591,6 @@ const dSub = {
     iconPath,
     cupnetRoot: _cupnetRoot,
     logViewerWindows,
-    traceWindows,
     requestEditorExtraWindows,
     logViewerInitSessions,
     comparePair,
@@ -697,7 +693,6 @@ const {
     _broadcastCompareUpdated,
     createCompareViewerWindow,
     getLiveLogViewerWindow,
-    createTraceViewerWindow,
     createConsoleViewerWindow,
     createPageAnalyzerWindow,
     createNotesWindow,
@@ -1030,7 +1025,6 @@ app.whenReady().then(async () => {
             case 'openRequestEditorWindow': return openRequestEditorWindow;
             case 'openRequestEditorNewWindow': return openRequestEditorNewWindow;
             case 'createRulesWindow': return createRulesWindow;
-            case 'createTraceViewerWindow': return createTraceViewerWindow;
             case 'currentSessionId': return currentSessionId;
             case 'db': return db;
             case 'dialog': return dialog;
@@ -1110,7 +1104,6 @@ app.whenReady().then(async () => {
             case 'sysLog': return sysLog;
             case 'tabManager': return tabManager;
             case 'testProxy': return testProxy;
-            case 'traceWindows': return traceWindows;
             case 'uiPrefsStore': return uiPrefsStore;
             case 'withTimeout': return withTimeout;
             default: return undefined;

@@ -9,9 +9,8 @@
 **Что это**  
 Единый переносимый файл-кейс, который содержит все необходимое для воспроизведения и расследования.
 
-**Что должно входить в bundle**  
+**Что должно входить в bundle**
 - выбранные запросы и ответы;
-- trace-срез;
 - активные rules/intercept/dns-overrides;
 - cookies/session metadata;
 - заметки автора кейса;
@@ -55,7 +54,7 @@
 
 **Минимальная schema bundle v1**  
 - `meta` (appVersion, exportedAt, protectionLevel, report);
-- `traffic` (requests, responses, traceLinks);
+- `traffic` (requests, responses);
 - `context` (rules, intercepts, dnsOverrides, sessionMeta);
 - `notes` (summary, hypothesis, owner).
 

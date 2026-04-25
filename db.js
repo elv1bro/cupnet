@@ -310,6 +310,10 @@ function migrateSchema() {
     try {
         db.exec(`DROP TABLE IF EXISTS rules`);
     } catch { /* ignore */ }
+    /** trace-mode feature was removed (MITM-only refactor). Drop legacy table on existing DBs. */
+    try {
+        db.exec(`DROP TABLE IF EXISTS trace_entries`);
+    } catch { /* ignore */ }
     migrateInterceptRulesCommercialColumns();
     try {
         db.exec(`
@@ -632,26 +636,6 @@ function createSchema() {
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_dns_overrides_host ON dns_overrides(host);
 
-        CREATE TABLE IF NOT EXISTS trace_entries (
-            id              INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts              TEXT    NOT NULL,
-            method          TEXT    NOT NULL DEFAULT 'GET',
-            url             TEXT    NOT NULL,
-            request_headers TEXT,
-            request_body    TEXT,
-            status          INTEGER,
-            response_headers TEXT,
-            response_body   TEXT,
-            duration_ms     INTEGER,
-            tab_id          TEXT,
-            session_id      INTEGER,
-            browser         TEXT,
-            proxy           TEXT,
-            created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_trace_created ON trace_entries(created_at);
-        CREATE INDEX IF NOT EXISTS idx_trace_session ON trace_entries(session_id);
-
         CREATE TABLE IF NOT EXISTS user_notes (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             domain          TEXT    NOT NULL,
@@ -772,7 +756,6 @@ let _stmtCreateExtSession = null;
 let _stmtInsertRequest = null;
 let _stmtInsertWsEvent = null;
 let _stmtInsertSS      = null;
-let _stmtInsertTrace   = null;
 let _stmtInsertBrowserEvent = null;
 let _stmtEndSession    = null;
 let _stmtCountReqs     = null;
@@ -789,11 +772,6 @@ function _prepareStmts() {
         RETURNING id`);
     _stmtInsertWsEvent = db.prepare(`INSERT INTO ws_events (session_id, tab_id, url, direction, payload, connection_id) VALUES (?,?,?,?,?,?)`);
     _stmtInsertSS      = db.prepare(`INSERT INTO screenshots (session_id, tab_id, url, data_blob, screenshot_meta) VALUES (?,?,?,?,?) RETURNING id`);
-    _stmtInsertTrace   = db.prepare(`
-        INSERT INTO trace_entries (ts, method, url, request_headers, request_body, status, response_headers, response_body, duration_ms, tab_id, session_id, browser, proxy)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        RETURNING id
-    `);
     _stmtInsertBrowserEvent = db.prepare(`
         INSERT INTO browser_events (session_id, tab_id, event_type, level, summary, detail, source_url, source_line, origin)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1037,63 +1015,6 @@ function queryRequestsFull(filters = {}, limit = 100, offset = 0) {
     if (filters.url)       { conditions.push('url LIKE ?');      params.push(`%${filters.url}%`); }
     const sql = `SELECT * FROM requests WHERE ${conditions.join(' AND ')} ORDER BY id DESC LIMIT ? OFFSET ?`;
     return db.prepare(sql).all(...params, limit, offset);
-}
-
-// ─── Trace entries ────────────────────────────────────────────────────────────
-
-function insertTraceEntry(entry) {
-    const row = _stmtInsertTrace.get(
-        entry.ts || new Date().toISOString(),
-        entry.method || 'GET',
-        entry.url || '',
-        entry.requestHeaders ? JSON.stringify(entry.requestHeaders) : null,
-        entry.requestBody || null,
-        entry.status ?? null,
-        entry.responseHeaders ? JSON.stringify(entry.responseHeaders) : null,
-        entry.responseBody != null ? String(entry.responseBody).slice(0, 50000) : null,
-        entry.duration != null ? Math.round(entry.duration) : null,
-        entry.tabId || null,
-        entry.sessionId ?? null,
-        entry.browser || null,
-        entry.proxy || null
-    );
-    return row ? row.id : null;
-}
-
-function insertTraceEntryQueued(entry) {
-    if (!networkPolicy.featureFlags.dbTraceQueue) {
-        return Promise.resolve(insertTraceEntry(entry));
-    }
-    return enqueueWrite(() => insertTraceEntry(entry), 'low').catch(() => null);
-}
-
-function queryTraceEntries(limit = 200, offset = 0) {
-    return db.prepare(`
-        SELECT id, ts, method, url, status, duration_ms, tab_id, session_id, browser, created_at
-        FROM trace_entries ORDER BY id DESC LIMIT ? OFFSET ?
-    `).all(limit, offset);
-}
-
-function getTraceEntriesBySession(sessionId, limit = 2000, offset = 0) {
-    return db.prepare(`
-        SELECT *
-        FROM trace_entries
-        WHERE session_id = ?
-        ORDER BY id DESC
-        LIMIT ? OFFSET ?
-    `).all(sessionId, limit, offset);
-}
-
-function getTraceEntry(id) {
-    return db.prepare(`SELECT * FROM trace_entries WHERE id = ?`).get(id);
-}
-
-function countTraceEntries() {
-    return db.prepare(`SELECT COUNT(*) as cnt FROM trace_entries`).get().cnt;
-}
-
-function clearTraceEntries() {
-    db.prepare(`DELETE FROM trace_entries`).run();
 }
 
 function ftsSearch(query, sessionId, limit = 100, offset = 0) {
@@ -1768,10 +1689,6 @@ function insertScreenshotAsync(sessionId, tabId, url, dataB64, screenshotMeta = 
     return enqueueWrite(() => insertScreenshot(sessionId, tabId, url, dataB64, screenshotMeta), 'low');
 }
 
-function insertTraceEntryAsync(entry) {
-    return enqueueWrite(() => insertTraceEntry(entry), 'low');
-}
-
 function saveProxyProfileAsync(name, urlEncrypted, urlDisplay, opts = {}) {
     return enqueueWrite(() => saveProxyProfile(name, urlEncrypted, urlDisplay, opts), 'high');
 }
@@ -1810,10 +1727,6 @@ function deleteDnsOverrideAsync(id) {
 
 function toggleDnsOverrideAsync(id, enabled) {
     return enqueueWrite(() => toggleDnsOverride(id, enabled), 'high');
-}
-
-function clearTraceEntriesAsync() {
-    return enqueueWrite(() => clearTraceEntries(), 'high');
 }
 
 function createCookieGroupAsync(name) {
@@ -2647,7 +2560,7 @@ function close() {
     _writeQueueDroppedHigh = 0;
     _writeQueueBusyRetries = 0;
     _stmtCreateSession = _stmtCreateExtSession = _stmtInsertRequest = _stmtInsertWsEvent = null;
-    _stmtInsertSS = _stmtInsertTrace = _stmtInsertBrowserEvent = _stmtEndSession = null;
+    _stmtInsertSS = _stmtInsertBrowserEvent = _stmtEndSession = null;
     _stmtCountReqs = _stmtGetSession = null;
 }
 
@@ -2694,8 +2607,6 @@ module.exports = {
     // cookie groups
     getCookieGroups, getCookieGroup, createCookieGroup, renameCookieGroup, deleteCookieGroup,
     createCookieGroupAsync, renameCookieGroupAsync, deleteCookieGroupAsync,
-    // trace
-    insertTraceEntry, insertTraceEntryAsync, insertTraceEntryQueued, queryTraceEntries, getTraceEntriesBySession, getTraceEntry, countTraceEntries, clearTraceEntries, clearTraceEntriesAsync,
     getWriteQueueStats,
     // user notes
     listUserNotes, getUserNote, saveUserNote, deleteUserNote, saveUserNoteAsync, deleteUserNoteAsync,

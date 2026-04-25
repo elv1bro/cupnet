@@ -27,7 +27,6 @@ npx playwright test tests/e2e/settings.e2e.spec.js
 npx playwright test tests/e2e/dns-overrides.e2e.spec.js
 npx playwright test tests/e2e/notes.e2e.spec.js
 npx playwright test tests/e2e/fts-search.e2e.spec.js
-npx playwright test tests/e2e/trace-mode.e2e.spec.js
 npx playwright test tests/e2e/request-editor.e2e.spec.js
 npx playwright test tests/e2e/onboarding.e2e.spec.js
 npx playwright test tests/e2e/p2-features.e2e.spec.js

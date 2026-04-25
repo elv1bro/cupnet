@@ -298,20 +298,6 @@ function createSubWindowsApi(d) {
         ) || null;
     }
 
-    function createTraceViewerWindow() {
-        const win = new d.BrowserWindow({
-            width: 1100, height: 720, minWidth: 700, minHeight: 400,
-            title: 'Trace', icon: d.iconPath,
-            webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false },
-        });
-        win.loadFile(d.getAssetPath('trace-viewer.html'));
-        d.traceWindows.push(win);
-        win.on('closed', () => {
-            const idx = d.traceWindows.indexOf(win);
-            if (idx !== -1) d.traceWindows.splice(idx, 1);
-        });
-    }
-
     function createConsoleViewerWindow() {
         if (d.consoleViewerWindow && !d.consoleViewerWindow.isDestroyed()) {
             d.consoleViewerWindow.focus();
@@ -879,7 +865,6 @@ function createSubWindowsApi(d) {
         _broadcastCompareUpdated,
         createCompareViewerWindow,
         getLiveLogViewerWindow,
-        createTraceViewerWindow,
         createConsoleViewerWindow,
         createPageAnalyzerWindow,
         createNotesWindow,

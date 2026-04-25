@@ -17,7 +17,7 @@ export default function ru(kbdRow) {
     <h2>Кратко</h2>
     <ul>
         <li><b>Суть:</b> Electron-браузер: трафик вкладок идёт через стек CupNet — опциональный upstream-прокси, MITM HTTPS на <b>8877</b>, исходящий TLS через worker <b>AzureTLS</b> (JA3 / HTTP2 как у выбранного браузера).</li>
-        <li><b>Логи:</b> события пишутся в <b>SQLite</b> (CDP + путь MITM). Кнопка <b>REC</b> в тулбаре включает/останавливает запись; <b>Log</b> открывает просмотрщик (FTS, HAR, replay, trace, сравнение запросов).</li>
+        <li><b>Логи:</b> события пишутся в <b>SQLite</b> (CDP + путь MITM). Кнопка <b>REC</b> в тулбаре включает/останавливает запись; <b>Log</b> открывает просмотрщик (FTS, HAR, replay, сравнение запросов).</li>
         <li><b>Менеджер прокси:</b> профили с шифрованием в OS keychain, <b>Apply globally</b> / <b>Apply to active tab</b>, живая статистика MITM в шапке окна (req/s, задержка, ошибки, TLS-профиль).</li>
         <li><b>Тулбар:</b> DNS, редактор запросов, правила и перехват, анализатор страницы, системная консоль, настройки (отдельное окно).</li>
         <li><b>Стартовая страница:</b> поиск, быстрые ссылки, виджет прокси/IP (бейдж MITM, область прокси для вкладки), переключатель cookies <b>Shared / Isolated</b>, <b>внешний proxy</b> для curl и скриптов.</li>
@@ -34,7 +34,7 @@ export default function ru(kbdRow) {
     <a href="#fingerprint">4. Отпечаток и TLS</a>
     <a href="#toolbar">5. Панель инструментов</a>
     <a href="#hotkeys">6. Горячие клавиши</a>
-    <a href="#logs">7. Сетевые логи · Trace · Compare</a>
+    <a href="#logs">7. Сетевые логи · Compare</a>
     <a href="#editor">8. Редактор запросов</a>
     <a href="#rules">9. Правила и перехват</a>
     <a href="#cookies">10. Менеджер cookies</a>
@@ -158,14 +158,13 @@ export default function ru(kbdRow) {
 </div>
 
 <div id="logs" class="g-card">
-    <h2>7) Сетевые логи · Trace · Compare</h2>
+    <h2>7) Сетевые логи · Compare</h2>
     <p>HTTP(S) и WebSocket попадают в SQLite: URL, метод, заголовки, тела (в т.ч. бинарные в пригодном виде), длительности, скриншоты отдельными строками.</p>
     <ul>
         <li><b>Фильтры</b> — метод, статус, content-type, вкладка, сессия.</li>
         <li><b>FTS</b> — полнотекст по URL и телу ответа.</li>
         <li><b>Export HAR</b> — HAR 1.2 для Charles, DevTools и др.</li>
         <li><b>Replay</b> — открыть запись в Редакторе запросов.</li>
-        <li><b>Trace</b> — полные снимки req/resp в БД; ⌘/Ctrl+клик открывает окно Trace viewer.</li>
         <li><b>Compare</b> — добавить запрос в слот A/B и открыть окно сравнения.</li>
         <li><b>Сессии</b> — переключение, переименование, удаление.</li>
     </ul>

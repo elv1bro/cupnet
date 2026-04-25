@@ -22,7 +22,6 @@ const SETTINGS_DEFAULTS = {
     /** Open this many tabs without a confirmation when opening another (1–200). */
     maxTabsBeforeWarning: 10,
     pasteUnlock: true,
-    traceMode: false,
     currentProxy: '',
     effectiveTrafficMode: 'mitm',
     tracking: {
@@ -249,7 +248,7 @@ function mergeImportedSettings(current, imported) {
     delete importedClean._exportMeta;
     const next = { ...current };
     const keys = [
-        'filterPatterns', 'homepage', 'maxTabsBeforeWarning', 'pasteUnlock', 'traceMode',
+        'filterPatterns', 'homepage', 'maxTabsBeforeWarning', 'pasteUnlock',
         'currentProxy', 'effectiveTrafficMode', 'bypassDomains', 'onboardingComplete',
         'activityMonitorEnabled', 'activityMonitorRateLimit', 'activityMonitorStorageStackTraces',
         'lastLogPath',

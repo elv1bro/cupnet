@@ -109,8 +109,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setMaxTabsBeforeWarning: (n) => ipcRenderer.invoke('set-max-tabs-before-warning', n),
     getHomepage:        ()        => ipcRenderer.invoke('get-homepage'),
     setHomepage:        (url)     => ipcRenderer.invoke('set-homepage', url),
-    getTraceMode:       ()        => ipcRenderer.invoke('get-trace-mode'),
-    setTraceMode:       (on)      => ipcRenderer.invoke('set-trace-mode', on),
     getMitmCaCert:      ()        => ipcRenderer.invoke('mitm-get-ca-cert'),
     saveFilterPatterns: (patterns)=> ipcRenderer.invoke('save-filter-patterns', patterns),
     saveBypassDomains:  (domains) => ipcRenderer.invoke('save-bypass-domains', domains),

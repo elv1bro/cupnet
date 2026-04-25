@@ -53,7 +53,7 @@ flowchart TD
 ### Безопасные шаги выноса (6 месяцев)
 
 1. **Удалить или архивировать** `electron-app/app.js` после diff с `cupnet-runtime.js` + handlers (или односторонняя синхронизация), чтобы убрать путаницу.
-2. **Дальше упростить `cupnet-runtime.js`**: оставшийся glue `onRequestLogged` / trace / stability перенести в `main-process/services/mitm-log-pipeline.js` (или аналог).
+2. **Дальше упростить `cupnet-runtime.js`**: оставшийся glue `onRequestLogged` / stability перенести в `main-process/services/mitm-log-pipeline.js` (или аналог).
 3. **Сохранить разбиение handlers по доменам** (proxy, tabs, cookies-dns, trace-har, page-analyzer, …) — уже соответствует плану.
 
 ### Риск циклических зависимостей
@@ -97,9 +97,9 @@ flowchart TD
 |---------|---------|
 | Батчинг IPC | `main-process/services/ipc-batch-messenger.js` — лог батч **50 мс**, макс. **200** записей; intercept/DNS батчи **80 мс** — снижает флуд |
 | Дедуп | `cupnet-runtime` / MITM: `_seenRequestIds` Set с обрезкой при 5000; `_lastMitmLogKey` Map с вытеснением по времени |
-| Индексы SQLite | `db.js`: индексы по `requests(session_id, tab_id, url, status, created_at, duration_ms)`, trace, notes, ws_events — разумно для фильтров |
+| Индексы SQLite | `db.js`: индексы по `requests(session_id, tab_id, url, status, created_at, duration_ms)`, notes, ws_events — разумно для фильтров |
 | Синхронный I/O | Ранний `readFileSync` настроек в `cupnet-runtime.js` (bypass list) — маленький файл, на старте приемлемо |
-| Большие тела | Trace/лог пишут тела в БД — зависят от политики хранения; проверить лимиты в `db.js` / настройках |
+| Большие тела | Лог пишет тела в БД — зависят от политики хранения; проверить лимиты в `db.js` / настройках |
 
 **Быстрые выигрыши:** (1) задокументировать макс. размер тела на строку. (2) Периодический VACUUM или prune старых сессий, если ещё нет. (3) Профилировать число вкладок (`WebContentsView`) и память на длинных сессиях.
 
@@ -135,7 +135,7 @@ flowchart TD
 
 ## 6. UX / UI (17 окон)
 
-**Окна (корневые HTML):** browser, log-viewer, proxy-manager, rules, cookie-manager, request-editor, page-analyzer, trace-viewer, console-viewer, new-tab, notes, settings, cupnet-guide, dns-manager, compare-viewer, ivac-scout, modal-logging.
+**Окна (корневые HTML):** browser, log-viewer, proxy-manager, rules, cookie-manager, request-editor, page-analyzer, console-viewer, new-tab, notes, settings, cupnet-guide, dns-manager, compare-viewer, ivac-scout, modal-logging.
 
 **Сквозное**
 
@@ -150,10 +150,9 @@ flowchart TD
 4. **Сетевой лог:** колонки по умолчанию + сохранённые наборы колонок; сохранять FTS-запрос в сессии.
 5. **Proxy Manager:** список профилей уже укорочен — добавить inline «last error» при ошибке подключения.
 6. **Settings:** сгруппировать MITM / privacy / appearance со sticky subnav.
-7. **Trace viewer:** ссылка из строки лога → открыть trace по id (deep link).
-8. **Тосты ошибок:** централизованный `showError` с копированием debug-info (версия сборки из `get-app-version`).
-9. **Клавиатура:** задокументировать шорткаты в `cupnet-guide.html` + cheat sheet overlay.
-10. **Состояния загрузки:** skeleton-строки в log viewer при тяжёлом импорте.
+7. **Тосты ошибок:** централизованный `showError` с копированием debug-info (версия сборки из `get-app-version`).
+8. **Клавиатура:** задокументировать шорткаты в `cupnet-guide.html` + cheat sheet overlay.
+9. **Состояния загрузки:** skeleton-строки в log viewer при тяжёлом импорте.
 
 *Референсы:* панель Network в Chrome DevTools, Proxyman (список + фильтр), Linear (command palette).
 
@@ -188,7 +187,7 @@ flowchart TD
 
 1. **Web QA / SDET** — воспроизводимые сессии, HAR, compare, правила.
 2. **Инженер по антиботу / интеграциям** — TLS + прокси + реальный Chromium, Turnstile-чувствительные сценарии.
-3. **Продвинутый пользователь с privacy** — DNS overrides, изоляция cookie, trace.
+3. **Продвинутый пользователь с privacy** — DNS overrides, изоляция cookie, MITM-логи.
 
 ### Roadmap (топ-10 тем в стиле RICE)
 

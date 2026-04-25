@@ -23,10 +23,9 @@
 | `rules-ipc.js` | highlight + intercept rules |
 | `launcher-ipc.js` | открытие proxy manager, console, page analyzer, IVAC |
 | `page-analyzer-ipc.js` | анализ страницы, CapMonster, Turnstile |
-| `misc-ipc.js` | uptime, splash, version, ui-pref, geo / direct IP |
+| `misc-ipc.js` | uptime, splash, version, ui-pref, geo / direct IP, homepage |
 | `proxy-ipc.js` | текущий прокси, connect/disconnect, профили |
 | `screenshots-ipc.js` | скриншоты |
-| `trace-viewer-ipc.js` | trace mode, homepage |
 | `cookies-dns-ipc.js` | cookies, DNS, isolate/direct, DevTools |
 | `log-compare-execute-ipc.js` | log viewer, compare, JSONL, rules mock, request editor, `execute-request` |
 | `settings-toolbar-ipc.js` | агрегированные настройки toolbar, bypass, traffic |

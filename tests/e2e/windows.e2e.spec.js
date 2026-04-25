@@ -110,25 +110,6 @@ test('w9) API Scout (IVAC) — новое окно, закрытие', async () 
     if (extra) await extra.close().catch(() => {});
 });
 
-test('w10) Trace Viewer — после включения trace появляется окно', async () => {
-    const n0 = getWindowCount(electronApp);
-    await mainWindow.evaluate(async () => {
-        await window.electronAPI.setTraceMode(true);
-        await window.electronAPI.openTraceViewer();
-    });
-    await new Promise((r) => setTimeout(r, 800));
-    const n1 = getWindowCount(electronApp);
-    if (n1 > n0) {
-        const pages = electronApp.windows();
-        const newest = pages[pages.length - 1];
-        if (newest && newest !== mainWindow) await newest.close().catch(() => {});
-    }
-    await mainWindow.evaluate(async () => {
-        await window.electronAPI.setTraceMode(false);
-    });
-    expect(n1).toBeGreaterThan(n0);
-});
-
 test('w11) Compare Viewer — новое окно, закрытие', async () => {
     const extra = await openSubWindowExpectNew(electronApp, mainWindow, 'openCompareViewer');
     if (extra) await extra.close().catch(() => {});

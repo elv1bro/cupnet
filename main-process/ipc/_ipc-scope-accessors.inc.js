@@ -53,7 +53,6 @@ function ipcScopeGet(k) {
         case 'createProxyManagerWindow': return createProxyManagerWindow;
         case 'createRequestEditorWindow': return createRequestEditorWindow;
         case 'createRulesWindow': return createRulesWindow;
-        case 'createTraceViewerWindow': return createTraceViewerWindow;
         case 'currentSessionId': return currentSessionId;
         case 'db': return db;
         case 'dialog': return dialog;
@@ -123,7 +122,6 @@ function ipcScopeGet(k) {
         case 'sysLog': return sysLog;
         case 'tabManager': return tabManager;
         case 'testProxy': return testProxy;
-        case 'traceWindows': return traceWindows;
         case 'uiPrefsStore': return uiPrefsStore;
         case 'withTimeout': return withTimeout;
         default: return undefined;

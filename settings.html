@@ -204,21 +204,16 @@
                 <!-- Capture -->
                 <section id="sp-tab-capture" class="sp-tab-body">
                     <div class="sp-tab-stack">
-                        <p class="sp-tab-intro"><strong>Capture &amp; logging</strong> Network log noise filters, optional full HTTP capture for Trace viewer, Activity Monitor, and screenshot triggers.</p>
+                        <p class="sp-tab-intro"><strong>Capture &amp; logging</strong> Network log noise filters, Activity Monitor, and screenshot triggers.</p>
                         <div class="grid-2">
-                            <div class="card" data-sp-search="network log filter url hide analytics noise trace full request response capture">
-                                <h3 class="card-title">Network Log &amp; Trace</h3>
-                                <p class="card-title-desc">Filter noisy URLs in the log; optionally store full bodies in Trace (separate from filters and Activity Monitor).</p>
+                            <div class="card" data-sp-search="network log filter url hide analytics noise capture">
+                                <h3 class="card-title">Network Log filters</h3>
+                                <p class="card-title-desc">Filter noisy URLs from the log database. Does not affect MITM capture itself.</p>
                                 <label class="sp-field-label" for="sp-filter-patterns">Hide URLs matching patterns (one per line)</label>
                                 <textarea id="sp-filter-patterns" class="sp-textarea" placeholder="*analytics*&#10;*doubleclick*&#10;*tracking*" rows="5" aria-describedby="sp-filters-help"></textarea>
                                 <p class="field-error" id="sp-filter-patterns-err" hidden></p>
-                                <label class="sp-toggle" for="sp-trace-mode" style="margin-top:14px">
-                                    <input type="checkbox" id="sp-trace-mode" class="sp-toggle-input">
-                                    <span class="sp-toggle-track" aria-hidden="true"></span>
-                                    <span class="sp-toggle-label">Trace viewer: save full HTTP request/response bodies (uses more disk; open from command palette or Tools)</span>
-                                </label>
                                 <div class="sp-help-panel" id="sp-filters-help" style="margin-top:14px">
-                                    <p class="sp-help-lead">URL patterns only affect what appears in the Network Log database — not MITM, not Trace content. Trace is off unless the toggle above is on.</p>
+                                    <p class="sp-help-lead">URL patterns only affect what appears in the Network Log database — not MITM, not Activity Monitor.</p>
                                     <ul class="sp-help-list">
                                         <li><span class="sp-help-k">Match</span> <code>*</code> = any substring (case-insensitive). One pattern per line.</li>
                                         <li><span class="sp-help-k">Note</span> <code>file://</code> requests are never logged, regardless of patterns.</li>

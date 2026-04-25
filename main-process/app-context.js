@@ -16,7 +16,6 @@ function createAppContext() {
         windows: {
             main: null,
             logViewers: [],
-            traceViewers: [],
             rules: null,
             proxyManager: null,
             cookieManager: null,

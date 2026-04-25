@@ -29,15 +29,6 @@ test('st1) homepage get/set', async () => {
     await mainWindow.evaluate(() => window.electronAPI.setHomepage(''));
 });
 
-test('st2) trace mode toggle', async () => {
-    await mainWindow.evaluate(() => window.electronAPI.setTraceMode(true));
-    let on = await mainWindow.evaluate(() => window.electronAPI.getTraceMode());
-    expect(on).toBe(true);
-    await mainWindow.evaluate(() => window.electronAPI.setTraceMode(false));
-    on = await mainWindow.evaluate(() => window.electronAPI.getTraceMode());
-    expect(on).toBe(false);
-});
-
 test('st3) bypass domains save + getSettingsAll', async () => {
     await mainWindow.evaluate(() => window.electronAPI.saveBypassDomains(['example.com', 'test.invalid']));
     const all = await mainWindow.evaluate(() => window.electronAPI.getSettingsAll());

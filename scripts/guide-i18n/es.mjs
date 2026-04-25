@@ -17,7 +17,7 @@ export default function es(kbdRow) {
     <h2>En resumen</h2>
     <ul>
         <li><b>Qué es:</b> navegador Electron donde el tráfico pasa por la pila CupNet: proxy ascendente opcional, MITM HTTPS en el puerto <b>8877</b>, TLS saliente mediante el worker <b>AzureTLS</b> (perfil JA3 / HTTP2).</li>
-        <li><b>Registros:</b> peticiones en <b>SQLite</b> (CDP + ruta MITM). <b>REC</b> en la barra pausa/reanuda el registro; <b>Log</b> abre el visor (FTS, HAR, replay, traza, comparar).</li>
+        <li><b>Registros:</b> peticiones en <b>SQLite</b> (CDP + ruta MITM). <b>REC</b> en la barra pausa/reanuda el registro; <b>Log</b> abre el visor (FTS, HAR, replay, comparar).</li>
         <li><b>Gestor de proxies:</b> perfiles cifrados (llavero del SO), <b>Aplicar globalmente</b> o <b>Aplicar a la pestaña activa</b>, estadísticas MITM en vivo en la barra superior.</li>
         <li><b>Barra de herramientas:</b> DNS, editor de peticiones, reglas e interceptación, analizador de página, consola del sistema, ajustes (ventana aparte).</li>
         <li><b>Página nueva pestaña:</b> búsqueda, accesos rápidos, tarjeta proxy/IP (insignia MITM, ámbito por pestaña), interruptor de cookies <b>Compartido / Aislado</b>, <b>proxy externo</b> para curl/scripts.</li>
@@ -34,7 +34,7 @@ export default function es(kbdRow) {
     <a href="#fingerprint">4. Huella digital y TLS</a>
     <a href="#toolbar">5. Barra de herramientas</a>
     <a href="#hotkeys">6. Atajos</a>
-    <a href="#logs">7. Registros · Traza · Comparar</a>
+    <a href="#logs">7. Registros · Comparar</a>
     <a href="#editor">8. Editor de peticiones</a>
     <a href="#rules">9. Reglas e interceptación</a>
     <a href="#cookies">10. Gestor de cookies</a>
@@ -158,14 +158,13 @@ export default function es(kbdRow) {
 </div>
 
 <div id="logs" class="g-card">
-    <h2>7) Registros · Traza · Comparar</h2>
+    <h2>7) Registros · Comparar</h2>
     <p>HTTP(S)/WebSocket a SQLite: URL, método, cabeceras, cuerpos (binario admitido), tiempos, capturas como filas especiales.</p>
     <ul>
         <li><b>Filtros</b> — método, estado, MIME, pestaña, sesión.</li>
         <li><b>FTS</b> — búsqueda de texto completo en URL + cuerpo de respuesta.</li>
         <li><b>Exportar HAR</b> — HAR 1.2 (Charles, DevTools…).</li>
         <li><b>Replay</b> — enviar selección al editor.</li>
-        <li><b>Traza</b> — instantáneas req/resp completas; ⌘/Ctrl-clic abre la ventana Trace.</li>
         <li><b>Comparar</b> — ranuras izquierda/derecha y ventana diff.</li>
         <li><b>Sesiones</b> — renombrar, cambiar, borrar.</li>
     </ul>
