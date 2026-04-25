@@ -55,8 +55,8 @@ let nextTabNumber = 1;
 let extraTopOffset = 0;
 let _broadcastTimer = null;
 let _relayoutTimer = null;
-/** Matches traffic-mode-service buildBypassList([]): hardcoded only until applyBypassDomains runs. */
-let _currentBypassRules = '<local>,*.youtube.com,*.googlevideo.com';
+/** Single hardcoded bypass: <local> keeps Chromium loopback/link-local off the MITM. */
+let _currentBypassRules = '<local>';
 let _trafficOpts = {};
 let _upstreamProxyRules = null;
 
@@ -1203,20 +1203,6 @@ function destroyAll() {
 
 function getAllTabs() { return tabs.values(); }
 
-// ── Bypass rules live update ──────────────────────────────────────────────────
-function setBypassRules(bypassStr) {
-    _currentBypassRules = bypassStr;
-    for (const tab of tabs.values()) {
-        try {
-            if (tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
-                tab.view.webContents.session.setProxy(getProxyOptsForTab(tab)).catch(() => {});
-            } else {
-                tab.tabSession.setProxy(getProxyOptsForTab(tab)).catch(() => {});
-            }
-        } catch {}
-    }
-}
-
 // ── Traffic content filtering ─────────────────────────────────────────────────
 const RESOURCE_TYPE_MAP = {
     blockImages:    'image',
@@ -1378,7 +1364,7 @@ module.exports = {
     setPasteUnlock, getPasteUnlock,
     injectCredentialFormCapture,
     injectStorageActivityMonitor,
-    setBypassRules, setTrafficOpts,
+    setTrafficOpts,
     applyWebRtcPolicy, resetWebRtcPolicy,
     // New per-tab controls
     setTabProxy, setTabCookieGroup,

@@ -241,7 +241,6 @@ export default function en(kbdRow) {
     <h3>General</h3>
     <ul>
         <li><b>Unblock copy / paste</b> — stop pages from blocking clipboard shortcuts.</li>
-        <li><b>MITM bypass domains</b> — one host pattern per line; matched hosts skip MITM (useful for embedded challenges).</li>
         <li><b>URL filter patterns</b> — glob per line; matching URLs are omitted from logs (<b>Save filters</b>).</li>
     </ul>
     <h3>Tracking</h3>
@@ -265,8 +264,6 @@ export default function en(kbdRow) {
         <li><b>Linux:</b> <code>~/.config/CupNet/mitm-ca/ca-cert.pem</code></li>
     </ul>
     <p>Import that PEM into another browser or OS trust store only if you intentionally want that tool to accept CupNet-signed sites. Prefer the <b>External proxy</b> on the New Tab page to chain CLI clients through CupNet instead.</p>
-    <h3>Bypass domains</h3>
-    <p>Configured under <b>Settings → General → MITM bypass domains</b>. Combine with Intercept / DNS tools for advanced setups.</p>
     <span class="g-status warn">⚠ Only install the CA on machines you control. Never trust unknown CA files.</span>
 </div>
 
@@ -276,7 +273,7 @@ export default function en(kbdRow) {
         <li><b>App won’t start from IDE</b> — run <code>ELECTRON_RUN_AS_NODE= npm start</code> from a clean shell.</li>
         <li><b>Native module crash</b> — <code>npm run rebuild:arm64</code> (Apple Silicon) or <code>npx electron-rebuild</code>.</li>
         <li><b>Upstream proxy errors</b> — verify URL format, run <b>Test</b>, check MITM stats error counter.</li>
-        <li><b>Strict sites / captcha loops</b> — ensure MITM bypass list includes challenge domains; avoid mixed tooling that reintroduces <code>protocol.handle</code> paths alongside MITM.</li>
+        <li><b>Strict sites / captcha loops</b> — avoid mixed tooling that reintroduces <code>protocol.handle</code> paths alongside MITM; check the TLS-passthrough domains in <b>Traffic</b>.</li>
         <li><b>External proxy disabled</b> — start listening only when CupNet is in MITM traffic mode; widget shows the precise error.</li>
     </ul>
     <details><summary>Developer bootstrap</summary>

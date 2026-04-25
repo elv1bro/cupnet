@@ -239,19 +239,8 @@ function saveUiPref(key, value) {
 }
 
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
-// Read bypass domains early (before app.whenReady) for Chromium proxy bypass hints.
-// Proxy route itself is controlled dynamically via session.setProxy (MITM vs browser proxy).
-{
-    const earlySettingsPath = path.join(app.getPath('userData'), 'settings.json');
-    let earlyBypass = [];
-    try {
-        earlyBypass = JSON.parse(fs.readFileSync(earlySettingsPath, 'utf8')).bypassDomains || [];
-    } catch (err) {
-        safeCatch({ module: 'main', eventCode: 'settings.parse.failed', context: { file: earlySettingsPath } }, err, 'info');
-    }
-    const bypassList = ['<local>', '*.youtube.com', '*.googlevideo.com', ...earlyBypass];
-    app.commandLine.appendSwitch('proxy-bypass-list', [...new Set(bypassList)].join(','));
-}
+// Single hardcoded Chromium bypass: <local> keeps loopback / link-local off the MITM.
+app.commandLine.appendSwitch('proxy-bypass-list', '<local>');
 // Accept MITM self-signed certs (required when using proxy with fake TLS)
 app.commandLine.appendSwitch('ignore-certificate-errors');
 app.commandLine.appendSwitch('force-webrtc-ip-handling-policy', 'disable_non_proxied_udp');
@@ -711,7 +700,6 @@ const SETTINGS_DEFAULTS = {
         cooldownMs: 2000,
         maxPerMinute: 12,
     },
-    bypassDomains: [],
     trafficOpts: {
         trafficEnabled: false,
         blockImages: false,
@@ -809,22 +797,17 @@ function getNewTabUrl() {
     return getInternalPageUrl('new-tab');
 }
 
-// ─── MITM bypass domains ──────────────────────────────────────────────────────
-const HARDCODED_BYPASS = ['<local>', '*.youtube.com', '*.googlevideo.com'];
+// ─── MITM proxy options ───────────────────────────────────────────────────────
+/** Single hardcoded Chromium bypass; user-configurable list was removed (MITM-only refactor). */
+const HARDCODED_BYPASS = ['<local>'];
+const BYPASS_RULES = HARDCODED_BYPASS.join(',');
 
 function getCurrentTrafficMode() {
     return normalizeTrafficMode(currentTrafficMode);
 }
 
-function buildBypassList(userDomains) {
-    const all = [...HARDCODED_BYPASS, ...(userDomains || [])];
-    return [...new Set(all)].join(',');
-}
-
 function getMitmProxyOpts() {
-    return resolveSessionProxyConfig({
-        bypassRules: buildBypassList((cachedSettings || loadSettings()).bypassDomains),
-    });
+    return resolveSessionProxyConfig({ bypassRules: BYPASS_RULES });
 }
 
 async function applyEffectiveTrafficMode(mode, upstreamProxyUrl, context = {}) {
@@ -855,19 +838,6 @@ async function applyEffectiveTrafficMode(mode, upstreamProxyUrl, context = {}) {
 
     sysLog('info', 'traffic.mode.applied', `mode=${nextMode} source=${context.source || 'unknown'}`);
     notifyProxyStatus();
-}
-
-function applyBypassDomains(userDomains) {
-    if (!tabManager) return;
-    const bypassStr = buildBypassList(userDomains);
-    tabManager.setBypassRules(bypassStr);
-    applyEffectiveTrafficMode(getCurrentTrafficMode(), persistentAnonymizedProxyUrl, {
-        source: 'bypass-domains',
-        force: true,
-    }).catch((err) => {
-        safeCatch({ module: 'main', eventCode: 'traffic.mode.apply.failed', context: { source: 'bypass-domains' } }, err);
-    });
-    console.log('[main] bypass domains updated:', bypassStr);
 }
 
 // ─── Traffic content filters ──────────────────────────────────────────────────
@@ -1917,12 +1887,10 @@ function createMainWindow() {
         // Send initial data to browser toolbar
         const s = loadSettings();
         tabManager.setPasteUnlock(s.pasteUnlock !== false);
-        applyBypassDomains(s.bypassDomains || []);
         if (s.trafficOpts) applyTrafficFilters(s.trafficOpts);
         mainWindow.webContents.send('init-settings', {
             filterPatterns: s.filterPatterns || [],
             pasteUnlock:    s.pasteUnlock !== false,
-            bypassDomains:  s.bypassDomains || [],
             tracking:       getTrackingSettings(),
         });
         notifyProxyProfilesList();
@@ -5186,7 +5154,6 @@ app.whenReady().then(async () => {
         return {
             filterPatterns:  s.filterPatterns  || [],
             pasteUnlock:     s.pasteUnlock !== false,
-            bypassDomains:   s.bypassDomains || [],
             trafficOpts:     s.trafficOpts || {},
             effectiveTrafficMode: getCurrentTrafficMode(),
             tracking:        getTrackingSettings(),
@@ -5229,13 +5196,6 @@ app.whenReady().then(async () => {
         return true;
     });
 
-    ipcMain.handle('save-bypass-domains', async (_, domains) => {
-        const s = loadSettings();
-        s.bypassDomains = Array.isArray(domains) ? domains : [];
-        saveSettings(s);
-        applyBypassDomains(s.bypassDomains);
-        return true;
-    });
 
     ipcMain.handle('save-traffic-opts', async (_, opts) => {
         const s = loadSettings();

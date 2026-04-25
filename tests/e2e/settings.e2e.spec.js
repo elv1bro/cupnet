@@ -29,14 +29,6 @@ test('st1) homepage get/set', async () => {
     await mainWindow.evaluate(() => window.electronAPI.setHomepage(''));
 });
 
-test('st3) bypass domains save + getSettingsAll', async () => {
-    await mainWindow.evaluate(() => window.electronAPI.saveBypassDomains(['example.com', 'test.invalid']));
-    const all = await mainWindow.evaluate(() => window.electronAPI.getSettingsAll());
-    expect(Array.isArray(all?.bypassDomains)).toBe(true);
-    expect(all.bypassDomains).toContain('example.com');
-    await mainWindow.evaluate(() => window.electronAPI.saveBypassDomains([]));
-});
-
 test('st4) activity monitor settings persist', async () => {
     await mainWindow.evaluate(() =>
         window.electronAPI.saveActivityMonitorSettings({

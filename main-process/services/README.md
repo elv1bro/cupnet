@@ -17,7 +17,7 @@
 | `fingerprint-service.js` | `createFingerprintService({ sysLog, safeCatch, getTabManager })` → apply/reset fingerprint на вкладках |
 | `screenshot-service.js` | `createScreenshotService({…})` → `captureScreenshot` / `requestScreenshot` (внутренний dedup + rate limit) |
 | `page-analyzer-injected-scripts.js` | Строки `executeJavaScript` для форм / captcha / meta / endpoints (вынесено из `cupnet-runtime.js`) |
-| `traffic-mode-service.js` | `createTrafficModeService(deps)` — режим трафика, bypass, TLS passthrough |
+| `traffic-mode-service.js` | `createTrafficModeService(deps)` — режим трафика, TLS passthrough (bypass захардкожен в `<local>`) |
 | `proxy-service.js` | `createProxyMitmService(deps)` — старт MITM, ProxyChain, failover, IP/geo |
 | `main-window.js` | `createMainWindowApi(d)` — главное окно, меню, иконка Dock, диалог выхода |
 | `sub-windows.js` | `createSubWindowsApi(d)` — вторичные окна, compare, IVAC, cookie/DNS/modal |

@@ -178,25 +178,6 @@
                                 <p id="sp-effective-traffic" class="sp-help-lead" style="margin:0;font-family:ui-monospace,monospace;font-size:12px;color:#cbd5e1">—</p>
                                 <p class="hint">Change mode and TLS profile in <strong>Proxy Manager</strong>.</p>
                             </div>
-                            <div class="card" data-sp-search="mitm bypass domains direct tls proxy host">
-                                <h3 class="card-title">MITM bypass domains</h3>
-                                <p class="card-title-desc">Hosts using a direct connection (not CupNet MITM)</p>
-                                <label class="sp-field-label" for="sp-bypass-domains">Hosts (one per line)</label>
-                                <textarea id="sp-bypass-domains" class="sp-textarea" placeholder="One host or pattern per line" rows="5" aria-describedby="sp-bypass-help"></textarea>
-                                <p class="field-error" id="sp-bypass-domains-err" hidden></p>
-                                <div class="sp-help-panel" id="sp-bypass-help">
-                                    <ul class="sp-help-list">
-                                        <li><span class="sp-help-k">Use</span> Site breaks with TLS interception, or needs native TLS / fingerprint.</li>
-                                        <li><span class="sp-help-k">Tech</span> Sent to Chromium <code>proxyBypassRules</code> (plus built-in entries such as local and some video hosts).</li>
-                                        <li><span class="sp-help-k">Not</span> Log filter patterns — those only hide rows in the Network Log.</li>
-                                    </ul>
-                                    <div class="sp-help-examples">
-                                        <span class="sp-help-k" style="display:block;margin-bottom:6px">Examples</span>
-                                        <code>challenges.cloudflare.com</code> <code>*.example-cdn.com</code> <code>bank.example.com</code>
-                                    </div>
-                                </div>
-                                <p class="hint">Saves automatically after you pause typing or leave the field.</p>
-                            </div>
                         </div>
                     </div>
                 </section>

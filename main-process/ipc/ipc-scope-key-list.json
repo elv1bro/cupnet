@@ -22,7 +22,6 @@
   "activeExtPorts",
   "activeFingerprint",
   "app",
-  "applyBypassDomains",
   "applyEffectiveTrafficMode",
   "applyFingerprintFromProfile",
   "applyFingerprintToAllTabs",

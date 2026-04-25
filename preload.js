@@ -259,7 +259,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getTrackingSettings:     ()        => ipcRenderer.invoke('get-tracking-settings'),
     saveTrackingSettings:    (cfg)     => ipcRenderer.invoke('save-tracking-settings', cfg),
     saveFilterPatterns:      (pats)    => ipcRenderer.invoke('save-filter-patterns', pats),
-    saveBypassDomains:       (doms)    => ipcRenderer.invoke('save-bypass-domains', doms),
     getSysLog:               (lvl, lim) => ipcRenderer.invoke('get-sys-log', lvl, lim),
     saveTrafficOpts:         (opts)    => ipcRenderer.invoke('save-traffic-opts', opts),
     getTrafficOpts:          ()        => ipcRenderer.invoke('get-traffic-opts'),

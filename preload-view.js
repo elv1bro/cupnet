@@ -111,7 +111,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setHomepage:        (url)     => ipcRenderer.invoke('set-homepage', url),
     getMitmCaCert:      ()        => ipcRenderer.invoke('mitm-get-ca-cert'),
     saveFilterPatterns: (patterns)=> ipcRenderer.invoke('save-filter-patterns', patterns),
-    saveBypassDomains:  (domains) => ipcRenderer.invoke('save-bypass-domains', domains),
     saveTrackingSettings:(cfg)    => ipcRenderer.invoke('save-tracking-settings', cfg),
     solveTurnstileCaptcha: (tabId, captcha, options) => ipcRenderer.invoke('solve-turnstile-captcha', tabId, captcha, options),
     injectTurnstileToken: (tabId, payload) => ipcRenderer.invoke('inject-turnstile-token', tabId, payload),

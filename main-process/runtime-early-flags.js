@@ -29,21 +29,14 @@ function logCupnetBisectEnv() {
 
 /**
  * @param {import('electron').App} app
- * @param {{ path: typeof import('path'), fs: typeof import('fs'), safeCatch: Function }} deps
+ * @param {object} _deps - reserved for future deps (currently unused)
  */
-function applyCupnetEarlyChromiumFlags(app, { path, fs, safeCatch }) {
+function applyCupnetEarlyChromiumFlags(app, _deps) {
     logCupnetBisectEnv();
     app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
     if (STEALTH < 7) {
-        const earlySettingsPath = path.join(app.getPath('userData'), 'settings.json');
-        let earlyBypass = [];
-        try {
-            earlyBypass = JSON.parse(fs.readFileSync(earlySettingsPath, 'utf8')).bypassDomains || [];
-        } catch (err) {
-            safeCatch({ module: 'main', eventCode: 'settings.parse.failed', context: { file: earlySettingsPath } }, err, 'info');
-        }
-        const bypassList = ['<local>', '*.youtube.com', '*.googlevideo.com', ...earlyBypass];
-        app.commandLine.appendSwitch('proxy-bypass-list', [...new Set(bypassList)].join(','));
+        // Only <local> kept: required by Chromium so loopback / link-local don't go through the MITM.
+        app.commandLine.appendSwitch('proxy-bypass-list', '<local>');
     }
 }
 

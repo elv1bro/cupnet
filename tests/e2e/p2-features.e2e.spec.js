@@ -112,13 +112,6 @@ test('p2-tab-proxy) setTabProxy with profile then clear', async () => {
     await mainWindow.evaluate(async (id) => window.electronAPI.deleteProxyProfile(id), created.id);
 });
 
-test('p2-bypass) saveBypassDomains roundtrip', async () => {
-    await mainWindow.evaluate(() => window.electronAPI.saveBypassDomains(['example.net']));
-    const all = await mainWindow.evaluate(() => window.electronAPI.getSettingsAll());
-    expect(all?.bypassDomains || []).toContain('example.net');
-    await mainWindow.evaluate(() => window.electronAPI.saveBypassDomains([]));
-});
-
 test('p2-ws) websocket handshake logged when page opens WS', async ({}, testInfo) => {
     await ensureLoggingStartedNoModal(mainWindow);
     const sessionId = await mainWindow.evaluate(() => window.electronAPI.getCurrentSessionId());

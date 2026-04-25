@@ -503,9 +503,7 @@ const {
     getCurrentTrafficMode,
     getMitmProxyOpts,
     applyEffectiveTrafficMode,
-    applyBypassDomains,
     applyTrafficFilters,
-    buildBypassList,
 } = trafficSvc;
 
 const proxySvc = createProxyMitmService({
@@ -652,7 +650,6 @@ Object.assign(dMain, {
     setupNetworkLogging,
     getNewTabUrl,
     startLogStatusUpdater,
-    applyBypassDomains,
     applyTrafficFilters,
     getTrackingSettings,
     sendLogStatus,
@@ -987,7 +984,6 @@ app.whenReady().then(async () => {
             case 'activeExtPorts': return activeExtPorts;
             case 'activeFingerprint': return activeFingerprint;
             case 'app': return app;
-            case 'applyBypassDomains': return applyBypassDomains;
             case 'applyEffectiveTrafficMode': return applyEffectiveTrafficMode;
             case 'applyFingerprintToAllTabs': return applyFingerprintToAllTabs;
             case 'applyFingerprintFromProfile': return applyFingerprintFromProfile;

@@ -15,8 +15,6 @@ const spFilters = document.getElementById('sp-filter-patterns');
 const spPasteUnlock = document.getElementById('sp-paste-unlock');
 const spMaxTabsWarning = document.getElementById('sp-max-tabs-warning');
 const spMaxTabsErr = document.getElementById('sp-max-tabs-warning-err');
-const spBypassDomains = document.getElementById('sp-bypass-domains');
-const spBypassErr = document.getElementById('sp-bypass-domains-err');
 const spFiltersErr = document.getElementById('sp-filter-patterns-err');
 
 const spTrackClick = document.getElementById('sp-track-click');
@@ -68,7 +66,6 @@ let trackingSaveTimer = null;
 let deviceSaveTimer = null;
 let homepageSaveTimer = null;
 let filtersSaveTimer = null;
-let bypassSaveTimer = null;
 let activitySaveTimer = null;
 let maxTabsSaveDebounce = null;
 
@@ -665,48 +662,6 @@ async function saveFiltersNow() {
     }
 }
 
-function scheduleBypassSave() {
-    if (bypassSaveTimer) clearTimeout(bypassSaveTimer);
-    markUnsaved();
-    bypassSaveTimer = setTimeout(async () => {
-        bypassSaveTimer = null;
-        const domains = (spBypassDomains?.value || '').split('\n').map((l) => l.trim()).filter(Boolean);
-        beginSave();
-        try {
-            await api.saveBypassDomains(domains);
-            clearFieldError(spBypassDomains, spBypassErr);
-            endSave(true);
-        } catch (e) {
-            const msg = e && e.message ? String(e.message) : 'Could not save bypass domains';
-            showFieldError(spBypassDomains, spBypassErr, msg);
-            endSave(false, msg);
-        }
-    }, 600);
-}
-
-spBypassDomains?.addEventListener('input', () => scheduleBypassSave());
-spBypassDomains?.addEventListener('blur', () => {
-    if (bypassSaveTimer) {
-        clearTimeout(bypassSaveTimer);
-        bypassSaveTimer = null;
-    }
-    saveBypassNow();
-});
-
-async function saveBypassNow() {
-    const domains = (spBypassDomains?.value || '').split('\n').map((l) => l.trim()).filter(Boolean);
-    beginSave();
-    try {
-        await api.saveBypassDomains(domains);
-        clearFieldError(spBypassDomains, spBypassErr);
-        endSave(true);
-    } catch (e) {
-        const msg = e && e.message ? String(e.message) : 'Could not save bypass domains';
-        showFieldError(spBypassDomains, spBypassErr, msg);
-        endSave(false, msg);
-    }
-}
-
 [
     spTrackClick, spTrackPageLoad, spTrackPending, spTrackMouse, spTrackTypingEnd, spTrackScrollEnd, spTrackRule,
     spTrackPendingThreshold, spTrackCooldownMs, spTrackMaxPerMinute,
@@ -982,7 +937,6 @@ document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
         saveFiltersNow();
-        saveBypassNow();
         saveHomepageNow();
     }
 });
@@ -1000,7 +954,6 @@ async function init() {
         }
         const data = await api.getSettingsAll();
         if (spFilters) spFilters.value = (data?.filterPatterns || []).join('\n');
-        if (spBypassDomains) spBypassDomains.value = (data?.bypassDomains || []).join('\n');
         if (spPasteUnlock) spPasteUnlock.checked = data?.pasteUnlock !== false;
         if (spMaxTabsWarning) {
             const m = Number(data?.maxTabsBeforeWarning);

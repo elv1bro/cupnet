@@ -23,7 +23,6 @@ function ipcScopeGet(k) {
         case 'activeExtPorts': return activeExtPorts;
         case 'activeFingerprint': return activeFingerprint;
         case 'app': return app;
-        case 'applyBypassDomains': return applyBypassDomains;
         case 'applyEffectiveTrafficMode': return applyEffectiveTrafficMode;
         case 'applyFingerprintFromProfile': return applyFingerprintFromProfile;
         case 'applyFingerprintToAllTabs': return applyFingerprintToAllTabs;

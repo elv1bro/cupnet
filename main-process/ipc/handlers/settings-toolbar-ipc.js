@@ -4,7 +4,7 @@ const { isDevtoolsHostileUrl } = require('../../services/devtools-hostile-sites'
 const { buildAntiAntiDebugScript } = require('../../services/anti-anti-debug-script');
 
 /**
- * Настройки для toolbar / фильтры / bypass / traffic.
+ * Настройки для toolbar / фильтры / traffic.
  * @param {object} ctx
  */
 function reattachActivityMonitorToAllTabs(ctx) {
@@ -30,9 +30,6 @@ function applySettingsSideEffects(ctx) {
         if (ctx.tabManager && typeof ctx.tabManager.setPasteUnlock === 'function') {
             ctx.tabManager.setPasteUnlock(s.pasteUnlock !== false);
         }
-    } catch { /* ignore */ }
-    try {
-        if (typeof ctx.applyBypassDomains === 'function') ctx.applyBypassDomains(s.bypassDomains || []);
     } catch { /* ignore */ }
     try {
         if (typeof ctx.applyTrafficFilters === 'function') ctx.applyTrafficFilters(s.trafficOpts || {});
@@ -71,7 +68,6 @@ function registerSettingsToolbarIpc(ctx) {
         return {
             filterPatterns:  s.filterPatterns  || [],
             pasteUnlock:     s.pasteUnlock !== false,
-            bypassDomains:   s.bypassDomains || [],
             trafficOpts:     s.trafficOpts || {},
             effectiveTrafficMode: ctx.getCurrentTrafficMode(),
             tracking:        ctx.getTrackingSettings(),
@@ -174,14 +170,6 @@ function registerSettingsToolbarIpc(ctx) {
         const s = ctx.loadSettings();
         s.filterPatterns = Array.isArray(patterns) ? patterns : [];
         ctx.saveSettings(s);
-        return true;
-    });
-
-    ctx.ipcMain.handle('save-bypass-domains', async (_, domains) => {
-        const s = ctx.loadSettings();
-        s.bypassDomains = Array.isArray(domains) ? domains : [];
-        ctx.saveSettings(s);
-        ctx.applyBypassDomains(s.bypassDomains);
         return true;
     });
 

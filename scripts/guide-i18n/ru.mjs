@@ -241,7 +241,6 @@ export default function ru(kbdRow) {
     <h3>General</h3>
     <ul>
         <li><b>Unblock copy / paste</b> — не даём сайтам блокировать Ctrl+C/V и вставку из контекстного меню.</li>
-        <li><b>MITM bypass domains</b> — строка на паттерн; совпадения идут мимо MITM (полезно для встроенных challenge).</li>
         <li><b>URL filter patterns</b> — glob построчно; совпадения не пишутся в лог после <b>Save filters</b>.</li>
     </ul>
     <h3>Tracking</h3>
@@ -265,8 +264,6 @@ export default function ru(kbdRow) {
         <li><b>Linux:</b> <code>~/.config/CupNet/mitm-ca/ca-cert.pem</code></li>
     </ul>
     <p>Импортируйте в доверенные только на контролируемых машинах. Для CLI предпочтительнее поднимать <b>External proxy</b> на стартовой странице и слать трафик через него.</p>
-    <h3>Обход (bypass)</h3>
-    <p>Список в <b>Settings → General → MITM bypass domains</b>, синхронизируется с поведением MITM.</p>
     <span class="g-status warn">⚠ Не устанавливайте чужие CA и не распространяйте свой PEM публично.</span>
 </div>
 

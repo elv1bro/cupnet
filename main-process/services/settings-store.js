@@ -36,7 +36,6 @@ const SETTINGS_DEFAULTS = {
         cooldownMs: 2000,
         maxPerMinute: 12,
     },
-    bypassDomains: [],
     trafficOpts: {
         trafficEnabled: false,
         blockImages: false,
@@ -249,7 +248,7 @@ function mergeImportedSettings(current, imported) {
     const next = { ...current };
     const keys = [
         'filterPatterns', 'homepage', 'maxTabsBeforeWarning', 'pasteUnlock',
-        'currentProxy', 'effectiveTrafficMode', 'bypassDomains', 'onboardingComplete',
+        'currentProxy', 'effectiveTrafficMode', 'onboardingComplete',
         'activityMonitorEnabled', 'activityMonitorRateLimit', 'activityMonitorStorageStackTraces',
         'lastLogPath',
     ];

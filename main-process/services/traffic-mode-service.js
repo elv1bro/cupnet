@@ -2,7 +2,9 @@
 
 const { normalizeTrafficMode, resolveSessionProxyConfig } = require('../../traffic-mode-router');
 
-const HARDCODED_BYPASS = ['<local>', '*.youtube.com', '*.googlevideo.com'];
+/** Chromium internals require <local> bypass to avoid proxying loopback / link-local. */
+const HARDCODED_BYPASS = ['<local>'];
+const BYPASS_RULES = HARDCODED_BYPASS.join(',');
 
 /**
  * @param {object} d
@@ -20,19 +22,12 @@ const HARDCODED_BYPASS = ['<local>', '*.youtube.com', '*.googlevideo.com'];
  * @param {(v: string) => void} d.setCurrentTrafficModeRaw
  */
 function createTrafficModeService(d) {
-    function buildBypassList(userDomains) {
-        const all = [...HARDCODED_BYPASS, ...(userDomains || [])];
-        return [...new Set(all)].join(',');
-    }
-
     function getCurrentTrafficMode() {
         return normalizeTrafficMode(d.getCurrentTrafficModeRaw());
     }
 
     function getMitmProxyOpts() {
-        return resolveSessionProxyConfig({
-            bypassRules: buildBypassList((d.settingsStore.getCached() || d.loadSettings()).bypassDomains),
-        });
+        return resolveSessionProxyConfig({ bypassRules: BYPASS_RULES });
     }
 
     async function applyEffectiveTrafficMode(mode, upstreamProxyUrl, context = {}) {
@@ -71,20 +66,6 @@ function createTrafficModeService(d) {
         d.notifyProxyStatus();
     }
 
-    function applyBypassDomains(userDomains) {
-        const tabManager = d.getTabManager();
-        if (!tabManager) return;
-        const bypassStr = buildBypassList(userDomains);
-        tabManager.setBypassRules(bypassStr);
-        applyEffectiveTrafficMode(getCurrentTrafficMode(), d.getPersistentAnonymizedProxyUrl(), {
-            source: 'bypass-domains',
-            force: true,
-        }).catch((err) => {
-            d.safeCatch({ module: 'main', eventCode: 'traffic.mode.apply.failed', context: { source: 'bypass-domains' } }, err);
-        });
-        console.log('[main] bypass domains updated:', bypassStr);
-    }
-
     function applyTrafficFilters(trafficOpts) {
         const tabManager = d.getTabManager();
         if (!tabManager) return;
@@ -98,13 +79,11 @@ function createTrafficModeService(d) {
     }
 
     return {
-        buildBypassList,
         getCurrentTrafficMode,
         getMitmProxyOpts,
         applyEffectiveTrafficMode,
-        applyBypassDomains,
         applyTrafficFilters,
     };
 }
 
-module.exports = { createTrafficModeService, HARDCODED_BYPASS };
+module.exports = { createTrafficModeService, HARDCODED_BYPASS, BYPASS_RULES };

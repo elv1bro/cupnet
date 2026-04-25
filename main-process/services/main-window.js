@@ -110,7 +110,6 @@ function createMainWindowApi(d) {
         d.mainWindow.webContents.once('did-finish-load', async () => {
             const s = d.loadSettings();
             d.tabManager.setPasteUnlock(s.pasteUnlock !== false);
-            d.applyBypassDomains(s.bypassDomains || []);
             if (s.trafficOpts) d.applyTrafficFilters(s.trafficOpts);
 
             const firstTabId = await d.tabManager.createTab(d.persistentAnonymizedProxyUrl || null, d.getNewTabUrl());
@@ -128,7 +127,6 @@ function createMainWindowApi(d) {
             d.mainWindow.webContents.send('init-settings', {
                 filterPatterns: s.filterPatterns || [],
                 pasteUnlock: s.pasteUnlock !== false,
-                bypassDomains: s.bypassDomains || [],
                 tracking: d.getTrackingSettings(),
             });
             d.notifyProxyProfilesList();

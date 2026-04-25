@@ -28,7 +28,7 @@
 | `screenshots-ipc.js` | скриншоты |
 | `cookies-dns-ipc.js` | cookies, DNS, isolate/direct, DevTools |
 | `log-compare-execute-ipc.js` | log viewer, compare, JSONL, rules mock, request editor, `execute-request` |
-| `settings-toolbar-ipc.js` | агрегированные настройки toolbar, bypass, traffic |
+| `settings-toolbar-ipc.js` | агрегированные настройки toolbar, traffic |
 | `diagnostics-ipc.js` | `get-app-metrics` |
 | `quick-connect-ipc.js` | `quick-connect-profile` |
 | `mitm-tls-resilience-ipc.js` | MITM stats, TLS, stability, `connect-direct` |

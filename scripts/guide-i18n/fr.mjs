@@ -265,8 +265,6 @@ export default function fr(kbdRow) {
         <li><b>Linux :</b> <code>~/.config/CupNet/mitm-ca/ca-cert.pem</code></li>
     </ul>
     <p>Importez ce PEM dans un autre navigateur ou magasin de confiance seulement si vous le voulez explicitement. Préférez le <b>proxy externe</b> pour enchaîner des clients CLI via CupNet.</p>
-    <h3>Liste de contournement</h3>
-    <p><b>Paramètres → Général → MITM bypass domains</b>. Combinez avec interception / DNS pour des setups avancés.</p>
     <span class="g-status warn">⚠ N’importez des CA que sur des machines que vous contrôlez.</span>
 </div>
 
