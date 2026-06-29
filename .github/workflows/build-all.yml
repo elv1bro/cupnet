@@ -69,44 +69,15 @@ jobs:
         shell: powershell
         run: |
           if (Test-Path "package-lock.json") {
-            npm ci --ignore-scripts
+            npm ci --ignore-scripts --omit=optional
           } else {
-            npm i --ignore-scripts
+            npm i --ignore-scripts --omit=optional
           }
 
-      # MSBuild: (1) лишний 'call' → call "call". (2) cwd = build/deps/libffi, а не deps/libffi — нужен путь к preprocess_asm.cmd.
-      - name: Patch ffi-napi libffi.gyp for Windows (MSBuild preprocess_asm)
+      - name: Rebuild better-sqlite3 for Electron (Windows)
         if: runner.os == 'Windows'
         shell: powershell
-        run: |
-          $gyp = "node_modules/@2060.io/ffi-napi/deps/libffi/libffi.gyp"
-          if (Test-Path $gyp) {
-            $raw = Get-Content $gyp -Raw
-            $patched = $raw -replace "'call',\s*\r?\n\s*'preprocess_asm\.cmd'", "'../../../deps/libffi/preprocess_asm.cmd'"
-            if ($patched -eq $raw) {
-              $patched = $raw -replace "'preprocess_asm\.cmd'", "'../../../deps/libffi/preprocess_asm.cmd'"
-            }
-            Set-Content $gyp -Value $patched -NoNewline
-            Write-Host "Patched $gyp (preprocess_asm path + no double-call)"
-          } else {
-            Write-Host "Skipping patch: $gyp not found (ffi-napi is optional)"
-          }
-
-      # Sequential electron-rebuild: npm rebuild targets Node, not Electron.
-      - name: Rebuild native modules (Windows, sequential)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          npm run rebuild
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if (Test-Path "node_modules/@2060.io/ref-napi") {
-            npx electron-rebuild -f -o "@2060.io/ref-napi"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          if (Test-Path "node_modules/@2060.io/ffi-napi") {
-            npx electron-rebuild -f -o "@2060.io/ffi-napi"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+        run: npm run rebuild
 
       - uses: actions/setup-go@v5
         with:
