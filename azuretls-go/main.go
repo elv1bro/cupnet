@@ -7,7 +7,6 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	azuretls "github.com/Noooste/azuretls-client"
@@ -62,7 +61,7 @@ func startParentWatchdog() {
 			if os.Getppid() == 1 {
 				os.Exit(0)
 			}
-			if err := syscall.Kill(parentPid, 0); err != nil {
+			if !parentProcessAlive(parentPid) {
 				os.Exit(0)
 			}
 		}
