@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Page unavailable — CupNet</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body {
+            height: 100%;
+            background: radial-gradient(circle at 50% 28%, #1a1d2e 0%, #0f1117 55%, #0b0f16 100%);
+            color: #e2e8f0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+        }
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+        .wrap {
+            max-width: 520px;
+            width: 100%;
+            text-align: center;
+        }
+        .logo {
+            width: clamp(96px, 18vw, 128px);
+            height: clamp(96px, 18vw, 128px);
+            border-radius: 28px;
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+            object-fit: contain;
+            margin-bottom: 20px;
+        }
+        h1 {
+            font-size: clamp(20px, 3vw, 26px);
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            color: rgba(255, 255, 255, 0.94);
+            margin-bottom: 8px;
+        }
+        .lead {
+            font-size: 14px;
+            line-height: 1.5;
+            color: rgba(203, 213, 225, 0.88);
+            margin-bottom: 22px;
+        }
+        .panel {
+            text-align: left;
+            background: rgba(15, 17, 23, 0.72);
+            border: 1px solid rgba(48, 54, 61, 0.9);
+            border-radius: 12px;
+            padding: 14px 16px;
+            margin-bottom: 16px;
+        }
+        .row {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(48, 54, 61, 0.55);
+        }
+        .row:last-child { border-bottom: none; padding-bottom: 0; }
+        .lbl {
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: #8b949e;
+        }
+        .val {
+            font-size: 12.5px;
+            line-height: 1.45;
+            color: #e6edf3;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            word-break: break-all;
+            overflow-wrap: anywhere;
+            white-space: pre-wrap;
+        }
+        .val.status-err { color: #f87171; font-weight: 600; }
+        .actions {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 8px 16px;
+            border-radius: 8px;
+            border: 1px solid #30363d;
+            background: #21262d;
+            color: #e6edf3;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        button:hover { background: #30363d; border-color: #484f58; }
+        button.primary {
+            background: rgba(59, 130, 246, 0.2);
+            border-color: rgba(59, 130, 246, 0.45);
+            color: #93c5fd;
+        }
+        button.primary:hover { background: rgba(59, 130, 246, 0.32); }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <img class="logo" src="img.png" alt="CupNet">
+        <h1 id="title">Nothing here</h1>
+        <p class="lead" id="lead">There is no content at this address.</p>
+        <div class="panel" id="details"></div>
+        <div class="actions">
+            <button type="button" class="primary" id="btn-reload">Reload</button>
+            <button type="button" id="btn-copy">Copy details</button>
+        </div>
+    </div>
+    <script>
+        const params = new URLSearchParams(location.search);
+        const failedUrl = params.get('url') || '';
+        const status = params.get('status') || '';
+        const code = params.get('code') || '';
+        const desc = params.get('desc') || '';
+
+        const statusNum = parseInt(status, 10);
+        const titleEl = document.getElementById('title');
+        const leadEl = document.getElementById('lead');
+        const detailsEl = document.getElementById('details');
+
+        if (statusNum >= 500) {
+            titleEl.textContent = 'Server error';
+            leadEl.textContent = 'The server returned an error and there is nothing to show here.';
+        } else if (statusNum >= 400) {
+            titleEl.textContent = 'Page not available';
+            leadEl.textContent = 'This address returned an error — there is no page content to display.';
+        } else if (code) {
+            titleEl.textContent = 'Could not load page';
+            leadEl.textContent = 'The connection or request failed before any content could be shown.';
+        }
+
+        function addRow(label, value, cls) {
+            if (!value) return;
+            const row = document.createElement('div');
+            row.className = 'row';
+            row.innerHTML = `<span class="lbl">${label}</span><span class="val${cls ? ' ' + cls : ''}">${escapeHtml(value)}</span>`;
+            detailsEl.appendChild(row);
+        }
+
+        function escapeHtml(t) {
+            return String(t)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+
+        if (status) addRow('HTTP status', status + (statusNum === 404 ? ' Not Found' : ''), 'status-err');
+        if (desc) addRow('Error', desc, status ? '' : 'status-err');
+        if (code && !status) addRow('Error code', code);
+        if (failedUrl) addRow('URL', failedUrl);
+        if (!detailsEl.children.length) {
+            addRow('Details', 'Unknown error');
+        }
+
+        document.getElementById('btn-reload').addEventListener('click', () => {
+            if (failedUrl && /^https?:\/\//i.test(failedUrl)) {
+                location.href = failedUrl;
+            } else {
+                location.reload();
+            }
+        });
+
+        document.getElementById('btn-copy').addEventListener('click', () => {
+            const text = [
+                titleEl.textContent,
+                leadEl.textContent,
+                ...Array.from(detailsEl.querySelectorAll('.row')).map((r) => {
+                    const l = r.querySelector('.lbl')?.textContent || '';
+                    const v = r.querySelector('.val')?.textContent || '';
+                    return `${l}: ${v}`;
+                }),
+            ].join('\n');
+            navigator.clipboard.writeText(text).catch(() => {});
+        });
+    </script>
+</body>
+</html>

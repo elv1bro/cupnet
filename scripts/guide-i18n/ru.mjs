@@ -33,6 +33,7 @@ export default function ru(kbdRow) {
     <a href="#proxy">3. Менеджер прокси</a>
     <a href="#fingerprint">4. Отпечаток и TLS</a>
     <a href="#toolbar">5. Панель инструментов</a>
+    <a href="#omnibox">Адресная строка (omnibox)</a>
     <a href="#hotkeys">6. Горячие клавиши</a>
     <a href="#logs">7. Сетевые логи · Compare</a>
     <a href="#editor">8. Редактор запросов</a>
@@ -119,7 +120,7 @@ export default function ru(kbdRow) {
     <h2>5) Панель инструментов</h2>
     ${kbdRow('← → ↻ ⌂', 'Назад / Вперёд / Обновить / Домой (стартовая страница)')}
     ${kbdRow('Таблетка прокси', 'Direct или имя профиля + подпись. Открывает Менеджер прокси. Бейдж режима при MITM.')}
-    ${kbdRow('Адресная строка', 'URL или поиск, Enter')}
+    ${kbdRow('Адресная строка', 'Omnibox в стиле Chrome — см. <a href="#omnibox">Адресная строка</a>')}
     <hr class="g-hr" style="margin:10px 0">
     ${kbdRow('<b>REC · Log #N</b>', 'REC — запись в БД вкл/выкл. Log — просмотрщик; # — сессия и счётчик.')}
     ${kbdRow('<b>DevTools</b>', 'Инструменты активной вкладки. Также <kbd>F12</kbd>.')}
@@ -130,6 +131,19 @@ export default function ru(kbdRow) {
     ${kbdRow('<b>Analyzer</b>', 'Анализатор: формы, captcha, endpoint scout')}
     ${kbdRow('<b>Console</b>', 'Системная консоль — логи процесса')}
     ${kbdRow('<b>Settings</b>', 'Окно настроек: General / Tracking / Devices / Performance')}
+</div>
+
+<div id="omnibox" class="g-card">
+    <h2>Адресная строка (omnibox)</h2>
+    <p>Поле адреса ведёт себя как Chrome omnibox: <b>история с frecency</b> (переходы + ввод из строки), <b>дописывание хвоста</b> лучшего совпадения из истории, подсказки по категориям (поиск, переключить вкладку, быстрые ссылки, история) и отдельное окно-оверлей со списком.</p>
+    ${kbdRow('<kbd>Ctrl L</kbd> (⌘L)', 'Фокус на строке и список подсказок')}
+    ${kbdRow('<kbd>Ctrl K</kbd> (⌘K)', 'Палитра команд — префикс <code>&gt;</code> для встроенных команд')}
+    ${kbdRow('<kbd>Tab</kbd> (inline)', 'Если хвост URL выделен «призраком», Tab переносит каретку в конец (принять).')}
+    ${kbdRow('<kbd>Ctrl Enter</kbd> / <kbd>⌘ Enter</kbd> / <kbd>Alt Enter</kbd>', 'Открыть ввод в <b>новой вкладке</b> (в т.ч. при открытом оверлее).')}
+    ${kbdRow('Иконка сайта', 'Замок / глобус по схеме; клик — TLS/соединение, копировать URL, очистить cookies хоста, лог. Перетаскивание — URL.')}
+    ${kbdRow('× / Stop / Esc', 'Очистить поле. Обновить превращается в Stop при загрузке; Esc останавливает, если оверлей закрыт.')}
+    ${kbdRow('Поисковик', 'Настройки → Search engine: DuckDuckGo, Google, Brave, Yandex или свой URL с <code>{q}</code>.')}
+    <div class="g-tip">Внутренняя <code>cupnet://newtab</code> показывает пустое отображение адреса, пока не начнёте набор.</div>
 </div>
 
 <div id="hotkeys" class="g-card">

@@ -266,8 +266,9 @@ function createCdpNetworkLogging({
 
         if (getActiveFingerprint()) {
             if (getActiveFingerprint().user_agent) {
+                const { resolveRendererUserAgent } = require('../../user-agent-utils');
                 cdp.sendCommand('Emulation.setUserAgentOverride', {
-                    userAgent:      getActiveFingerprint().user_agent,
+                    userAgent:      resolveRendererUserAgent(getActiveFingerprint().user_agent),
                     acceptLanguage: getActiveFingerprint().language || '',
                 }).catch((err) => {
                     safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Emulation.setUserAgentOverride', tabId: state.tabId } }, err, 'info');

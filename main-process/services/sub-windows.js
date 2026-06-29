@@ -687,6 +687,47 @@ function createSubWindowsApi(d) {
         d.dnsManagerWindow.on('closed', () => { d.dnsManagerWindow = null; });
     }
 
+    function createSessionProfileModalWindow() {
+        if (d.sessionProfileModalWindow && !d.sessionProfileModalWindow.isDestroyed()) {
+            d.sessionProfileModalWindow.show();
+            d.sessionProfileModalWindow.focus();
+            return;
+        }
+
+        const W = 860;
+        const H = 640;
+        const winOpts = {
+            width: W,
+            height: H,
+            minWidth: 720,
+            minHeight: 520,
+            resizable: true,
+            minimizable: false,
+            maximizable: true,
+            title: 'Launch Profile',
+            icon: d.iconPath,
+            show: false,
+            webPreferences: {
+                preload: d.path.join(d.cupnetRoot, 'preload-session-profile-modal.js'),
+                contextIsolation: true,
+                nodeIntegration: false,
+                sandbox: false,
+            },
+        };
+        if (d.mainWindow && !d.mainWindow.isDestroyed()) {
+            winOpts.parent = d.mainWindow;
+        }
+
+        d.sessionProfileModalWindow = new d.BrowserWindow(winOpts);
+        d.sessionProfileModalWindow.loadFile(d.getAssetPath('session-profile-modal.html'));
+        d.sessionProfileModalWindow.once('ready-to-show', () => {
+            if (d.sessionProfileModalWindow && !d.sessionProfileModalWindow.isDestroyed()) {
+                d.sessionProfileModalWindow.show();
+            }
+        });
+        d.sessionProfileModalWindow.on('closed', () => { d.sessionProfileModalWindow = null; });
+    }
+
     function createLoggingModalWindow(data, buttonHint) {
         // If already open, just focus and re-send data
         if (d.loggingModalWindow && !d.loggingModalWindow.isDestroyed()) {
@@ -740,6 +781,91 @@ function createSubWindowsApi(d) {
         });
 
         d.loggingModalWindow.on('closed', () => { d.loggingModalWindow = null; });
+    }
+
+    /**
+     * Site information popover — separate frameless window so it is not clipped by WebContentsView stacking.
+     * @param {object} data — payload from buildTabTlsInfo (main)
+     * @param {{ x: number, y: number, w: number, h: number }|null} buttonHint — site-info button rect in browser shell coords
+     */
+    function createSiteInfoPopoverWindow(data, buttonHint) {
+        const W = 340;
+        const H = 360;
+        let x;
+        let y;
+        if (d.mainWindow && !d.mainWindow.isDestroyed()) {
+            const [wx, wy] = d.mainWindow.getPosition();
+            if (buttonHint && Number.isFinite(buttonHint.x)) {
+                x = Math.round(wx + buttonHint.x);
+                y = Math.round(wy + buttonHint.y + (buttonHint.h || 0) + 8);
+            } else {
+                const [ww, wh] = d.mainWindow.getSize();
+                x = Math.round(wx + (ww - W) / 2);
+                y = Math.round(wy + 96);
+            }
+        }
+
+        const sendInit = (win) => {
+            if (!win || win.isDestroyed()) return;
+            try {
+                win.webContents.send('site-info-init', data);
+            } catch (_) { /* ignore */ }
+        };
+
+        if (d.siteInfoPopoverWindow && !d.siteInfoPopoverWindow.isDestroyed()) {
+            try {
+                d.siteInfoPopoverWindow.__cupnetTabId = data.tabId;
+            } catch (_) { /* ignore */ }
+            try {
+                if (Number.isFinite(x) && Number.isFinite(y)) d.siteInfoPopoverWindow.setPosition(x, y);
+            } catch (_) { /* ignore */ }
+            sendInit(d.siteInfoPopoverWindow);
+            d.siteInfoPopoverWindow.show();
+            d.siteInfoPopoverWindow.focus();
+            return;
+        }
+
+        d.siteInfoPopoverWindow = new d.BrowserWindow({
+            width: W,
+            height: H,
+            x,
+            y,
+            resizable: false,
+            minimizable: false,
+            maximizable: false,
+            frame: false,
+            transparent: true,
+            alwaysOnTop: true,
+            parent: d.mainWindow || undefined,
+            show: false,
+            webPreferences: {
+                preload: d.path.join(d.cupnetRoot, 'preload-site-info-popover.js'),
+                contextIsolation: true,
+                nodeIntegration: false,
+            },
+        });
+
+        try {
+            d.siteInfoPopoverWindow.setBackgroundColor('#00000000');
+        } catch (_) { /* ignore */ }
+
+        d.siteInfoPopoverWindow.loadFile(d.getAssetPath('site-info-popover.html'));
+
+        d.siteInfoPopoverWindow.webContents.once('did-finish-load', () => {
+            try {
+                d.siteInfoPopoverWindow.__cupnetTabId = data.tabId;
+            } catch (_) { /* ignore */ }
+            sendInit(d.siteInfoPopoverWindow);
+            d.siteInfoPopoverWindow.show();
+        });
+
+        d.siteInfoPopoverWindow.on('blur', () => {
+            try {
+                if (d.siteInfoPopoverWindow && !d.siteInfoPopoverWindow.isDestroyed()) d.siteInfoPopoverWindow.close();
+            } catch (_) { /* ignore */ }
+        });
+
+        d.siteInfoPopoverWindow.on('closed', () => { d.siteInfoPopoverWindow = null; });
     }
 
     function createProxyManagerWindow() {
@@ -885,6 +1011,8 @@ function createSubWindowsApi(d) {
         createCookieManagerWindow,
         createDnsManagerWindow,
         createLoggingModalWindow,
+        createSessionProfileModalWindow,
+        createSiteInfoPopoverWindow,
         createProxyManagerWindow,
         createRulesWindow,
         openBreakpointWindow,

@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * E2E: исходящий User-Agent после MITM — без CupNet/Electron (Chrome-like).
- * В рендерере navigator.userAgent может оставаться строкой Electron — правка на wire.
- * Запуск: npm run test:e2e — или playwright test tests/e2e/user-agent.e2e.spec.js
+ * E2E: User-Agent in renderer and on the wire — Chrome-like, no CupNet/Electron.
+ * Run: npm run test:e2e — or playwright test tests/e2e/user-agent.e2e.spec.js
  */
 
 const { test, expect } = require('@playwright/test');
@@ -47,10 +46,9 @@ describeUa('user-agent e2e (MITM outbound)', () => {
         if (electronApp) await electronApp.close();
     });
 
-    test('navigator.userAgent в рендерере — строка Electron/Chromium (может содержать CupNet)', async () => {
+    test('navigator.userAgent in tab — Chrome-like, no CupNet/Electron', async () => {
         const ua = await getActiveTabNavigatorUserAgent(electronApp);
-        expect(ua).toBeTruthy();
-        expect(String(ua)).toMatch(/Chrome\/[\d.]+/);
+        assertChromeLikeWireUserAgent(ua);
     });
 
     test('httpbin.org/headers — User-Agent в запросе Chrome-like (нормализация в MITM)', async () => {

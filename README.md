@@ -33,6 +33,8 @@ main.js                  — главный процесс Electron
 browser.html             — главное окно (тулбар + таб-бар)
 browser-renderer.js      — логика тулбара и таб-бара
 
+**Session profile** — загрузка вкладки из JSON (прокси, cookies, URL, JS после загрузки): **File → Load Session Profile…**, документация [`docs/session-profile.md`](docs/session-profile.md), пример [`examples/cupnet-session.example.json`](examples/cupnet-session.example.json).
+
 log-viewer.html          — окно просмотра сетевых логов
 log-viewer-renderer.js   — виртуальный скролл, фильтры, HAR, replay
 
@@ -65,6 +67,7 @@ quick-proxy-change.html  — быстрая смена прокси
 | `proxy_profiles` | Сохранённые прокси-профили (URL зашифрован) |
 | `rules` | Правила подсветки и уведомлений |
 | `intercept_rules` | Правила перехвата (block / modifyHeaders / mock) |
+| `omnibox_history` | История посещений для адресной строки (frecency, подсказки omnibox) |
 
 **FTS5 (Full-Text Search):**  
 Виртуальная таблица `requests_fts` с триггерами — полнотекстовый поиск по URL и телу ответа без сканирования всей таблицы.
@@ -84,6 +87,8 @@ quick-proxy-change.html  — быстрая смена прокси
 - `target=_blank` ссылки открываются в новой вкладке (через `setWindowOpenHandler`)
 - Загрузка страницы (`did-start-loading` / `did-stop-loading`) → обновляет индикатор в тулбаре
 - Переключение вкладки → URL-бар обновляется до URL активной вкладки
+
+**Omnibox (адресная строка):** подсказки из `omnibox_history` и логов, категории (поиск / переключить вкладку / быстрые ссылки / история), inline-дополнение хвоста URL, отдельный overlay, иконка сайта (popover TLS / копирование / cookies / лог), Reload→Stop и **Esc** при закрытом списке, **⌘/Ctrl+Enter** или **Alt+Enter** — открыть ввод в новой вкладке. Поисковик настраивается в **Settings** (DuckDuckGo, Google, Brave, Yandex, свой URL с `{q}`). Подробнее — `cupnet-guide.html`, раздел *Address bar (omnibox)*.
 
 ---
 

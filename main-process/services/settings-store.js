@@ -66,6 +66,16 @@ const SETTINGS_DEFAULTS = {
     activityMonitorRateLimit: 100,
     /** Optional inject: wrap localStorage/sessionStorage for stack traces (not implemented in CDP path). */
     activityMonitorStorageStackTraces: false,
+    /** Omnibox fallback search: duckduckgo | google | brave | yandex | custom */
+    searchEngine: 'duckduckgo',
+    /** When searchEngine is custom: URL with `{q}` or `%s` placeholder, or base URL (see utils.normalizeCustomSearchEngineUrl). */
+    searchEngineCustomUrl: '',
+    /** MITM: inject Access-Control-* on all matching HTTPS responses (toolbar). */
+    corsBypassEnabled: false,
+    /** Tool dock placement: inline (toolbar) | subbar (under address bar) | bottom | separate. */
+    toolbarToolsPlacement: 'subbar',
+    /** Mini horizontal bars (subbar / bottom): left | right alignment. */
+    toolbarToolsMiniAlign: 'right',
 };
 
 let _cached = null;
@@ -151,10 +161,32 @@ function normalizeDevicePermissions(raw) {
     };
 }
 
+function normalizeSearchEngineSettings(raw) {
+    const base = SETTINGS_DEFAULTS;
+    const key = String((raw && raw.searchEngine) || base.searchEngine || 'duckduckgo').toLowerCase();
+    const allowed = new Set(['duckduckgo', 'google', 'brave', 'yandex', 'custom']);
+    const searchEngine = allowed.has(key) ? key : 'duckduckgo';
+    const searchEngineCustomUrl = String(
+        (raw && raw.searchEngineCustomUrl != null) ? raw.searchEngineCustomUrl : base.searchEngineCustomUrl
+    ).trim();
+    return { searchEngine, searchEngineCustomUrl };
+}
+
 function normalizeMaxTabsBeforeWarning(raw) {
     const n = Number(raw && raw.maxTabsBeforeWarning);
     if (Number.isFinite(n) && n >= 1) return Math.min(200, Math.floor(n));
     return SETTINGS_DEFAULTS.maxTabsBeforeWarning;
+}
+
+function normalizeToolbarToolsPlacement(raw) {
+    const v = String((raw && raw.toolbarToolsPlacement) || SETTINGS_DEFAULTS.toolbarToolsPlacement).toLowerCase();
+    if (v === 'subbar' || v === 'bottom' || v === 'separate') return v;
+    return 'inline';
+}
+
+function normalizeToolbarToolsMiniAlign(raw) {
+    const v = String((raw && raw.toolbarToolsMiniAlign) || SETTINGS_DEFAULTS.toolbarToolsMiniAlign).toLowerCase();
+    return v === 'left' ? 'left' : 'right';
 }
 
 function settingsForDisk(s) {
@@ -201,6 +233,10 @@ function materializeSettingsFromRaw(raw) {
         activityMonitorEnabled: raw.activityMonitorEnabled === true,
         activityMonitorRateLimit: Math.max(50, Math.min(500, Number(raw.activityMonitorRateLimit) || SETTINGS_DEFAULTS.activityMonitorRateLimit)),
         activityMonitorStorageStackTraces: raw.activityMonitorStorageStackTraces === true,
+        corsBypassEnabled: raw.corsBypassEnabled === true,
+        toolbarToolsPlacement: normalizeToolbarToolsPlacement(raw),
+        toolbarToolsMiniAlign: normalizeToolbarToolsMiniAlign(raw),
+        ...normalizeSearchEngineSettings(raw),
     };
     merged._version = CURRENT_SETTINGS_VERSION;
     if (merged.effectiveTrafficMode === 'browser_proxy') {
@@ -250,7 +286,7 @@ function mergeImportedSettings(current, imported) {
         'filterPatterns', 'homepage', 'maxTabsBeforeWarning', 'pasteUnlock',
         'currentProxy', 'effectiveTrafficMode', 'onboardingComplete',
         'activityMonitorEnabled', 'activityMonitorRateLimit', 'activityMonitorStorageStackTraces',
-        'lastLogPath',
+        'lastLogPath', 'searchEngine', 'searchEngineCustomUrl', 'corsBypassEnabled',
     ];
     for (const k of keys) {
         if (importedClean[k] !== undefined) next[k] = importedClean[k];
@@ -330,7 +366,10 @@ module.exports = {
     normalizeTrackingSettings,
     normalizeTrafficOpts,
     normalizeDevicePermissions,
+    normalizeSearchEngineSettings,
     normalizeMaxTabsBeforeWarning,
+    normalizeToolbarToolsPlacement,
+    normalizeToolbarToolsMiniAlign,
     buildFactoryResetSettings,
     exportSettingsSafe,
     mergeImportedSettings,

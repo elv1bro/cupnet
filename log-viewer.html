@@ -783,52 +783,232 @@ select:focus { border-color: var(--accent); }
 #lv-detail-empty .empty-icon { font-size: 32px; opacity: 0.4; }
 #lv-detail-empty p { font-size: 12px; opacity: 0.5; }
 
-/* Detail — request / entry id */
-#lv-detail-id-strip {
+/* Detail — request line: [id] METHOD / url */
+#lv-detail-id-strip.lv-detail-request-line {
     display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    padding: 8px 14px 6px;
-    border-bottom: 1px solid var(--border2);
-    flex-shrink: 0;
-    background: var(--bg1);
-}
-#lv-detail-id-strip #d-request-id {
-    font-variant-numeric: tabular-nums;
-    font-size: 12px;
-    color: var(--text-hi);
-}
-#lv-detail-id-strip .body-act-btn {
-    font-size: 11px;
-    padding: 3px 8px;
-}
-
-/* Detail — URL bar */
-#lv-detail-url-bar {
-    padding: 10px 14px 8px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     background: var(--bg1);
 }
+.lv-detail-request-line-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+.lv-req-id {
+    flex-shrink: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-dim);
+}
+#d-request-method {
+    flex-shrink: 0;
+    font-size: 10px;
+}
+.lv-detail-url-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    width: 100%;
+    min-width: 0;
+}
+.lv-detail-url-btn {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 2px 6px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: none;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+}
+.lv-detail-url-btn:hover:not(:disabled) {
+    background: var(--bg2);
+    border-color: var(--border2);
+}
+.lv-detail-url-btn:disabled {
+    cursor: default;
+    opacity: 0.65;
+}
 #lv-detail-url {
-    font-size: 12.5px;
-    font-family: 'SF Mono','Fira Code','Courier New',monospace;
+    display: block;
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     color: var(--text-hi);
+    white-space: pre-wrap;
     word-break: break-all;
-    line-height: 1.5;
-    max-height: 56px;
-    overflow: hidden;
-    overflow-y: auto;
-    scrollbar-width: none;
+    overflow-wrap: anywhere;
+    line-height: 1.45;
+}
+.lv-detail-url-btn:hover:not(:disabled) #lv-detail-url {
+    color: var(--accent);
+}
+.lv-url-copy-btn {
+    flex-shrink: 0;
+    align-self: flex-start;
+    margin-top: 1px;
+    padding: 2px 6px;
+    min-width: 26px;
+    border-radius: 5px;
+    border: 1px solid var(--border2);
+    background: var(--bg2);
+    color: var(--text-dim);
+    font-size: 10px;
+    line-height: 1.2;
+    cursor: pointer;
+    font-family: inherit;
+}
+.lv-url-copy-btn:hover {
+    color: var(--text-hi);
+    border-color: var(--border);
+    background: var(--bg3);
+}
+.lv-url-parts-popover {
+    position: fixed;
+    z-index: 25000;
+    min-width: min(380px, calc(100vw - 24px));
+    max-width: min(560px, calc(100vw - 24px));
+    max-height: min(62vh, 520px);
+    overflow: auto;
+    background: var(--bg1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.48);
+}
+.lv-url-parts-popover[hidden] { display: none !important; }
+.lv-url-parts-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border2);
+    background: var(--bg2);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+.lv-url-parts-head > span:first-child {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-hi);
+    flex: 1;
+}
+.lv-url-parts-body { padding: 8px 10px 10px; }
+.lv-url-parts-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border2);
+}
+.lv-url-parts-row:last-child { border-bottom: none; }
+.lv-url-parts-label {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+.lv-url-parts-val {
+    margin: 0;
+    font-size: 11.5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text-hi);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    line-height: 1.45;
+}
+.lv-url-parts-section {
+    margin: 8px 0 4px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+.lv-url-parts-query {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.lv-url-parts-query-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--bg0);
+    border: 1px solid var(--border2);
+}
+.lv-url-parts-query-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.lv-url-parts-query-head .lv-url-parts-q-key { flex: 1; min-width: 0; }
+.lv-url-parts-row-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+}
+.lv-url-parts-row-head .lv-url-parts-val,
+.lv-url-parts-row-head pre.lv-url-parts-val { flex: 1; min-width: 0; }
+.lv-multipart-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 6px;
+}
+.lv-multipart-filter-btn {
+    padding: 2px 7px;
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 4px;
+    border: 1px solid var(--border2);
+    background: var(--bg1);
+    color: var(--text-dim);
+    cursor: pointer;
+    font-family: inherit;
+}
+.lv-multipart-filter-btn.active {
+    background: var(--bg3);
+    color: var(--text-hi);
+    border-color: var(--border);
+}
+.resp-form-editor-btn { margin-left: 6px; flex-shrink: 0; }
+.lv-url-parts-q-key {
+    font-size: 11px;
+    font-weight: 700;
+    color: #7dd3fc;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-all;
+}
+.lv-url-parts-q-val {
+    font-size: 11px;
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 #lv-detail.multi-sel #lv-detail-id-strip,
 #lv-detail.multi-sel #lv-detail-meta,
 #lv-detail.multi-sel #lv-replay-bar,
-#lv-detail.multi-sel #lv-mark-panel,
 #lv-detail.multi-sel #lv-tabs,
 #lv-detail.multi-sel #lv-tab-body,
+#lv-detail.multi-sel #lv-detail-find,
 #lv-detail.multi-sel #lv-screenshot-direct {
     display: none !important;
 }
@@ -840,100 +1020,176 @@ select:focus { border-color: var(--accent); }
 #lv-detail-meta {
     display: flex;
     align-items: center;
-    gap: 0;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    padding: 6px 14px;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    padding: 4px 12px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     background: var(--bg1);
-    scrollbar-width: none;
 }
-.meta-cell {
-    display: flex; align-items: center; gap: 5px;
-    padding: 0 10px;
-    border-right: 1px solid var(--border2);
+.meta-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     white-space: nowrap;
-    font-size: 11.5px;
-    flex-shrink: 0;
+    font-size: 11px;
 }
-.meta-cell:last-child { border-right: none; }
-.meta-lbl { color: var(--text-dim); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px; }
-.meta-val { color: var(--text-hi); font-weight: 500; }
+.meta-lbl {
+    color: var(--text-dim);
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.meta-val {
+    color: var(--text-hi);
+    font-weight: 600;
+    font-size: 11px;
+}
 
-/* Replay bar */
+/* Replay + mark unified toolbar */
 #lv-replay-bar {
     display: none;
     align-items: center;
-    gap: 8px;
-    padding: 6px 14px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg0);
-    flex-shrink: 0;
-}
-#lv-replay-bar.visible { display: flex; }
-#lv-replay-btn {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 4px 12px; border-radius: 5px;
-    background: var(--accent); border: none;
-    color: #fff; font-size: 11.5px; font-weight: 600;
-    cursor: pointer;
-}
-#lv-replay-btn:hover { filter: brightness(1.15); }
-#lv-replay-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-#lv-copy-url {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 4px 10px; border-radius: 5px;
-    background: var(--bg2); border: 1px solid var(--border);
-    color: var(--text); font-size: 11px; cursor: pointer;
-}
-#lv-copy-url:hover { border-color: var(--accent); color: var(--text-hi); }
-#lv-create-mock-btn {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 4px 10px; border-radius: 5px;
-    background: var(--bg2); border: 1px solid var(--border);
-    color: #f0a030; font-size: 11px; font-weight: 600; cursor: pointer;
-}
-#lv-create-mock-btn:hover { border-color: #f0a030; background: rgba(240,160,48,0.1); }
-#lv-create-mock-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-#lv-replay-diff {
-    font-size: 11px; color: var(--text-dim);
-}
-#lv-mark-panel {
-    display: none;
-    flex-direction: column;
-    gap: 8px;
-    padding: 8px 14px;
+    gap: 6px;
+    padding: 4px 10px;
     border-bottom: 1px solid var(--border);
     background: var(--bg1);
+    flex-shrink: 0;
+    min-height: 30px;
+    overflow: hidden;
 }
-#lv-mark-panel.visible { display: flex; }
-.mark-row { display: flex; align-items: center; gap: 8px; }
-.mark-title {
-    font-size: 10px; font-weight: 700; letter-spacing: 0.4px;
-    text-transform: uppercase; color: var(--text-dim);
-    min-width: 74px;
+#lv-replay-bar.visible { display: flex; }
+.lv-detail-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+    flex-wrap: wrap;
 }
-.mark-colors { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.lv-replay-actions,
+#lv-toolbar-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+.lv-act-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+.lv-act-sep {
+    width: 1px;
+    height: 18px;
+    background: var(--border2);
+    flex-shrink: 0;
+}
+.lv-act-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border2);
+    background: var(--bg2);
+    color: var(--text);
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+    cursor: pointer;
+    font-family: inherit;
+}
+.lv-act-btn:hover {
+    color: var(--text-hi);
+    border-color: var(--border);
+    background: var(--bg3);
+}
+.lv-act-btn:active { background: var(--bg0); }
+.lv-act-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.lv-act-btn-primary {
+    background: rgba(59, 130, 246, 0.16);
+    border-color: rgba(59, 130, 246, 0.42);
+    color: #93c5fd;
+}
+.lv-act-btn-primary:hover {
+    background: rgba(59, 130, 246, 0.26);
+    border-color: rgba(59, 130, 246, 0.62);
+    color: #bfdbfe;
+}
+.lv-act-btn-warn {
+    color: #fcd34d;
+    border-color: rgba(245, 158, 11, 0.35);
+    background: rgba(245, 158, 11, 0.08);
+}
+.lv-act-btn-warn:hover {
+    border-color: rgba(245, 158, 11, 0.55);
+    background: rgba(245, 158, 11, 0.14);
+    color: #fde68a;
+}
+#lv-replay-diff {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-left: auto;
+    flex-shrink: 0;
+    max-width: 42%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+#lv-mark-section {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1 1 220px;
+    overflow: hidden;
+}
+#lv-mark-section.visible { display: inline-flex; }
+.mark-tag-group,
+.mark-comment-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    flex-shrink: 0;
+}
+.mark-comment-group { flex: 1; flex-shrink: 1; overflow: hidden; }
+.mark-colors { display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
 .mark-color {
-    width: 14px; height: 14px; border-radius: 50%;
-    border: 1px solid rgba(255,255,255,0.25); cursor: pointer;
+    width: 11px; height: 11px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.22); cursor: pointer;
+    padding: 0;
 }
 .mark-color.active { outline: 2px solid #ffffffcc; outline-offset: 1px; }
-#lv-mark-status {
-    font-size: 11px;
+.mark-clear-btn {
+    min-width: 22px;
+    padding: 2px 6px !important;
+}
+#lv-mark-status,
+.mark-status-inline {
+    font-size: 10px;
     color: #4ade80;
-    min-height: 14px;
+    margin-left: auto;
+    flex-shrink: 0;
+    min-height: 0;
+    white-space: nowrap;
 }
 .mark-preview {
     flex: 1;
-    min-width: 120px;
+    min-width: 0;
+    max-width: min(180px, 22vw);
     color: var(--text-dim);
-    font-size: 11px;
+    font-size: 10.5px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
+.mark-preview.has-note { color: var(--text); }
 
 /* Detail tabs */
 #lv-tabs {
@@ -943,18 +1199,213 @@ select:focus { border-color: var(--accent); }
     flex-shrink: 0;
 }
 .lv-tab-btn {
-    padding: 7px 14px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 11px;
     background: none; border: none;
     border-bottom: 2px solid transparent;
     color: var(--text-dim); cursor: pointer;
-    font-size: 12px; font-weight: 500;
+    font-size: 11.5px; font-weight: 500;
     transition: color 0.12s, border-color 0.12s;
+}
+.lv-tab-label { line-height: 1.2; }
+.lv-tab-badges {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+.lv-tab-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    border-radius: 7px;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.01em;
+    color: var(--text-dim);
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+}
+.lv-tab-badge[hidden] { display: none !important; }
+.lv-tab-btn:hover .lv-tab-badge {
+    color: var(--text);
+    border-color: var(--border);
+}
+.lv-tab-btn.active .lv-tab-badge {
+    color: #93c5fd;
+    background: rgba(59, 130, 246, 0.12);
+    border-color: rgba(59, 130, 246, 0.28);
+}
+.lv-tab-badge.badge-cookie-sent {
+    color: #7dd3fc;
+    background: rgba(125, 211, 252, 0.12);
+    border-color: rgba(125, 211, 252, 0.32);
+}
+.lv-tab-btn:hover .lv-tab-badge.badge-cookie-sent,
+.lv-tab-btn.active .lv-tab-badge.badge-cookie-sent {
+    color: #bae6fd;
+    background: rgba(125, 211, 252, 0.2);
+    border-color: rgba(125, 211, 252, 0.45);
+}
+.lv-tab-badge.badge-cookie-recv {
+    color: #86efac;
+    background: rgba(34, 197, 94, 0.12);
+    border-color: rgba(34, 197, 94, 0.32);
+}
+.lv-tab-btn:hover .lv-tab-badge.badge-cookie-recv,
+.lv-tab-btn.active .lv-tab-badge.badge-cookie-recv {
+    color: #bbf7d0;
+    background: rgba(34, 197, 94, 0.2);
+    border-color: rgba(34, 197, 94, 0.45);
 }
 .lv-tab-btn:hover { color: var(--text); }
 .lv-tab-btn.active {
     color: var(--accent);
     border-bottom-color: var(--accent);
 }
+
+/* In-tab find (Headers / Request / Response / Raw …) */
+.lv-detail-find-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg1);
+    flex-shrink: 0;
+}
+.lv-detail-find-bar:focus-within { border-bottom-color: var(--accent); }
+.lv-detail-find-icon {
+    color: var(--text-dim);
+    font-size: 13px;
+    flex-shrink: 0;
+}
+.lv-detail-find-bar input {
+    flex: 1;
+    min-width: 72px;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 12px;
+    outline: none;
+}
+.lv-detail-find-bar input::placeholder { color: var(--text-dim); }
+.lv-detail-find-count {
+    font-size: 11px;
+    color: var(--text-dim);
+    min-width: 76px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+mark.lv-find-mark {
+    background: rgba(250, 204, 21, 0.42);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0;
+}
+mark.lv-find-mark.lv-find-active {
+    background: rgba(249, 115, 22, 0.82);
+    box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.95);
+}
+
+.resp-html-subtabs {
+    display: none;
+    gap: 0;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg1);
+    flex-shrink: 0;
+}
+.resp-html-subtab {
+    padding: 6px 12px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-dim);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+}
+.resp-html-subtab:hover { color: var(--text); }
+.resp-html-subtab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+}
+.resp-html-forms-wrap {
+    display: none;
+    padding: 0 0 12px;
+}
+.resp-forms-empty {
+    padding: 14px;
+    color: var(--text-dim);
+    font-size: 12px;
+    font-style: italic;
+}
+.resp-form-card {
+    margin: 10px 14px 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--bg0);
+}
+.resp-form-head {
+    padding: 8px 12px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    line-height: 1.45;
+}
+.resp-form-head-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin-bottom: 2px;
+}
+.resp-form-head-top .resp-form-head-title { margin-bottom: 0; flex: 1; min-width: 0; }
+.resp-form-head-title {
+    font-weight: 700;
+    color: var(--text-hi);
+    margin-bottom: 2px;
+}
+.resp-form-head-meta {
+    color: var(--text-dim);
+    word-break: break-all;
+}
+.resp-field-flag {
+    display: inline-block;
+    margin: 0 4px 2px 0;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    background: var(--bg3);
+    color: var(--text-dim);
+}
+.resp-field-flag.hidden-flag { background: rgba(168, 85, 247, 0.22); color: #d8b4fe; }
+.resp-field-flag.state-flag { background: rgba(245, 158, 11, 0.18); color: #fcd34d; }
+.resp-field-attrs {
+    display: block;
+    margin-top: 3px;
+    font-size: 10px;
+    color: var(--text-dim);
+    word-break: break-word;
+}
+.resp-field-options {
+    margin-top: 4px;
+    font-size: 10px;
+    color: var(--text-dim);
+    line-height: 1.4;
+}
+.resp-field-option.selected { color: #86efac; font-weight: 600; }
 
 /* Tab content */
 #lv-tab-body {
@@ -994,6 +1445,197 @@ select:focus { border-color: var(--accent); }
 .ws-msg-toggle:hover { border-color: var(--accent); }
 .ws-msg-time { color: var(--text-dim); font-size: 10px; flex-shrink: 0; max-width: 140px; text-align: right; }
 
+/* ── Field cards (headers, cookies, form fields — long values) ───────────── */
+.lv-field-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    padding: 0 0 8px;
+}
+.lv-field-list-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px 2px;
+}
+.lv-field-list-count {
+    font-size: 10px;
+    color: var(--text-dim);
+}
+.lv-field-card,
+.lv-kv-field {
+    padding: 6px 12px 7px;
+    border-bottom: 1px solid var(--border2);
+}
+.lv-field-card:last-child,
+.lv-kv-field:last-child { border-bottom: none; }
+.lv-field-card:hover,
+.lv-kv-field:hover { background: var(--bg2); }
+.lv-field-head,
+.lv-kv-field-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 3px;
+}
+.lv-field-keybox { min-width: 0; flex: 1; }
+.lv-field-key,
+.lv-kv-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+}
+.lv-field-subkey,
+.lv-kv-subkey {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 1px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-all;
+    text-transform: none;
+    letter-spacing: 0;
+}
+.lv-field-copy {
+    flex-shrink: 0;
+    padding: 2px 6px !important;
+    font-size: 10px !important;
+    min-width: 26px;
+}
+.lv-field-val-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+.lv-field-val,
+.lv-kv-value {
+    margin: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.lv-field-val.is-empty,
+.lv-kv-value.is-empty {
+    color: var(--text-dim);
+    font-style: italic;
+}
+.lv-field-val-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.lv-field-val-len {
+    font-size: 10px;
+    color: var(--text-dim);
+}
+.lv-field-expand {
+    font-size: 10px !important;
+    padding: 2px 8px !important;
+}
+.lv-field-wire {
+    margin-top: 6px;
+    font-size: 10px;
+    color: var(--text-dim);
+}
+.lv-field-wire > summary {
+    cursor: pointer;
+    user-select: none;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin-bottom: 4px;
+}
+.lv-field-wire-act {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 2px;
+}
+.lv-kv-table-wrap { padding: 0 0 8px; overflow-x: auto; }
+.lv-kv-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.lv-kv-table th {
+    text-align: left;
+    padding: 5px 10px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border2);
+    background: var(--bg1);
+    position: sticky;
+    top: 0;
+    white-space: nowrap;
+}
+.lv-kv-table td {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border2);
+    vertical-align: top;
+    word-break: break-word;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+}
+.lv-kv-table tr:last-child td { border-bottom: none; }
+.lv-kv-table tr:hover td { background: var(--bg2); }
+.lv-kv-td-key { color: #7dd3fc; font-weight: 600; width: 22%; white-space: nowrap; }
+.lv-kv-td-val { color: var(--text); }
+.lv-kv-td-meta { color: var(--text-dim); font-size: 10.5px; }
+.lv-kv-td-act { width: 32px; white-space: nowrap; text-align: right; }
+.lv-field-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+}
+.lv-field-badge {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--bg3);
+    color: var(--text-dim);
+    border: 1px solid var(--border2);
+}
+.lv-field-badge.badge-file { color: #fcd34d; border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.1); }
+.lv-field-badge.badge-hidden { color: #d8b4fe; border-color: rgba(168, 85, 247, 0.35); background: rgba(168, 85, 247, 0.12); }
+.lv-field-badge.badge-secure { color: #86efac; border-color: rgba(34, 197, 94, 0.35); background: rgba(34, 197, 94, 0.12); }
+.lv-field-badge.badge-httponly { color: #93c5fd; border-color: rgba(59, 130, 246, 0.35); background: rgba(59, 130, 246, 0.12); }
+.lv-field-badge.badge-samesite { color: #fcd34d; border-color: rgba(245, 158, 11, 0.35); background: rgba(245, 158, 11, 0.1); }
+.lv-field-meta {
+    margin-top: 6px;
+    font-size: 10px;
+    color: var(--text-dim);
+    line-height: 1.45;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+.lv-field-meta-line + .lv-field-meta-line { margin-top: 3px; }
+.lv-field-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+.resp-form-card .lv-field-list { padding: 8px 10px 10px; }
+
 /* ── Headers tab ─────────────────────────────────────────────────────────────── */
 .hdr-section { padding: 10px 14px 0; }
 .hdr-section-title {
@@ -1009,37 +1651,46 @@ select:focus { border-color: var(--accent); }
     background: none; border: 1px solid var(--border2); color: var(--text-dim);
     font-size: 10px; padding: 1px 7px; border-radius: 4px; cursor: pointer;
     font-family: inherit; text-transform: none; letter-spacing: 0;
-    margin-left: auto;
+    flex-shrink: 0;
 }
+.hdr-section-title .lv-view-toggle-host { margin-left: auto; }
+.body-toolbar .lv-view-toggle-host { margin-left: 8px; }
+.lv-field-list-header .lv-view-toggle-host { margin-left: auto; }
+.resp-form-head .lv-view-toggle-host { margin-left: auto; flex-shrink: 0; }
 .hdr-copy-btn:hover { color: var(--text-hi); border-color: var(--border); background: var(--bg2); }
 .ck-copy-btn {
     background: none; border: 1px solid var(--border2); color: var(--text-dim);
     font-size: 10px; padding: 1px 7px; border-radius: 4px; cursor: pointer;
-    font-family: inherit; margin-left: auto;
+    font-family: inherit; flex-shrink: 0;
 }
+.ck-section-title .lv-view-toggle-host { margin-left: auto; }
 .ck-copy-btn:hover { color: var(--text-hi); border-color: var(--border); background: var(--bg2); }
-.hdr-row {
-    display: grid;
-    grid-template-columns: 200px 1fr;
-    gap: 0;
-    border-bottom: 1px solid rgba(255,255,255,0.035);
-    padding: 4px 0;
-    align-items: baseline;
+
+/* View mode toggle (Fields / Table) */
+.lv-view-toggle {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--border2);
+    border-radius: 5px;
+    overflow: hidden;
+    flex-shrink: 0;
 }
-.hdr-row:last-child { border-bottom: none; }
-.hdr-name {
-    font-size: 11.5px; font-weight: 500;
-    color: #7dd3fc;
-    padding-right: 12px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font-family: 'SF Mono','Fira Code','Courier New',monospace;
+.lv-view-toggle-btn {
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    border: none;
+    background: var(--bg1);
+    color: var(--text-dim);
+    cursor: pointer;
+    font-family: inherit;
+    line-height: 1.3;
 }
-.hdr-val {
-    font-size: 11.5px;
-    color: var(--text);
-    word-break: break-all;
-    line-height: 1.5;
-    font-family: 'SF Mono','Fira Code','Courier New',monospace;
+.lv-view-toggle-btn + .lv-view-toggle-btn { border-left: 1px solid var(--border2); }
+.lv-view-toggle-btn:hover { color: var(--text-hi); background: var(--bg2); }
+.lv-view-toggle-btn.active {
+    background: var(--bg3);
+    color: var(--text-hi);
 }
 
 /* ── Cookies tab ─────────────────────────────────────────────────────────────── */
@@ -1290,21 +1941,6 @@ select:focus { border-color: var(--accent); }
 .cmp-side-btn:hover { border-color: var(--accent); color: var(--text-hi); }
 .cmp-side-btn .side-label { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
 .cmp-side-btn .side-info { font-size: 10px; color: var(--text-dim); }
-#lv-add-to-compare,
-#lv-open-compare {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 4px 10px;
-    border-radius: 5px;
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-size: 11px;
-    cursor: pointer;
-}
-#lv-add-to-compare:hover,
-#lv-open-compare:hover { border-color: var(--accent); color: var(--text-hi); }
 
 /* ── Overlay dialogs ──────────────────────────────────────────────────────── */
 .lv-overlay {
@@ -1342,6 +1978,45 @@ select:focus { border-color: var(--accent); }
     justify-content: flex-end;
     margin-top: 10px;
 }
+.mp-image-dialog {
+    width: min(920px, calc(100vw - 24px));
+    max-height: calc(100vh - 24px);
+    overflow: auto;
+}
+.mp-image-wrap {
+    text-align: center;
+    overflow: auto;
+}
+
+/* Web Request Tools — row context menu */
+.wrt-ctx-menu {
+    position: fixed;
+    z-index: 500;
+    min-width: 220px;
+    padding: 4px 0;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+    font-size: 12px;
+}
+.wrt-ctx-menu.hidden { display: none !important; }
+.wrt-ctx-menu-title {
+    padding: 6px 12px 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+.wrt-ctx-menu-item {
+    padding: 7px 12px;
+    cursor: pointer;
+    color: var(--text);
+}
+.wrt-ctx-menu-item:hover { background: rgba(59, 126, 248, 0.15); color: var(--text-hi); }
+.wrt-ctx-menu-item.disabled { opacity: 0.45; pointer-events: none; }
+.wrt-ctx-menu-sep { height: 1px; background: var(--border2); margin: 4px 0; }
 
 /* Export site (ZIP): слева фильтры, справа host + превью путей */
 .site-export-dialog {
@@ -1673,14 +2348,20 @@ select:focus { border-color: var(--accent); }
         <!-- Detail view (hidden until entry selected) -->
         <div id="lv-detail" style="display:none; flex-direction:column; height:100%; overflow:hidden; display:none">
 
-            <!-- Entry ID + URL -->
-            <div id="lv-detail-id-strip">
-                <span id="d-request-id" class="meta-val" title="Database entry id"></span>
-                <button type="button" id="lv-copy-id-btn" class="body-act-btn">⧉ Copy ID</button>
+            <!-- Entry line: [id] METHOD / url -->
+            <div id="lv-detail-id-strip" class="lv-detail-request-line">
+                <div class="lv-detail-request-line-meta">
+                    <span id="d-request-id" class="lv-req-id" title="Database entry id"></span>
+                    <span id="d-request-method" class="method-badge m-other" style="display:none">—</span>
+                </div>
+                <div class="lv-detail-url-row">
+                    <button type="button" id="lv-detail-url-btn" class="lv-detail-url-btn" title="Show host, path and query parameters">
+                        <span id="lv-detail-url"></span>
+                    </button>
+                    <button type="button" id="lv-copy-url-header" class="lv-url-copy-btn" title="Copy URL">⎘</button>
+                </div>
             </div>
-            <div id="lv-detail-url-bar">
-                <div id="lv-detail-url"></div>
-            </div>
+            <div id="lv-url-parts-popover" class="lv-url-parts-popover" hidden></div>
 
             <div id="lv-detail-multi-banner" style="display:none;padding:10px 12px;font-size:12px;color:var(--text-dim);line-height:1.45;border-bottom:1px solid var(--border2)">
                 <span id="lv-detail-multi-text"></span>
@@ -1688,57 +2369,54 @@ select:focus { border-color: var(--accent); }
 
             <!-- Meta row -->
             <div id="lv-detail-meta">
-                <div class="meta-cell">
+                <span class="meta-item">
                     <span class="meta-lbl">Status</span>
                     <span class="meta-val lv-status" id="d-status">—</span>
-                </div>
-                <div class="meta-cell">
-                    <span class="meta-lbl">Method</span>
-                    <span class="meta-val" id="d-method">—</span>
-                </div>
-                <div class="meta-cell">
+                </span>
+                <span class="meta-item">
                     <span class="meta-lbl">Type</span>
                     <span class="meta-val" id="d-type">—</span>
-                </div>
-                <div class="meta-cell">
+                </span>
+                <span class="meta-item">
                     <span class="meta-lbl">Duration</span>
                     <span class="meta-val" id="d-duration">—</span>
-                </div>
-                <div class="meta-cell">
+                </span>
+                <span class="meta-item">
                     <span class="meta-lbl">Time</span>
                     <span class="meta-val" id="d-time">—</span>
-                </div>
-                <div class="meta-cell">
-                    <span class="meta-lbl">Tab</span>
-                    <span class="meta-val" id="d-tab" style="max-width:90px;overflow:hidden;text-overflow:ellipsis">—</span>
-                </div>
+                </span>
             </div>
 
-            <!-- Replay bar -->
+            <!-- Actions + mark (single row) -->
             <div id="lv-replay-bar">
-                <button id="lv-replay-btn">✏ Request Editor</button>
-                <button id="lv-copy-url">⧉ Copy URL</button>
-                <button id="lv-add-to-compare">Add to Compare</button>
-                <button id="lv-open-compare">Open Compare Window</button>
-                <button id="lv-create-mock-btn" title="Create mock intercept rule from this response">⚡ Mock Rule</button>
+                <div class="lv-detail-toolbar">
+                    <div id="lv-toolbar-actions" class="lv-replay-actions">
+                        <button type="button" id="lv-replay-btn" class="lv-act-btn lv-act-btn-primary" title="Open in Request Editor">✏ Editor</button>
+                        <span class="lv-act-sep" aria-hidden="true"></span>
+                        <div class="lv-act-group">
+                            <button type="button" id="lv-copy-url" class="lv-act-btn" title="Copy request URL">⧉ URL</button>
+                            <button type="button" id="lv-add-to-compare" class="lv-act-btn" title="Add this request to Compare">+ Compare</button>
+                            <button type="button" id="lv-open-compare" class="lv-act-btn" title="Open Compare window">⇄ Open</button>
+                            <button type="button" id="lv-create-mock-btn" class="lv-act-btn lv-act-btn-warn" title="Create mock intercept rule from this response">⚡ Mock</button>
+                        </div>
+                    </div>
+                    <span id="lv-sep-actions-mark" class="lv-act-sep" aria-hidden="true" hidden></span>
+                    <div id="lv-mark-section">
+                        <div class="mark-tag-group" title="Tag color">
+                            <div class="mark-colors" id="lv-tag-colors"></div>
+                            <button type="button" class="lv-act-btn mark-clear-btn" id="lv-tag-clear" title="Clear tag color">✕</button>
+                        </div>
+                        <span class="lv-act-sep" aria-hidden="true"></span>
+                        <div class="mark-comment-group" title="Request comment">
+                            <span id="lv-note-preview" class="mark-preview">No comment</span>
+                            <button type="button" class="lv-act-btn" id="lv-note-open" title="Edit comment">Edit</button>
+                        </div>
+                        <span class="lv-act-sep" aria-hidden="true"></span>
+                        <button type="button" class="lv-act-btn" id="lv-embed-in-note" title="Insert this request into the open note">📋 Note</button>
+                    </div>
+                    <span id="lv-mark-status" class="mark-status-inline"></span>
+                </div>
                 <span id="lv-replay-diff"></span>
-            </div>
-            <div id="lv-mark-panel">
-                <div class="mark-row">
-                    <span class="mark-title">Tag color</span>
-                    <div class="mark-colors" id="lv-tag-colors"></div>
-                    <button class="body-act-btn" id="lv-tag-clear">Clear</button>
-                    <span id="lv-mark-status"></span>
-                </div>
-                <div class="mark-row">
-                    <span class="mark-title">Comment</span>
-                    <span id="lv-note-preview" class="mark-preview">No comment</span>
-                    <button class="body-act-btn" id="lv-note-open">Full</button>
-                </div>
-                <div class="mark-row">
-                    <span class="mark-title">Notes</span>
-                    <button class="body-act-btn" id="lv-embed-in-note" title="Insert this request as a card into the open note (or a new note if none is selected)">📋 Copy to current note</button>
-                </div>
             </div>
 
             <!-- Screenshot direct view (no tabs) -->
@@ -1746,14 +2424,23 @@ select:focus { border-color: var(--accent); }
 
             <!-- Tabs -->
             <div id="lv-tabs">
-                <button class="lv-tab-btn active" data-tab="headers">Headers</button>
-                <button class="lv-tab-btn" data-tab="cookies">Cookies</button>
-                <button class="lv-tab-btn" data-tab="request">Request</button>
-                <button class="lv-tab-btn" data-tab="response">Response</button>
-                <button class="lv-tab-btn" data-tab="raw">Raw</button>
-                <button class="lv-tab-btn" data-tab="messages" id="lv-tab-messages-btn" style="display:none">Messages</button>
-                <button class="lv-tab-btn" data-tab="event" id="lv-tab-event-btn" style="display:none">Event</button>
-                <button class="lv-tab-btn" data-tab="comment">Comment</button>
+                <button type="button" class="lv-tab-btn active" data-tab="headers"><span class="lv-tab-label">Headers</span><span class="lv-tab-badge" hidden></span></button>
+                <button type="button" class="lv-tab-btn" data-tab="cookies"><span class="lv-tab-label">Cookies</span><span class="lv-tab-badges"><span class="lv-tab-badge badge-cookie-sent" data-cookie-badge="sent" hidden title="Sent cookies"></span><span class="lv-tab-badge badge-cookie-recv" data-cookie-badge="recv" hidden title="Received Set-Cookie"></span></span></button>
+                <button type="button" class="lv-tab-btn" data-tab="request"><span class="lv-tab-label">Request</span><span class="lv-tab-badge" hidden></span></button>
+                <button type="button" class="lv-tab-btn" data-tab="response"><span class="lv-tab-label">Response</span><span class="lv-tab-badge" hidden></span></button>
+                <button type="button" class="lv-tab-btn" data-tab="raw"><span class="lv-tab-label">Raw</span><span class="lv-tab-badge" hidden></span></button>
+                <button type="button" class="lv-tab-btn" data-tab="messages" id="lv-tab-messages-btn" style="display:none"><span class="lv-tab-label">Messages</span><span class="lv-tab-badge" hidden></span></button>
+                <button type="button" class="lv-tab-btn" data-tab="event" id="lv-tab-event-btn" style="display:none"><span class="lv-tab-label">Event</span><span class="lv-tab-badge" hidden></span></button>
+                <button type="button" class="lv-tab-btn" data-tab="comment"><span class="lv-tab-label">Comment</span><span class="lv-tab-badge" hidden></span></button>
+            </div>
+
+            <div id="lv-detail-find" class="lv-detail-find-bar" title="Find in active tab (Ctrl+F)">
+                <span class="lv-detail-find-icon">⌕</span>
+                <input type="text" id="lv-detail-find-input" placeholder="Find in tab…" autocomplete="off" spellcheck="false">
+                <span id="lv-detail-find-count" class="lv-detail-find-count"></span>
+                <button type="button" class="body-act-btn" id="lv-detail-find-prev" title="Previous (Shift+Enter)">↑</button>
+                <button type="button" class="body-act-btn" id="lv-detail-find-next" title="Next (Enter)">↓</button>
+                <button type="button" class="body-act-btn" id="lv-detail-find-clear" title="Clear">✕</button>
             </div>
 
             <!-- Tab body -->
@@ -1811,10 +2498,16 @@ select:focus { border-color: var(--accent); }
                     <div class="body-toolbar" id="resp-body-info">
                         <span id="resp-body-size">Response body</span>
                         <span style="flex:1"></span>
+                        <button class="body-act-btn" id="resp-forms-copy-btn" title="Copy forms as JSON" style="display:none">⎘ Forms JSON</button>
                         <button class="body-act-btn" id="resp-copy-btn" title="Copy to clipboard">⎘ Copy</button>
                         <button class="body-act-btn" id="resp-save-btn" title="Save to file">↓ Save</button>
                     </div>
+                    <div id="resp-html-subtabs" class="resp-html-subtabs">
+                        <button type="button" class="resp-html-subtab active" data-resp-view="body">Body</button>
+                        <button type="button" class="resp-html-subtab" data-resp-view="forms">Forms <span id="resp-forms-count"></span></button>
+                    </div>
                     <div id="response-body-wrap"></div>
+                    <div id="resp-html-forms-wrap" class="resp-html-forms-wrap"></div>
                     <div id="lv-replay-result">
                         <div class="replay-result-header">
                             <span id="replay-status-badge"></span>
@@ -1953,6 +2646,8 @@ select:focus { border-color: var(--accent); }
         </div>
     </div>
 </div>
+
+<div id="wrt-ctx-menu" class="wrt-ctx-menu hidden" role="menu" aria-label="Web Request Tools"></div>
 
 <script src="log-viewer-renderer.js"></script>
 </body>

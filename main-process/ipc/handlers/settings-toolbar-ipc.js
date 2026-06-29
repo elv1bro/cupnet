@@ -2,6 +2,7 @@
 
 const { isDevtoolsHostileUrl } = require('../../services/devtools-hostile-sites');
 const { buildAntiAntiDebugScript } = require('../../services/anti-anti-debug-script');
+const { getPasteUnlockScript } = require('../../services/paste-unlock');
 
 /**
  * Настройки для toolbar / фильтры / traffic.
@@ -39,7 +40,29 @@ function applySettingsSideEffects(ctx) {
             ctx.tabManager.applyDevicePermissions();
         }
     } catch { /* ignore */ }
+    try {
+        if (ctx.mitmProxy && typeof ctx.mitmProxy.setGlobalCorsEnabled === 'function') {
+            ctx.mitmProxy.setGlobalCorsEnabled(!!s.corsBypassEnabled);
+        }
+    } catch { /* ignore */ }
+    try {
+        if (ctx.mainWindow && !ctx.mainWindow.isDestroyed()) {
+            ctx.mainWindow.webContents.send('cors-bypass-status', !!s.corsBypassEnabled);
+        }
+    } catch { /* ignore */ }
+    broadcastBrowserChromeSettings(ctx);
     reattachActivityMonitorToAllTabs(ctx);
+}
+
+function broadcastBrowserChromeSettings(ctx) {
+    try {
+        const s = ctx.loadSettings();
+        if (!ctx.mainWindow || ctx.mainWindow.isDestroyed()) return;
+        ctx.mainWindow.webContents.send('browser-settings-updated', {
+            toolbarToolsPlacement: ctx.settingsStore.normalizeToolbarToolsPlacement(s),
+            toolbarToolsMiniAlign: ctx.settingsStore.normalizeToolbarToolsMiniAlign(s),
+        });
+    } catch { /* ignore */ }
 }
 
 function registerSettingsToolbarIpc(ctx) {
@@ -65,6 +88,7 @@ function registerSettingsToolbarIpc(ctx) {
 
     ctx.ipcMain.handle('get-settings-all', () => {
         const s = ctx.loadSettings();
+        const se = ctx.settingsStore.normalizeSearchEngineSettings(s);
         return {
             filterPatterns:  s.filterPatterns  || [],
             pasteUnlock:     s.pasteUnlock !== false,
@@ -77,7 +101,25 @@ function registerSettingsToolbarIpc(ctx) {
             activityMonitorEnabled: s.activityMonitorEnabled === true,
             activityMonitorRateLimit: Math.max(50, Math.min(500, Number(s.activityMonitorRateLimit) || ctx.settingsStore.SETTINGS_DEFAULTS.activityMonitorRateLimit)),
             activityMonitorStorageStackTraces: s.activityMonitorStorageStackTraces === true,
+            searchEngine: se.searchEngine,
+            searchEngineCustomUrl: se.searchEngineCustomUrl,
+            corsBypassEnabled: s.corsBypassEnabled === true,
+            toolbarToolsPlacement: ctx.settingsStore.normalizeToolbarToolsPlacement(s),
+            toolbarToolsMiniAlign: ctx.settingsStore.normalizeToolbarToolsMiniAlign(s),
         };
+    });
+
+    ctx.ipcMain.handle('save-search-engine-settings', (_, opts) => {
+        const s = ctx.loadSettings();
+        const o = opts && typeof opts === 'object' ? opts : {};
+        const n = ctx.settingsStore.normalizeSearchEngineSettings({
+            searchEngine: o.searchEngine,
+            searchEngineCustomUrl: o.searchEngineCustomUrl != null ? o.searchEngineCustomUrl : s.searchEngineCustomUrl,
+        });
+        s.searchEngine = n.searchEngine;
+        s.searchEngineCustomUrl = n.searchEngineCustomUrl;
+        ctx.saveSettings(s);
+        return { success: true, searchEngine: n.searchEngine, searchEngineCustomUrl: n.searchEngineCustomUrl };
     });
 
     ctx.ipcMain.handle('save-activity-monitor-settings', (_, opts) => {
@@ -149,6 +191,32 @@ function registerSettingsToolbarIpc(ctx) {
     ctx.ipcMain.handle('set-toolbar-height', (_, extraPx) => {
         ctx.tabManager.setExtraTopOffset(extraPx || 0);
         return true;
+    });
+
+    ctx.ipcMain.handle('set-bottom-chrome-height', (_, extraPx) => {
+        ctx.tabManager.setExtraBottomOffset(extraPx || 0);
+        return true;
+    });
+
+    ctx.ipcMain.handle('set-right-chrome-width', (_, extraPx) => {
+        ctx.tabManager.setExtraRightOffset(extraPx || 0);
+        return true;
+    });
+
+    ctx.ipcMain.handle('save-toolbar-tools-placement', (_, placement) => {
+        const s = ctx.loadSettings();
+        s.toolbarToolsPlacement = ctx.settingsStore.normalizeToolbarToolsPlacement({ toolbarToolsPlacement: placement });
+        ctx.saveSettings(s);
+        broadcastBrowserChromeSettings(ctx);
+        return { success: true, toolbarToolsPlacement: s.toolbarToolsPlacement };
+    });
+
+    ctx.ipcMain.handle('save-toolbar-tools-mini-align', (_, align) => {
+        const s = ctx.loadSettings();
+        s.toolbarToolsMiniAlign = ctx.settingsStore.normalizeToolbarToolsMiniAlign({ toolbarToolsMiniAlign: align });
+        ctx.saveSettings(s);
+        broadcastBrowserChromeSettings(ctx);
+        return { success: true, toolbarToolsMiniAlign: s.toolbarToolsMiniAlign };
     });
 
     ctx.ipcMain.handle('set-auto-screenshot', async (_, seconds) => {
@@ -223,6 +291,21 @@ function registerSettingsToolbarIpc(ctx) {
             };
         } catch {
             event.returnValue = null;
+        }
+    });
+
+    ctx.ipcMain.on('get-paste-unlock-sync', (event) => {
+        try {
+            const s = ctx.loadSettings();
+            const enabled = s.pasteUnlock !== false;
+            const stealth = Number(process.env.CUPNET_STEALTH_LEVEL || 0);
+            if (!enabled || stealth >= 1) {
+                event.returnValue = { script: null };
+                return;
+            }
+            event.returnValue = { script: getPasteUnlockScript() };
+        } catch {
+            event.returnValue = { script: null };
         }
     });
 

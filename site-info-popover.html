@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Site information</title>
+<link rel="stylesheet" href="shared-dark-theme.css">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+    background: transparent;
+    color: #e6edf3;
+    height: 100vh;
+    display: flex;
+    align-items: stretch;
+    justify-content: stretch;
+}
+.card {
+    flex: 1;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: 0 12px 36px rgba(0,0,0,0.45);
+    overflow: hidden;
+}
+.card h1 {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: #e6edf3;
+}
+.body {
+    font-size: 12px;
+    line-height: 1.45;
+    color: #8b949e;
+    overflow-y: auto;
+    max-height: 200px;
+    flex: 1;
+    min-height: 0;
+}
+.body strong { color: #c9d1d9; }
+.body dl { margin: 8px 0 0; }
+.body dt { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #656d76; margin-top: 6px; }
+.body dd { color: #adbac7; word-break: break-all; }
+.actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-top: 4px;
+    border-top: 1px solid #30363d;
+}
+.actions button {
+    flex: 1 1 auto;
+    min-width: 90px;
+    padding: 6px 10px;
+    font-size: 12px;
+    border-radius: 6px;
+    border: 1px solid #30363d;
+    background: #21262d;
+    color: #e6edf3;
+    cursor: pointer;
+}
+.actions button:hover { background: #30363d; }
+.actions button.primary { background: #238636; border-color: #2ea043; }
+.actions button.primary:hover { background: #2ea043; }
+</style>
+</head>
+<body>
+<div class="card">
+    <h1 id="si-title">Site information</h1>
+    <div class="body" id="si-body"></div>
+    <div class="actions">
+        <button type="button" id="si-copy" class="primary">Copy URL</button>
+        <button type="button" id="si-cookies">Clear cookies</button>
+        <button type="button" id="si-log">Network log</button>
+    </div>
+</div>
+<script>
+(function () {
+    const api = window.siteInfoPopoverAPI;
+    if (!api) return;
+    let state = { tabId: null, url: '', host: '' };
+
+    function esc(t) {
+        return String(t || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    function render(data) {
+        state = {
+            tabId: data.tabId != null ? data.tabId : null,
+            url: data.url || '',
+            host: data.host || '',
+        };
+        const titleEl = document.getElementById('si-title');
+        const bodyEl = document.getElementById('si-body');
+        const host = data.host || '';
+        const secure = !!data.secure;
+        const internal = !!data.internal;
+        let title = host || data.url || 'Page';
+        if (internal) title = 'Internal page';
+        else if (secure) title = 'Connection is secure · ' + host;
+        else if (data.url) title = 'Not secure · ' + (host || data.url);
+        titleEl.textContent = title;
+
+        const parts = [];
+        if (data.url) parts.push('<div><strong>URL</strong><br>' + esc(data.url) + '</div>');
+        if (data.tlsProfile) parts.push('<dl><dt>TLS profile</dt><dd>' + esc(data.tlsProfile) + '</dd></dl>');
+        if (data.tlsJa3Mode) parts.push('<dl><dt>JA3 mode</dt><dd>' + esc(data.tlsJa3Mode) + '</dd></dl>');
+        if (data.connectedProfileName) parts.push('<dl><dt>Proxy profile</dt><dd>' + esc(data.connectedProfileName) + '</dd></dl>');
+        if (data.lastRequest && data.lastRequest.id) {
+            parts.push('<dl><dt>Last logged request</dt><dd>#' + esc(data.lastRequest.id) + ' ' + esc(data.lastRequest.method || '') + ' ' + esc(String(data.lastRequest.status ?? '')) + '</dd></dl>');
+        } else {
+            parts.push('<p>No matching request in the network log yet.</p>');
+        }
+        bodyEl.innerHTML = parts.join('');
+    }
+
+    api.onSiteInfoInit(render);
+
+    document.getElementById('si-copy').addEventListener('click', () => {
+        if (!state.url) return;
+        void api.copyUrl(state.url);
+    });
+    document.getElementById('si-cookies').addEventListener('click', () => {
+        if (state.tabId == null || !state.host) return;
+        const dm = state.host.startsWith('.') ? state.host : '.' + state.host;
+        void api.clearCookies(state.tabId, dm);
+    });
+    document.getElementById('si-log').addEventListener('click', () => {
+        const f = state.host || state.url || '';
+        void api.openNetworkLog(f).then(() => api.closeWindow());
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') api.closeWindow();
+    });
+})();
+</script>
+</body>
+</html>

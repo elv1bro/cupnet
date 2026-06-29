@@ -106,6 +106,15 @@ function createProxyMitmService(d) {
             port: networkPolicy.mitmPort,
             browser: 'chrome_120',
             workerPath: d.pathModule.join(d.cupnetRoot, 'azure-tls-worker.js'),
+            onGatewayError: (info) => {
+                const mw = d.getMainWindow?.();
+                if (!mw || mw.isDestroyed()) return;
+                const active = d.getTabManager()?.getActiveTab();
+                if (info?.tabId != null && active && active.id !== info.tabId) return;
+                try {
+                    mw.webContents.send('page-gateway-error', info);
+                } catch (_) { /* ignore */ }
+            },
             onRequestLogged: (entry) => {
                 let tabId = entry.tabId ?? null;
                 if (!tabId) {
@@ -578,10 +587,15 @@ function createProxyMitmService(d) {
         return empty;
     }
 
-    async function testProxy(upstreamProxyUrl) {
+    async function testProxy(upstreamProxyUrl, options = {}) {
         let anonUrl = null;
         let testWin = null;
         const partition = `proxy-test-${Date.now()}`;
+        const primaryCheckUrl = options.checkUrl || 'https://ipinfo.io/json';
+        const checkUrls = [primaryCheckUrl];
+        if (primaryCheckUrl !== 'https://ipinfo.io/json') {
+            checkUrls.push('https://ipinfo.io/json');
+        }
         try {
             anonUrl = await withTimeout(
                 ProxyChain.anonymizeProxy(upstreamProxyUrl),
@@ -597,14 +611,28 @@ function createProxyMitmService(d) {
                 }
             }, networkPolicy.timeouts.proxyTestMs);
             let text = '';
+            let usedCheckUrl = checkUrls[0];
+            let lastErr = null;
             try {
-                await testWin.loadURL('https://ipinfo.io/json');
-                text = await testWin.webContents.executeJavaScript('document.body.innerText');
+                for (const checkUrl of checkUrls) {
+                    try {
+                        await testWin.loadURL(checkUrl);
+                        text = await testWin.webContents.executeJavaScript('document.body.innerText');
+                        usedCheckUrl = checkUrl;
+                        lastErr = null;
+                        break;
+                    } catch (err) {
+                        lastErr = err;
+                        const msg = err?.message || String(err);
+                        const retriable = /ERR_TUNNEL|ERR_PROXY|ERR_CONNECTION|ERR_NAME_NOT_RESOLVED/i.test(msg);
+                        if (!retriable || checkUrl === checkUrls[checkUrls.length - 1]) throw err;
+                    }
+                }
+                if (lastErr) throw lastErr;
             } finally {
                 clearTimeout(loadTimer);
             }
-            const data = JSON.parse(text);
-            if (!data.ip || !data.country) throw new Error('Incomplete response');
+            const data = parseProxyCheckResponse(text, usedCheckUrl);
             return { success: true, data };
         } catch (err) {
             return { success: false, error: err.message };
@@ -619,6 +647,34 @@ function createProxyMitmService(d) {
             }
             try { await d.session.fromPartition(partition).clearStorageData(); } catch (e) { d.sysLog('warn', 'proxy', 'clearStorageData after proxy test failed: ' + (e?.message || e)); }
         }
+    }
+
+    function parseProxyCheckResponse(text, checkUrl) {
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch {
+            throw new Error('Invalid JSON response');
+        }
+        const url = String(checkUrl || '').toLowerCase();
+        if (url.includes('ip.oxylabs.io')) {
+            const ip = data.ip || data.query;
+            let country = data.country || data.country_code || data.countryCode;
+            let city = data.city;
+            if (!country && data.providers && typeof data.providers === 'object') {
+                for (const prov of Object.values(data.providers)) {
+                    if (prov?.country || prov?.country_code) {
+                        country = prov.country || prov.country_code;
+                        city = city || prov.city;
+                        break;
+                    }
+                }
+            }
+            if (!ip) throw new Error('Incomplete response');
+            return { ip, country: country || '', city: city || '', org: data.org || data.isp || '' };
+        }
+        if (!data.ip || !data.country) throw new Error('Incomplete response');
+        return { ip: data.ip, country: data.country, city: data.city || '', org: data.org || '' };
     }
 
     async function _doQuickChangeProxy(proxyUrl) {

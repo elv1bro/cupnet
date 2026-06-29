@@ -1,5 +1,79 @@
 'use strict';
 
+const { BrowserWindow } = require('electron');
+
+/**
+ * Shared TLS / site payload for get-tab-tls-info and site-info popover window.
+ * @param {object} ctx
+ * @param {string|number|null} tabId
+ */
+function buildTabTlsInfo(ctx, tabId) {
+    try {
+        let tab = null;
+        if (tabId != null && tabId !== '') tab = ctx.tabManager.getTab(tabId);
+        if (!tab) tab = ctx.tabManager.getActiveTab();
+        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) {
+            return { ok: false, error: 'no_tab' };
+        }
+        const wc = tab.view.webContents;
+        const url = wc.getURL() || tab.url || '';
+        let host = '';
+        let scheme = '';
+        let secure = false;
+        try {
+            const u = new URL(url);
+            host = u.hostname || '';
+            scheme = (u.protocol || '').replace(/:$/, '');
+            secure = u.protocol === 'https:';
+        } catch { /* ignore */ }
+        const internal = !host || url.startsWith('file:') || String(url).startsWith('cupnet:');
+        const out = {
+            ok: true,
+            tabId: tab.id,
+            url,
+            host,
+            scheme,
+            secure,
+            internal,
+            tlsProfile: null,
+            tlsJa3Mode: null,
+            tlsJa3Custom: null,
+            connectedProfileId: ctx.connectedProfileId ?? null,
+            connectedProfileName: ctx.connectedProfileName || null,
+            lastRequest: null,
+        };
+        const pid = ctx.connectedProfileId;
+        if (pid && ctx.db && typeof ctx.db.getProxyProfileEncrypted === 'function') {
+            try {
+                const prof = ctx.db.getProxyProfileEncrypted(pid);
+                if (prof) {
+                    out.tlsProfile = prof.tls_profile || null;
+                    out.tlsJa3Mode = prof.tls_ja3_mode || null;
+                    out.tlsJa3Custom = prof.tls_ja3_custom || null;
+                }
+            } catch { /* ignore */ }
+        }
+        if (host && ctx.db && typeof ctx.db.queryRequests === 'function') {
+            try {
+                const rows = ctx.db.queryRequests({ tabId: String(tab.id) }, 40, 0);
+                const doc = rows.find((r) => r.host && String(r.host) === host);
+                if (doc) {
+                    out.lastRequest = {
+                        id: doc.id,
+                        url: doc.url,
+                        status: doc.status,
+                        method: doc.method,
+                        created_at: doc.created_at,
+                    };
+                }
+            } catch { /* ignore */ }
+        }
+        return out;
+    } catch (e) {
+        return { ok: false, error: e && e.message ? String(e.message) : 'error' };
+    }
+}
+
 /**
  * Uptime, splash, version, ui-pref, IP geo.
  * @param {object} ctx
@@ -31,6 +105,106 @@ function registerMiscIpc(ctx) {
         ctx.saveSettings(settings);
         return true;
     });
+
+    ctx.ipcMain.handle('get-tab-tls-info', async (_, tabId) => buildTabTlsInfo(ctx, tabId));
+
+    ctx.ipcMain.handle('toggle-site-info-popover', async (_, tabId, buttonHint) => {
+        try {
+            if (typeof ctx.createSiteInfoPopoverWindow !== 'function') return { ok: false, error: 'no_factory' };
+            const w = ctx.siteInfoPopoverWindow;
+            if (w && !w.isDestroyed() && w.isVisible()) {
+                try {
+                    if (w.__cupnetTabId != null && String(w.__cupnetTabId) === String(tabId)) {
+                        w.close();
+                        return { ok: true, action: 'closed' };
+                    }
+                } catch (_) { /* ignore */ }
+            }
+            const data = buildTabTlsInfo(ctx, tabId);
+            if (!data.ok) return data;
+            ctx.createSiteInfoPopoverWindow(data, buttonHint || null);
+            return { ok: true, action: 'opened' };
+        } catch (e) {
+            return { ok: false, error: e && e.message ? String(e.message) : 'error' };
+        }
+    });
+
+    ctx.ipcMain.handle('site-info-popover-copy-url', (_, url) => {
+        try {
+            const s = String(url || '').trim();
+            if (!s) return false;
+            ctx.clipboard.writeText(s);
+            return true;
+        } catch (_) {
+            return false;
+        }
+    });
+
+    ctx.ipcMain.handle('site-info-popover-clear-cookies', async (_, tabId, domain) => {
+        const tab = tabId ? ctx.tabManager.getTab(tabId) : ctx.tabManager.getActiveTab();
+        if (!tab) return { success: false, error: 'Tab not found' };
+        try {
+            const filter = domain ? { domain } : {};
+            const cookies = await tab.tabSession.cookies.get(filter);
+            for (const c of cookies) {
+                const url = `${c.secure ? 'https' : 'http'}://${c.domain.replace(/^\./, '')}${c.path || '/'}`;
+                try { await tab.tabSession.cookies.remove(url, c.name); } catch (e) { ctx.sysLog('warn', 'tabs', 'cookie remove failed: ' + (e?.message || e)); }
+            }
+            await tab.tabSession.cookies.flushStore();
+            return { success: true, count: cookies.length };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    ctx.ipcMain.handle('site-info-popover-open-log', (_, url) => {
+        const sendFocus = (win) => {
+            if (win && !win.isDestroyed()) {
+                win.webContents.send('focus-request-url', { url: String(url || '') });
+            }
+        };
+        let liveWin = ctx.getLiveLogViewerWindow();
+        if (liveWin) {
+            if (liveWin.isMinimized()) liveWin.restore();
+            liveWin.focus();
+            sendFocus(liveWin);
+            return { success: true };
+        }
+        ctx.createLogViewerWindow();
+        liveWin = ctx.getLiveLogViewerWindow();
+        if (liveWin && !liveWin.webContents.isLoading()) {
+            sendFocus(liveWin);
+        } else if (liveWin) {
+            liveWin.webContents.once('did-finish-load', () => sendFocus(liveWin));
+        }
+        return { success: true };
+    });
+
+    ctx.ipcMain.on('site-info-popover-close', (event) => {
+        try {
+            const w = BrowserWindow.fromWebContents(event.sender);
+            if (w && !w.isDestroyed()) w.close();
+        } catch (_) { /* ignore */ }
+    });
+
+    ctx.ipcMain.handle('toggle-cors-bypass', () => {
+        const s = ctx.loadSettings();
+        s.corsBypassEnabled = !s.corsBypassEnabled;
+        ctx.saveSettings(s);
+        try {
+            if (ctx.mitmProxy && typeof ctx.mitmProxy.setGlobalCorsEnabled === 'function') {
+                ctx.mitmProxy.setGlobalCorsEnabled(!!s.corsBypassEnabled);
+            }
+        } catch (_) { /* ignore */ }
+        try {
+            if (ctx.mainWindow && !ctx.mainWindow.isDestroyed()) {
+                ctx.mainWindow.webContents.send('cors-bypass-status', !!s.corsBypassEnabled);
+            }
+        } catch (_) { /* ignore */ }
+        return { ok: true, enabled: !!s.corsBypassEnabled };
+    });
+
+    ctx.ipcMain.handle('get-cors-bypass-status', () => !!ctx.loadSettings().corsBypassEnabled);
 
     ctx.ipcMain.handle('get-direct-ip', async () => {
         try {
@@ -116,6 +290,9 @@ function registerMiscIpc(ctx) {
         if (ctx.pageAnalyzerWindow && !ctx.pageAnalyzerWindow.isDestroyed() && win.id === ctx.pageAnalyzerWindow.id) return 'page-analyzer';
         if (ctx.notesWindow && !ctx.notesWindow.isDestroyed() && win.id === ctx.notesWindow.id) return 'notes';
         if (ctx.ivacScoutWindow && !ctx.ivacScoutWindow.isDestroyed() && win.id === ctx.ivacScoutWindow.id) return 'ivac-scout';
+        if (ctx.siteInfoPopoverWindow && !ctx.siteInfoPopoverWindow.isDestroyed() && win.id === ctx.siteInfoPopoverWindow.id) {
+            return 'site-info-popover';
+        }
         if (ctx.loggingModalWindow && !ctx.loggingModalWindow.isDestroyed() && win.id === ctx.loggingModalWindow.id) return 'logging-modal';
         if (ctx.logViewerWindows && Array.isArray(ctx.logViewerWindows)) {
             for (const w of ctx.logViewerWindows) {
@@ -326,4 +503,4 @@ function registerMiscIpc(ctx) {
     });
 }
 
-module.exports = { registerMiscIpc };
+module.exports = { registerMiscIpc, buildTabTlsInfo };

@@ -1,6 +1,7 @@
 'use strict';
 
 const { insertCupnetTrafficSnapshot, insertCupnetTrafficSnapshotWithGeo } = require('../../services/cupnet-network-meta-log');
+const { connectGlobalProxyProfile, disconnectGlobalProxy } = require('../../services/global-proxy-connect');
 
 /**
  * Текущий прокси, connect/disconnect, профили, тесты.
@@ -47,131 +48,7 @@ function registerProxyIpc(ctx) {
     });
 
     ctx.ipcMain.handle('connect-proxy-template', async (_, profileId, ephemeralVars) => {
-        // Get the encrypted template URL from DB
-        const row = ctx.db.getProxyProfileEncrypted(profileId);
-        if (!row) return { success: false, error: 'Profile not found' };
-        let template = null;
-        if (row.url_encrypted && ctx.safeStorage.isEncryptionAvailable()) {
-            try { template = ctx.safeStorage.decryptString(row.url_encrypted); } catch (e) { ctx.sysLog('warn', 'proxy', 'decrypt proxy template failed: ' + (e?.message || e)); }
-        }
-        if (!template) return { success: false, error: 'Cannot decrypt template' };
-
-        const savedVars  = parseProxyVariablesJson(row.variables, ctx);
-        const mergedVars = { ...savedVars, ...(ephemeralVars || {}) };
-        const resolvedVars = {};
-        const resolvedUrl = ctx.parseProxyTemplate(template, mergedVars, resolvedVars);
-        const profileTrafficMode = ctx.normalizeTrafficMode(row.traffic_mode);
-        if (row.traffic_mode && row.traffic_mode !== profileTrafficMode) {
-            ctx.sysLog('warn', 'traffic.mode.fallback', `Invalid profile mode "${row.traffic_mode}" -> "${profileTrafficMode}"`);
-        }
-        const fallbackCandidates = ctx.parseFallbackProxyList(
-            mergedVars.FALLBACK_PROXIES || mergedVars.fallback_proxies || mergedVars.fallbackProxies
-        );
-
-        try {
-            const proxyConnect = await ctx.connectProxyWithFailover(resolvedUrl, fallbackCandidates);
-            if (proxyConnect?.used && proxyConnect.used !== resolvedUrl) {
-                resolvedVars.__usedFallbackProxy = proxyConnect.used;
-            }
-            await ctx.applyEffectiveTrafficMode(profileTrafficMode, ctx.persistentAnonymizedProxyUrl, {
-                source: 'connect-proxy-template',
-                profileId,
-                force: true,
-            });
-
-            // Apply fingerprint from profile
-            ctx.activeFingerprint = {
-                user_agent: row.user_agent || null,
-                timezone:   row.timezone   || null,
-                language:   row.language   || null,
-            };
-            if (ctx.activeFingerprint.user_agent) {
-                // Apply session-level UA for each tab session (same as electron-app/app.js)
-                for (const tab of ctx.tabManager.getAllTabs()) {
-                    if (tab?.view?.webContents && !tab.view.webContents.isDestroyed()) {
-                        try {
-                            tab.view.webContents.session.setUserAgent(
-                                ctx.activeFingerprint.user_agent,
-                                ctx.activeFingerprint.language || ''
-                            );
-                        } catch (e) {
-                            ctx.sysLog('warn', 'fingerprint', 'setUserAgent for tab failed: ' + (e?.message || e));
-                        }
-                    }
-                }
-            }
-            await ctx.applyFingerprintToAllTabs(ctx.activeFingerprint);
-
-            // Apply TLS fingerprint profile
-            if (ctx.mitmProxy) {
-                const tlsMode    = row.tls_ja3_mode   || 'template';
-                const tlsProfile = row.tls_profile    || 'chrome';
-                const tlsJa3     = row.tls_ja3_custom || null;
-                if (tlsMode === 'custom' && tlsJa3) {
-                    // Custom JA3 → apply via worker
-                    ctx.mitmProxy.setBrowser(tlsProfile);
-                    if (ctx.mitmProxy.worker && ctx.mitmProxy.worker.ready) {
-                        // Send a dummy request with ja3 to pre-warm the session with the custom fingerprint
-                        // The ja3 is applied per-request in azure-tls-worker.js
-                        ctx.mitmProxy._activeJa3 = tlsJa3;
-                    }
-                } else {
-                    ctx.mitmProxy.setBrowser(tlsProfile);
-                    ctx.mitmProxy._activeJa3 = null;
-                }
-                // Notify toolbar
-                ctx.broadcastTlsProfileChanged(tlsProfile);
-            }
-
-            ctx.connectedProfileId = profileId;
-            ctx.connectedProfileName = row.name || null;
-            ctx.connectedResolvedVars = resolvedVars || {};
-            ctx.buildMenu();
-            ctx.notifyProxyStatus();
-
-            ctx.checkCurrentIpGeo().then(geo => {
-                ctx.db.updateProxyProfileGeoAsync(profileId, geo.ip, `${geo.city}, ${geo.country_name}`).catch((err) => {
-                    ctx.safeCatch({ module: 'main', eventCode: 'db.write.failed', context: { op: 'updateProxyProfileGeo', profileId } }, err);
-                });
-                ctx.notifyProxyProfilesList();
-                insertCupnetTrafficSnapshot(ctx, {
-                    mode: 'proxy',
-                    profileName: row.name || null,
-                    ip: geo?.ip && geo.ip !== 'unknown' ? geo.ip : '—',
-                    country: geo?.country_name || '',
-                    city: geo?.city || '',
-                }).catch(() => {});
-            }).catch((e) => {
-                ctx.sysLog('warn', 'proxy', 'geo check after proxy connect failed: ' + (e?.message || e));
-                insertCupnetTrafficSnapshotWithGeo(ctx, { mode: 'proxy', profileName: row.name || null }).catch(() => {});
-            });
-            return { success: true, resolvedUrl, resolvedVars };
-        } catch (e) {
-            ctx.sysLog('warn', 'proxy', 'connect-proxy-template failed, switching to direct mode: ' + (e?.message || e));
-            try {
-                if (ctx.persistentAnonymizedProxyUrl) {
-                    await ctx.withTimeout(
-                        ctx.ProxyChain.closeAnonymizedProxy(ctx.persistentAnonymizedProxyUrl, true),
-                        ctx.networkPolicy.timeouts.proxyOperationMs,
-                        'Proxy close timeout'
-                    );
-                    ctx.persistentAnonymizedProxyUrl = null;
-                }
-                ctx.actProxy = '';
-                ctx.connectedProfileId = null;
-                ctx.connectedProfileName = null;
-                ctx.connectedResolvedVars = {};
-                await ctx.applyEffectiveTrafficMode(profileTrafficMode, null, {
-                    source: 'connect-proxy-template.fallback',
-                    profileId,
-                });
-                ctx.buildMenu();
-                ctx.notifyProxyStatus();
-            } catch (fallbackErr) {
-                ctx.sysLog('warn', 'proxy', 'direct fallback after proxy failure also failed: ' + (fallbackErr?.message || fallbackErr));
-            }
-            return { success: false, error: e.message, fallback: 'direct' };
-        }
+        return connectGlobalProxyProfile(ctx, profileId, ephemeralVars);
     });
 
     ctx.ipcMain.handle('apply-quick-proxy-change', async (_, proxyUrl) => {
@@ -191,37 +68,7 @@ function registerProxyIpc(ctx) {
 
     ctx.ipcMain.handle('disconnect-proxy', async () => {
         try {
-            if (ctx.persistentAnonymizedProxyUrl) {
-                await ctx.withTimeout(
-                    ctx.ProxyChain.closeAnonymizedProxy(ctx.persistentAnonymizedProxyUrl, true),
-                    ctx.networkPolicy.timeouts.proxyOperationMs,
-                    'Proxy close timeout'
-                );
-                ctx.persistentAnonymizedProxyUrl = null;
-            }
-            ctx.actProxy = '';
-            ctx.connectedProfileId = null;
-            ctx.connectedProfileName = null;
-            ctx.connectedResolvedVars = {};
-            await ctx.applyEffectiveTrafficMode(ctx.getCurrentTrafficMode(), null, {
-                source: 'disconnect-proxy',
-                force: true,
-            });
-
-            // Reset fingerprint overrides
-            if (ctx.activeFingerprint) {
-                for (const tab of ctx.tabManager.getAllTabs()) {
-                    if (tab?.view?.webContents && !tab.view.webContents.isDestroyed()) {
-                        ctx.resetFingerprintOnWebContents(tab.view.webContents).catch(e => ctx.sysLog('warn', 'fingerprint', 'reset fingerprint on disconnect failed: ' + (e?.message || e)));
-                    }
-                }
-                ctx.activeFingerprint = null;
-            }
-
-            ctx.buildMenu();
-            ctx.notifyProxyStatus();
-            await insertCupnetTrafficSnapshotWithGeo(ctx, { mode: 'direct' }).catch(() => {});
-            // No reload needed — MITM upstream switches instantly
+            await disconnectGlobalProxy(ctx);
             return { success: true };
         } catch (e) { return { success: false, error: e.message }; }
     });
@@ -373,6 +220,13 @@ function registerProxyIpc(ctx) {
         const latency = Date.now() - start;
         if (result.success) await ctx.db.updateProxyProfileTestAsync(id, latency);
         return { ...result, latency };
+    });
+
+    ctx.ipcMain.handle('test-proxy-url', async (_, url, options) => {
+        if (!url || typeof url !== 'string') return { success: false, error: 'URL required' };
+        const start = Date.now();
+        const result = await ctx.testProxy(url, options && typeof options === 'object' ? options : undefined);
+        return { ...result, latency: Date.now() - start, resolvedUrl: url };
     });
 }
 

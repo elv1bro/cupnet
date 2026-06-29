@@ -1,5 +1,7 @@
 'use strict';
 
+const { applyRendererUserAgentToSession } = require('../../user-agent-utils');
+
 /**
  * Fingerprint service: applies UA/language/timezone from proxy profiles to tabs.
  *
@@ -9,15 +11,17 @@
 function createFingerprintService({ sysLog, safeCatch, getTabManager, getDb }) {
     async function applyFingerprintToWebContents(wc, fp) {
         if (process.env.CUPNET_DISABLE_FINGERPRINT === '1') return;
-        if (!fp || !wc || wc.isDestroyed()) return;
-        if (fp.user_agent) {
-            try {
-                wc.session.setUserAgent(fp.user_agent, fp.language || '');
-            } catch (e) {
-                sysLog('warn', 'fingerprint', 'setUserAgent failed: ' + (e?.message || e));
-            }
+        if (!wc || wc.isDestroyed()) return;
+        try {
+            applyRendererUserAgentToSession(
+                wc.session,
+                fp?.user_agent || null,
+                fp?.language || '',
+            );
+        } catch (e) {
+            sysLog('warn', 'fingerprint', 'setUserAgent failed: ' + (e?.message || e));
         }
-        if (fp.timezone) {
+        if (fp?.timezone) {
             try {
                 const dbg = wc.debugger;
                 if (dbg.isAttached()) {
@@ -32,9 +36,10 @@ function createFingerprintService({ sysLog, safeCatch, getTabManager, getDb }) {
     async function applyFingerprintToAllTabs(fp) {
         const tabManager = typeof getTabManager === 'function' ? getTabManager() : null;
         if (!tabManager) return;
+        const payload = fp || {};
         for (const tab of tabManager.getAllTabs()) {
             if (tab?.view?.webContents && !tab.view.webContents.isDestroyed()) {
-                await applyFingerprintToWebContents(tab.view.webContents, fp).catch((err) => {
+                await applyFingerprintToWebContents(tab.view.webContents, payload).catch((err) => {
                     safeCatch({ module: 'main', eventCode: 'fingerprint.apply.failed', context: { tabId: tab.id } }, err, 'info');
                 });
             }
@@ -61,9 +66,7 @@ function createFingerprintService({ sysLog, safeCatch, getTabManager, getDb }) {
     async function resetFingerprintOnWebContents(wc) {
         if (!wc || wc.isDestroyed()) return;
         try {
-            const { session: electronSession } = require('electron');
-            const def = electronSession.defaultSession.getUserAgent();
-            wc.session.setUserAgent(def);
+            applyRendererUserAgentToSession(wc.session);
         } catch (e) {
             sysLog('warn', 'fingerprint', 'resetFingerprintOnWebContents failed: ' + (e?.message || e));
         }

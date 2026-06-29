@@ -14,8 +14,8 @@
  *   1. Refuse to attach `webContents.debugger`/CDP (cdp-network-logging.js).
  *   2. Detach CDP eagerly on `will-navigate` / `did-navigate` (same module).
  *   3. Block opening the in-app DevTools window (cookies-dns-ipc.js + main-window.js).
- *   4. Skip `executeJavaScript` injects that touch storage / forms / paste-unlock
- *      so we don't add extra surface for fingerprint-style detection (tab-manager.js).
+ *   4. Skip credential-form and storage-monitor injects on hostile URLs
+ *      (extra fingerprint surface). Paste unlock still follows the user setting.
  *
  * Traffic recording still works through the MITM proxy — only the per-tab CDP
  * shadow path is disabled. That keeps the page usable both with logging on and

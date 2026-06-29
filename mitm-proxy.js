@@ -28,6 +28,12 @@ const http             = require('http');
 const { EventEmitter } = require('events');
 const { safeCatch } = require('./sys-log');
 const { networkPolicy, computeBackoffMs } = require('./network-policy');
+const {
+    buildMitmGatewayErrorResponse,
+    isLikelyDocumentNavigation,
+    summarizeMitmGatewayError,
+    resolveMitmGatewayDnsContext,
+} = require('./mitm-gateway-error');
 
 /**
  * Native Node.js HTTPS fallback when Go azureTLS library fails with connection errors.
@@ -595,8 +601,22 @@ class AzureTLSWorker extends EventEmitter {
             }
         }
         this.pending.clear();
-        try { this.proc?.kill(); } catch (err) {
+        const proc = this.proc;
+        this.proc = null;
+        if (!proc) return;
+        try {
+            if (proc.stdin?.writable) proc.stdin.end();
+        } catch (err) {
+            safeCatch({ module: 'mitm-proxy', eventCode: 'worker.shutdown.failed', context: { op: 'stdin.end' } }, err);
+        }
+        const pid = proc.pid;
+        try { proc.kill('SIGTERM'); } catch (err) {
             safeCatch({ module: 'mitm-proxy', eventCode: 'worker.shutdown.failed', context: { op: 'proc.kill' } }, err);
+        }
+        if (pid) {
+            setTimeout(() => {
+                try { process.kill(pid, 'SIGKILL'); } catch (_) { /* already exited */ }
+            }, 3000).unref?.();
         }
     }
 
@@ -750,12 +770,15 @@ class MitmProxy {
         this.upstream   = opts.upstream || null;
         this.workerPath = opts.workerPath;
         this.onRequestLogged = opts.onRequestLogged || null;
+        this.onGatewayError = opts.onGatewayError || null;
         this.worker = createMitmAzureBackend(this.workerPath);
         this._server    = null;
         this._activeJa3 = null;
         this._dnsOverrides = new Map();
         /** @type {string[]} паттерны хоста из DNS rules с mitm_inject_cors (exact или *.suffix, см. _matchHostPattern). */
         this._dnsCorsPatterns = [];
+        /** When true, MITM injects CORS headers for all HTTPS responses (toolbar setting). */
+        this._globalCorsEnabled = false;
         this._tlsPassthroughDomains = [...DEFAULT_TLS_PASSTHROUGH];
 
         // Per-tab upstream proxy overrides: tabId → { upstream, browser?, ja3? }
@@ -875,8 +898,13 @@ class MitmProxy {
         this.worker.clearSessions().catch(() => {});
     }
 
+    setGlobalCorsEnabled(enabled) {
+        this._globalCorsEnabled = !!enabled;
+    }
+
     _mitmCorsEnabledForUrl(urlStr) {
         if (shouldSkipMitmCorsForUrl(urlStr)) return false;
+        if (this._globalCorsEnabled) return true;
         let u;
         try { u = new URL(urlStr); } catch { return false; }
         const h = (u.hostname || '').toLowerCase();
@@ -893,6 +921,7 @@ class MitmProxy {
         try { u = new URL(urlStr); } catch { return null; }
         const h = (u.hostname || '').toLowerCase();
         if (!h) return null;
+        if (this._globalCorsEnabled) return { host: h, pattern: '*' };
         for (const p of this._dnsCorsPatterns) {
             if (_matchHostPattern(p, h)) return { host: h, pattern: p };
         }
@@ -1005,14 +1034,8 @@ class MitmProxy {
             const entry = { done: false, data: null };
             pipeline.push(entry);
             const t0 = Date.now();
-            // #region agent log
-            try{const http=require('http');const d=JSON.stringify({sessionId:'7c0789',hypothesisId:'E',location:'mitm-proxy.js:dispatchRequest',message:'MITM dispatchRequest',data:{url,method:req.method,tabId,requestId,forceHttp1},timestamp:t0});const r=http.request('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'}});r.on('error',()=>{});r.end(d);}catch(_){}
-            // #endregion
             this._doRequest({ method: req.method, url, headers, orderedHeaders: orderedHeadersStripped, body: req.body, bodyBase64: req.bodyBase64, requestId, tabId })
                 .then(res  => {
-                    // #region agent log
-                    try{const http=require('http');const d=JSON.stringify({sessionId:'7c0789',hypothesisId:'E',location:'mitm-proxy.js:dispatchRequest-ok',message:'MITM request OK',data:{url,status:res.statusCode,elapsedMs:Date.now()-t0,tabId},timestamp:Date.now()});const r=http.request('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'}});r.on('error',()=>{});r.end(d);}catch(_){}
-                    // #endregion
                     dbg(`[mitm] ← ${url} status=${res.statusCode}${ctag}\n`);
                     if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(res.headers));
                     if (debugMitmLevel >= 4) mitmUserLog(_fmtBody(null, res.bodyBase64, 'res body'));
@@ -1046,10 +1069,9 @@ class MitmProxy {
                 })
                 .catch((e) => {
                     dbg(`[mitm] ✗ ${url} ${e.message}${ctag}\n`);
-                    // #region agent log
-                    try{const http=require('http');const d=JSON.stringify({sessionId:'7c0789',hypothesisId:'E',location:'mitm-proxy.js:dispatchRequest-error',message:'MITM 502 error',data:{url,error:e.message,elapsedMs:Date.now()-t0,tabId},timestamp:Date.now()});const r=http.request('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'}});r.on('error',()=>{});r.end(d);}catch(_){}
-                    // #endregion
-                    const errRes = { statusCode: 502, headers: {}, bodyBase64: '' };
+                    const errRes = this._build502Response(url, e.message, {
+                        req, tabId, dnsOverride: e.mitmDnsOverride || null,
+                    });
                     const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
                     entry.data = buildHttpResponse(resOut);
                 })
@@ -1249,7 +1271,9 @@ class MitmProxy {
             })
             .catch((e) => {
                 dbg(`[mitm] ✗ ${url} ${e.message}${ctagPlain}\n`);
-                const errRes = { statusCode: 502, headers: {}, bodyBase64: '' };
+                const errRes = this._build502Response(url, e.message, {
+                    req, tabId, dnsOverride: e.mitmDnsOverride || null,
+                });
                 const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
                 socket.write(buildHttpResponse(resOut));
                 socket.end();
@@ -1315,9 +1339,6 @@ class MitmProxy {
             const CONN_ERR = /\bEOF\b|connection reset|ECONNRESET|ETIMEDOUT|ECONNREFUSED|broken pipe/i;
 
             let workerError = null;
-            // #region agent log
-            {const _oh=up.orderedHeaders?up.orderedHeaders.slice(0,12).map(([k,v])=>[k,(v&&v.length>60)?v.slice(0,60)+'…':v]):null;const _h=up.headers?Object.fromEntries(Object.entries(up.headers).slice(0,12).map(([k,v])=>[k,(v&&v.length>60)?String(v).slice(0,60)+'…':v])):null;const _hasUA=!!(_h&&Object.keys(_h).some(k=>k.toLowerCase()==='user-agent'));try{const _http=require('http');const d=JSON.stringify({sessionId:'7c0789',hypothesisId:'MITM_REQ',location:'mitm-proxy.js:pre-worker-request',message:'request to worker',data:{url:up.url,method:up.method,headers:_h,orderedHeaders:_oh,hasUA:_hasUA,proxy:tabUpstream.proxy||null,browser:tabUpstream.browser,forceHttp1,disableRedirects:opts.disableRedirects!==false,tabId:opts.tabId||null},timestamp:Date.now()});const r=_http.request('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'}});r.on('error',()=>{});r.end(d);}catch(_){}}
-            // #endregion
             try {
                 const res = await this.worker.request({
                     method:            up.method,
@@ -1359,9 +1380,6 @@ class MitmProxy {
 
             // Worker failed with connection error — native Node.js https fallback
             dbg(`[mitm] ↻ native-fallback ${url} (${workerError.message})\n`);
-            // #region agent log
-            try{const _http=require('http');const d=JSON.stringify({sessionId:'7c0789',hypothesisId:'FALLBACK',location:'mitm-proxy.js:native-fallback',message:'using native https fallback',data:{url,method:up.method,workerError:workerError.message},timestamp:Date.now()});const r=_http.request('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'}});r.on('error',()=>{});r.end(d);}catch(_){}
-            // #endregion
             try {
                 const nativeRes = await _nativeHttpsFallback(
                     url, up.method, up.headers, up.orderedHeaders,
@@ -1373,9 +1391,6 @@ class MitmProxy {
                 if (ms < st.minMs) st.minMs = ms;
                 if (ms > st.maxMs) st.maxMs = ms;
                 dbg(`[mitm] ← ${url} status=${nativeRes.statusCode} (native-fallback)\n`);
-                // #region agent log
-                try{const _http=require('http');const d=JSON.stringify({sessionId:'7c0789',hypothesisId:'FALLBACK',location:'mitm-proxy.js:native-fallback-ok',message:'native fallback OK',data:{url,status:nativeRes.statusCode,elapsedMs:ms},timestamp:Date.now()});const r=_http.request('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'}});r.on('error',()=>{});r.end(d);}catch(_){}
-                // #endregion
                 let out = {
                     statusCode: nativeRes.statusCode,
                     headers: nativeRes.headers || {},
@@ -1394,10 +1409,38 @@ class MitmProxy {
             }
         } catch (e) {
             st.errors++;
+            if (dnsAdjusted?.dnsOverride) {
+                try { e.mitmDnsOverride = dnsAdjusted.dnsOverride; } catch (_) { /* ignore */ }
+            }
             throw e;
         } finally {
             st.pending--;
         }
+    }
+
+    _build502Response(url, errorMessage, { req, tabId, dnsOverride: explicitDnsOverride } = {}) {
+        const dnsOverride = resolveMitmGatewayDnsContext({
+            url,
+            errorMessage,
+            dnsOverride: explicitDnsOverride || this._applyDnsOverride({ url }).dnsOverride || null,
+        });
+        if (dnsOverride && /ECONNREFUSED|connection refused/i.test(String(errorMessage || ''))) {
+            dbg(`[mitm] 502 ${url} — ${dnsOverride.inferred ? 'routed to' : 'DNS override'} `
+                + `${dnsOverride.host} → ${dnsOverride.ip}: ${errorMessage}\n`);
+        }
+        const errRes = buildMitmGatewayErrorResponse({ url, errorMessage, dnsOverride });
+        if (this.onGatewayError && (!req || isLikelyDocumentNavigation(req))) {
+            try {
+                this.onGatewayError({
+                    url,
+                    errorMessage,
+                    dnsOverride,
+                    tabId: tabId ?? null,
+                    summary: summarizeMitmGatewayError({ url, errorMessage, dnsOverride }),
+                });
+            } catch (_) { /* ignore */ }
+        }
+        return errRes;
     }
 
     _applyDnsOverride(opts) {
@@ -2153,7 +2196,9 @@ class ExternalProxyPort {
                     })
                     .catch((e) => {
                         dbg(`[mitm] ✗ ${url} ${e.message}${ctagExt}\n`);
-                        const errRes = { statusCode: 502, headers: {}, bodyBase64: '' };
+                        const errRes = this.parent._build502Response(url, e.message, {
+                            req: r, tabId: connectTabId, dnsOverride: e.mitmDnsOverride || null,
+                        });
                         const resOut = applyMitmCorsToResponse(this.parent._mitmCorsEnabledForUrl(url), url, headers, r.method, errRes);
                         entry.data = buildHttpResponse(resOut);
                     })
@@ -2243,7 +2288,9 @@ class ExternalProxyPort {
             })
             .catch((e) => {
                 dbg(`[mitm] ✗ ${url} ${e.message}${ctagExtHttp}\n`);
-                const errRes = { statusCode: 502, headers: {}, bodyBase64: '' };
+                const errRes = this.parent._build502Response(url, e.message, {
+                    req, tabId: null, dnsOverride: e.mitmDnsOverride || null,
+                });
                 const resOut = applyMitmCorsToResponse(this.parent._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
                 socket.write(buildHttpResponse(resOut));
                 socket.end();
@@ -2261,6 +2308,10 @@ module.exports = {
     loadOrGenerateCA,
     getDebugMitmLevel,
     setDebugMitmLevel,
+    buildMitmGatewayErrorResponse,
+    isLikelyDocumentNavigation,
+    summarizeMitmGatewayError,
+    resolveMitmGatewayDnsContext,
     /** @internal app.asar → app.asar.unpacked for child Node */
     _resolveAzureTlsWorkerScriptForExternalNode,
     /** @internal used by tests/test-dns-mitm.js */

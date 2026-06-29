@@ -1,0 +1,84 @@
+{
+  "format": "cupnet-session",
+  "version": 1,
+  "name": "Example — login bootstrap",
+  "description": "Template only. Replace cookies, proxy, and URLs with your own values. Do not commit real secrets.",
+
+  "tab": {
+    "newTab": true,
+    "isolated": true,
+    "cookieGroupName": "Example isolated session"
+  },
+
+  "navigate": {
+    "url": "https://app.example.com/account/login",
+    "timeoutMs": 120000
+  },
+
+  "proxy": {
+    "template": "http://{USER}:{PASS}@residential-proxy.example.com:10000",
+    "variables": {
+      "USER": "your_proxy_user",
+      "PASS": "your_proxy_password"
+    },
+    "tlsProfile": "chrome_120"
+  },
+
+  "fingerprint": {
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "language": "en-US",
+    "timezone": "Europe/Moscow"
+  },
+
+  "clearCookiesBeforeLoad": true,
+  "clearStorageBeforeLoad": false,
+
+  "cookies": [
+    {
+      "name": ".AspNetCore.Antiforgery.example",
+      "value": "REPLACE_WITH_REAL_VALUE",
+      "domain": "app.example.com",
+      "path": "/",
+      "secure": true,
+      "httpOnly": true,
+      "sameSite": "Strict"
+    },
+    {
+      "name": "Culture",
+      "value": "en-US",
+      "domain": "app.example.com",
+      "path": "/",
+      "secure": true,
+      "httpOnly": false
+    }
+  ],
+
+  "storage": {
+    "localStorage": {
+      "cupnet_example_flag": "1"
+    },
+    "sessionStorage": {
+      "wizardStep": "login"
+    }
+  },
+
+  "dnsOverrides": [
+    {
+      "host": "app.example.com",
+      "ip": "",
+      "enabled": false,
+      "rewrite_host": ""
+    }
+  ],
+  "persistDnsOverrides": false,
+
+  "runAfterLoad": {
+    "script": "(function(){ const el = document.querySelector('input[type=email], input[name=Email], #Email'); if (el) { el.focus(); console.log('[CupNet session] focused login field'); } else { console.log('[CupNet session] login field not found'); } })();",
+    "delayMs": 300,
+    "timeoutMs": 30000
+  },
+
+  "logging": {
+    "recording": true
+  }
+}

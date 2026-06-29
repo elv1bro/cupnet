@@ -9,7 +9,14 @@ const reloadBtn      = document.getElementById('reload-btn');
 const homeBtn        = document.getElementById('home-btn');
 const urlInput       = document.getElementById('url-input');
 const addressBarContainer = document.getElementById('address-bar-container');
+const urlInputStack  = document.querySelector('.url-input-stack');
+const urlDisplayEl   = document.getElementById('url-display');
+const siteInfoBtn    = document.getElementById('site-info-btn');
+const urlClearBtn    = document.getElementById('url-clear-btn');
+const corsBtn        = document.getElementById('cors-btn');
 const urlOmniboxDropdown = document.getElementById('url-omnibox-dropdown');
+const omniboxListEl = document.getElementById('command-palette-list');
+const omniboxHintEl = document.getElementById('url-omnibox-hint');
 const URL_INPUT_PLACEHOLDER_DEFAULT = 'Type > for commands, or enter a URL…';
 const URL_INPUT_PLACEHOLDER_OMNIBOX = 'Commands: > filter · URL: type and Enter';
 const logSessionNum  = document.getElementById('log-session-num');
@@ -28,6 +35,7 @@ const reqEditorBtn   = document.getElementById('req-editor-btn');
 const rulesBtn       = document.getElementById('rules-btn');
 const consoleBtn     = document.getElementById('console-btn');
 const analyzerBtn    = document.getElementById('analyzer-btn');
+const httpLabBtn     = document.getElementById('http-lab-btn');
 const notesBtn       = document.getElementById('notes-btn');
 const credUnifiedWrap = document.getElementById('cred-unified-wrap');
 const credentialsBtn = document.getElementById('credentials-btn');
@@ -52,6 +60,7 @@ const pbName         = document.getElementById('pb-name');
 const pbModeBadge    = document.getElementById('pb-mode-badge');
 const settingsToggle = document.getElementById('settings-toggle-btn');
 
+const statusPage      = document.getElementById('status-page');
 const statusMitm      = document.getElementById('status-mitm');
 const statusProxy     = document.getElementById('status-proxy');
 const statusIp        = document.getElementById('status-ip');
@@ -63,32 +72,268 @@ const toastContainer  = document.getElementById('rule-toast-container');
 // ─── Navigation ───────────────────────────────────────────────────────────────
 backBtn.addEventListener('click',    () => api.navBack());
 forwardBtn.addEventListener('click', () => api.navForward());
-reloadBtn.addEventListener('click',  () => api.navReload());
+reloadBtn.addEventListener('click', () => {
+    if (_toolbarLoading) {
+        try { api.navStop?.(); } catch (_) { /* ignore */ }
+    } else {
+        api.navReload();
+    }
+});
 if (homeBtn) homeBtn.addEventListener('click', () => api.navHome());
 
 function isOmniboxDropdownVisible() {
-    const el = document.getElementById('command-palette');
-    return !!(el && !el.classList.contains('hidden'));
+    return addressBarContainer?.classList.contains('omnibox-open') ?? false;
 }
 
 urlInput.addEventListener('keydown', (e) => {
-    if (!isOmniboxDropdownVisible() && e.key === 'Enter') {
+    const paletteOpen = isOmniboxDropdownVisible();
+    const mod = e.metaKey || e.ctrlKey;
+    if (e.key === 'Tab' && urlInput.selectionStart != null && urlInput.selectionEnd != null
+        && urlInput.selectionEnd > urlInput.selectionStart
+        && urlInput.selectionEnd === String(urlInput.value || '').length) {
+        e.preventDefault();
+        const len = urlInput.value.length;
+        urlInput.setSelectionRange(len, len);
+        return;
+    }
+    if (e.key === 'Enter' && (mod || e.altKey) && !paletteOpen) {
+        e.preventDefault();
         const raw = urlInput.value.trim();
         if (!raw) return;
-        // Sync with main in case omnibox chrome reserve / overlay state is out of date.
         hideCommandPalette();
+        void (async () => {
+            await api.newTab();
+            api.navigateTo(raw);
+        })();
+        return;
+    }
+    if (!paletteOpen && e.key === 'Enter') {
+        const raw = urlInput.value.trim();
+        if (!raw) return;
+        hideCommandPalette();
+        _urlInputDirty = false;
         api.navigateTo(raw);
     }
 });
 
 function _normalizeToolbarUrl(url) {
-    return url === 'about:blank' ? '' : (url || '');
+    if (url === 'about:blank') return '';
+    const u = String(url || '').trim().toLowerCase();
+    if (u === 'cupnet://new-tab' || u === 'cupnet://newtab' || u === 'cupnet:new-tab') return '';
+    return url || '';
 }
 
-function _setToolbarUrlIfChanged(url, { respectFocus = true, blur = false } = {}) {
-    if (respectFocus && document.activeElement === urlInput) return false;
-    if (urlInput.value !== url) urlInput.value = url;
+const SEARCH_ENGINE_LABELS = {
+    duckduckgo: 'DuckDuckGo',
+    google: 'Google',
+    brave: 'Brave',
+    yandex: 'Yandex',
+    custom: 'Custom',
+};
+let _cupnetSearchEngineKey = 'duckduckgo';
+
+function _applyCorsToolbarVisual(on) {
+    if (!corsBtn) return;
+    const v = !!on;
+    corsBtn.classList.toggle('cors-active', v);
+    corsBtn.setAttribute('aria-pressed', v ? 'true' : 'false');
+    corsBtn.title = v ? 'CORS bypass (MITM) — ON' : 'CORS bypass (MITM) — OFF';
+}
+
+api.onInitSettings?.((s) => {
+    if (s && s.searchEngine) _cupnetSearchEngineKey = String(s.searchEngine);
+    if (s && typeof s.corsBypassEnabled === 'boolean') _applyCorsToolbarVisual(s.corsBypassEnabled);
+});
+
+api.onCorsBypassStatus?.((on) => _applyCorsToolbarVisual(on));
+
+corsBtn?.addEventListener('click', () => {
+    void api.toggleCorsBypass?.();
+});
+
+function _searchEngineDisplayName() {
+    return SEARCH_ENGINE_LABELS[_cupnetSearchEngineKey] || 'Search';
+}
+
+let _toolbarLoading = false;
+
+function _looksLikeUrlOrHost(q) {
+    const s = String(q || '').trim();
+    if (!s) return false;
+    if (/^[a-z][a-z\d+\-.]*:\/\//i.test(s)) return true;
+    if (/^[^\s]+\.[^\s]{2,}$/.test(s) && !s.includes(' ')) return true;
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(s)) return true;
+    return false;
+}
+
+/** Origin-only input — keep in sync with utils.shouldSkipOmniboxInlineGhost */
+function _shouldSkipInlineGhost(trimmed) {
+    const t = String(trimmed || '').trim();
+    if (!t) return true;
+    return /^https?:\/\/[^/?#]+\/?$/i.test(t);
+}
+
+function _hasInlineGhostSelection() {
+    if (!urlInput) return false;
+    const start = urlInput.selectionStart;
+    const end = urlInput.selectionEnd;
+    return start != null && end != null && end > start && end === String(urlInput.value || '').length;
+}
+
+function _clearInlineGhostSelection() {
+    if (!urlInput || !_hasInlineGhostSelection()) return false;
+    const pos = urlInput.selectionStart ?? 0;
+    urlInput.value = String(urlInput.value || '').slice(0, pos);
+    urlInput.setSelectionRange(pos, pos);
+    return true;
+}
+
+function _buildExactTypedUrlRow(q) {
+    const trimmed = String(q || '').trim();
+    if (!trimmed || !_looksLikeUrlOrHost(trimmed)) return null;
+    return {
+        kind: 'url',
+        icon: 'url',
+        label: `Open ${trimmed}`,
+        sub: 'Typed URL',
+        url: trimmed,
+        _isExactTyped: true,
+        match: null,
+        urlPreview: trimmed,
+    };
+}
+
+function _computeMatchRange(hay, needle) {
+    const h = String(hay || '').toLowerCase();
+    const n = String(needle || '').toLowerCase().trim();
+    if (!n || !h) return null;
+    const i = h.indexOf(n);
+    if (i < 0) return null;
+    return [i, i + n.length];
+}
+
+function _formatUrlForDisplay(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return { html: '', plain: '' };
+    try {
+        const u = new URL(s);
+        const host = u.hostname || '';
+        if (!host) return { html: escapeAttr(s), plain: s };
+        let rest = (u.pathname || '') + (u.search || '') + (u.hash || '');
+        if (rest === '/') rest = '';
+        return {
+            html: `<span class="url-host">${escapeAttr(host)}</span><span class="url-rest">${escapeAttr(rest)}</span>`,
+            plain: s,
+        };
+    } catch {
+        return { html: escapeAttr(s), plain: s };
+    }
+}
+
+function escapeAttr(t) {
+    return String(t || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/"/g, '&quot;');
+}
+
+function escHtml(s) {
+    return String(s ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function _updateUrlDisplayFromValue(raw) {
+    if (!urlDisplayEl) return;
+    const norm = _normalizeToolbarUrl(raw);
+    if (!norm) {
+        urlDisplayEl.innerHTML = '';
+        return;
+    }
+    urlDisplayEl.innerHTML = _formatUrlForDisplay(norm).html;
+}
+
+function _updateSiteInfoBtn(urlRaw, faviconHint) {
+    if (!siteInfoBtn) return;
+    const u = String(urlRaw || '').trim().toLowerCase();
+    siteInfoBtn.classList.remove('site-info-btn--insecure', 'site-info-btn--internal', 'site-info-btn--file');
+    let mode = 'secure';
+    if (!u || u === 'about:blank') mode = 'internal';
+    else if (u.startsWith('file:')) { mode = 'file'; siteInfoBtn.classList.add('site-info-btn--file'); }
+    else if (u.startsWith('http:')) { mode = 'insecure'; siteInfoBtn.classList.add('site-info-btn--insecure'); }
+    else if (u.startsWith('cupnet:') || u.startsWith('devtools:')) {
+        mode = 'internal';
+        siteInfoBtn.classList.add('site-info-btn--internal');
+    }
+    const fc = window.CupNetFaviconCache;
+    const fav = fc?.resolveSync(urlRaw, faviconHint) || null;
+    if (fav && mode !== 'internal' && mode !== 'file') {
+        siteInfoBtn.innerHTML = `<img class="site-info-favicon" src="${escapeAttr(fav)}" alt="" aria-hidden="true">`;
+        void fc?.load(urlRaw, faviconHint).then((loaded) => {
+            if (!loaded || loaded === fav) return;
+            if (String(_committedToolbarUrl || '').trim().toLowerCase() !== u) return;
+            const img = siteInfoBtn.querySelector('.site-info-favicon');
+            if (img) img.src = loaded;
+        });
+        return;
+    }
+    const lock = '<svg class="site-info-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a3 3 0 00-3 3v2H4a1 1 0 00-1 1v6a1 1 0 001 1h8a1 1 0 001-1V7a1 1 0 00-1-1h-1V4a3 3 0 00-3-3zm-1 5V4a1 1 0 112 0v2H7z"/></svg>';
+    const globe = '<svg class="site-info-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a7 7 0 100 14A7 7 0 008 1zm-.5 1a5.6 5.6 0 012.9 1.2c-.3.4-.6.9-.9 1.3H6.5c-.3-.4-.6-.9-.9-1.3A5.6 5.6 0 017.5 2zM4.3 3.4c.3.5.7 1 1 1.6h5.4c.3-.6.7-1.1 1-1.6a6 6 0 014.1 5.1h-2.1c-.1-1.2-.4-2.3-.8-3.3H5.1c-.4 1-.7 2.1-.8 3.3H2.2a6 6 0 014.1-5.1zM2.2 9.9h2.1c.1 1.2.4 2.3.8 3.3h5.8c.4-1 .7-2.1.8-3.3h2.1a6 6 0 01-11.6 0zm4.6 4.7c.3-.4.6-.9.9-1.3h2.9c.3.4.6.9.9 1.3a5.6 5.6 0 01-4.7 0z"/></svg>';
+    const info = '<svg class="site-info-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a7 7 0 100 14A7 7 0 008 1zm.8 3.2v1.6H7.2V4.2h1.6zM7.2 7h1.6v5H7.2V7z"/></svg>';
+    if (mode === 'insecure') siteInfoBtn.innerHTML = info;
+    else if (mode === 'internal' || mode === 'file') siteInfoBtn.innerHTML = info;
+    else siteInfoBtn.innerHTML = u.startsWith('https:') ? lock : globe;
+    if (fc && urlRaw && mode !== 'internal' && mode !== 'file') {
+        const key = fc.hostKey(urlRaw);
+        if (key && !fc.get(key)) {
+            void fc.load(urlRaw, faviconHint).then((loaded) => {
+                if (!loaded) return;
+                if (String(_committedToolbarUrl || '').trim().toLowerCase() !== u) return;
+                siteInfoBtn.innerHTML = `<img class="site-info-favicon" src="${escapeAttr(loaded)}" alt="" aria-hidden="true">`;
+            });
+        }
+    }
+}
+
+let _committedToolbarUrl = '';
+let _urlInputDirty = false;
+
+function _activeTabFavicon() {
+    const active = tabs.find((t) => t.isActive);
+    return active?.faviconUrl || null;
+}
+
+function _syncUrlDisplayAndSiteInfo(url) {
+    _updateUrlDisplayFromValue(url);
+    _updateSiteInfoBtn(url, _activeTabFavicon());
+}
+
+function _setToolbarUrl(url, { forceInput = false, blur = false } = {}) {
+    const normalized = _normalizeToolbarUrl(url);
+    _committedToolbarUrl = normalized;
+    _syncUrlDisplayAndSiteInfo(normalized);
+
+    const inputFocused = document.activeElement === urlInput;
+    const shouldUpdateInput = forceInput || !inputFocused || !_urlInputDirty;
+    if (shouldUpdateInput && urlInput.value !== normalized) {
+        urlInput.value = normalized;
+        _urlInputDirty = false;
+    }
     if (blur) urlInput.blur();
+    if (urlClearBtn) {
+        const show = !!(String(normalized || '').trim() && inputFocused);
+        urlClearBtn.hidden = !show;
+    }
+}
+
+function _setToolbarUrlIfChanged(url, { respectFocus = true, blur = false, forceInput = false } = {}) {
+    if (respectFocus && !forceInput && document.activeElement === urlInput && _urlInputDirty) {
+        _syncUrlDisplayAndSiteInfo(_normalizeToolbarUrl(url));
+        return false;
+    }
+    _setToolbarUrl(url, { forceInput: forceInput || !respectFocus, blur });
     return true;
 }
 
@@ -107,9 +352,10 @@ api.onURLUpdate((url) => {
 api.onTabWillNavigate?.((data) => {
     const active = tabs.find(t => t.isActive);
     if (active && active.id === data.tabId) {
+        _clearPageError();
         const normalized = _normalizeToolbarUrl(data.url);
-        // Force-update + blur: page navigation started, typed draft is no longer relevant.
-        _setToolbarUrlIfChanged(normalized, { respectFocus: false, blur: true });
+        _urlInputDirty = false;
+        _setToolbarUrl(normalized, { forceInput: true, blur: true });
         ssHandleUrlChange(normalized);
         hideCredPopup();
         scheduleCookiePageBadgeRefresh();
@@ -121,11 +367,55 @@ let _loadingApplied = false;
 let _loadingPending = false;
 let _loadingRaf = null;
 let _loadingOffTimer = null;
+let _pageErrorMessage = null;
+
+function _clearPageError() {
+    _pageErrorMessage = null;
+    if (statusPage) statusPage.classList.remove('browser-status-item--error');
+    if (addressBarContainer) addressBarContainer.classList.remove('address-bar-error');
+}
+
+function _showPageError(summary, { toast = true } = {}) {
+    const msg = String(summary || 'Page failed to load').trim();
+    if (!msg) return;
+    _pageErrorMessage = msg;
+    if (statusPage) {
+        statusPage.textContent = 'Page: Error';
+        statusPage.title = msg;
+        statusPage.classList.remove('browser-status-item--loading', 'browser-status-item--ready');
+        statusPage.classList.add('browser-status-item--error');
+    }
+    if (addressBarContainer) addressBarContainer.classList.add('address-bar-error');
+    _toolbarLoading = false;
+    if (reloadBtn) {
+        reloadBtn.classList.remove('nav-btn--stop');
+        reloadBtn.title = 'Reload (Ctrl+R)';
+    }
+    _applyToolbarLoading(false);
+    if (toast && typeof showToast === 'function') {
+        showToast(msg, { type: 'error', duration: 9000 });
+    }
+}
+
+function _applyPageLoadStatus(loading) {
+    if (!statusPage) return;
+    if (_pageErrorMessage && !loading) return;
+    const on = !!loading;
+    if (on) _clearPageError();
+    statusPage.textContent = on ? 'Page: Loading…' : 'Page: Ready';
+    statusPage.classList.toggle('browser-status-item--loading', on);
+    statusPage.classList.toggle('browser-status-item--ready', !on);
+    statusPage.classList.remove('browser-status-item--error');
+    statusPage.title = on ? 'Active tab is loading' : 'Active tab finished loading';
+}
+
 function _applyToolbarLoading(next) {
     const val = !!next;
     if (_loadingApplied === val) return;
     _loadingApplied = val;
     toolbar.classList.toggle('loading', val);
+    if (addressBarContainer) addressBarContainer.classList.toggle('address-bar-loading', val);
+    _applyPageLoadStatus(val);
 }
 function _scheduleToolbarLoading(next) {
     _loadingPending = !!next;
@@ -136,6 +426,11 @@ function _scheduleToolbarLoading(next) {
     });
 }
 api.onSetLoadingState((loading) => {
+    _toolbarLoading = !!loading;
+    if (reloadBtn) {
+        reloadBtn.classList.toggle('nav-btn--stop', _toolbarLoading);
+        reloadBtn.title = _toolbarLoading ? 'Stop loading (Esc)' : 'Reload (Ctrl+R)';
+    }
     if (loading) {
         if (_loadingOffTimer) { clearTimeout(_loadingOffTimer); _loadingOffTimer = null; }
         _scheduleToolbarLoading(true);
@@ -148,6 +443,49 @@ api.onSetLoadingState((loading) => {
         _loadingOffTimer = null;
         _scheduleToolbarLoading(false);
     }, 90);
+});
+
+function _formatTabLoadError({ errorCode, errorDescription, url }) {
+    const code = Number(errorCode);
+    const desc = String(errorDescription || '').trim();
+    let label = desc;
+    if (!label) {
+        if (code === -102) label = 'Connection refused';
+        else if (code === -105) label = 'Host not found (DNS)';
+        else if (code === -106) label = 'No internet connection';
+        else if (code === -118) label = 'Connection timed out';
+        else if (code === -200) label = 'Certificate error';
+        else if (code === -501) label = 'HTTP response error';
+        else if (code >= 400 && code < 500) label = `HTTP ${code} client error`;
+        else if (code >= 500) label = `HTTP ${code} server error`;
+        else label = `Load failed (${code})`;
+    } else if (/^HTTP \d+$/.test(label)) {
+        const m = label.match(/^HTTP (\d+)$/);
+        if (m) {
+            const sc = Number(m[1]);
+            if (sc === 404) label = 'HTTP 404 Not Found';
+            else if (sc >= 500) label = `HTTP ${sc} Server Error`;
+            else if (sc >= 400) label = `HTTP ${sc} Client Error`;
+        }
+    }
+    try {
+        const u = new URL(String(url || ''));
+        return `${label} — ${u.hostname}${u.pathname !== '/' ? u.pathname : ''}`;
+    } catch {
+        return url ? `${label} — ${url}` : label;
+    }
+}
+
+api.onTabLoadError?.((data) => {
+    const active = tabs.find(t => t.isActive);
+    if (active && data?.tabId != null && data.tabId !== active.id) return;
+    _showPageError(_formatTabLoadError(data || {}));
+});
+
+api.onPageGatewayError?.((data) => {
+    const active = tabs.find(t => t.isActive);
+    if (active && data?.tabId != null && data.tabId !== active.id) return;
+    _showPageError(data?.summary || data?.errorMessage || 'Page failed to load (MITM gateway error)');
 });
 
 // ─── Logging toggle state ─────────────────────────────────────────────────────
@@ -230,13 +568,15 @@ function makeTabEl(tab) {
     el.title = (tab.url || '') + (tab.isolated ? ' [Isolated cookies]' : '');
 
     const fallbackIcon = _tabFallbackIcon(tab);
+    const fc = window.CupNetFaviconCache;
+    const faviconUrl = tab.faviconUrl || fc?.resolveSync(tab.url, null) || null;
 
     const faviconWrapper = document.createElement('span');
     faviconWrapper.className = 'tab-favicon-wrapper';
-    if (tab.faviconUrl) {
+    if (faviconUrl) {
         const img = document.createElement('img');
         img.className = 'tab-favicon-img';
-        img.src = tab.faviconUrl;
+        img.src = faviconUrl;
         const fallback = document.createElement('span');
         fallback.className = 'tab-favicon';
         fallback.textContent = fallbackIcon;
@@ -372,12 +712,14 @@ function _scheduleTabUiUpdate(tabData) {
         _tabUiRaf = null;
         const payload = _tabUiPending || [];
         _tabUiPending = null;
+        window.CupNetFaviconCache?.ingestTabs(payload);
         renderTabs(payload);
         _onActiveTabChanged(payload);
         const active = payload.find(t => t.isActive);
-        if (active && document.activeElement !== urlInput) {
+        if (active) {
             const normalized = _normalizeToolbarUrl(active.url);
-            _setToolbarUrlIfChanged(normalized, { respectFocus: true });
+            _urlInputDirty = false;
+            _setToolbarUrl(normalized, { forceInput: true });
             ssHandleUrlChange(normalized);
         }
         scheduleCookiePageBadgeRefresh();
@@ -391,12 +733,10 @@ api.onTabListUpdated((tabData) => {
 
 api.onTabUrlChanged((data) => {
     const active = tabs.find(t => t.isActive);
-    if (active && active.id === data.tabId && document.activeElement !== urlInput) {
+    if (active && active.id === data.tabId) {
         const normalized = _normalizeToolbarUrl(data.url);
         _setToolbarUrlIfChanged(normalized, { respectFocus: true });
         ssHandleUrlChange(normalized);
-    }
-    if (active && active.id === data.tabId) {
         hideCredPopup();
         scheduleCookiePageBadgeRefresh();
         scheduleCredentialsToolbarRefresh();
@@ -702,6 +1042,15 @@ if (analyzerBtn) {
     });
 }
 
+if (httpLabBtn) {
+    httpLabBtn.addEventListener('click', () => {
+        void api.injectActivePageHttpLab?.({}).catch((err) => {
+            console.error('[HTTP Lab]', err);
+            alert('Could not inject HTTP Lab: ' + (err?.message || err));
+        });
+    });
+}
+
 if (notesBtn) {
     notesBtn.addEventListener('click', () => {
         api.openNotesWindow();
@@ -899,21 +1248,125 @@ const credSaveDismiss = document.getElementById('cred-save-dismiss');
 
 /** Extra space above the tab WebContentsView when the credential save bar is visible. */
 const CRED_SAVE_BAR_RESERVE_PX = 36;
+const TOOLS_MINI_BAR_HEIGHT_PX = 34;
+const TOOLS_SIDE_WIDTH_PX = 58;
+const CHROME_TOP_BASE_PX = 95;
+/** Overlay WebContentsView starts here (below tab bar + toolbar); matches tab-manager TOOLBAR_HEIGHT. */
+const OMNIBOX_OVERLAY_TOP_PX = CHROME_TOP_BASE_PX;
+
+const toolDockEl = document.querySelector('.tool-dock');
+const toolDockMountInline = document.getElementById('tool-dock-mount-inline');
+const toolDockMountSubbar = document.getElementById('tool-dock-mount-subbar');
+const toolDockMountBottom = document.getElementById('tool-dock-mount-bottom');
+const toolDockMountSeparate = document.getElementById('tool-dock-mount-separate');
+const toolsSubbarEl = document.getElementById('browser-tools-subbar');
+const toolsBottomEl = document.getElementById('browser-tools-bottom');
+const toolsSeparateEl = document.getElementById('browser-tools-separate');
+const TOOLBAR_PLACEMENTS = new Set(['inline', 'subbar', 'bottom', 'separate']);
+let _toolbarToolsPlacement = 'subbar';
+let _toolbarToolsMiniAlign = 'right';
 
 function getCredSaveBarReservePx() {
     return credSaveBar && !credSaveBar.classList.contains('hidden') ? CRED_SAVE_BAR_RESERVE_PX : 0;
 }
 
-async function applyChromeToolbarReserve() {
-    try {
-        await api.setToolbarHeight(getCredSaveBarReservePx());
-    } catch (_) { /* ignore */ }
+function updateShellChromeCssVars() {
+    const top = CHROME_TOP_BASE_PX + getCredSaveBarReservePx();
+    document.documentElement.style.setProperty('--shell-chrome-top', `${top}px`);
+    document.documentElement.style.setProperty('--shell-status-height', '26px');
+    document.documentElement.style.setProperty('--shell-tools-bar-height', `${TOOLS_MINI_BAR_HEIGHT_PX}px`);
+    document.documentElement.style.setProperty('--shell-tools-side-width', `${TOOLS_SIDE_WIDTH_PX}px`);
 }
+
+async function applyChromeLayoutReserve() {
+    updateShellChromeCssVars();
+    const cred = getCredSaveBarReservePx();
+    const subbar = _toolbarToolsPlacement === 'subbar' ? TOOLS_MINI_BAR_HEIGHT_PX : 0;
+    const bottom = _toolbarToolsPlacement === 'bottom' ? TOOLS_MINI_BAR_HEIGHT_PX : 0;
+    const side = _toolbarToolsPlacement === 'separate' ? TOOLS_SIDE_WIDTH_PX : 0;
+    try {
+        await api.setToolbarHeight(cred + subbar);
+        await api.setBottomChromeHeight?.(bottom);
+        await api.setRightChromeWidth?.(side);
+    } catch (_) { /* ignore */ }
+    if (addressBarContainer?.classList.contains('omnibox-open')) {
+        syncOmniboxOverlay();
+    }
+}
+
+function applyToolbarToolsMiniAlign(align) {
+    const next = align === 'left' ? 'left' : 'right';
+    _toolbarToolsMiniAlign = next;
+    document.body.dataset.toolsMiniAlign = next;
+    for (const el of [toolsSubbarEl, toolsBottomEl]) {
+        if (el) el.dataset.miniAlign = next;
+    }
+}
+
+function applyToolbarToolsPlacement(placement) {
+    const next = TOOLBAR_PLACEMENTS.has(placement) ? placement : 'inline';
+    _toolbarToolsPlacement = next;
+    document.body.dataset.toolsPlacement = next;
+
+    const mount = next === 'subbar' ? toolDockMountSubbar
+        : next === 'bottom' ? toolDockMountBottom
+        : next === 'separate' ? toolDockMountSeparate
+        : toolDockMountInline;
+
+    if (toolDockEl && mount && toolDockEl.parentElement !== mount) {
+        mount.appendChild(toolDockEl);
+    }
+
+    const isMini = next !== 'inline';
+    toolDockEl?.classList.toggle('tool-dock--mini', isMini);
+    toolDockEl?.classList.toggle('tool-dock--side', next === 'separate');
+
+    const subbarOn = next === 'subbar';
+    const bottomOn = next === 'bottom';
+    const separateOn = next === 'separate';
+    if (toolsSubbarEl) {
+        toolsSubbarEl.hidden = !subbarOn;
+        toolsSubbarEl.setAttribute('aria-hidden', subbarOn ? 'false' : 'true');
+    }
+    if (toolsBottomEl) {
+        toolsBottomEl.hidden = !bottomOn;
+        toolsBottomEl.setAttribute('aria-hidden', bottomOn ? 'false' : 'true');
+    }
+    if (toolsSeparateEl) {
+        toolsSeparateEl.hidden = !separateOn;
+        toolsSeparateEl.setAttribute('aria-hidden', separateOn ? 'false' : 'true');
+    }
+
+    void applyChromeLayoutReserve();
+    applyToolbarToolsMiniAlign(_toolbarToolsMiniAlign);
+}
+
+async function initToolbarToolsPlacement() {
+    try {
+        const data = await api.getSettingsAll?.();
+        applyToolbarToolsPlacement(data?.toolbarToolsPlacement || 'subbar');
+        applyToolbarToolsMiniAlign(data?.toolbarToolsMiniAlign || 'right');
+    } catch {
+        applyToolbarToolsPlacement('subbar');
+        applyToolbarToolsMiniAlign('right');
+    }
+}
+
+api.onBrowserSettingsUpdated?.((data) => {
+    if (data?.toolbarToolsPlacement != null) {
+        applyToolbarToolsPlacement(data.toolbarToolsPlacement);
+    }
+    if (data?.toolbarToolsMiniAlign != null) {
+        applyToolbarToolsMiniAlign(data.toolbarToolsMiniAlign);
+    }
+});
+
+void initToolbarToolsPlacement();
 
 function hideCredSaveBar() {
     if (credSaveBar) credSaveBar.classList.add('hidden');
     if (credSavePw) credSavePw.value = '';
-    void applyChromeToolbarReserve();
+    void applyChromeLayoutReserve();
 }
 
 if (api.onShowCredentialSaveBar) {
@@ -930,7 +1383,7 @@ if (api.onShowCredentialSaveBar) {
             if (credSaveUnlockRow) { credSaveUnlockRow.classList.add('hidden'); credSaveUnlockRow.style.display = 'none'; }
             if (credSaveYes) credSaveYes.textContent = 'Save';
         }
-        void applyChromeToolbarReserve();
+        void applyChromeLayoutReserve();
     });
 }
 
@@ -1847,15 +2300,14 @@ document.getElementById('win-switcher-toolbar-btn')?.addEventListener('click', (
     }
 });
 
-// ─── Omnibox: `>` = commands; otherwise URL + suggestions (top hosts from log) ──
+// ─── Omnibox: `>` = commands; otherwise URL + history / tabs / search ──
 const commandPaletteEl = document.getElementById('command-palette');
 const commandPaletteBackdrop = document.getElementById('command-palette-backdrop');
 let commandPaletteActiveIdx = 0;
-/** @type {Array<{ kind: 'cmd', label: string, category?: string, shortcut?: string, run: function } | { kind: 'url', label: string, sub?: string, url: string }>} */
+/** @type {Array<any>} */
 let omniboxRows = [];
-let cachedTopHosts = [];
-let _topHostsFetchedAt = 0;
-const TOP_HOSTS_TTL_MS = 60000;
+/** True after ArrowUp/Down changed the highlighted suggestion (Enter then picks it). */
+let _omniboxHighlightMoved = false;
 
 const OMNIBOX_QUICK_LINKS = [
     { label: 'CupNet start page', keywords: 'home new tab dashboard', url: 'cupnet://newtab' },
@@ -1907,6 +2359,7 @@ function getCommandPaletteCommands() {
 
         { label: 'Take screenshot', category: 'Page', keywords: 'capture screen shot', shortcut: '', run: () => { void api.takeScreenshot?.('click').catch(() => {}); } },
         { label: 'Import session bundle', category: 'Tools', keywords: 'har zip restore', shortcut: '', run: () => { void api.importBundle?.().catch(() => {}); } },
+        { label: 'Launch profile', category: 'Tools', keywords: 'json cookies proxy bootstrap import file session launch', shortcut: '', run: () => { void api.openSessionProfileModal?.(); } },
         { label: 'Open Network Activity', category: 'Tools', keywords: 'log viewer database requests', shortcut: '', run: () => api.openLogViewer() },
         { label: 'Open Proxy Manager', category: 'Tools', keywords: 'profile tls fingerprint chain', shortcut: '', run: () => api.openProxyManager() },
         { label: 'Disconnect proxy', category: 'Proxy', keywords: 'offline mitm', shortcut: '', run: () => { void api.disconnectProxy?.().catch(() => {}); } },
@@ -1914,6 +2367,7 @@ function getCommandPaletteCommands() {
         { label: 'Open Rules & Interceptor', category: 'Tools', keywords: 'highlight mock block', shortcut: '', run: () => api.openRulesWindow() },
         { label: 'Open Cookie Manager', category: 'Tools', keywords: 'storage jar', shortcut: '', run: () => api.openCookieManager(activeTabId) },
         { label: 'Open DNS Manager', category: 'Tools', keywords: 'hosts override', shortcut: '', run: () => api.openDnsManager() },
+        { label: 'Toggle CORS bypass (MITM)', category: 'Tools', keywords: 'access-control mitm fetch', shortcut: '', run: () => { void api.toggleCorsBypass?.(); } },
         { label: 'Open Request Editor', category: 'Tools', keywords: 'replay http', shortcut: '', run: () => api.openRequestEditor() },
         { label: 'Open Request Editor (new window)', category: 'Tools', keywords: 'replay separate', shortcut: '', run: () => { void api.openRequestEditorNewWindow?.().catch(() => {}); } },
         { label: 'Open System Console', category: 'Tools', keywords: 'stdout stderr debug', shortcut: '', run: () => api.openConsoleViewer() },
@@ -1940,84 +2394,253 @@ function getCommandPaletteCommands() {
     ];
 }
 
-async function refreshTopHostsIfStale() {
-    if (Date.now() - _topHostsFetchedAt < TOP_HOSTS_TTL_MS && cachedTopHosts.length) return;
-    try {
-        const rows = await api.getOmniboxTopHosts?.(16);
-        cachedTopHosts = Array.isArray(rows) ? rows : [];
-    } catch {
-        cachedTopHosts = [];
-    }
-    _topHostsFetchedAt = Date.now();
-}
-
 function getOmniboxHintText() {
     if (isCommandMode()) {
-        return '↑↓ select · Enter run command · Shift+Enter open rest as URL · Esc';
+        return '↑↓ select · Enter run · Esc close · Shift+Enter as URL';
     }
-    return '↑↓ select · Enter open · Shift+Enter search · Type > for commands · Esc';
+    return '↑↓ select · Enter open · Tab complete · Esc close · Type > for commands';
+}
+
+let _omniboxOverlayReady = null;
+let _omniboxFaviconLoadGen = 0;
+let _omniboxSyncRaf = null;
+let _omniboxRenderTimer = null;
+let _omniboxFaviconTimer = null;
+let _omniboxRenderGen = 0;
+
+function _omniboxRowNeedsFavicon(row) {
+    if (!row || row.kind === 'cmd' || row._isSearchUrl || row.icon === 'search') return false;
+    return !!(row.url || row.urlPreview);
+}
+
+function attachOmniboxFaviconsSync(rows) {
+    const fc = window.CupNetFaviconCache;
+    if (!fc) return;
+    for (const row of rows) {
+        if (!_omniboxRowNeedsFavicon(row)) continue;
+        const url = row.url || row.urlPreview;
+        const tab = row.tabId != null ? tabs.find((t) => t.id === row.tabId) : null;
+        const fav = fc.resolveSync(url, tab?.faviconUrl || null);
+        if (fav) row.faviconUrl = fav;
+        else delete row.faviconUrl;
+    }
+}
+
+async function enrichOmniboxFaviconsAsync(expectedGen) {
+    const fc = window.CupNetFaviconCache;
+    if (!fc || !isOmniboxDropdownVisible() || expectedGen !== _omniboxFaviconLoadGen) return;
+    const rows = omniboxRows;
+    const entries = [];
+    for (const row of rows) {
+        if (!_omniboxRowNeedsFavicon(row) || row.faviconUrl) continue;
+        const url = row.url || row.urlPreview;
+        const tab = row.tabId != null ? tabs.find((t) => t.id === row.tabId) : null;
+        entries.push({ url, tabFaviconUrl: tab?.faviconUrl || null });
+    }
+    if (!entries.length) return;
+    await fc.loadMany(entries, 8, 3);
+    if (expectedGen !== _omniboxFaviconLoadGen || !isOmniboxDropdownVisible()) return;
+    attachOmniboxFaviconsSync(omniboxRows);
+    syncOmniboxOverlay();
+}
+
+function scheduleEnrichOmniboxFavicons() {
+    clearTimeout(_omniboxFaviconTimer);
+    const gen = _omniboxFaviconLoadGen;
+    _omniboxFaviconTimer = setTimeout(() => {
+        _omniboxFaviconTimer = null;
+        void enrichOmniboxFaviconsAsync(gen);
+    }, 150);
+}
+
+function resetOmniboxOverlayReady() {
+    _omniboxOverlayReady = null;
+}
+
+async function ensureOmniboxOverlay() {
+    if (!isOmniboxDropdownVisible()) return false;
+    if (!_omniboxOverlayReady) {
+        _omniboxOverlayReady = api.showOmniboxOverlay?.().catch(() => false);
+    }
+    return !!(await _omniboxOverlayReady);
+}
+
+function paintInlineOmniboxList() {
+    syncOmniboxOverlay();
 }
 
 function buildOmniboxOverlayPayload() {
-    const addr = addressBarContainer;
-    const r = addr ? addr.getBoundingClientRect() : { left: 12, width: 400, bottom: 95 };
-    const left = Math.max(0, Math.round(r.left));
-    const width = Math.max(120, Math.round(r.width));
-    /** Align dropdown under the address field; overlay view starts at tab top (see tab-manager TOOLBAR_HEIGHT + cred reserve). */
-    const tabSurfaceTop = 95 + getCredSaveBarReservePx();
-    const topGap = Math.max(4, Math.round(r.bottom) - tabSurfaceTop + 4);
-    const hint = getOmniboxHintText();
-    if (!omniboxRows.length) {
-        return {
-            left,
-            width,
-            topGap,
-            hint,
-            emptyText: isCommandMode()
-                ? 'No commands match'
-                : 'No suggestions — browse to build history',
-            items: [],
-        };
-    }
-    const items = omniboxRows.map((row, i) => ({
-        label: row.label,
-        sub: row.kind === 'cmd' ? (row.category || '') : (row.sub || ''),
-        shortcut: row.shortcut || '',
-        active: i === commandPaletteActiveIdx,
-    }));
-    return { left, width, topGap, hint, items };
+    const anchor = addressBarContainer?.getBoundingClientRect();
+    const left = anchor ? Math.round(anchor.left) : 0;
+    const width = anchor ? Math.max(120, Math.round(anchor.width)) : undefined;
+    const topGap = anchor
+        ? Math.max(2, Math.round(anchor.bottom - OMNIBOX_OVERLAY_TOP_PX + 2))
+        : 4;
+    return {
+        backdrop: false,
+        attached: true,
+        left,
+        width,
+        topGap,
+        hint: getOmniboxHintText(),
+        emptyText: isCommandMode() ? 'No commands match' : 'No suggestions yet',
+        items: omniboxRows.map((row, i) => ({
+            active: i === commandPaletteActiveIdx,
+            icon: row.icon || row.kind || 'url',
+            label: row.label,
+            match: row.match,
+            sub: row.kind === 'cmd' ? (row.category || '') : (row.sub || ''),
+            shortcut: row.shortcut || '',
+            urlPreview: row.urlPreview || '',
+            faviconUrl: row.faviconUrl || '',
+        })),
+    };
 }
 
-function renderOmniboxList() {
-    if (!commandPaletteEl) return;
+function syncOmniboxOverlay() {
+    if (!isOmniboxDropdownVisible()) return;
+    if (_omniboxSyncRaf) return;
+    _omniboxSyncRaf = requestAnimationFrame(() => {
+        _omniboxSyncRaf = null;
+        if (!isOmniboxDropdownVisible()) return;
+        try {
+            void api.updateOmniboxOverlay?.(buildOmniboxOverlayPayload());
+        } catch (_) { /* ignore */ }
+    });
+}
+
+function syncOmniboxHighlightOnly() {
+    syncOmniboxOverlay();
+}
+
+function _applyInlineAutocompleteGhost() {
+    if (!urlInput || isCommandMode()) return;
+    const q = String(urlInput.value || '');
+    const trimmed = q.trim();
+    if (!trimmed || _shouldSkipInlineGhost(trimmed)) return;
+    if (urlInput.selectionStart !== q.length) return;
+    const top = omniboxRows.find((r) => r && r.kind === 'url' && r.url && !r._isSearchUrl && !r._isExactTyped && r.sub === 'History');
+    if (!top || !top.url) return;
+    const low = trimmed.toLowerCase();
+    const ulow = String(top.url).toLowerCase();
+    if (!ulow.startsWith(low) || top.url.length <= trimmed.length) return;
+    const full = top.url;
+    urlInput.value = full;
+    urlInput.setSelectionRange(trimmed.length, full.length);
+}
+
+async function renderOmniboxList() {
+    const renderGen = ++_omniboxRenderGen;
     if (isCommandMode()) {
         const q = getCommandFilterQuery();
         const all = getCommandPaletteCommands();
         const cmds = all.filter((c) => _cupnetFuzzyMatch(q, `${c.label} ${c.category} ${c.keywords || ''}`));
         omniboxRows = cmds.map((c) => ({
             kind: 'cmd',
+            icon: 'cmd',
             label: c.label,
             category: c.category,
             shortcut: c.shortcut,
             run: c.run,
+            match: _computeMatchRange(c.label, q),
         }));
         commandPaletteActiveIdx = Math.min(commandPaletteActiveIdx, Math.max(0, omniboxRows.length - 1));
     } else {
-        const q = (urlInput?.value || '').trim().toLowerCase();
-        const quick = OMNIBOX_QUICK_LINKS.filter((x) => _cupnetFuzzyMatch(q, `${x.label} ${x.keywords}`))
-            .map((x) => ({ kind: 'url', label: x.label, sub: 'Quick link', url: x.url }));
-        const hosts = cachedTopHosts
-            .filter((h) => !q || _cupnetFuzzyMatch(q, h.host))
-            .map((h) => ({
+        const q = (urlInput?.value || '').trim();
+        const ql = q.toLowerCase();
+        let suggestions = [];
+        try {
+            suggestions = await api.getOmniboxSuggestions?.(q, 24);
+        } catch {
+            suggestions = [];
+        }
+        const quick = OMNIBOX_QUICK_LINKS.filter((x) => _cupnetFuzzyMatch(ql, `${x.label} ${x.keywords}`))
+            .map((x) => ({
                 kind: 'url',
-                label: h.host,
-                sub: `${h.count} in log`,
-                url: `https://${h.host}`,
+                icon: 'quick',
+                label: x.label,
+                sub: 'Quick link',
+                url: x.url,
+                match: _computeMatchRange(x.label, q),
+                urlPreview: x.url,
             }));
-        omniboxRows = [...quick, ...hosts].slice(0, 24);
+        const tabRows = [];
+        const active = tabs.find((t) => t.isActive);
+        const activeId = active?.id;
+        if (ql) {
+            for (const t of tabs) {
+                if (t.id === activeId) continue;
+                const tu = String(t.url || '');
+                const tt = String(t.title || '');
+                if (!tu.toLowerCase().includes(ql) && !tt.toLowerCase().includes(ql)) continue;
+                const label = tt || tu || 'Tab';
+                tabRows.push({
+                    kind: 'tab',
+                    icon: 'tab',
+                    label,
+                    sub: 'Switch to tab',
+                    tabId: t.id,
+                    url: tu,
+                    match: _computeMatchRange(label, q) || _computeMatchRange(tu, q),
+                    urlPreview: tu,
+                });
+                if (tabRows.length >= 4) break;
+            }
+        }
+        const hist = (Array.isArray(suggestions) ? suggestions : []).map((row) => {
+            const label = row.title ? String(row.title) : (row.host || row.url || '');
+            const urlPreview = row.url || '';
+            return {
+                kind: 'url',
+                icon: 'history',
+                label,
+                sub: 'History',
+                url: row.url,
+                match: _computeMatchRange(label, q) || _computeMatchRange(row.host || '', q) || _computeMatchRange(row.url || '', q),
+                urlPreview,
+            };
+        });
+        const searchRow = [];
+        if (ql && !_looksLikeUrlOrHost(q)) {
+            const seLabel = _searchEngineDisplayName();
+            const line = `Search ${seLabel} for "${q}"`;
+            searchRow.push({
+                kind: 'url',
+                icon: 'search',
+                label: line,
+                sub: 'Search',
+                url: q,
+                _isSearchUrl: true,
+                match: _computeMatchRange(line, q),
+                urlPreview: '',
+            });
+        }
+        const exactRow = _buildExactTypedUrlRow(q);
+        const typedRows = exactRow ? [exactRow] : [];
+        omniboxRows = [...typedRows, ...searchRow, ...tabRows, ...quick, ...hist].slice(0, 24);
         commandPaletteActiveIdx = Math.min(commandPaletteActiveIdx, Math.max(0, omniboxRows.length - 1));
     }
-    void api.updateOmniboxOverlay?.(buildOmniboxOverlayPayload());
+    if (renderGen !== _omniboxRenderGen) return;
+    attachOmniboxFaviconsSync(omniboxRows);
+    await ensureOmniboxOverlay();
+    if (renderGen !== _omniboxRenderGen) return;
+    paintInlineOmniboxList();
+    if (!isCommandMode()) _applyInlineAutocompleteGhost();
+    scheduleEnrichOmniboxFavicons();
+}
+
+function scheduleRenderOmniboxList(immediate = false) {
+    if (immediate) {
+        clearTimeout(_omniboxRenderTimer);
+        _omniboxRenderTimer = null;
+        void renderOmniboxList();
+        return;
+    }
+    clearTimeout(_omniboxRenderTimer);
+    _omniboxRenderTimer = setTimeout(() => {
+        _omniboxRenderTimer = null;
+        void renderOmniboxList();
+    }, 60);
 }
 
 function runOmniboxIndex(idx) {
@@ -2026,6 +2649,7 @@ function runOmniboxIndex(idx) {
     hideCommandPalette();
     try {
         if (row.kind === 'cmd') row.run();
+        else if (row.kind === 'tab') void api.switchTab?.(row.tabId);
         else if (row.kind === 'url') api.navigateTo(row.url);
     } catch (e) {
         console.error('[Omnibox]', e);
@@ -2033,80 +2657,93 @@ function runOmniboxIndex(idx) {
     }
 }
 
-async function showOmniboxOverlayShell() {
-    if (!commandPaletteEl || !urlInput) return;
-    commandPaletteEl.classList.remove('hidden');
-    commandPaletteEl.setAttribute('aria-hidden', 'false');
-    urlOmniboxDropdown?.classList.add('hidden');
-    urlOmniboxDropdown?.setAttribute('aria-hidden', 'true');
+function showOmniboxShell() {
+    if (!urlInput || !urlOmniboxDropdown) return;
+    urlOmniboxDropdown.classList.add('hidden');
+    urlOmniboxDropdown.setAttribute('aria-hidden', 'true');
     addressBarContainer?.classList.add('omnibox-open');
-    urlInput.placeholder = URL_INPUT_PLACEHOLDER_OMNIBOX;
     urlInput.setAttribute('aria-expanded', 'true');
-    try {
-        await api.showOmniboxOverlay?.();
-    } catch (_) { /* ignore */ }
+    if (!_omniboxOverlayReady) {
+        _omniboxOverlayReady = api.showOmniboxOverlay?.().catch(() => false);
+    }
+    void _omniboxOverlayReady.then((ok) => {
+        if (ok && isOmniboxDropdownVisible()) syncOmniboxOverlay();
+    });
 }
 
 /** Focus address bar + `>` + command list (Cmd/Ctrl+K). */
 async function openCommandOmniboxHotkey() {
-    if (!commandPaletteEl || !urlInput) return;
+    if (!urlInput) return;
     if (isOmniboxDropdownVisible() && isCommandMode() && String(urlInput.value || '').trim() === '>') {
         hideCommandPalette();
         return;
     }
-    await showOmniboxOverlayShell();
+    showOmniboxShell();
     urlInput.value = '>';
     commandPaletteActiveIdx = 0;
-    renderOmniboxList();
-    setTimeout(() => {
-        urlInput.focus();
-        urlInput.setSelectionRange(1, 1);
-    }, 0);
+    _omniboxHighlightMoved = false;
+    void scheduleRenderOmniboxList(true);
+    urlInput.focus();
+    urlInput.setSelectionRange(1, 1);
 }
 
 /** Suggestions for normal URL mode (focus / Ctrl+L). */
-async function openNavOmniboxOnFocus() {
-    if (!commandPaletteEl || !urlInput || isCommandMode()) return;
-    await showOmniboxOverlayShell();
+function openNavOmniboxOnFocus() {
+    if (!urlInput || isCommandMode()) return;
+    showOmniboxShell();
     commandPaletteActiveIdx = 0;
-    renderOmniboxList();
-    void refreshTopHostsIfStale().then(() => {
-        if (!isOmniboxDropdownVisible() || isCommandMode()) return;
-        renderOmniboxList();
-    });
+    _omniboxHighlightMoved = false;
+    void scheduleRenderOmniboxList(true);
 }
 
 async function onUrlInputOmnibox() {
+    _omniboxHighlightMoved = false;
     if (isCommandMode()) {
-        if (!isOmniboxDropdownVisible()) await showOmniboxOverlayShell();
+        if (!isOmniboxDropdownVisible()) showOmniboxShell();
         commandPaletteActiveIdx = 0;
-        renderOmniboxList();
+        scheduleRenderOmniboxList();
         return;
     }
-    if (isOmniboxDropdownVisible()) {
-        commandPaletteActiveIdx = 0;
-        renderOmniboxList();
-    }
+    if (!isOmniboxDropdownVisible()) return;
+    commandPaletteActiveIdx = 0;
+    scheduleRenderOmniboxList();
 }
 
 function hideCommandPalette() {
-    if (!commandPaletteEl) return;
+    resetOmniboxOverlayReady();
+    _omniboxFaviconLoadGen++;
+    _omniboxRenderGen++;
+    clearTimeout(_omniboxRenderTimer);
+    clearTimeout(_omniboxFaviconTimer);
+    _omniboxRenderTimer = null;
+    _omniboxFaviconTimer = null;
+    if (_omniboxSyncRaf) {
+        cancelAnimationFrame(_omniboxSyncRaf);
+        _omniboxSyncRaf = null;
+    }
     try {
         void api.hideOmniboxOverlay?.();
     } catch (_) { /* ignore */ }
-    commandPaletteEl.classList.add('hidden');
-    commandPaletteEl.setAttribute('aria-hidden', 'true');
     urlOmniboxDropdown?.classList.add('hidden');
     urlOmniboxDropdown?.setAttribute('aria-hidden', 'true');
     addressBarContainer?.classList.remove('omnibox-open');
     if (urlInput) {
         urlInput.placeholder = URL_INPUT_PLACEHOLDER_DEFAULT;
         urlInput.setAttribute('aria-expanded', 'false');
-        const active = tabs.find((t) => t.isActive);
-        if (active) urlInput.value = _normalizeToolbarUrl(active.url || '');
+        if (!_urlInputDirty) {
+            const active = tabs.find((t) => t.isActive);
+            if (active) {
+                const v = _normalizeToolbarUrl(active.url || '');
+                urlInput.value = v;
+                _committedToolbarUrl = v;
+                _syncUrlDisplayAndSiteInfo(v);
+            }
+        }
+        if (urlClearBtn) urlClearBtn.hidden = !String(urlInput.value || '').trim();
     }
     omniboxRows = [];
-    void applyChromeToolbarReserve();
+    _omniboxHighlightMoved = false;
+    void applyChromeLayoutReserve();
 }
 
 _focusUrlBarOmniboxExtra = () => {
@@ -2114,18 +2751,81 @@ _focusUrlBarOmniboxExtra = () => {
 };
 
 urlInput.addEventListener('input', () => {
+    _urlInputDirty = true;
+    void onUrlInputOmnibox();
+    if (urlClearBtn) urlClearBtn.hidden = !String(urlInput.value || '').trim();
+});
+
+urlInputStack?.addEventListener('mousedown', (e) => {
+    if (e.target === urlClearBtn || urlClearBtn?.contains(e.target)) return;
+    if (document.activeElement !== urlInput) {
+        e.preventDefault();
+        urlInput.focus();
+        urlInput.select();
+    }
+});
+
+urlInput.addEventListener('mousedown', (e) => {
+    if (document.activeElement !== urlInput) {
+        e.preventDefault();
+        urlInput.focus();
+        urlInput.select();
+    }
+});
+
+urlClearBtn?.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    urlInput.value = '';
+    _urlInputDirty = true;
+    urlInput.focus();
+    if (urlClearBtn) urlClearBtn.hidden = true;
     void onUrlInputOmnibox();
 });
 
+siteInfoBtn?.addEventListener('dragstart', (e) => {
+    const active = tabs.find((t) => t.isActive);
+    const u = active?.url ? String(active.url) : String(urlInput.value || '').trim();
+    if (!u) {
+        e.preventDefault();
+        return;
+    }
+    try {
+        e.dataTransfer.setData('text/uri-list', u);
+        e.dataTransfer.setData('text/plain', u);
+    } catch (_) { /* ignore */ }
+});
+
+siteInfoBtn?.addEventListener('click', (ev) => {
+    ev.preventDefault();
+    const active = tabs.find((t) => t.isActive);
+    if (!active || !siteInfoBtn) return;
+    const r = siteInfoBtn.getBoundingClientRect();
+    void api.toggleSiteInfoPopover?.(active.id, { x: r.left, y: r.top, w: r.width, h: r.height });
+});
+
 urlInput.addEventListener('focus', () => {
-    void (async () => {
-        if (isCommandMode()) {
-            if (!isOmniboxDropdownVisible()) await showOmniboxOverlayShell();
-            renderOmniboxList();
-            return;
+    if (urlClearBtn) urlClearBtn.hidden = !String(urlInput.value || '').trim();
+    if (isCommandMode()) {
+        if (!isOmniboxDropdownVisible()) showOmniboxShell();
+        void scheduleRenderOmniboxList(true);
+        return;
+    }
+    openNavOmniboxOnFocus();
+});
+
+urlInput.addEventListener('blur', () => {
+    setTimeout(() => {
+        if (addressBarContainer && !addressBarContainer.contains(document.activeElement)) {
+            hideCommandPalette();
         }
-        await openNavOmniboxOnFocus();
-    })();
+    }, 0);
+    if (!_urlInputDirty) return;
+    if (_normalizeToolbarUrl(urlInput.value) === _committedToolbarUrl) {
+        _urlInputDirty = false;
+        return;
+    }
+    _setToolbarUrl(_committedToolbarUrl, { forceInput: true });
 });
 
 api.onToggleCommandPalette?.(() => {
@@ -2140,33 +2840,36 @@ api.onOmniboxOverlayDismiss?.(() => {
     hideCommandPalette();
 });
 api.onForceCloseOmnibox?.(() => {
-    if (!commandPaletteEl || commandPaletteEl.classList.contains('hidden')) return;
+    if (!isOmniboxDropdownVisible()) return;
     hideCommandPalette();
 });
 
 /** Capture phase: arrows / Enter when omnibox is open (list is under address bar). */
 function onCommandPaletteGlobalKeydown(e) {
-    if (!commandPaletteEl || commandPaletteEl.classList.contains('hidden')) return;
+    if (!isOmniboxDropdownVisible()) return;
     if (e.key === 'ArrowDown') {
         e.preventDefault();
         e.stopPropagation();
         if (omniboxRows.length) {
+            _omniboxHighlightMoved = true;
             commandPaletteActiveIdx = Math.min(omniboxRows.length - 1, commandPaletteActiveIdx + 1);
-            renderOmniboxList();
+            syncOmniboxHighlightOnly();
         }
         return;
     }
     if (e.key === 'ArrowUp') {
         e.preventDefault();
         e.stopPropagation();
+        _omniboxHighlightMoved = true;
         commandPaletteActiveIdx = Math.max(0, commandPaletteActiveIdx - 1);
-        renderOmniboxList();
+        syncOmniboxHighlightOnly();
         return;
     }
     if (e.key === 'Enter') {
         e.preventDefault();
         e.stopPropagation();
         const raw = (urlInput?.value || '').trim();
+        const modEnter = (e.metaKey || e.ctrlKey || e.altKey) && !e.shiftKey;
         if (isCommandMode()) {
             if (e.shiftKey) {
                 const rest = raw.replace(/^>\s*/, '').trim();
@@ -2177,29 +2880,54 @@ function onCommandPaletteGlobalKeydown(e) {
             if (omniboxRows.length) runOmniboxIndex(commandPaletteActiveIdx);
             return;
         }
+        if (modEnter && raw) {
+            hideCommandPalette();
+            void (async () => {
+                await api.newTab();
+                api.navigateTo(raw);
+            })();
+            return;
+        }
         if (e.shiftKey) {
             if (raw) api.navigateTo(raw);
             hideCommandPalette();
             return;
         }
-        if (omniboxRows.length) {
+        if (_omniboxHighlightMoved && omniboxRows.length) {
             runOmniboxIndex(commandPaletteActiveIdx);
             return;
         }
-        if (raw) api.navigateTo(raw);
+        if (raw) {
+            api.navigateTo(raw);
+            hideCommandPalette();
+            return;
+        }
+        if (omniboxRows.length) runOmniboxIndex(commandPaletteActiveIdx);
         hideCommandPalette();
     }
 }
 document.addEventListener('keydown', onCommandPaletteGlobalKeydown, true);
 
-commandPaletteBackdrop?.addEventListener('click', hideCommandPalette);
+omniboxListEl?.addEventListener('mousedown', (e) => {
+    const item = e.target.closest('.command-palette-item');
+    if (!item) return;
+    e.preventDefault();
+    const idx = Number(item.dataset.idx);
+    if (Number.isFinite(idx)) runOmniboxIndex(idx);
+});
+
+document.addEventListener('mousedown', (e) => {
+    if (!isOmniboxDropdownVisible()) return;
+    if (addressBarContainer?.contains(e.target)) return;
+    hideCommandPalette();
+}, true);
 
 let _omniboxResizeTimer = null;
 window.addEventListener('resize', () => {
     if (!isOmniboxDropdownVisible()) return;
     clearTimeout(_omniboxResizeTimer);
     _omniboxResizeTimer = setTimeout(() => {
-        void api.updateOmniboxOverlay?.(buildOmniboxOverlayPayload());
+        syncOmniboxOverlay();
     }, 80);
 });
 
@@ -2210,8 +2938,37 @@ document.addEventListener('keydown', (e) => {
         api.openSettingsTab?.();
         return;
     }
-    if (e.key === 'Escape' && commandPaletteEl && !commandPaletteEl.classList.contains('hidden')) {
+    if (e.key === 'Escape' && isOmniboxDropdownVisible()) {
+        if (_clearInlineGhostSelection()) {
+            e.preventDefault();
+            _omniboxHighlightMoved = false;
+            commandPaletteActiveIdx = 0;
+            void onUrlInputOmnibox();
+            return;
+        }
         e.preventDefault();
         hideCommandPalette();
+        return;
+    }
+    if (e.key === 'Escape' && _toolbarLoading && !isOmniboxDropdownVisible()) {
+        e.preventDefault();
+        try { api.navStop?.(); } catch (_) { /* ignore */ }
     }
 }, true);
+
+api.onSessionProfileLoaded?.((result) => {
+    const parts = [`Session "${result?.name || 'loaded'}"`];
+    if (result?.navigationStarted) parts.push('navigation started');
+    if (result?.url) parts.push(result.url.replace(/^https?:\/\//, '').slice(0, 48));
+    if (result?.cookiesOk) parts.push(`${result.cookiesOk} cookie(s)`);
+    if (result?.cookiesFail) parts.push(`${result.cookiesFail} failed`);
+    if (typeof showToast === 'function') {
+        showToast(parts.join(' · '), { type: 'success', duration: 5000 });
+    }
+});
+
+api.onSessionProfileLoadFailed?.((result) => {
+    if (typeof showToast === 'function') {
+        showToast(result?.error || 'Session load failed', { type: 'error', duration: 8000 });
+    }
+});

@@ -8,7 +8,7 @@ delete process.env.CUPNET_DISABLE_UA_SANITIZE;
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { sanitizeUserAgentChromeOnly, applyOutboundUserAgentToMitmHeaders } = require('../user-agent-utils');
+const { sanitizeUserAgentChromeOnly, applyOutboundUserAgentToMitmHeaders, resolveRendererUserAgent } = require('../user-agent-utils');
 
 /** Типичный UA Electron с брендом приложения (как до санитайза). */
 const SAMPLE_ELECTRON_UA =
@@ -59,6 +59,12 @@ test('sanitizeUserAgentChromeOnly: только Electron без CupNet (на в�
     const out = sanitizeUserAgentChromeOnly(raw);
     assert.doesNotMatch(out, /\bElectron\//i);
     assert.match(out, /Chrome\/120\.0\.0\.0/);
+});
+
+test('resolveRendererUserAgent: strips CupNet/Electron from explicit raw', () => {
+    const out = resolveRendererUserAgent(SAMPLE_ELECTRON_UA);
+    assertNoLeak(out);
+    assert.match(out, CHROME_LIKE_UA);
 });
 
 test('applyOutboundUserAgentToMitmHeaders: правит headers и orderedHeaders', () => {

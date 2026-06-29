@@ -3,80 +3,17 @@
 const { insertCupnetTrafficSnapshotWithGeo } = require('../../services/cupnet-network-meta-log');
 const { confirmOpenAnotherTab } = require('../../services/tab-open-confirm');
 const { isDevtoolsHostileWebContents } = require('../../services/devtools-hostile-sites');
-
-// ── Managed DevTools (real BrowserWindow + setDevToolsWebContents) ───────────
-// Track by tab.id (Map), not WeakMap(webContents): the same logical tab must
-// always resolve to one DevTools BrowserWindow; WeakMap lookups were missing on
-// repeat clicks → duplicate white windows.
-const _dtByTabId = new Map();
-const _dtDestroyGuards = new Set();
-
-function _focusDevToolsWindow(devWin) {
-    if (!devWin || devWin.isDestroyed()) return;
-    if (devWin.isMinimized()) devWin.restore();
-    devWin.show();
-    devWin.focus();
-}
-
-function _openManagedDevTools(wc, tabManager, tab) {
-    const { BrowserWindow } = require('electron');
-    const tabId = tab.id;
-    const existing = _dtByTabId.get(tabId);
-    if (existing && !existing.isDestroyed()) {
-        _focusDevToolsWindow(existing);
-        return true;
-    }
-    if (existing) _dtByTabId.delete(tabId);
-
-    // getAllTabs() returns MapIterator (tabs.values()), not Array — no findIndex.
-    const tabList = Array.from(tabManager.getAllTabs());
-    const tabNum = Math.max(1, tabList.findIndex((t) => t.id === tab.id) + 1);
-    const winTitle = `devtools #${tabNum}`;
-
-    const devWin = new BrowserWindow({
-        title: winTitle,
-        show: false,
-        width: 960,
-        height: 700,
-        webPreferences: { nodeIntegration: false, contextIsolation: true },
-    });
-
-    _dtByTabId.set(tabId, devWin);
-
-    devWin.on('closed', () => {
-        _dtByTabId.delete(tabId);
-        if (!wc.isDestroyed() && wc.isDevToolsOpened()) {
-            try { wc.closeDevTools(); } catch (_) {}
-        }
-    });
-
-    // Register devtools-closed ONLY after a real open — avoids spurious close during init.
-    wc.once('devtools-opened', () => {
-        wc.once('devtools-closed', () => {
-            _dtByTabId.delete(tabId);
-            if (devWin && !devWin.isDestroyed()) {
-                try { devWin.close(); } catch (_) {}
-            }
-        });
-    });
-
-    if (!_dtDestroyGuards.has(tabId)) {
-        _dtDestroyGuards.add(tabId);
-        wc.once('destroyed', () => {
-            _dtDestroyGuards.delete(tabId);
-            const w = _dtByTabId.get(tabId);
-            _dtByTabId.delete(tabId);
-            if (w && !w.isDestroyed()) try { w.close(); } catch (_) {}
-        });
-    }
-
-    wc.setDevToolsWebContents(devWin.webContents);
-    wc.openDevTools({ mode: 'detach' });
-    try { devWin.setTitle(winTitle); } catch (_) {}
-    devWin.show();
-    devWin.focus();
-    return true;
-}
+const {
+    openManagedDevTools,
+    getManagedDevToolsWindowIds,
+    getManagedDevToolsSwitcherEntries,
+} = require('../../services/managed-devtools');
+const { resolveProxyTemplateFromDbRow } = require('../../services/proxy-profile-resolve');
+const {
+    buildCookieRequestUrl,
+    normalizeRemoveCookieArgs,
+    removeSessionCookiePrecise,
+} = require('../../services/session-cookie-utils.js');
 
 /**
  * Cookies, DNS overrides, isolate/direct tabs, DevTools.
@@ -84,16 +21,7 @@ function _openManagedDevTools(wc, tabManager, tab) {
  */
 function registerCookiesDnsIpc(ctx) {
     function getResolvedProxyUpstreamFromProfile(profile, ephemeralVars) {
-        if (!profile) return null;
-        let template = null;
-        if (profile.url_encrypted && ctx.safeStorage?.isEncryptionAvailable()) {
-            try { template = ctx.safeStorage.decryptString(profile.url_encrypted); } catch {}
-        }
-        if (!template) return null;
-        let savedVars = {};
-        try { savedVars = profile.variables ? JSON.parse(profile.variables) : {}; } catch {}
-        const mergedVars = { ...savedVars, ...(ephemeralVars && typeof ephemeralVars === 'object' ? ephemeralVars : {}) };
-        return ctx.parseProxyTemplate(template, mergedVars);
+        return resolveProxyTemplateFromDbRow(ctx, profile, ephemeralVars);
     }
 
     async function applyMitmAndFingerprintForTabProxy(tid, proxyProfileId, ephemeralVars) {
@@ -134,11 +62,17 @@ function registerCookiesDnsIpc(ctx) {
         } catch (e) { return { success: false, error: e.message }; }
     });
 
-    ctx.ipcMain.handle('remove-cookie', async (_, tabId, url, name) => {
+    ctx.ipcMain.handle('remove-cookie', async (_, tabId, cookieOrUrl, name) => {
         const tab = tabId ? ctx.tabManager.getTab(tabId) : ctx.tabManager.getActiveTab();
-        if (!tab) return false;
-        await tab.tabSession.cookies.remove(url, name);
-        return true;
+        if (!tab) return { success: false, error: 'Tab not found' };
+        try {
+            const cookie = normalizeRemoveCookieArgs(cookieOrUrl, name);
+            await removeSessionCookiePrecise(tab.tabSession, cookie);
+            await tab.tabSession.cookies.flushStore();
+            return { success: true };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
     });
 
     ctx.ipcMain.handle('clear-cookies', async (_, tabId, domain) => {
@@ -148,8 +82,11 @@ function registerCookiesDnsIpc(ctx) {
             const filter = domain ? { domain } : {};
             const cookies = await tab.tabSession.cookies.get(filter);
             for (const c of cookies) {
-                const url = `${c.secure ? 'https' : 'http'}://${c.domain.replace(/^\./, '')}${c.path || '/'}`;
-                try { await tab.tabSession.cookies.remove(url, c.name); } catch (e) { ctx.sysLog('warn', 'tabs', 'cookie remove failed: ' + (e?.message || e)); }
+                try {
+                    await removeSessionCookiePrecise(tab.tabSession, { ...c, url: buildCookieRequestUrl(c) });
+                } catch (e) {
+                    ctx.sysLog('warn', 'tabs', 'cookie remove failed: ' + (e?.message || e));
+                }
             }
             await tab.tabSession.cookies.flushStore();
             return { success: true, count: cookies.length };
@@ -165,7 +102,7 @@ function registerCookiesDnsIpc(ctx) {
             const cookies = await fromTab.tabSession.cookies.get(filter);
             let count = 0;
             for (const c of cookies) {
-                const url = `${c.secure ? 'https' : 'http'}://${c.domain.replace(/^\./, '')}${c.path || '/'}`;
+                const url = buildCookieRequestUrl(c);
                 try { await toTab.tabSession.cookies.set({ ...c, url }); count++; } catch (e) { ctx.sysLog('warn', 'tabs', 'cookie share/set failed: ' + (e?.message || e)); }
             }
             await toTab.tabSession.cookies.flushStore();
@@ -191,15 +128,17 @@ function registerCookiesDnsIpc(ctx) {
 
         if (!ctx.isValidDnsHost(host)) return { success: false, error: 'Invalid host' };
 
-        const mitm_inject_cors = payload?.mitm_inject_cors === true;
+        let mitm_inject_cors = false;
+        if (id && ctx.db) {
+            try {
+                const cur = ctx.db.getDnsOverrides().find((r) => Number(r.id) === id);
+                if (cur) mitm_inject_cors = !!cur.mitm_inject_cors;
+            } catch (_) { /* ignore */ }
+        }
         const isWildcard = host.startsWith('*.');
         if (isWildcard && ip) return { success: false, error: 'Wildcard host (*.…) cannot be combined with IPv4' };
-        if (isWildcard && !mitm_inject_cors) return { success: false, error: 'Wildcard host requires MITM CORS' };
-        if (mitm_inject_cors) {
-            if (ip && !ctx.isValidIpv4(ip)) return { success: false, error: 'Invalid IPv4 address' };
-        } else {
-            if (!ctx.isValidIpv4(ip)) return { success: false, error: 'Invalid IPv4 address' };
-        }
+        const needIpv4 = !mitm_inject_cors || !!ip;
+        if (needIpv4 && !ctx.isValidIpv4(ip)) return { success: false, error: 'Invalid IPv4 address' };
         const rewrite_host = String(payload?.rewrite_host ?? '').trim();
         try {
             const savedId = await ctx.db.saveDnsOverrideAsync({ id, host, ip, enabled, mitm_inject_cors, rewrite_host });
@@ -416,7 +355,6 @@ function registerCookiesDnsIpc(ctx) {
         const tab = ctx.tabManager?.getActiveTab();
         if (!tab || tab.view.webContents.isDestroyed()) return false;
         const wc = tab.view.webContents;
-        const tabId = tab.id;
         try { app.focus({ steal: true }); } catch (_) {}
         if (isDevtoolsHostileWebContents(wc)) {
             if (wc.isDevToolsOpened()) {
@@ -425,75 +363,8 @@ function registerCookiesDnsIpc(ctx) {
             return false;
         }
 
-        // Prefer stable tab id — same as _openManagedDevTools guard (no duplicate windows).
-        const managed = _dtByTabId.get(tabId);
-        if (managed && !managed.isDestroyed()) {
-            _focusDevToolsWindow(managed);
-            return true;
-        }
-
-        if (wc.isDevToolsOpened()) {
-            await new Promise((resolve) => {
-                let settled = false;
-                const finish = () => {
-                    if (settled) return;
-                    settled = true;
-                    resolve();
-                };
-                wc.once('devtools-closed', finish);
-                try { wc.closeDevTools(); } catch (_) { finish(); }
-                setTimeout(finish, 400);
-            });
-        }
-
-        if (wc.isDestroyed()) return false;
-        return _openManagedDevTools(wc, ctx.tabManager, tab);
+        return openManagedDevTools(wc, ctx.tabManager, tab);
     });
-}
-
-/** For window switcher: BrowserWindow ids of managed DevTools (detach). */
-function getManagedDevToolsWindowIds() {
-    const ids = [];
-    for (const [, bw] of _dtByTabId) {
-        if (bw && !bw.isDestroyed()) {
-            try { ids.push(bw.id); } catch (_) { /* ignore */ }
-        }
-    }
-    return ids;
-}
-
-/**
- * Rich metadata for DevTools tiles: tab index (#N) and inspected page title (from webContents).
- * @param {{ tabManager?: { getAllTabs: () => Iterable<unknown>; getTab: (id: unknown) => unknown } }} ctx
- */
-function getManagedDevToolsSwitcherEntries(ctx) {
-    const out = [];
-    for (const [tabId, bw] of _dtByTabId) {
-        if (!bw || bw.isDestroyed()) continue;
-        let tabNum = 1;
-        let tabTitle = '';
-        try {
-            if (ctx && ctx.tabManager) {
-                const tabList = Array.from(ctx.tabManager.getAllTabs());
-                const idx = tabList.findIndex((t) => t.id === tabId);
-                tabNum = idx >= 0 ? idx + 1 : 1;
-                const tab = ctx.tabManager.getTab(tabId);
-                if (tab && tab.view && tab.view.webContents && !tab.view.webContents.isDestroyed()) {
-                    tabTitle = tab.view.webContents.getTitle() || '';
-                }
-            }
-        } catch (_) { /* ignore */ }
-        try {
-            out.push({
-                id: bw.id,
-                title: `DevTools #${tabNum}`,
-                type: 'devtools',
-                devtoolsTabNum: tabNum,
-                tabTitle: tabTitle || undefined,
-            });
-        } catch (_) { /* ignore */ }
-    }
-    return out;
 }
 
 module.exports = {

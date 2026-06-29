@@ -33,6 +33,7 @@ export default function fr(kbdRow) {
     <a href="#proxy">3. Gestionnaire de proxies</a>
     <a href="#fingerprint">4. Empreinte &amp; TLS</a>
     <a href="#toolbar">5. Barre d'outils</a>
+    <a href="#omnibox">Barre d'adresse (omnibox)</a>
     <a href="#hotkeys">6. Raccourcis</a>
     <a href="#logs">7. Journaux · Comparer</a>
     <a href="#editor">8. Éditeur de requêtes</a>
@@ -119,7 +120,7 @@ export default function fr(kbdRow) {
     <h2>5) Barre d'outils</h2>
     ${kbdRow('← → ↻ ⌂', 'Précédent / Suivant / Actualiser / Accueil (page de démarrage)')}
     ${kbdRow('Pastille proxy', 'Direct ou nom de profil + détail. Ouvre le gestionnaire. Badge de mode si MITM actif.')}
-    ${kbdRow('Barre d\'adresse', 'URL ou recherche — Entrée')}
+    ${kbdRow('Barre d\'adresse', 'Omnibox façon Chrome — voir <a href="#omnibox">Barre d\'adresse</a>')}
     <hr class="g-hr" style="margin:10px 0">
     ${kbdRow('<b>REC · Log #N</b>', "REC active/désactive l'écriture DB. Log ouvre le visualiseur ; badge = session + nombre.")}
     ${kbdRow('<b>DevTools</b>', "Outils pour l'onglet actif. Aussi <kbd>F12</kbd>.")}
@@ -130,6 +131,19 @@ export default function fr(kbdRow) {
     ${kbdRow('<b>Analyzer</b>', 'Analyseur — formulaires, captcha, endpoints')}
     ${kbdRow('<b>Console</b>', 'Console système stdout/stderr')}
     ${kbdRow('<b>Settings</b>', 'Fenêtre Paramètres (Général / Tracking / Périphériques / Performance)')}
+</div>
+
+<div id="omnibox" class="g-card">
+    <h2>Barre d'adresse (omnibox)</h2>
+    <p>Comportement proche de Chrome : <b>historique classé (frecency)</b>, <b>autocomplétion inline</b> sur le meilleur historique, suggestions par catégories (recherche, changer d'onglet, liens rapides, historique) et liste dans un overlay séparé.</p>
+    ${kbdRow('<kbd>Ctrl L</kbd> (⌘L)', "Focus + suggestions")}
+    ${kbdRow('<kbd>Ctrl K</kbd> (⌘K)', "Palette de commandes — préfixe <code>&gt;</code> pour les commandes intégrées")}
+    ${kbdRow('<kbd>Tab</kbd> (inline)', "Si la fin d'URL est sélectionnée en « fantôme », Tab place le curseur à la fin (accepter).")}
+    ${kbdRow('<kbd>Ctrl Entrée</kbd> / <kbd>⌘ Entrée</kbd> / <kbd>Alt Entrée</kbd>', 'Ouvrir la saisie dans un <b>nouvel onglet</b> (overlay ouvert ou non).')}
+    ${kbdRow('Icône du site', 'Cadenas / globe ; clic : popover TLS / connexion, copier URL, effacer cookies du host, journal réseau. Glisser = URL.')}
+    ${kbdRow('× / Stop / Esc', "Vider le champ. Recharger devient Stop pendant le chargement ; Esc arrête si l'overlay est fermé.")}
+    ${kbdRow('Moteur de recherche', 'Paramètres → Search engine : DuckDuckGo, Google, Brave, Yandex ou URL perso avec <code>{q}</code>.')}
+    <div class="g-tip">La page interne <code>cupnet://newtab</code> affiche une adresse vide jusqu'à la saisie.</div>
 </div>
 
 <div id="hotkeys" class="g-card">

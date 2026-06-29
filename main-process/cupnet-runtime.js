@@ -41,11 +41,13 @@ const getAssetPath = (name) => path.join(_cupnetRoot, name);
 // ─── Pure utilities (no Electron deps — also used by tests) ──────────────────
 const {
     resolveNavigationUrl,
+    resolveNavigationUrlWithBase,
     parseProxyTemplate,
     extractTemplateVars,
     formatBytes,
     shouldFilterUrl: _shouldFilterUrl,
     SEARCH_ENGINE,
+    getSearchEngineUrlFromSettings,
 } = require('../utils');
 const bundleUtils = require('../bundle-utils');
 const diffUtils = require('../diff-utils');
@@ -147,6 +149,8 @@ const broadcastDnsRuleMatched = ipcBatch.broadcastDnsRuleMatched;
 const broadcastTlsProfileChanged = ipcBatch.broadcastTlsProfileChanged;
 
 let loggingModalWindow         = null;
+let sessionProfileModalWindow  = null;
+let siteInfoPopoverWindow      = null;
 /** Основной Request Editor (тулбар, Log → «в том же окне»). */
 let requestEditorWindow        = null;
 /** Доп. окна Request Editor («+ New window»). */
@@ -427,7 +431,7 @@ const fingerprintSvc = createFingerprintService({
     getTabManager: () => tabManager,
     getDb: () => db,
 });
-const { applyFingerprintToAllTabs, applyFingerprintFromProfile, resetFingerprintOnWebContents } = fingerprintSvc;
+const { applyFingerprintToAllTabs, applyFingerprintFromProfile, applyFingerprintToWebContents, resetFingerprintOnWebContents } = fingerprintSvc;
 
 const screenshotSvc = createScreenshotService({
     path,
@@ -478,6 +482,9 @@ function getNewTabUrl() {
     return getInternalPageUrl('new-tab');
 }
 
+function getSearchEngineUrl() {
+    return getSearchEngineUrlFromSettings(settingsStore.getCached() || loadSettings());
+}
 
 // Deduplicate MITM logs (used by proxy-service MITM callback)
 const _seenRequestIds = new Set();
@@ -634,6 +641,8 @@ Object.defineProperties(dSub, {
     credentialsWindow: rwWin(() => credentialsWindow, (v) => { credentialsWindow = v; }),
     ivacScoutWindow: rwWin(() => ivacScoutWindow, (v) => { ivacScoutWindow = v; }),
     loggingModalWindow: rwWin(() => loggingModalWindow, (v) => { loggingModalWindow = v; }),
+    sessionProfileModalWindow: rwWin(() => sessionProfileModalWindow, (v) => { sessionProfileModalWindow = v; }),
+    siteInfoPopoverWindow: rwWin(() => siteInfoPopoverWindow, (v) => { siteInfoPopoverWindow = v; }),
     requestEditorWindow: rwWin(() => requestEditorWindow, (v) => { requestEditorWindow = v; }),
     onboardingWindow: rwWin(() => onboardingWindow, (v) => { onboardingWindow = v; }),
 });
@@ -649,6 +658,7 @@ Object.assign(dMain, {
     startupMetrics,
     setupNetworkLogging,
     getNewTabUrl,
+    getSearchEngineUrl,
     startLogStatusUpdater,
     applyTrafficFilters,
     getTrackingSettings,
@@ -709,6 +719,8 @@ const {
     createCookieManagerWindow,
     createDnsManagerWindow,
     createLoggingModalWindow,
+    createSessionProfileModalWindow,
+    createSiteInfoPopoverWindow,
     createProxyManagerWindow,
     createRulesWindow,
     openBreakpointWindow,
@@ -761,7 +773,7 @@ app.whenReady().then(async () => {
     if (isUaSanitizeDisabled()) {
         console.log('[main] UA sanitize: OFF (CUPNET_DISABLE_UA_SANITIZE=1) — MITM leaves outbound User-Agent unchanged');
     } else {
-        console.log('[main] Outbound User-Agent: CupNet/Electron stripped in MITM (navigator.userAgent may still show Electron)');
+        console.log('[main] User-Agent: CupNet/Electron stripped in MITM and tab sessions (navigator.userAgent)');
     }
 
     // Load only the critical modules synchronously
@@ -867,6 +879,12 @@ app.whenReady().then(async () => {
         proxy.setBrowser(startupProfile);
         syncDnsOverridesToMitm();
         _syncDnsOverrideHostsSet();
+        try {
+            const _sCors = loadSettings();
+            if (proxy && typeof proxy.setGlobalCorsEnabled === 'function') {
+                proxy.setGlobalCorsEnabled(!!_sCors.corsBypassEnabled);
+            }
+        } catch (_) { /* ignore */ }
         console.log(`[main] MITM startup profile: ${startupProfile}`);
         mitmReady = true;
         startupMetrics.mitmReadyTs = Date.now();
@@ -987,6 +1005,7 @@ app.whenReady().then(async () => {
             case 'applyEffectiveTrafficMode': return applyEffectiveTrafficMode;
             case 'applyFingerprintToAllTabs': return applyFingerprintToAllTabs;
             case 'applyFingerprintFromProfile': return applyFingerprintFromProfile;
+            case 'applyFingerprintToWebContents': return applyFingerprintToWebContents;
             case 'applyTrafficFilters': return applyTrafficFilters;
             case 'broadcastInterceptRuleMatched': return broadcastInterceptRuleMatched;
             case 'broadcastTlsProfileChanged': return broadcastTlsProfileChanged;
@@ -1011,6 +1030,8 @@ app.whenReady().then(async () => {
             case 'createIvacScoutWindow': return createIvacScoutWindow;
             case 'createLogViewerWindow': return createLogViewerWindow;
             case 'createLoggingModalWindow': return createLoggingModalWindow;
+            case 'createSessionProfileModalWindow': return createSessionProfileModalWindow;
+            case 'createSiteInfoPopoverWindow': return createSiteInfoPopoverWindow;
             case 'createOnboardingWindow': return createOnboardingWindow;
             case 'createNotesWindow': return createNotesWindow;
             case 'createCredentialsWindow': return createCredentialsWindow;
@@ -1036,6 +1057,7 @@ app.whenReady().then(async () => {
             case 'getLiveLogViewerWindow': return getLiveLogViewerWindow;
             case 'getLocalIp': return getLocalIp;
             case 'getNewTabUrl': return getNewTabUrl;
+            case 'getSearchEngineUrl': return getSearchEngineUrl;
             case 'getTrackingSettings': return getTrackingSettings;
             case 'hadLoggingBeenStopped': return hadLoggingBeenStopped;
             case 'harExporter': return harExporter;
@@ -1050,6 +1072,8 @@ app.whenReady().then(async () => {
             case 'loadJsonDiffModules': return loadJsonDiffModules;
             case 'loadSettings': return loadSettings;
             case 'loggingModalWindow': return loggingModalWindow;
+            case 'sessionProfileModalWindow': return sessionProfileModalWindow;
+            case 'siteInfoPopoverWindow': return siteInfoPopoverWindow;
             case 'logEntryCount': return logEntryCount;
             case 'logViewerInitSessions': return logViewerInitSessions;
             case 'logViewerWindow': return logViewerWindow;
@@ -1081,6 +1105,7 @@ app.whenReady().then(async () => {
             case 'requestScreenshot': return requestScreenshot;
             case 'resetFingerprintOnWebContents': return resetFingerprintOnWebContents;
             case 'resolveNavigationUrl': return resolveNavigationUrl;
+            case 'resolveNavigationUrlWithBase': return resolveNavigationUrlWithBase;
             case 'requestEditorExtraWindows': return requestEditorExtraWindows;
             case 'requestEditorWindow': return requestEditorWindow;
             case 'rulesWindow': return rulesWindow;

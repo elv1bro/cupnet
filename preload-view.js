@@ -20,8 +20,24 @@ try {
     }
 } catch { /* ignore — e.g. internal pages where IPC handler may not be ready yet */ }
 
+// Paste unlock: same early inject — must register capture listeners before site anti-paste scripts.
+try {
+    const pasteData = ipcRenderer.sendSync('get-paste-unlock-sync');
+    if (pasteData && pasteData.script) {
+        webFrame.executeJavaScript(pasteData.script);
+    }
+} catch { /* ignore */ }
+
 // Listen for live settings changes — re-inject when user toggles cameras.
 ipcRenderer.on('camera-filter-update', (_, payload) => {
+    try {
+        if (payload && payload.script) {
+            webFrame.executeJavaScript(payload.script);
+        }
+    } catch { /* ignore */ }
+});
+
+ipcRenderer.on('paste-unlock-update', (_, payload) => {
     try {
         if (payload && payload.script) {
             webFrame.executeJavaScript(payload.script);
@@ -60,6 +76,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // Navigation from new-tab.html search bar — load URL in current tab
     navigateTo: (url) => ipcRenderer.send('navigate-to', url),
+
+    reportHttpLabUiState: (state) => ipcRenderer.send('http-lab-ui-state', state),
 
     // Proxy profiles — needed by new-tab.html shortcut editor
     getProxyProfiles:     ()         => ipcRenderer.invoke('get-proxy-profiles'),
@@ -117,6 +135,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getAppMetrics:      ()        => ipcRenderer.invoke('get-app-metrics'),
     enumerateMediaDevices: ()     => ipcRenderer.invoke('enumerate-media-devices'),
     saveDevicePermissions: (cfg) => ipcRenderer.invoke('save-device-permissions', cfg),
+    saveToolbarToolsPlacement: (p) => ipcRenderer.invoke('save-toolbar-tools-placement', p),
+    saveToolbarToolsMiniAlign: (a) => ipcRenderer.invoke('save-toolbar-tools-mini-align', a),
+    saveSearchEngineSettings: (opts) => ipcRenderer.invoke('save-search-engine-settings', opts),
+    exportSettingsJson: () => ipcRenderer.invoke('export-settings-json'),
+    importSettingsJson: (json) => ipcRenderer.invoke('import-settings-json', json),
+    resetSettingsToDefaults: () => ipcRenderer.invoke('reset-settings-to-defaults'),
+    getUiPref: (key, fallback) => ipcRenderer.invoke('get-ui-pref', key, fallback),
+    setUiPref: (key, value) => ipcRenderer.invoke('set-ui-pref', key, value),
 });
 
 /** Page scripts (injected) call this on login form submit — main saves to vault if unlocked. */

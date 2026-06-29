@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	azuretls "github.com/Noooste/azuretls-client"
@@ -42,8 +43,30 @@ func finishClearing() {
 
 func waitZeroInflight() {
 	for httpInflight.Load() > 0 {
-		time.Sleep(1 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+func startParentWatchdog() {
+	if os.Getenv("CUPNET_WORKER_NO_WATCHDOG") == "1" {
+		return
+	}
+	parentPid := os.Getppid()
+	if parentPid <= 1 {
+		return
+	}
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for range t.C {
+			if os.Getppid() == 1 {
+				os.Exit(0)
+			}
+			if err := syscall.Kill(parentPid, 0); err != nil {
+				os.Exit(0)
+			}
+		}
+	}()
 }
 
 func sendLine(v any) {
@@ -71,6 +94,8 @@ var (
 func main() {
 	stdoutBuf = bufio.NewWriter(os.Stdout)
 	defer stdoutBuf.Flush()
+
+	startParentWatchdog()
 
 	sendLine(map[string]any{"id": "__init__", "status": "ready"})
 

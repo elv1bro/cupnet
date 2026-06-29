@@ -33,6 +33,7 @@ export default function en(kbdRow) {
     <a href="#proxy">3. Proxy Manager</a>
     <a href="#fingerprint">4. Fingerprint &amp; TLS</a>
     <a href="#toolbar">5. Toolbar</a>
+    <a href="#omnibox">Address bar (omnibox)</a>
     <a href="#hotkeys">6. Hotkeys</a>
     <a href="#logs">7. Network logs · Compare</a>
     <a href="#editor">8. Request Editor</a>
@@ -119,7 +120,7 @@ export default function en(kbdRow) {
     <h2>5) Toolbar</h2>
     ${kbdRow('← → ↻ ⌂', 'Back / Forward / Reload / Home (start page)')}
     ${kbdRow('Proxy pill', 'Shows Direct or profile name + detail. Opens Proxy Manager. Mode badge when MITM routing is active.')}
-    ${kbdRow('Address bar', 'URL or search — Enter to navigate')}
+    ${kbdRow('Address bar', 'Chrome-style omnibox — see <a href="#omnibox">Address bar</a>')}
     <hr class="g-hr" style="margin:10px 0">
     ${kbdRow('<b>REC · Log #N</b>', 'REC toggles DB logging. Log opens Network Activity viewer; badge shows session id + request count.')}
     ${kbdRow('<b>DevTools</b>', 'Developer tools for the active tab (not the shell). Also <kbd>F12</kbd>.')}
@@ -130,6 +131,19 @@ export default function en(kbdRow) {
     ${kbdRow('<b>Analyzer</b>', 'Page Analyzer window — forms, captcha heuristics, endpoint hints')}
     ${kbdRow('<b>Console</b>', 'System console — stdout/stderr from the app')}
     ${kbdRow('<b>Settings</b>', 'Opens the Settings window (General / Tracking / Devices / Performance)')}
+</div>
+
+<div id="omnibox" class="g-card">
+    <h2>Address bar (omnibox)</h2>
+    <p>The address field behaves like a Chrome omnibox: <b>frecency-ranked history</b> (visits + typed navigations), <b>inline autocomplete</b> for the best history match, categorized suggestions (search, switch tab, quick links, history), and a separate overlay for the list.</p>
+    ${kbdRow('<kbd>Ctrl L</kbd> (⌘L)', 'Focus the bar and open suggestions')}
+    ${kbdRow('<kbd>Ctrl K</kbd> (⌘K)', 'Command palette — bar starts with <code>&gt;</code> for built-in commands')}
+    ${kbdRow('<kbd>Tab</kbd> (inline)', 'When the rest of the URL is selected as a ghost, Tab moves the caret to the end (accept).')}
+    ${kbdRow('<kbd>Ctrl Enter</kbd> / <kbd>⌘ Enter</kbd> / <kbd>Alt Enter</kbd>', 'Open what you typed in a <b>new tab</b> (also when the overlay is open).')}
+    ${kbdRow('Site icon', 'Lock / globe by scheme; click for TLS / connection popover, copy URL, clear cookies for host, Network log. Drag the icon to drag the URL.')}
+    ${kbdRow('× / Stop / Esc', 'Clear the field. Reload becomes Stop while loading; Esc stops loading when the overlay is closed.')}
+    ${kbdRow('Search engine', 'Settings → Search engine: DuckDuckGo, Google, Brave, Yandex, or custom base URL with <code>{q}</code>.')}
+    <div class="g-tip">Internal <code>cupnet://newtab</code> shows an empty address display until you type.</div>
 </div>
 
 <div id="hotkeys" class="g-card">

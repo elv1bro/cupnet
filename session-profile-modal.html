@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+    <title>Launch Profile</title>
+    <link rel="stylesheet" href="shared-dark-theme.css">
+    <style>
+        * { box-sizing: border-box; }
+        html, body { height: 100%; margin: 0; overflow: hidden; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+            background: #0d1117;
+            color: #e6edf3;
+            font-size: 13px;
+            line-height: 1.45;
+        }
+        .shell {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        .topbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 16px;
+            border-bottom: 1px solid #30363d;
+            background: #161b22;
+            flex-shrink: 0;
+        }
+        .topbar-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #e6edf3;
+            white-space: nowrap;
+        }
+        .topbar-file {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            gap: 8px;
+        }
+        .input {
+            width: 100%;
+            padding: 7px 10px;
+            border-radius: 6px;
+            border: 1px solid #30363d;
+            background: #0d1117;
+            color: #e6edf3;
+            font-size: 12px;
+            font-family: inherit;
+        }
+        .input:focus, .code:focus, select:focus { outline: none; border-color: #388bfd; }
+        .input.mono, .code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; }
+        .code {
+            width: 100%;
+            min-height: 120px;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid #30363d;
+            background: #0d1117;
+            color: #c9d1d9;
+            resize: vertical;
+            line-height: 1.5;
+        }
+        .code.tall { min-height: 200px; }
+        .btn {
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: inherit;
+            cursor: pointer;
+            border: 1px solid #30363d;
+            background: #21262d;
+            color: #c9d1d9;
+            white-space: nowrap;
+        }
+        .btn:hover { background: #30363d; }
+        .btn-primary {
+            background: #238636;
+            border-color: #2ea043;
+            color: #fff;
+        }
+        .btn-primary:hover:not(:disabled) { background: #2ea043; }
+        .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+        .body {
+            flex: 1;
+            display: flex;
+            min-height: 0;
+        }
+        .nav {
+            width: 148px;
+            flex-shrink: 0;
+            border-right: 1px solid #30363d;
+            background: #161b22;
+            padding: 8px 0;
+            overflow-y: auto;
+        }
+        .nav-item {
+            display: block;
+            width: 100%;
+            text-align: left;
+            padding: 8px 14px;
+            border: none;
+            background: transparent;
+            color: #8b949e;
+            font-size: 12px;
+            font-family: inherit;
+            cursor: pointer;
+        }
+        .nav-item:hover { background: rgba(56, 139, 253, 0.08); color: #c9d1d9; }
+        .nav-item.active {
+            background: rgba(56, 139, 253, 0.15);
+            color: #58a6ff;
+            font-weight: 500;
+        }
+        .panel-wrap {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 18px;
+            min-width: 0;
+        }
+        .panel { display: none; }
+        .panel.active { display: block; }
+        .panel-head {
+            margin: 0 0 4px;
+            font-size: 15px;
+            font-weight: 600;
+            color: #e6edf3;
+        }
+        .panel-desc {
+            margin: 0 0 14px;
+            font-size: 12px;
+            color: #8b949e;
+        }
+        .field { margin-bottom: 12px; }
+        .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+        @media (max-width: 640px) { .field-row { grid-template-columns: 1fr; } }
+        .label {
+            display: block;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #8b949e;
+            margin-bottom: 5px;
+        }
+        .hint { font-size: 11px; color: #656d76; margin-top: 4px; }
+        .check-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px 20px;
+            margin: 8px 0 4px;
+        }
+        .check {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: #c9d1d9;
+            cursor: pointer;
+        }
+        select.input { cursor: pointer; }
+        .statusbar {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 16px;
+            border-top: 1px solid #30363d;
+            background: #161b22;
+        }
+        .status-text {
+            flex: 1;
+            font-size: 12px;
+            color: #8b949e;
+            min-width: 0;
+        }
+        .status-text.ok { color: #3fb950; }
+        .status-text.warn { color: #d29922; }
+        .status-text.err { color: #f85149; }
+        .actions { display: flex; gap: 8px; flex-shrink: 0; }
+        .badge {
+            display: inline-block;
+            padding: 2px 7px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 600;
+            background: rgba(56, 139, 253, 0.15);
+            color: #58a6ff;
+            margin-left: 6px;
+            vertical-align: middle;
+        }
+    </style>
+</head>
+<body>
+<div class="shell">
+    <header class="topbar">
+        <span class="topbar-title">Launch Profile</span>
+        <div class="topbar-file">
+            <input type="text" id="file-path" class="input mono" readonly placeholder="Last imported profile path — use Import… to change">
+            <button type="button" id="browse-btn" class="btn">Import…</button>
+            <button type="button" id="template-btn" class="btn">Blank template</button>
+        </div>
+    </header>
+
+    <div class="body">
+        <nav class="nav" role="tablist" aria-label="Profile sections">
+            <button type="button" class="nav-item active" data-panel="general">General</button>
+            <button type="button" class="nav-item" data-panel="navigation">Navigation</button>
+            <button type="button" class="nav-item" data-panel="proxy">Proxy</button>
+            <button type="button" class="nav-item" data-panel="fingerprint">Fingerprint</button>
+            <button type="button" class="nav-item" data-panel="cookies">Cookies</button>
+            <button type="button" class="nav-item" data-panel="script">Post-load</button>
+            <button type="button" class="nav-item" data-panel="advanced">Advanced</button>
+        </nav>
+
+        <div class="panel-wrap">
+            <section id="panel-general" class="panel active" role="tabpanel">
+                <h2 class="panel-head">General</h2>
+                <p class="panel-desc">Profile identity and recording. The file only pre-fills these fields — edit freely before launch.</p>
+                <div class="field">
+                    <label class="label" for="pf-name">Name</label>
+                    <input type="text" id="pf-name" class="input" placeholder="My session" autocomplete="off">
+                </div>
+                <div class="field">
+                    <label class="label" for="pf-description">Description</label>
+                    <textarea id="pf-description" class="code" rows="3" placeholder="Optional notes"></textarea>
+                </div>
+                <div class="field-row">
+                    <div class="field">
+                        <label class="label" for="pf-format">Format</label>
+                        <select id="pf-format" class="input">
+                            <option value="cupnet-launch">cupnet-launch (flexible)</option>
+                            <option value="cupnet-session">cupnet-session (requires URL)</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label class="label" for="pf-version">Version</label>
+                        <input type="number" id="pf-version" class="input" value="1" min="1" max="1" readonly>
+                    </div>
+                </div>
+                <div class="check-row">
+                    <label class="check"><input type="checkbox" id="pf-recording"> Enable session recording</label>
+                </div>
+            </section>
+
+            <section id="panel-navigation" class="panel" role="tabpanel" hidden>
+                <h2 class="panel-head">Navigation</h2>
+                <p class="panel-desc">Target URL and tab behavior. Leave URL empty for context-only launch (proxy/cookies without navigation).</p>
+                <div class="field">
+                    <label class="label" for="pf-url">Navigate URL</label>
+                    <input type="text" id="pf-url" class="input mono" placeholder="https://…" spellcheck="false" autocomplete="off">
+                </div>
+                <div class="field-row">
+                    <div class="field">
+                        <label class="label" for="pf-timeout">Navigation timeout (ms)</label>
+                        <input type="number" id="pf-timeout" class="input" value="120000" min="5000" max="300000" step="1000">
+                    </div>
+                    <div class="field" style="display:flex;align-items:flex-end">
+                        <label class="check"><input type="checkbox" id="pf-new-tab" checked> Open in a new tab</label>
+                    </div>
+                </div>
+            </section>
+
+            <section id="panel-proxy" class="panel" role="tabpanel" hidden>
+                <h2 class="panel-head">Proxy</h2>
+                <p class="panel-desc">Global upstream via <code>last_session_proxy</code>: disconnect → refresh profile → connect → then launch.</p>
+                <div class="field">
+                    <label class="label" for="pf-proxy-template">Proxy URL / template</label>
+                    <input type="text" id="pf-proxy-template" class="input mono" placeholder="http://user:pass@host:8080 or http://{USER}:{PASS}@…" spellcheck="false" autocomplete="off">
+                </div>
+                <div class="field-row">
+                    <div class="field">
+                        <label class="label" for="pf-proxy-tls">TLS profile</label>
+                        <input type="text" id="pf-proxy-tls" class="input mono" placeholder="chrome_120">
+                    </div>
+                    <div class="field">
+                        <label class="label" for="pf-proxy-profile-id">Profile ID <span style="font-weight:400;text-transform:none">(optional)</span></label>
+                        <input type="number" id="pf-proxy-profile-id" class="input" placeholder="Proxy Manager id" min="1" step="1">
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="label" for="pf-proxy-vars">Template variables (JSON)</label>
+                    <textarea id="pf-proxy-vars" class="code" rows="5" placeholder='{ "USER": "alice", "PASS": "secret" }'></textarea>
+                </div>
+            </section>
+
+            <section id="panel-fingerprint" class="panel" role="tabpanel" hidden>
+                <h2 class="panel-head">Fingerprint</h2>
+                <p class="panel-desc">User-Agent, language, and timezone applied to tabs after proxy connect.</p>
+                <div class="field">
+                    <label class="label" for="pf-ua">User-Agent</label>
+                    <textarea id="pf-ua" class="code" rows="2" placeholder="Mozilla/5.0 …" spellcheck="false"></textarea>
+                </div>
+                <div class="field-row">
+                    <div class="field">
+                        <label class="label" for="pf-language">Language</label>
+                        <input type="text" id="pf-language" class="input mono" placeholder="en-US,en;q=0.9">
+                    </div>
+                    <div class="field">
+                        <label class="label" for="pf-timezone">Timezone</label>
+                        <input type="text" id="pf-timezone" class="input mono" placeholder="Europe/London">
+                    </div>
+                </div>
+            </section>
+
+            <section id="panel-cookies" class="panel" role="tabpanel" hidden>
+                <h2 class="panel-head">Cookies <span id="cookie-badge" class="badge">0</span></h2>
+                <p class="panel-desc">JSON array of cookie objects. Imported from file; edit or paste before launch.</p>
+                <div class="check-row">
+                    <label class="check"><input type="checkbox" id="pf-clear-cookies"> Clear cookies before apply</label>
+                    <label class="check"><input type="checkbox" id="pf-clear-storage"> Clear storage before apply</label>
+                </div>
+                <div class="field">
+                    <label class="label" for="pf-cookies">Cookies JSON</label>
+                    <textarea id="pf-cookies" class="code tall" rows="12" placeholder='[{ "name": "sid", "value": "…", "domain": "example.com", "path": "/" }]' spellcheck="false"></textarea>
+                    <p class="hint">Invalid JSON blocks launch. Empty array is allowed.</p>
+                </div>
+            </section>
+
+            <section id="panel-script" class="panel" role="tabpanel" hidden>
+                <h2 class="panel-head">Post-load script</h2>
+                <p class="panel-desc">JavaScript executed after navigation finishes (or skipped if no URL).</p>
+                <div class="field-row">
+                    <div class="field">
+                        <label class="label" for="pf-script-delay">Delay (ms)</label>
+                        <input type="number" id="pf-script-delay" class="input" value="0" min="0" max="60000" step="100">
+                    </div>
+                    <div class="field">
+                        <label class="label" for="pf-script-timeout">Wait timeout (ms)</label>
+                        <input type="number" id="pf-script-timeout" class="input" value="30000" min="1000" max="300000" step="1000">
+                    </div>
+                </div>
+                <div class="field">
+                    <label class="label" for="pf-script">Script</label>
+                    <textarea id="pf-script" class="code tall" rows="10" placeholder="(function () { … })();" spellcheck="false"></textarea>
+                </div>
+            </section>
+
+            <section id="panel-advanced" class="panel" role="tabpanel" hidden>
+                <h2 class="panel-head">Advanced</h2>
+                <p class="panel-desc">Storage, DNS overrides, or edit the full profile as JSON. Click <strong>Apply JSON</strong> to sync back to the form.</p>
+                <div class="field">
+                    <label class="label" for="pf-storage">Storage (JSON)</label>
+                    <textarea id="pf-storage" class="code" rows="4" placeholder='{ "localStorage": {}, "sessionStorage": {} }' spellcheck="false"></textarea>
+                </div>
+                <div class="check-row">
+                    <label class="check"><input type="checkbox" id="pf-persist-dns"> Persist DNS overrides to global DB</label>
+                </div>
+                <div class="field">
+                    <label class="label" for="pf-dns">DNS overrides (JSON array)</label>
+                    <textarea id="pf-dns" class="code" rows="4" placeholder='[{ "host": "api.example.com", "ip": "203.0.113.1", "enabled": true }]' spellcheck="false"></textarea>
+                </div>
+                <div class="field">
+                    <label class="label" for="pf-raw-json">Full profile JSON</label>
+                    <textarea id="pf-raw-json" class="code tall" rows="14" spellcheck="false"></textarea>
+                    <div style="margin-top:8px;display:flex;gap:8px">
+                        <button type="button" id="apply-json-btn" class="btn">Apply JSON → form</button>
+                        <button type="button" id="refresh-json-btn" class="btn">Refresh from form</button>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <footer class="statusbar">
+        <div id="status-text" class="status-text warn">Import a file or use Blank template, then review and edit fields.</div>
+        <div class="actions">
+            <button type="button" id="cancel-btn" class="btn">Cancel</button>
+            <button type="button" id="load-btn" class="btn btn-primary" disabled>Launch</button>
+        </div>
+    </footer>
+</div>
+<script src="session-profile-modal-renderer.js"></script>
+</body>
+</html>

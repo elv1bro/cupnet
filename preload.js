@@ -51,10 +51,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     navBack:                 ()        => ipcRenderer.send('nav-back'),
     navForward:              ()        => ipcRenderer.send('nav-forward'),
     navReload:               ()        => ipcRenderer.send('nav-reload'),
+    navStop:                 ()        => ipcRenderer.send('nav-stop'),
     navHome:                 ()        => ipcRenderer.send('nav-home'),
     onURLUpdate:             (cb)      => sub('url-updated', cb),
     onTabWillNavigate:       (cb)      => sub('tab-will-navigate', cb),
     onSetLoadingState:       (cb)      => sub('set-loading-state', cb),
+    onTabLoadError:          (cb)      => sub('tab-load-error', cb),
+    onPageGatewayError:      (cb)      => sub('page-gateway-error', cb),
     onUpdateLogStatus:       (cb)      => sub('update-log-status', cb),
 
     // ── Tab management ─────────────────────────────────────────────────────
@@ -105,6 +108,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getScreenshotData:       (id)      => ipcRenderer.invoke('get-screenshot-data', id),
     ftsSearch:               (q, sid)  => ipcRenderer.invoke('fts-search', q, sid),
     getOmniboxTopHosts:      (limit)   => ipcRenderer.invoke('get-omnibox-top-hosts', limit),
+    getOmniboxSuggestions:   (q, lim)   => ipcRenderer.invoke('get-omnibox-suggestions', q, lim),
+    recordOmniboxVisit:      (payload) => ipcRenderer.invoke('record-omnibox-visit', payload),
+    getTabTlsInfo:           (tabId)   => ipcRenderer.invoke('get-tab-tls-info', tabId),
+    toggleSiteInfoPopover:   (tabId, hint) => ipcRenderer.invoke('toggle-site-info-popover', tabId, hint),
+    toggleCorsBypass:        ()        => ipcRenderer.invoke('toggle-cors-bypass'),
+    getCorsBypassStatus:     ()        => ipcRenderer.invoke('get-cors-bypass-status'),
+    onCorsBypassStatus:      (cb)      => sub('cors-bypass-status', cb),
+    saveSearchEngineSettings: (opts)  => ipcRenderer.invoke('save-search-engine-settings', opts),
     getSessions:             ()        => ipcRenderer.invoke('get-sessions'),
     getSessionsWithStats:    ()        => ipcRenderer.invoke('get-sessions-with-stats'),
     getCurrentSessionId:     ()        => ipcRenderer.invoke('get-current-session-id'),
@@ -193,6 +204,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onOmniboxOverlaySelect:  (cb)      => sub('omnibox-overlay-select', cb),
     onOmniboxOverlayDismiss: (cb)      => sub('omnibox-overlay-dismiss', cb),
     onForceCloseOmnibox:     (cb)      => sub('force-close-omnibox', cb),
+    onBrowserSettingsUpdated:(cb)      => sub('browser-settings-updated', cb),
     onToggleWindowSwitcher:  (cb)      => sub('toggle-window-switcher', cb),
     onToggleCommandPalette:  (cb)      => sub('toggle-command-palette', cb),
 
@@ -251,6 +263,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Inline settings (browser toolbar) ──────────────────────────────────────
     setToolbarHeight:        (px)      => ipcRenderer.invoke('set-toolbar-height', px),
+    setBottomChromeHeight:   (px)      => ipcRenderer.invoke('set-bottom-chrome-height', px),
+    setRightChromeWidth:     (px)      => ipcRenderer.invoke('set-right-chrome-width', px),
+    saveToolbarToolsPlacement: (p)     => ipcRenderer.invoke('save-toolbar-tools-placement', p),
+    saveToolbarToolsMiniAlign: (a)     => ipcRenderer.invoke('save-toolbar-tools-mini-align', a),
     getSettingsAll:          ()        => ipcRenderer.invoke('get-settings-all'),
     saveActivityMonitorSettings: (opts) => ipcRenderer.invoke('save-activity-monitor-settings', opts),
     completeOnboarding:      ()        => ipcRenderer.invoke('onboarding-complete'),
@@ -296,6 +312,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // ── Page Analyzer ────────────────────────────────────────────────────────
     openPageAnalyzer:        ()        => ipcRenderer.invoke('open-page-analyzer'),
+    injectActivePageHttpLab: (opts)    => ipcRenderer.invoke('inject-active-page-http-lab', opts || {}),
+    injectPageHttpLab:       (tabId, opts) => ipcRenderer.invoke('inject-page-http-lab', tabId, opts || {}),
     analyzePageForms:        (tabId)   => ipcRenderer.invoke('analyze-page-forms', tabId),
     analyzePageCaptcha:      (tabId)   => ipcRenderer.invoke('analyze-page-captcha', tabId),
     solveTurnstileCaptcha:   (tabId, captcha, options) => ipcRenderer.invoke('solve-turnstile-captcha', tabId, captcha, options),
@@ -403,7 +421,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     connectDirect:           (profile) => ipcRenderer.invoke('connect-direct', profile),
     saveProxyProfileFull:    (p)       => ipcRenderer.invoke('save-proxy-profile-full', p),
     testProxyTemplate:       (id, ev)  => ipcRenderer.invoke('test-proxy-template', id, ev),
+    testProxyUrl:            (url, opts) => ipcRenderer.invoke('test-proxy-url', url, opts),
     deleteProxyProfileById:  (id)      => ipcRenderer.invoke('delete-proxy-profile', id),
     onProxyProfilesList:     (cb)      => sub('proxy-profiles-list', cb),
     onProxyStatusChanged:    (cb)      => sub('proxy-status-changed', cb),
+
+    // ── Session profile / launch profile ─────────────────────────────────────
+    openSessionProfileModal:  ()        => ipcRenderer.invoke('open-session-profile-modal'),
+    exportLaunchProfileFromRequest: (requestId) => ipcRenderer.invoke('export-launch-profile-from-request', requestId),
+    applyLaunchProfileFromRequest: (requestId, opts) => ipcRenderer.invoke('apply-launch-profile-from-request', requestId, opts),
+    onSessionProfileLoaded:   (cb)      => sub('session-profile-loaded', cb),
+    onSessionProfileLoadFailed: (cb)    => sub('session-profile-load-failed', cb),
 });

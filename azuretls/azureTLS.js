@@ -222,7 +222,7 @@ class AzureTLSClient {
                 delete requestConfig.body;
             }
 
-            if (requestConfig.disable_redirects || requestConfig.max_redirects === 0) {
+            if (process.env.CUPNET_MITM_DEBUG === '1' && (requestConfig.disable_redirects || requestConfig.max_redirects === 0)) {
                 process.stderr.write(`[ffi-dbg] sending to FFI: disable_redirects=${requestConfig.disable_redirects} max_redirects=${requestConfig.max_redirects} url=${requestConfig.url}\n`);
             }
             if (process.env.CUPNET_MITM_DEBUG === '1') {
@@ -289,7 +289,7 @@ class AzureTLSClient {
             if (response.url && !response.url.isNull()) result.url = response.url.readCString();
             if (response.error && !response.error.isNull()) result.error = response.error.readCString();
 
-            if (requestConfig.disable_redirects || requestConfig.max_redirects === 0) {
+            if (process.env.CUPNET_MITM_DEBUG === '1' && (requestConfig.disable_redirects || requestConfig.max_redirects === 0)) {
                 const sc = result.headers['set-cookie'] || result.headers['Set-Cookie'] || '';
                 const loc = result.headers['location']  || result.headers['Location']  || '';
                 process.stderr.write(`[ffi-dbg] FFI response: status=${result.statusCode} set-cookie=${sc} location=${loc} finalUrl=${result.url||''}\n`);

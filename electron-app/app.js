@@ -10,6 +10,9 @@ const {
 } = require('electron');
 const ProxyChain = require('proxy-chain');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const { spawn } = require('child_process');
 let _jsonDiffModulePromise = null;
 
@@ -69,6 +72,7 @@ const {
     formatBytes,
     shouldFilterUrl: _shouldFilterUrl,
     SEARCH_ENGINE,
+    getSearchEngineUrlFromSettings,
 } = require('./utils');
 const bundleUtils = require('./bundle-utils');
 const diffUtils = require('./diff-utils');
@@ -83,6 +87,7 @@ const shouldFilterUrl = _shouldFilterUrl;
 // ─── MITM Proxy (required lazily inside app.whenReady) ───────────────────────
 let mitmProxy = null;
 const { MitmProxy, ExternalProxyPort } = require('./mitm-proxy.js');
+const { buildTabTlsInfo } = require('../main-process/ipc/handlers/misc-ipc.js');
 
 async function startMitmProxy() {
     if (mitmProxy) return mitmProxy;
@@ -92,6 +97,14 @@ async function startMitmProxy() {
         port:       8877,
         browser:    'chrome_120',
         workerPath: path.join(__dirname, 'azure-tls-worker.js'),
+        onGatewayError: (info) => {
+            if (!mainWindow || mainWindow.isDestroyed()) return;
+            const active = tabManager?.getActiveTab();
+            if (info?.tabId != null && active && active.id !== info.tabId) return;
+            try {
+                mainWindow.webContents.send('page-gateway-error', info);
+            } catch (_) { /* ignore */ }
+        },
         onRequestLogged: (entry) => {
             let tabId = entry.tabId ?? null;
             if (!tabId) {
@@ -281,6 +294,7 @@ function confirmExitDialog(win) {
     return choice === 1;
 }
 let loggingModalWindow         = null;
+let siteInfoPopoverWindow      = null;
 let requestEditorWindow        = null;
 const requestEditorExtraWindows = [];
 let ivacScoutProcess           = null;
@@ -686,6 +700,7 @@ const SETTINGS_DEFAULTS = {
     filterPatterns: ['*google.com*', '*cloudflare.com*', '*analytics*', '*tracking*'],
     homepage: '',
     pasteUnlock: true,
+    corsBypassEnabled: false,
     currentProxy: '',
     effectiveTrafficMode: 'mitm',
     tracking: {
@@ -714,6 +729,8 @@ const SETTINGS_DEFAULTS = {
             '*.hcaptcha.com', 'turnstile.com', '*.turnstile.com',
         ],
     },
+    searchEngine: 'duckduckgo',
+    searchEngineCustomUrl: '',
 };
 
 function loadSettings() {
@@ -752,6 +769,10 @@ function saveSettings(s) {
             if (err) sysLog('warn', 'settings', 'Failed to save: ' + err.message);
         });
     }, 300);
+}
+
+function getSearchEngineUrl() {
+    return getSearchEngineUrlFromSettings(loadSettings());
 }
 
 function normalizeTrackingSettings(raw) {
@@ -1170,8 +1191,9 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
     // Apply active fingerprint via CDP now that the debugger is attached
     if (activeFingerprint) {
         if (activeFingerprint.user_agent) {
+            const { resolveRendererUserAgent } = require('../user-agent-utils');
             cdp.sendCommand('Emulation.setUserAgentOverride', {
-                userAgent:      activeFingerprint.user_agent,
+                userAgent:      resolveRendererUserAgent(activeFingerprint.user_agent),
                 acceptLanguage: activeFingerprint.language || '',
             }).catch((err) => {
                 safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Emulation.setUserAgentOverride', tabId } }, err, 'info');
@@ -1507,10 +1529,11 @@ async function setupNetworkLogging(webContents, tabId, sessionId) {
 
 /** Apply UA + language on session only (no CDP — Turnstile / CF детектит debugger). */
 async function applyFingerprintToWebContents(wc, fp) {
-    if (!fp || !wc || wc.isDestroyed()) return;
-    if (fp.user_agent) {
-        try { wc.session.setUserAgent(fp.user_agent, fp.language || ''); } catch (e) { sysLog('warn', 'fingerprint', 'setUserAgent failed: ' + (e?.message || e)); }
-    }
+    if (!wc || wc.isDestroyed()) return;
+    const { applyRendererUserAgentToSession } = require('../user-agent-utils');
+    try {
+        applyRendererUserAgentToSession(wc.session, fp?.user_agent || null, fp?.language || '');
+    } catch (e) { sysLog('warn', 'fingerprint', 'setUserAgent failed: ' + (e?.message || e)); }
 }
 
 /** Apply fingerprint to all open tabs. */
@@ -1529,9 +1552,8 @@ async function applyFingerprintToAllTabs(fp) {
 async function resetFingerprintOnWebContents(wc) {
     if (!wc || wc.isDestroyed()) return;
     try {
-        const { session: electronSession } = require('electron');
-        const def = electronSession.defaultSession.getUserAgent();
-        wc.session.setUserAgent(def);
+        const { applyRendererUserAgentToSession } = require('../user-agent-utils');
+        applyRendererUserAgentToSession(wc.session);
     } catch (e) { sysLog('warn', 'fingerprint', 'resetFingerprintOnWebContents failed: ' + (e?.message || e)); }
 }
 
@@ -1891,6 +1913,7 @@ function createMainWindow() {
         mainWindow.webContents.send('init-settings', {
             filterPatterns: s.filterPatterns || [],
             pasteUnlock:    s.pasteUnlock !== false,
+            corsBypassEnabled: s.corsBypassEnabled === true,
             tracking:       getTrackingSettings(),
         });
         notifyProxyProfilesList();
@@ -2991,6 +3014,97 @@ function createLoggingModalWindow(data, buttonHint) {
     loggingModalWindow.on('closed', () => { loggingModalWindow = null; });
 }
 
+/**
+ * Site information popover — separate frameless window (not clipped by WebContentsView).
+ * @param {object} data — payload from buildTabTlsInfo
+ * @param {{ x: number, y: number, w: number, h: number }|null} buttonHint — site-info button rect in browser shell coords
+ */
+function createSiteInfoPopoverWindow(data, buttonHint) {
+    const W = 340;
+    const H = 360;
+    const htmlPath = path.join(__dirname, '..', 'site-info-popover.html');
+    const preloadPath = path.join(__dirname, '..', 'preload-site-info-popover.js');
+    let x;
+    let y;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        const [wx, wy] = mainWindow.getPosition();
+        if (buttonHint && Number.isFinite(buttonHint.x)) {
+            x = Math.round(wx + buttonHint.x);
+            y = Math.round(wy + buttonHint.y + (buttonHint.h || 0) + 8);
+        } else {
+            const [ww, wh] = mainWindow.getSize();
+            x = Math.round(wx + (ww - W) / 2);
+            y = Math.round(wy + 96);
+        }
+    }
+
+    const sendInit = (win) => {
+        if (!win || win.isDestroyed()) return;
+        try {
+            win.webContents.send('site-info-init', data);
+        } catch (_) { /* ignore */ }
+    };
+
+    if (siteInfoPopoverWindow && !siteInfoPopoverWindow.isDestroyed()) {
+        try {
+            siteInfoPopoverWindow.__cupnetTabId = data.tabId;
+        } catch (_) { /* ignore */ }
+        try {
+            if (Number.isFinite(x) && Number.isFinite(y)) siteInfoPopoverWindow.setPosition(x, y);
+        } catch (_) { /* ignore */ }
+        sendInit(siteInfoPopoverWindow);
+        siteInfoPopoverWindow.show();
+        siteInfoPopoverWindow.focus();
+        return;
+    }
+
+    siteInfoPopoverWindow = new BrowserWindow({
+        width: W,
+        height: H,
+        x,
+        y,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        frame: false,
+        transparent: true,
+        alwaysOnTop: true,
+        parent: mainWindow || undefined,
+        show: false,
+        webPreferences: {
+            preload: preloadPath,
+            contextIsolation: true,
+            nodeIntegration: false,
+        },
+    });
+
+    try {
+        siteInfoPopoverWindow.setBackgroundColor('#00000000');
+    } catch (_) { /* ignore */ }
+
+    siteInfoPopoverWindow.loadFile(htmlPath);
+
+    siteInfoPopoverWindow.webContents.once('did-finish-load', () => {
+        try {
+            siteInfoPopoverWindow.__cupnetTabId = data.tabId;
+        } catch (_) { /* ignore */ }
+        sendInit(siteInfoPopoverWindow);
+        siteInfoPopoverWindow.show();
+    });
+
+    siteInfoPopoverWindow.on('blur', () => {
+        try {
+            if (siteInfoPopoverWindow && !siteInfoPopoverWindow.isDestroyed()) siteInfoPopoverWindow.close();
+        } catch (_) { /* ignore */ }
+    });
+
+    siteInfoPopoverWindow.on('closed', () => { siteInfoPopoverWindow = null; });
+}
+
+function tlsInfoCtx() {
+    return { tabManager, db, connectedProfileId, connectedProfileName };
+}
+
 function createProxyManagerWindow() {
     if (proxyManagerWindow && !proxyManagerWindow.isDestroyed()) {
         proxyManagerWindow.focus(); return;
@@ -3190,6 +3304,11 @@ app.whenReady().then(async () => {
         const startupProfile = loadSettings().tlsProfile || 'chrome';
         proxy.setBrowser(startupProfile);
         syncDnsOverridesToMitm();
+        try {
+            if (mitmProxy && typeof mitmProxy.setGlobalCorsEnabled === 'function') {
+                mitmProxy.setGlobalCorsEnabled(!!loadSettings().corsBypassEnabled);
+            }
+        } catch (_) { /* ignore */ }
         console.log(`[main] MITM startup profile: ${startupProfile}`);
         mitmReady = true;
         startupMetrics.mitmReadyTs = Date.now();
@@ -3450,24 +3569,24 @@ app.whenReady().then(async () => {
         const raw = String(rawInput || '').trim();
         const alias = raw.toLowerCase();
         if (alias === 'cupnet://settings' || alias === 'cupnet:settings') {
-            tabManager.navigate(getInternalPageUrl('settings'));
+            tabManager.navigate(getInternalPageUrl('settings'), undefined, { omniboxTyped: true });
             return;
         }
         if (alias === 'cupnet://guide' || alias === 'cupnet:guide') {
-            tabManager.navigate(getInternalPageUrl('guide'));
+            tabManager.navigate(getInternalPageUrl('guide'), undefined, { omniboxTyped: true });
             return;
         }
         if (alias === 'cupnet://home'
             || alias === 'cupnet:home'
             || alias === 'cupnet://new-tab'
             || alias === 'cupnet:new-tab') {
-            tabManager.navigate(getNewTabUrl());
+            tabManager.navigate(getNewTabUrl(), undefined, { omniboxTyped: true });
             return;
         }
-        const url = resolveNavigationUrl(rawInput);
+        const url = resolveNavigationUrl(rawInput, { searchEngineUrl: getSearchEngineUrl() });
         if (!url) return;
         // Always load in active tab — avoids sender-id confusion (URL bar vs new-tab)
-        tabManager.navigate(url);
+        tabManager.navigate(url, undefined, { omniboxTyped: true });
     });
     ipcMain.on('nav-back', () => {
         tabManager.ensureActiveTabViewVisible?.();
@@ -3483,6 +3602,13 @@ app.whenReady().then(async () => {
         tabManager.ensureActiveTabViewVisible?.();
         const tab = tabManager.getActiveTab();
         if (tab) tab.view.webContents.reload();
+    });
+    ipcMain.on('nav-stop', () => {
+        tabManager.ensureActiveTabViewVisible?.();
+        const tab = tabManager.getActiveTab();
+        if (tab && tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
+            try { tab.view.webContents.stop(); } catch (_) { /* ignore */ }
+        }
     });
     ipcMain.on('nav-home', () => {
         tabManager.navigate(getNewTabUrl());
@@ -3510,6 +3636,122 @@ app.whenReady().then(async () => {
     ipcMain.handle('fts-search', async (_, query, sessionId) => {
         return db.ftsSearch(query, sessionId || null);
     });
+
+    ipcMain.handle('get-omnibox-suggestions', async (_, query, limit) => {
+        try {
+            return db.getOmniboxSuggestions(query, limit);
+        } catch {
+            return [];
+        }
+    });
+
+    ipcMain.handle('record-omnibox-visit', async (_, payload) => {
+        try {
+            db.recordOmniboxVisit(payload || {});
+            return { ok: true };
+        } catch {
+            return { ok: false };
+        }
+    });
+
+    ipcMain.handle('get-tab-tls-info', async (_, tabId) => buildTabTlsInfo(tlsInfoCtx(), tabId));
+
+    ipcMain.handle('toggle-site-info-popover', async (_, tabId, buttonHint) => {
+        try {
+            const w = siteInfoPopoverWindow;
+            if (w && !w.isDestroyed() && w.isVisible()) {
+                try {
+                    if (w.__cupnetTabId != null && String(w.__cupnetTabId) === String(tabId)) {
+                        w.close();
+                        return { ok: true, action: 'closed' };
+                    }
+                } catch (_) { /* ignore */ }
+            }
+            const data = buildTabTlsInfo(tlsInfoCtx(), tabId);
+            if (!data.ok) return data;
+            createSiteInfoPopoverWindow(data, buttonHint || null);
+            return { ok: true, action: 'opened' };
+        } catch (e) {
+            return { ok: false, error: e && e.message ? String(e.message) : 'error' };
+        }
+    });
+
+    ipcMain.handle('site-info-popover-copy-url', (_, url) => {
+        try {
+            const s = String(url || '').trim();
+            if (!s) return false;
+            clipboard.writeText(s);
+            return true;
+        } catch (_) {
+            return false;
+        }
+    });
+
+    ipcMain.handle('site-info-popover-clear-cookies', async (_, tabId, domain) => {
+        const tab = tabId ? tabManager.getTab(tabId) : tabManager.getActiveTab();
+        if (!tab) return { success: false, error: 'Tab not found' };
+        try {
+            const filter = domain ? { domain } : {};
+            const cookies = await tab.tabSession.cookies.get(filter);
+            for (const c of cookies) {
+                const url = `${c.secure ? 'https' : 'http'}://${c.domain.replace(/^\./, '')}${c.path || '/'}`;
+                try { await tab.tabSession.cookies.remove(url, c.name); } catch (e) { sysLog('warn', 'tabs', 'cookie remove failed: ' + (e?.message || e)); }
+            }
+            await tab.tabSession.cookies.flushStore();
+            return { success: true, count: cookies.length };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    ipcMain.handle('site-info-popover-open-log', (_, url) => {
+        const sendFocus = (win) => {
+            if (win && !win.isDestroyed()) {
+                win.webContents.send('focus-request-url', { url: String(url || '') });
+            }
+        };
+        let liveWin = getLiveLogViewerWindow();
+        if (liveWin) {
+            if (liveWin.isMinimized()) liveWin.restore();
+            liveWin.focus();
+            sendFocus(liveWin);
+            return { success: true };
+        }
+        createLogViewerWindow();
+        liveWin = getLiveLogViewerWindow();
+        if (liveWin && !liveWin.webContents.isLoading()) {
+            sendFocus(liveWin);
+        } else if (liveWin) {
+            liveWin.webContents.once('did-finish-load', () => sendFocus(liveWin));
+        }
+        return { success: true };
+    });
+
+    ipcMain.on('site-info-popover-close', (event) => {
+        try {
+            const w = BrowserWindow.fromWebContents(event.sender);
+            if (w && !w.isDestroyed()) w.close();
+        } catch (_) { /* ignore */ }
+    });
+
+    ipcMain.handle('toggle-cors-bypass', () => {
+        const s = loadSettings();
+        s.corsBypassEnabled = !s.corsBypassEnabled;
+        saveSettings(s);
+        try {
+            if (mitmProxy && typeof mitmProxy.setGlobalCorsEnabled === 'function') {
+                mitmProxy.setGlobalCorsEnabled(!!s.corsBypassEnabled);
+            }
+        } catch (_) { /* ignore */ }
+        try {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('cors-bypass-status', !!s.corsBypassEnabled);
+            }
+        } catch (_) { /* ignore */ }
+        return { ok: true, enabled: !!s.corsBypassEnabled };
+    });
+
+    ipcMain.handle('get-cors-bypass-status', () => !!loadSettings().corsBypassEnabled);
 
     ipcMain.handle('get-sessions', async () => {
         return db.getSessions(50, 0);
@@ -4329,14 +4571,6 @@ app.whenReady().then(async () => {
                 timezone:   row.timezone   || null,
                 language:   row.language   || null,
             };
-            if (activeFingerprint.user_agent) {
-                // Apply session-level UA for all tab sessions
-                for (const tab of tabManager.getAllTabs()) {
-                    if (tab?.view?.webContents && !tab.view.webContents.isDestroyed()) {
-                        try { tab.view.webContents.session.setUserAgent(activeFingerprint.user_agent, activeFingerprint.language || ''); } catch (e) { sysLog('warn', 'fingerprint', 'setUserAgent for tab failed: ' + (e?.message || e)); }
-                    }
-                }
-            }
             await applyFingerprintToAllTabs(activeFingerprint);
 
             // Apply TLS fingerprint profile
@@ -4693,15 +4927,17 @@ app.whenReady().then(async () => {
 
         if (!isValidDnsHost(host)) return { success: false, error: 'Invalid host' };
 
-        const mitm_inject_cors = payload?.mitm_inject_cors === true;
+        let mitm_inject_cors = false;
+        if (id && db) {
+            try {
+                const cur = db.getDnsOverrides().find((r) => Number(r.id) === id);
+                if (cur) mitm_inject_cors = !!cur.mitm_inject_cors;
+            } catch (_) { /* ignore */ }
+        }
         const isWildcard = host.startsWith('*.');
         if (isWildcard && ip) return { success: false, error: 'Wildcard host (*.…) cannot be combined with IPv4' };
-        if (isWildcard && !mitm_inject_cors) return { success: false, error: 'Wildcard host requires MITM CORS' };
-        if (mitm_inject_cors) {
-            if (ip && !isValidIpv4(ip)) return { success: false, error: 'Invalid IPv4 address' };
-        } else {
-            if (!isValidIpv4(ip)) return { success: false, error: 'Invalid IPv4 address' };
-        }
+        const needIpv4 = !mitm_inject_cors || !!ip;
+        if (needIpv4 && !isValidIpv4(ip)) return { success: false, error: 'Invalid IPv4 address' };
         const rewrite_host = String(payload?.rewrite_host ?? '').trim();
         try {
             const savedId = await db.saveDnsOverrideAsync({ id, host, ip, enabled, mitm_inject_cors, rewrite_host });
@@ -5151,13 +5387,33 @@ app.whenReady().then(async () => {
     // ── Inline settings (browser toolbar) ───────────────────────────────────
     ipcMain.handle('get-settings-all', () => {
         const s = loadSettings();
+        const allowed = new Set(['duckduckgo', 'google', 'brave', 'yandex', 'custom']);
+        const seKey = allowed.has(String(s.searchEngine || '').toLowerCase())
+            ? String(s.searchEngine).toLowerCase()
+            : 'duckduckgo';
         return {
             filterPatterns:  s.filterPatterns  || [],
             pasteUnlock:     s.pasteUnlock !== false,
+            corsBypassEnabled: s.corsBypassEnabled === true,
             trafficOpts:     s.trafficOpts || {},
             effectiveTrafficMode: getCurrentTrafficMode(),
             tracking:        getTrackingSettings(),
+            searchEngine: seKey,
+            searchEngineCustomUrl: String(s.searchEngineCustomUrl || '').trim(),
         };
+    });
+
+    ipcMain.handle('save-search-engine-settings', (_, opts) => {
+        const s = loadSettings();
+        const o = opts && typeof opts === 'object' ? opts : {};
+        const allowed = new Set(['duckduckgo', 'google', 'brave', 'yandex', 'custom']);
+        const key = allowed.has(String(o.searchEngine || '').toLowerCase())
+            ? String(o.searchEngine).toLowerCase()
+            : 'duckduckgo';
+        s.searchEngine = key;
+        s.searchEngineCustomUrl = o.searchEngineCustomUrl != null ? String(o.searchEngineCustomUrl).trim() : (s.searchEngineCustomUrl || '');
+        saveSettings(s);
+        return { success: true, searchEngine: s.searchEngine, searchEngineCustomUrl: s.searchEngineCustomUrl };
     });
 
     ipcMain.handle('set-paste-unlock', (_, enabled) => {

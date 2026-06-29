@@ -433,7 +433,7 @@
     </div>
 
     <div class="note-bar">
-        <span><b>MITM only</b>. Direct tabs / bypass: no effect. <b>Rewrite Host</b>: optional <code>Host</code> to IPv4 target (<code>name:port</code> if not 80/443). <b>CORS</b> column: <b>MITM</b> injects <code>Access-Control-*</code> when <code>Origin</code> present (rule on).</span>
+        <span><b>MITM only</b>. Direct tabs / bypass: no effect. <b>Rewrite Host</b>: optional <code>Host</code> to IPv4 target (<code>name:port</code> if not 80/443). <b>CORS bypass</b> for all sites: use the <b>CORS</b> button on the main browser toolbar (not per-rule here). Legacy per-rule CORS rows may still appear until removed.</span>
     </div>
 
     <div class="table-wrap">
@@ -444,7 +444,6 @@
                     <th>Host</th>
                     <th>IP</th>
                     <th style="max-width:200px">Rewrite Host</th>
-                    <th style="width:88px">CORS</th>
                     <th style="width:132px">Updated</th>
                     <th style="width:52px"></th>
                 </tr>
@@ -480,8 +479,8 @@
             <input type="text" id="e-host" placeholder="api.example.com or *.example.com">
         </div>
         <div class="edit-field">
-            <label title="Empty if CORS-only rule (no IP redirect)">IPv4</label>
-            <input type="text" id="e-ip" placeholder="1.2.3.4 or empty">
+            <label>IPv4</label>
+            <input type="text" id="e-ip" placeholder="1.2.3.4">
         </div>
         <div class="edit-field">
             <label title="Sent as HTTP Host header (needs IPv4). E.g. internal:8080">Rewrite Host</label>
@@ -490,11 +489,6 @@
         <div class="edit-field">
             <label style="display:flex;align-items:center;gap:6px">
                 <input type="checkbox" id="e-enabled" checked> On
-            </label>
-        </div>
-        <div class="edit-field">
-            <label style="display:flex;align-items:center;gap:6px" title="Inject Access-Control-* in MITM when Origin present. Rule must be on.">
-                <input type="checkbox" id="e-mitm-cors"> CORS: MITM
             </label>
         </div>
     </div>

@@ -11,14 +11,17 @@ function getMaxTabsBeforeWarning(loadSettings) {
 
 /**
  * @param {{ loadSettings: function, tabManager: object, dialog: object, mainWindow?: import('electron').BrowserWindow | null }} ctx
+ * @param {import('electron').BrowserWindow | null | undefined} [parentWin] — e.g. session profile modal (must be on top of main)
  * @returns {Promise<boolean>}
  */
-async function confirmOpenAnotherTab(ctx) {
+async function confirmOpenAnotherTab(ctx, parentWin) {
     if (process.env.CUPNET_E2E === '1') return true;
     const limit = getMaxTabsBeforeWarning(ctx.loadSettings);
     const n = [...ctx.tabManager.getAllTabs()].length;
     if (n < limit) return true;
-    const win = ctx.mainWindow && !ctx.mainWindow.isDestroyed() ? ctx.mainWindow : undefined;
+    const win = parentWin && !parentWin.isDestroyed()
+        ? parentWin
+        : (ctx.mainWindow && !ctx.mainWindow.isDestroyed() ? ctx.mainWindow : undefined);
     const { response } = await ctx.dialog.showMessageBox(win, {
         type: 'warning',
         buttons: ['Cancel', 'Open tab'],

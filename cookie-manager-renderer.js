@@ -228,7 +228,8 @@ function cookiesChanged(a, b) {
     if (a.length !== b.length) return true;
     for (let i = 0; i < a.length; i++) {
         if (a[i].name !== b[i].name || a[i].value !== b[i].value ||
-            a[i].domain !== b[i].domain || a[i].expirationDate !== b[i].expirationDate) return true;
+            a[i].domain !== b[i].domain || a[i].path !== b[i].path ||
+            a[i].expirationDate !== b[i].expirationDate) return true;
     }
     return false;
 }
@@ -393,6 +394,11 @@ function renderTable() {
             !c.expirationDate ? `<span class="flag sess">Session</span>` : '',
         ].filter(Boolean).join('');
 
+        const identity = formatCookieIdentity(c);
+        const dupHint = countCookiesWithSameName(c.name) > 1
+            ? ` (${countCookiesWithSameName(c.name)} cookies share this name)`
+            : '';
+
         return `<tr data-idx="${i}">
             <td class="cell-name"  title="${escHtml(c.name)}">${escHtml(c.name)}</td>
             <td class="cell-value" title="${escHtml(c.value)}">${escHtml(truncate(c.value, 40))}</td>
@@ -402,8 +408,8 @@ function renderTable() {
             <td><div class="cell-flags">${flags}</div></td>
             <td>
                 <div class="actions-cell">
-                    <button class="btn btn-ghost btn-sm btn-edit-row" data-idx="${i}" title="Edit">✎</button>
-                    <button class="btn btn-danger btn-sm btn-del-row"  data-idx="${i}" title="Delete">✕</button>
+                    <button class="btn btn-ghost btn-sm btn-edit-row" data-idx="${i}" title="Edit ${escHtml(identity)}">✎</button>
+                    <button class="btn btn-danger btn-sm btn-del-row"  data-idx="${i}" title="Delete only ${escHtml(identity)}${dupHint}">✕</button>
                     <button class="btn btn-ghost btn-sm btn-copy-val"  data-idx="${i}" title="Copy value">⧉</button>
                 </div>
             </td>
@@ -416,6 +422,16 @@ function truncate(s, len) {
     return s.length > len ? s.slice(0, len) + '…' : s;
 }
 
+function formatCookieIdentity(c) {
+    const domain = c?.domain || '?';
+    const path = c?.path || '/';
+    return `"${c?.name || '?'}" · ${domain} · ${path}`;
+}
+
+function countCookiesWithSameName(name, list = allCookies) {
+    return (list || []).filter((c) => c.name === name).length;
+}
+
 function copyToClipboard(text) {
     navigator.clipboard.writeText(text || '').catch(() => {});
     setStatus('Value copied to clipboard', 'ok', 1500);
@@ -424,7 +440,7 @@ function copyToClipboard(text) {
 // ─── Edit panel ───────────────────────────────────────────────────────────────
 function openEdit(cookie) {
     editingCookie = cookie || null;
-    editPanelTitle.textContent = cookie ? `Edit: ${cookie.name}` : 'New Cookie';
+    editPanelTitle.textContent = cookie ? `Edit: ${formatCookieIdentity(cookie)}` : 'New Cookie';
     document.getElementById('e-name').value     = cookie?.name       ?? '';
     document.getElementById('e-value').value    = cookie?.value      ?? '';
     document.getElementById('e-domain').value   = cookie?.domain     ?? '';
@@ -483,9 +499,19 @@ document.getElementById('btn-delete-from-edit').addEventListener('click', async 
 
 // ─── Delete ───────────────────────────────────────────────────────────────────
 async function deleteCookie(c) {
-    const url = `${c.secure ? 'https' : 'http'}://${(c.domain || '').replace(/^\./, '')}${c.path || '/'}`;
-    await api.removeCookie(activeTabId, url, c.name);
-    setStatus(`Deleted "${c.name}"`, 'ok');
+    const sameNameCount = countCookiesWithSameName(c.name);
+    let msg = `Delete this cookie only?\n\n${formatCookieIdentity(c)}`;
+    if (sameNameCount > 1) {
+        msg += `\n\n${sameNameCount} cookies in this tab share the name "${c.name}". Only the selected domain/path entry will be removed.`;
+    }
+    if (!confirm(msg)) return;
+
+    const result = await api.removeCookie(activeTabId, c);
+    if (result?.success === false) {
+        setStatus(`Error: ${result.error || 'delete failed'}`, 'err');
+        return;
+    }
+    setStatus(`Deleted ${formatCookieIdentity(c)}`, 'ok');
     await loadCookies();
 }
 
@@ -495,7 +521,7 @@ document.getElementById('btn-add-new').addEventListener('click', () => openEdit(
 document.getElementById('btn-clear-all').addEventListener('click', async () => {
     const domFilter = filterDomain.value.trim();
     const msg = domFilter
-        ? `Delete all cookies for domain "${domFilter}"?`
+        ? `Delete all cookies matching domain filter "${domFilter}" in this tab?`
         : 'Delete ALL cookies for this tab?';
     if (!confirm(msg)) return;
     const result = await api.clearCookies(activeTabId, domFilter || null);

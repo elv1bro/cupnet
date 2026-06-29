@@ -80,7 +80,13 @@ test('cm3) remove-cookie — cookie gone', async () => {
         return tabs.find((t) => t.isActive)?.id;
     });
     await mainWindow.evaluate(
-        async (tid) => window.electronAPI.removeCookie(tid, 'https://httpbin.org/', 'cupnet_ipc'),
+        async (tid) =>
+            window.electronAPI.removeCookie(tid, {
+                name: 'cupnet_ipc',
+                domain: 'httpbin.org',
+                path: '/',
+                secure: true,
+            }),
         tabId
     );
     await navigateAndWait(electronApp, HTTPBIN_COOKIES);

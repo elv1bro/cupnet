@@ -33,6 +33,7 @@ export default function es(kbdRow) {
     <a href="#proxy">3. Gestor de proxies</a>
     <a href="#fingerprint">4. Huella digital y TLS</a>
     <a href="#toolbar">5. Barra de herramientas</a>
+    <a href="#omnibox">Barra de direcciones (omnibox)</a>
     <a href="#hotkeys">6. Atajos</a>
     <a href="#logs">7. Registros · Comparar</a>
     <a href="#editor">8. Editor de peticiones</a>
@@ -119,7 +120,7 @@ export default function es(kbdRow) {
     <h2>5) Barra de herramientas</h2>
     ${kbdRow('← → ↻ ⌂', 'Atrás / Adelante / Recargar / Inicio (página de arranque)')}
     ${kbdRow('Pastilla proxy', 'Direct o nombre de perfil + detalle. Abre el gestor. Insignia de modo con MITM activo.')}
-    ${kbdRow('Barra de dirección', 'URL o búsqueda — Enter')}
+    ${kbdRow('Barra de dirección', 'Omnibox estilo Chrome — ver <a href="#omnibox">Barra de direcciones</a>')}
     <hr class="g-hr" style="margin:10px 0">
     ${kbdRow('<b>REC · Log #N</b>', 'REC alterna escritura en DB. Log abre el visor; insignia = sesión + recuento.')}
     ${kbdRow('<b>DevTools</b>', 'Herramientas para la pestaña activa. También <kbd>F12</kbd>.')}
@@ -130,6 +131,19 @@ export default function es(kbdRow) {
     ${kbdRow('<b>Analyzer</b>', 'Analizador — formularios, captcha, endpoints')}
     ${kbdRow('<b>Console</b>', 'Consola del sistema stdout/stderr')}
     ${kbdRow('<b>Settings</b>', 'Ventana Ajustes (General / Tracking / Dispositivos / Rendimiento)')}
+</div>
+
+<div id="omnibox" class="g-card">
+    <h2>Barra de direcciones (omnibox)</h2>
+    <p>Similar a Chrome: <b>historial con frecency</b>, <b>autocompletado inline</b> del mejor match, sugerencias por categorías (búsqueda, cambiar pestaña, enlaces rápidos, historial) y lista en un overlay aparte.</p>
+    ${kbdRow('<kbd>Ctrl L</kbd> (⌘L)', 'Enfocar y abrir sugerencias')}
+    ${kbdRow('<kbd>Ctrl K</kbd> (⌘K)', 'Paleta de comandos — prefijo <code>&gt;</code> para comandos integrados')}
+    ${kbdRow('<kbd>Tab</kbd> (inline)', 'Si el resto de la URL está seleccionado como «fantasma», Tab mueve el cursor al final (aceptar).')}
+    ${kbdRow('<kbd>Ctrl Enter</kbd> / <kbd>⌘ Enter</kbd> / <kbd>Alt Enter</kbd>', 'Abrir lo escrito en una <b>nueva pestaña</b> (también con overlay abierto).')}
+    ${kbdRow('Icono del sitio', 'Candado / globo; clic: TLS / conexión, copiar URL, borrar cookies del host, registro de red. Arrastrar = URL.')}
+    ${kbdRow('× / Stop / Esc', 'Vaciar campo. Recargar pasa a Stop mientras carga; Esc detiene si el overlay está cerrado.')}
+    ${kbdRow('Motor de búsqueda', 'Ajustes → Search engine: DuckDuckGo, Google, Brave, Yandex o URL propia con <code>{q}</code>.')}
+    <div class="g-tip">La página interna <code>cupnet://newtab</code> muestra la dirección vacía hasta que escribes.</div>
 </div>
 
 <div id="hotkeys" class="g-card">

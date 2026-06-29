@@ -3,15 +3,58 @@
 // ─── Pure utility functions (no Electron deps) ────────────────────────────────
 // Exported separately so they can be unit-tested without launching Electron.
 
-const SEARCH_ENGINE = 'https://duckduckgo.com/?q=';
+/** Preset search URL templates (`{q}` = encoded query; if absent, query is appended). */
+const SEARCH_ENGINES = {
+    duckduckgo: 'https://duckduckgo.com/?q=',
+    google: 'https://www.google.com/search?q=',
+    brave: 'https://search.brave.com/search?q=',
+    yandex: 'https://yandex.com/search/?text=',
+};
+
+/** @deprecated Use SEARCH_ENGINES.duckduckgo — kept for legacy tests/imports */
+const SEARCH_ENGINE = SEARCH_ENGINES.duckduckgo;
+
+function applySearchEngineTemplate(template, query) {
+    const t = String(template || '');
+    const enc = encodeURIComponent(query);
+    if (t.includes('{q}')) return t.split('{q}').join(enc);
+    return t + enc;
+}
+
+/**
+ * Normalize user-defined search URL (must contain `{q}` or gets `?q={q}` / `&q={q}`).
+ * @param {string} raw
+ */
+function normalizeCustomSearchEngineUrl(raw) {
+    let t = String(raw || '').trim();
+    if (!t) return SEARCH_ENGINES.duckduckgo;
+    if (t.includes('{q}')) return t;
+    if (t.includes('%s')) return t.replace(/%s/g, '{q}');
+    if (!/^https?:\/\//i.test(t)) t = 'https://' + t;
+    const join = t.includes('?') ? (t.endsWith('?') || t.endsWith('&') ? '' : '&') : '?';
+    return `${t}${join}q={q}`;
+}
+
+/**
+ * @param {{ searchEngine?: string, searchEngineCustomUrl?: string }|null|undefined} s settings slice or null
+ * @returns {string} template for applySearchEngineTemplate
+ */
+function getSearchEngineUrlFromSettings(s) {
+    if (!s || typeof s !== 'object') return SEARCH_ENGINE;
+    const key = String(s.searchEngine || 'duckduckgo').toLowerCase();
+    if (key === 'custom') return normalizeCustomSearchEngineUrl(s.searchEngineCustomUrl);
+    return SEARCH_ENGINES[key] || SEARCH_ENGINE;
+}
 
 /**
  * Resolve raw user input (URL bar) to a full navigatable URL.
  *   "google.com"       → "https://google.com"
  *   "https://x.com"    → "https://x.com"
- *   "hello world"      → "https://duckduckgo.com/?q=hello+world"
+ *   "hello world"      → search engine URL for query
+ * @param {string} input
+ * @param {{ searchEngineUrl?: string }} [opts]
  */
-function resolveNavigationUrl(input) {
+function resolveNavigationUrl(input, opts = {}) {
     if (!input || typeof input !== 'string') return null;
     const s = input.trim();
     if (!s) return null;
@@ -22,7 +65,33 @@ function resolveNavigationUrl(input) {
         const withProto = 'https://' + s;
         try { new URL(withProto); return withProto; } catch {}
     }
-    return SEARCH_ENGINE + encodeURIComponent(s);
+    const engine = opts.searchEngineUrl || SEARCH_ENGINE;
+    return applySearchEngineTemplate(engine, s);
+}
+
+/**
+ * Resolve omnibox / navigation input against the active page when input is a site-relative path.
+ * @param {string} input
+ * @param {string|null|undefined} baseUrl current tab URL (https://host/…)
+ * @param {{ searchEngineUrl?: string }} [opts]
+ * @returns {string|null}
+ */
+function resolveNavigationUrlWithBase(input, baseUrl, opts = {}) {
+    if (!input || typeof input !== 'string') return null;
+    const s = input.trim();
+    if (!s) return null;
+    if (/^[a-z][a-z\d+\-.]*:\/\//i.test(s)) {
+        return resolveNavigationUrl(s, opts);
+    }
+    const base = String(baseUrl || '').trim();
+    if (s.startsWith('/') && base && !base.startsWith('file:') && !base.startsWith('about:')) {
+        try {
+            const abs = new URL(s, base).href;
+            new URL(abs);
+            return abs;
+        } catch { /* fall through to search / domain heuristics */ }
+    }
+    return resolveNavigationUrl(s, opts);
 }
 
 /**
@@ -114,12 +183,30 @@ function sanitizeOutgoingRequestHeaders(headers) {
     return out;
 }
 
+/**
+ * True when the user typed an origin only (scheme + host[:port] + optional `/`).
+ * Inline history ghost must not extend these into deeper paths.
+ * @param {string} trimmed
+ * @returns {boolean}
+ */
+function shouldSkipOmniboxInlineGhost(trimmed) {
+    const t = String(trimmed || '').trim();
+    if (!t) return true;
+    return /^https?:\/\/[^/?#]+\/?$/i.test(t);
+}
+
 module.exports = {
     resolveNavigationUrl,
+    resolveNavigationUrlWithBase,
     parseProxyTemplate,
     extractTemplateVars,
     formatBytes,
     shouldFilterUrl,
     sanitizeOutgoingRequestHeaders,
+    shouldSkipOmniboxInlineGhost,
     SEARCH_ENGINE,
+    SEARCH_ENGINES,
+    applySearchEngineTemplate,
+    getSearchEngineUrlFromSettings,
+    normalizeCustomSearchEngineUrl,
 };

@@ -22,99 +22,113 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
 
 /* ── Topbar ── */
 .topbar {
-    display: flex; align-items: center; gap: var(--space-2);
-    padding: var(--space-3) var(--space-4); background: var(--bg1); border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 14px;
+    background: var(--bg1);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0; height: 38px;
 }
-.topbar-title { font-size: 15px; font-weight: 700; color: var(--hi); }
-.spacer { flex: 1; }
-.proxy-status-pill {
-    display: flex; align-items: center; gap: 7px;
-    padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 500;
-    border: 1px solid var(--border); background: var(--bg2);
+.topbar-title {
+    font-size: 12px; font-weight: 600; color: var(--dim);
+    display: flex; align-items: center; gap: 6px; flex-shrink: 0;
 }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.status-dot.active   { background: var(--green); box-shadow: 0 0 6px rgba(34,197,94,0.5); }
-.status-dot.direct   { background: #60a5fa; box-shadow: 0 0 6px rgba(96,165,250,0.4); }
-.status-dot.inactive { background: var(--dim); }
-.status-ip { font-family: 'SF Mono','Fira Code',monospace; font-size: 11px; color: var(--dim); }
+.topbar-title .icon-svg { width: 14px; height: 14px; color: var(--accent); opacity: 0.75; }
+.spacer { flex: 1; min-width: 4px; }
 
-/* ── AzureTLS live stats ── */
-.mitm-stats {
-    display: flex; align-items: center; gap: 5px;
-    padding: 4px 10px; border-radius: 20px; font-size: 11px;
-    border: 1px solid var(--border); background: var(--bg2);
+.topbar-rail {
+    display: flex; align-items: center;
+    height: 28px; padding: 0 6px 0 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(42,51,80,0.65);
+    background: rgba(0,0,0,0.15);
+    flex-shrink: 0; min-width: 0;
+}
+.topbar-divider {
+    width: 1px; height: 14px; margin: 0 8px;
+    background: rgba(42,51,80,0.9); flex-shrink: 0;
+}
+.topbar-actions {
+    display: flex; align-items: center; gap: 1px; flex-shrink: 0;
+}
+
+.status-pill-btn {
+    display: inline-flex; align-items: center;
+    background: transparent; border: none; padding: 0; margin: 0;
+    cursor: pointer; font: inherit; color: inherit;
+    border-radius: 4px; min-width: 0; max-width: 340px;
+}
+.status-pill-btn:hover { background: rgba(255,255,255,0.04); }
+.status-pill-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.status-card {
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 4px 0 0; min-width: 0;
+}
+.status-card.active .status-primary { color: #86efac; }
+.status-card.direct .status-primary { color: #93c5fd; }
+
+.status-dot {
+    width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
+}
+.status-dot.active   { background: var(--green); }
+.status-dot.direct   { background: #60a5fa; }
+.status-dot.inactive { background: #4b5563; }
+
+.status-lines {
+    display: flex; align-items: center; min-width: 0;
+    font-size: 11px; line-height: 1;
+}
+.status-primary {
+    font-weight: 500; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.status-sep {
+    color: rgba(123,141,176,0.45); padding: 0 5px; flex-shrink: 0; font-size: 10px;
+}
+.status-secondary {
+    font-weight: 400; color: var(--dim);
+    font-family: 'SF Mono','Fira Code',monospace; font-size: 10px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.status-secondary:empty { display: none; }
+
+.metrics-inline {
+    display: flex; align-items: center;
     font-family: 'SF Mono','Fira Code',monospace;
-    flex-shrink: 0;
+    font-size: 10px; color: var(--dim);
+    flex-shrink: 0; white-space: nowrap;
 }
 .mitm-stat-dot {
-    width: 7px; height: 7px; border-radius: 50%; background: var(--dim);
-    flex-shrink: 0; transition: background 0.3s;
+    width: 4px; height: 4px; border-radius: 50%; background: #4b5563;
+    flex-shrink: 0; margin-right: 7px;
 }
-.mitm-stat-dot.ready  { background: var(--green); box-shadow: 0 0 5px rgba(34,197,94,0.5); }
-.mitm-stat-dot.busy   { background: var(--amber); box-shadow: 0 0 5px rgba(245,158,11,0.5); }
-.mitm-stat-dot.error  { background: var(--red);   box-shadow: 0 0 5px rgba(239,68,68,0.5); }
-.mitm-stat-item { display: flex; align-items: baseline; gap: 2px; }
-.mitm-stat-val  { font-weight: 700; color: var(--hi); font-size: 11px; }
-.mitm-stat-lbl  { color: var(--dim); font-size: 11px; font-weight: 400; }
-.mitm-stat-sep  { color: var(--border); font-size: 11px; }
+.mitm-stat-dot.ready  { background: var(--green); }
+.mitm-stat-dot.busy   { background: var(--amber); }
+.mitm-stat-dot.error  { background: var(--red); }
 
-/* Collapsible MITM stats (progressive disclosure) */
-.mitm-stats-wrap {
-    flex-shrink: 0;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--bg2);
-    overflow: hidden;
+.metric-item {
+    display: inline-flex; align-items: baseline; gap: 2px;
 }
-.mitm-stats-wrap summary {
-    list-style: none;
-    cursor: pointer;
-    padding: 4px var(--space-3);
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--dim);
-    user-select: none;
-    display: flex;
-    align-items: center;
-    gap: 6px;
+.metric-item + .metric-item::before {
+    content: '·'; margin: 0 5px; color: rgba(42,51,80,0.9);
 }
-.mitm-stats-wrap summary::-webkit-details-marker { display: none; }
-.mitm-stats-wrap summary:hover { color: var(--hi); background: rgba(255,255,255,0.03); }
-.mitm-stats-wrap[open] summary { border-bottom: 1px solid var(--border); }
-.mitm-stats-inner {
-    padding: var(--space-2) var(--space-3);
+.metric-item-val { font-weight: 500; color: rgba(201,211,232,0.85); font-size: 10px; }
+.metric-item-val.accent { color: var(--accent); }
+.metric-item-val.err { color: var(--red); }
+.metric-item-unit { font-size: 9px; color: var(--dim); opacity: 0.85; }
+
+.btn-icon-sm {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; padding: 0;
+    border-radius: 5px; border: none; background: transparent;
+    color: var(--dim); cursor: pointer; flex-shrink: 0;
 }
-.mitm-stats-inner .mitm-stats {
-    border: none;
-    background: transparent;
-    padding: 0;
-}
-.status-pill-btn {
-    display: inline-flex;
-    align-items: center;
-    background: transparent;
-    border: none;
-    padding: 0;
-    margin: 0;
-    cursor: pointer;
-    font: inherit;
-    color: inherit;
-    border-radius: 20px;
-}
-.status-pill-btn:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-}
-.btn-disconnect-top {
-    border-color: rgba(239,68,68,0.45);
-    color: #fca5a5;
-}
-.btn-disconnect-top:hover {
-    border-color: var(--red);
-    background: rgba(239,68,68,0.12);
-    color: #fff;
-}
+.btn-icon-sm .icon-svg { width: 13px; height: 13px; }
+.btn-icon-sm:hover { color: var(--hi); background: rgba(255,255,255,0.06); }
+.btn-icon-sm:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.btn-icon-sm.btn-disconnect-top { color: #f87171; }
+.btn-icon-sm.btn-disconnect-top:hover { background: rgba(239,68,68,0.1); color: #fca5a5; }
+.btn-icon-sm.checking { opacity: 0.4; pointer-events: none; }
 
 /* ── Layout ── */
 .layout { display: flex; flex: 1; overflow: hidden; }
@@ -639,6 +653,252 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
     cursor: pointer; margin: 0 4px 4px 0; transition: border-color 0.1s;
 }
 .recent-chip:hover { border-color: var(--accent); color: var(--text); }
+
+/* ── Connection mode switch ── */
+.conn-mode-switch {
+    display: flex; gap: 4px; margin-bottom: 14px;
+    padding: 3px; border-radius: 8px; background: var(--bg2); border: 1px solid var(--border);
+    width: fit-content;
+}
+.conn-mode-btn {
+    padding: 6px 14px; border-radius: 6px; border: none; background: transparent;
+    color: var(--dim); font-size: 12px; font-weight: 600; cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+}
+.conn-mode-btn.active { background: var(--accent); color: #fff; }
+.conn-mode-btn:hover:not(.active) { color: var(--hi); background: rgba(255,255,255,0.04); }
+
+.provider-panel, .manual-panel { display: none; }
+.provider-panel.active, .manual-panel.active { display: block; }
+
+.provider-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+}
+@media (max-width: 720px) { .provider-grid { grid-template-columns: 1fr; } }
+
+/* Country picker */
+.country-picker-wrap { position: relative; }
+.country-picker-input {
+    width: 100%; background: var(--bg2); border: 1px solid var(--border); border-radius: 7px;
+    color: var(--hi); padding: 7px 10px; font-size: 13px; outline: none;
+}
+.country-picker-input:focus { border-color: var(--accent); }
+.country-picker-dropdown {
+    display: none; position: absolute; left: 0; right: 0; top: calc(100% + 4px);
+    max-height: 280px; overflow-y: auto; z-index: 50;
+    background: var(--bg1); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    scrollbar-width: thin;
+}
+.country-picker-dropdown.open { display: block; }
+.country-region-label {
+    padding: 6px 10px 4px; font-size: 10px; font-weight: 700;
+    color: var(--dim); text-transform: uppercase; letter-spacing: 0.05em;
+    background: var(--bg2); position: sticky; top: 0;
+}
+.country-option {
+    display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+    cursor: pointer; font-size: 12px; color: var(--text);
+}
+.country-option:hover, .country-option.selected { background: rgba(59,126,248,0.12); color: var(--hi); }
+.country-option-flag { font-size: 16px; line-height: 1; }
+.country-option-code { font-size: 10px; color: var(--dim); margin-left: auto; font-family: monospace; }
+
+.session-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.session-seg {
+    display: flex; gap: 4px; padding: 3px; border-radius: 8px;
+    background: var(--bg2); border: 1px solid var(--border);
+}
+.session-seg-btn {
+    padding: 5px 12px; border-radius: 6px; border: none; background: transparent;
+    color: var(--dim); font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.session-seg-btn.active { background: var(--bg3); color: var(--hi); box-shadow: inset 0 0 0 1px var(--border); }
+.duration-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.duration-row input[type="number"] {
+    width: 72px; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--hi); padding: 5px 8px; font-size: 12px;
+}
+.duration-row input[type="range"] { flex: 1; min-width: 120px; accent-color: var(--accent); }
+
+/* Connect bar in header */
+.connect-bar {
+    display: flex; align-items: center; gap: 6px;
+    margin-left: auto; flex-shrink: 0;
+}
+.connect-bar-hint { display: none; }
+.connect-bar-actions { display: flex; gap: 6px; align-items: center; }
+.connect-bar-actions .btn.connected-state {
+    background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.4); color: var(--green); cursor: default;
+}
+.connect-bar-actions .btn.has-unsaved {
+    box-shadow: 0 0 0 2px rgba(245,158,11,0.45);
+}
+.editor-header-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+
+/* Action bar — save only */
+.action-bar { justify-content: flex-start; }
+.action-bar-right { margin-left: auto; }
+
+/* Sidebar filters & provider accounts */
+.sidebar-filters {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.sidebar-filters-row { display: flex; gap: 6px; }
+.sidebar-filters select {
+    flex: 1; min-width: 0; background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 11px; padding: 5px 8px;
+}
+.provider-accounts-section {
+    flex-shrink: 0; border-bottom: 1px solid var(--border);
+    background: rgba(168,85,247,0.04);
+}
+.provider-accounts-section summary {
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+}
+.provider-accounts-section summary::-webkit-details-marker { display: none; }
+.provider-accounts-summary {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px var(--space-3);
+    font-size: 11px; font-weight: 600; color: var(--text);
+}
+.provider-accounts-summary:hover { background: rgba(255,255,255,0.03); }
+.provider-accounts-chevron {
+    font-size: 10px; color: var(--dim); transition: transform 0.15s;
+    width: 12px; flex-shrink: 0;
+}
+.provider-accounts-section[open] .provider-accounts-chevron { transform: rotate(90deg); }
+.provider-accounts-summary-label { flex: 1; min-width: 0; }
+.provider-accounts-count { color: var(--dim); font-weight: 500; font-size: 10px; }
+.provider-acct-add-inline {
+    flex-shrink: 0; padding: 2px 8px !important; font-size: 10px !important;
+}
+.provider-accounts-body { padding: 0 var(--space-3) var(--space-3); display: flex; flex-direction: column; gap: 6px; }
+.provider-account-list { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
+.provider-account-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px; border-radius: 6px; background: var(--bg2); border: 1px solid var(--border);
+    font-size: 11px; cursor: pointer;
+}
+.provider-account-item:hover { border-color: rgba(59,126,248,0.35); background: rgba(59,126,248,0.06); }
+.provider-account-item.configured { border-color: rgba(34,197,94,0.2); }
+.provider-account-name { font-weight: 500; color: var(--hi); }
+.provider-account-user { font-size: 10px; color: var(--dim); font-family: monospace; }
+.provider-account-empty { font-size: 10px; color: var(--dim); padding: 4px 0; }
+.provider-options-panel {
+    display: flex; flex-direction: column; gap: 0;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: rgba(255,255,255,0.02); padding: 2px 0; margin-bottom: 8px;
+}
+.provider-options-title {
+    font-size: 10px; font-weight: 600; color: var(--dim);
+    text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 8px 12px 4px;
+}
+.provider-opt-row { margin: 0; padding: 0 12px 8px; }
+.provider-opt-row label { font-size: 11px; }
+.provider-opt-row input[type="text"],
+.provider-opt-row select {
+    width: 100%; background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 11px; padding: 6px 8px;
+}
+.provider-opt-check {
+    display: flex; align-items: center; gap: 8px; padding-top: 2px;
+}
+.provider-opt-check input { width: auto; }
+.provider-opt-check span { font-size: 11px; color: var(--text); }
+
+.sidebar-profiles-block {
+    display: flex; flex-direction: column; flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+}
+.sidebar-profiles-block .sidebar-my-profiles-label {
+    padding: var(--space-2) var(--space-3) var(--space-1);
+    margin: 0;
+}
+.sidebar-profiles-block .sidebar-filters {
+    border-bottom: none;
+    padding-top: 0;
+}
+.sidebar-profiles-block .left-search {
+    width: 100%;
+}
+.sidebar-profiles-block .left-search input {
+    width: 100%;
+}
+
+/* Provider account modal */
+.pm-modal-backdrop {
+    display: none; position: fixed; inset: 0; z-index: 200;
+    background: rgba(0,0,0,0.55); align-items: center; justify-content: center;
+    padding: 16px;
+}
+.pm-modal-backdrop.open { display: flex; }
+.pm-modal {
+    width: 100%; max-width: 380px;
+    background: var(--bg1); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 16px 48px rgba(0,0,0,0.45);
+    overflow: hidden;
+}
+.pm-modal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 14px; border-bottom: 1px solid var(--border);
+}
+.pm-modal-title { font-size: 13px; font-weight: 600; color: var(--hi); margin: 0; }
+.pm-modal-close {
+    width: 28px; height: 28px; border: none; border-radius: 6px;
+    background: transparent; color: var(--dim); cursor: pointer; font-size: 18px; line-height: 1;
+}
+.pm-modal-close:hover { background: rgba(255,255,255,0.06); color: var(--hi); }
+.pm-modal-body { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.pm-modal-body label { font-size: 11px; font-weight: 600; color: var(--dim); }
+.pm-modal-body select,
+.pm-modal-body input {
+    width: 100%; background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--hi); padding: 7px 10px; font-size: 12px;
+}
+.pm-modal-footer {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px; border-top: 1px solid var(--border); background: var(--bg2);
+}
+.pm-modal-footer .spacer-flex { flex: 1; }
+.pm-modal-footer .btn.danger { margin-right: auto; }
+.acct-modal-test-status {
+    min-height: 36px; font-size: 11px; line-height: 1.45; color: var(--dim);
+    padding: 8px 10px; border-radius: 6px; background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+}
+.acct-modal-test-status.ok { color: var(--green); border-color: rgba(34,197,94,0.35); }
+.acct-modal-test-status.err { color: #f87171; border-color: rgba(239,68,68,0.35); }
+.acct-modal-test-status.busy { color: var(--accent); }
+.acct-modal-test-row { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.acct-modal-test-row.ok { color: var(--green); }
+.acct-modal-test-row.err { color: #f87171; }
+.acct-modal-test-proxy {
+    font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+    font-size: 10px; color: var(--dim); word-break: break-all;
+    margin-top: 3px; opacity: 0.95;
+}
+.unsaved-modal-message { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text); }
+.editor-header-actions .btn.has-unsaved:not(:disabled) {
+    box-shadow: 0 0 0 1px rgba(245,158,11,0.45);
+}
+.provider-creds-hint {
+    padding: 8px 10px; border-radius: 8px; font-size: 11px; line-height: 1.5;
+    background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.25); color: #fcd34d;
+}
+.provider-creds-ok {
+    padding: 8px 10px; border-radius: 8px; font-size: 11px; line-height: 1.5;
+    background: rgba(34,197,94,0.08); border: 1px solid rgba(34,197,94,0.2); color: #86efac;
+}
+
+/* Profile list provider badge */
+.pi-badge.provider { background: rgba(168,85,247,0.12); color: #c084fc; border: 1px solid rgba(168,85,247,0.25); }
+.pi-subtitle { font-size: 10px; color: var(--dim); margin-top: 2px; }
     </style>
 </head>
 <body>
@@ -649,63 +909,38 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
         Proxy Manager
     </span>
-    <button type="button" class="status-pill-btn" id="status-pill-btn" title="Click to refresh IP / geo">
-        <div class="proxy-status-pill" id="status-pill">
-            <div class="status-dot inactive" id="status-dot"></div>
-            <span id="status-label">No proxy</span>
-            <span class="status-ip" id="status-ip"></span>
-        </div>
-    </button>
     <div class="spacer"></div>
-
-    <details class="mitm-stats-wrap" id="mitm-stats-wrap">
-        <summary>
-            <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-            MITM stats
-        </summary>
-        <div class="mitm-stats-inner">
-            <div class="mitm-stats" id="mitm-stats" title="AzureTLS MITM proxy statistics">
-                <span class="mitm-stat-dot" id="mitm-dot" title="Worker status"></span>
-                <span class="mitm-stat-item" title="Requests per second">
-                    <span class="mitm-stat-val" id="ms-rps">—</span>
-                    <span class="mitm-stat-lbl">req/s</span>
-                </span>
-                <span class="mitm-stat-sep">·</span>
-                <span class="mitm-stat-item" title="Average response time">
-                    <span class="mitm-stat-val" id="ms-avg">—</span>
-                    <span class="mitm-stat-lbl">avg</span>
-                </span>
-                <span class="mitm-stat-sep">·</span>
-                <span class="mitm-stat-item" title="In-flight requests">
-                    <span class="mitm-stat-val" id="ms-pend">0</span>
-                    <span class="mitm-stat-lbl">pending</span>
-                </span>
-                <span class="mitm-stat-sep">·</span>
-                <span class="mitm-stat-item" title="Total / errors">
-                    <span class="mitm-stat-val" id="ms-total">0</span>
-                    <span class="mitm-stat-lbl">total</span>
-                </span>
-                <span class="mitm-stat-sep">·</span>
-                <span class="mitm-stat-item" title="Error count">
-                    <span class="mitm-stat-val" id="ms-err" style="color:var(--red)">0</span>
-                    <span class="mitm-stat-lbl">err</span>
-                </span>
-                <span class="mitm-stat-sep">·</span>
-                <span class="mitm-stat-item" title="TLS profile">
-                    <span class="mitm-stat-val" id="ms-browser" style="color:var(--accent)">chrome</span>
-                </span>
+    <div class="topbar-rail">
+        <button type="button" class="status-pill-btn" id="status-pill-btn" title="Click to refresh IP / geo">
+            <div class="status-card" id="status-card">
+                <div class="status-dot inactive" id="status-dot"></div>
+                <div class="status-lines">
+                    <span class="status-primary" id="status-label">No proxy</span>
+                    <span class="status-sep" id="status-sep" aria-hidden="true">·</span>
+                    <span class="status-secondary" id="status-ip"></span>
+                </div>
             </div>
+        </button>
+        <span class="topbar-divider" aria-hidden="true"></span>
+        <div class="metrics-inline" id="mitm-stats" title="AzureTLS MITM proxy statistics">
+            <span class="mitm-stat-dot" id="mitm-dot" title="Worker status"></span>
+            <span class="metric-item"><span class="metric-item-val" id="ms-rps">—</span><span class="metric-item-unit">/s</span></span>
+            <span class="metric-item"><span class="metric-item-val" id="ms-avg">—</span></span>
+            <span class="metric-item"><span class="metric-item-val" id="ms-pend">0</span><span class="metric-item-unit">pend</span></span>
+            <span class="metric-item"><span class="metric-item-val" id="ms-total">0</span><span class="metric-item-unit">tot</span></span>
+            <span class="metric-item" id="ms-err-wrap" style="display:none"><span class="metric-item-val err" id="ms-err">0</span><span class="metric-item-unit">err</span></span>
+            <span class="metric-item"><span class="metric-item-val accent" id="ms-browser">chrome</span></span>
         </div>
-    </details>
-
-    <button class="btn" id="btn-check-ip" title="Check current IP / geo">
-        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-        Check IP
-    </button>
-    <button class="btn btn-disconnect-top" id="btn-disconnect" title="Disconnect proxy" style="display:none">
-        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        Disconnect
-    </button>
+        <span class="topbar-divider" aria-hidden="true"></span>
+        <div class="topbar-actions">
+            <button type="button" class="btn-icon-sm" id="btn-check-ip" title="Check current IP / geo">
+                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            </button>
+            <button type="button" class="btn-icon-sm btn-disconnect-top" id="btn-disconnect" title="Disconnect proxy" style="display:none">
+                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+    </div>
 </div>
 
 <div class="toast-proxy" id="toast-proxy" role="status" aria-live="polite"></div>
@@ -715,20 +950,37 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
 
     <!-- ── Left: list ── -->
     <div class="left-pane">
-        <div class="left-header">
-            <div class="left-search">
-                <input type="text" id="search-profiles" placeholder="Search profiles…" autocomplete="off">
+        <details class="provider-accounts-section" id="provider-accounts-section">
+            <summary class="provider-accounts-summary">
+                <span class="provider-accounts-chevron" aria-hidden="true">▸</span>
+                <span class="provider-accounts-summary-label">Provider accounts</span>
+                <span class="provider-accounts-count" id="provider-accounts-count">(0)</span>
+                <button type="button" class="btn sm provider-acct-add-inline" id="btn-acct-add">Add</button>
+            </summary>
+            <div class="provider-accounts-body">
+                <div class="provider-account-list" id="provider-account-list"></div>
             </div>
-            <button type="button" class="btn primary sm" id="btn-add-profile" title="New profile (⌘N)">
-                <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                New
-            </button>
+        </details>
+        <div class="sidebar-profiles-block">
+            <div class="sidebar-my-profiles-label">My profiles</div>
+            <div class="sidebar-filters">
+                <div class="left-search">
+                    <input type="text" id="search-profiles" placeholder="Search by name…" autocomplete="off">
+                </div>
+                <div class="sidebar-filters-row">
+                    <select id="filter-provider" title="Filter by provider">
+                        <option value="">All providers</option>
+                    </select>
+                    <select id="filter-country" title="Filter by last seen proxy country">
+                        <option value="">All countries</option>
+                    </select>
+                </div>
+            </div>
         </div>
         <div class="sidebar-built-in-block">
             <div class="sidebar-section-label" id="sidebar-label-built-in">Default</div>
             <div class="profile-list profile-list-built-in" id="profile-list-built-in"></div>
         </div>
-        <div class="sidebar-my-profiles-label">My profiles</div>
         <div class="profile-list" id="profile-list">
             <div class="empty-list">No profiles yet.<br><button type="button" class="btn primary sm empty-new-btn">New profile</button></div>
         </div>
@@ -752,16 +1004,26 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                     <span class="unsaved-dot" id="unsaved-dot" title="Unsaved changes"></span>
                     <span class="editor-title" id="editor-title">New Profile</span>
                 </div>
-                <button class="btn sm" id="btn-test" title="Test proxy (⌘⇧T)">
-                    <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                    Test
-                </button>
-                <button class="btn sm" id="btn-duplicate" style="display:none" title="Duplicate this profile">
-                    <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                    Copy
-                </button>
-                <button class="btn success sm" id="btn-connect-global" title="Connect selected profile for all tabs">Connect</button>
-                <button class="btn sm" id="btn-disconnect-global" title="Disconnect global proxy / upstream">Disconnect</button>
+                <div class="editor-header-actions">
+                    <button type="button" class="btn primary sm" id="btn-header-new" title="New profile (⌘N)">
+                        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        New Profile
+                    </button>
+                    <button class="btn sm" id="btn-test" title="Test proxy (⌘⇧T)">
+                        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                        Test
+                    </button>
+                    <button class="btn sm" id="btn-duplicate" style="display:none" title="Duplicate this profile">
+                        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                        Copy
+                    </button>
+                    <div class="connect-bar" id="connect-bar">
+                        <div class="connect-bar-actions">
+                            <button class="btn success sm" id="btn-connect-global" title="Apply selected profile to all tabs">Connect</button>
+                            <button class="btn sm" id="btn-disconnect-global" title="Disconnect global proxy / upstream">Disconnect</button>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="editor-tabs" role="tablist" aria-label="Profile sections">
@@ -777,11 +1039,70 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                 <!-- Name -->
                 <div class="form-row">
                     <label>Profile Name</label>
-                    <input type="text" id="f-name" placeholder="e.g. SmartProxy RU Session">
+                    <input type="text" id="f-name" placeholder="e.g. Decodo · Poland · Sticky">
                 </div>
 
-                <!-- Template -->
-                <div class="form-row mono">
+                <div class="conn-mode-switch" id="conn-mode-switch" style="display:none">
+                    <button type="button" class="conn-mode-btn active" data-mode="provider" id="conn-mode-provider">Provider</button>
+                    <button type="button" class="conn-mode-btn" data-mode="manual" id="conn-mode-manual">Manual URL</button>
+                </div>
+
+                <!-- Provider mode -->
+                <div class="provider-panel active" id="provider-panel">
+
+                    <div class="form-row">
+                        <label>Provider</label>
+                        <select id="f-provider">
+                            <option value="">Select provider…</option>
+                        </select>
+                        <div class="form-hint" id="provider-type-hint"></div>
+                        <div id="provider-creds-status"></div>
+                    </div>
+
+                    <div class="provider-grid" id="provider-creds-fields" style="display:none">
+                        <div class="form-row">
+                            <label>Username</label>
+                            <input type="text" id="f-provider-user" placeholder="Account username" autocomplete="off">
+                        </div>
+                        <div class="form-row">
+                            <label>Password</label>
+                            <input type="password" id="f-provider-pass" placeholder="Account password" autocomplete="off">
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <label>Country</label>
+                        <div class="country-picker-wrap" id="country-picker-wrap">
+                            <input type="text" class="country-picker-input" id="f-country-search"
+                                placeholder="Search country…" autocomplete="off" readonly>
+                            <div class="country-picker-dropdown" id="country-picker-dropdown"></div>
+                        </div>
+                        <input type="hidden" id="f-country-code" value="">
+                    </div>
+
+                    <div class="form-row" id="session-section">
+                        <label>Session</label>
+                        <div class="session-row">
+                            <div class="session-seg" id="session-seg">
+                                <button type="button" class="session-seg-btn active" data-session="rotating">Rotating</button>
+                                <button type="button" class="session-seg-btn" data-session="sticky">Sticky</button>
+                            </div>
+                            <div class="duration-row" id="duration-row" style="display:none">
+                                <label style="font-size:11px;color:var(--dim);margin:0">Duration</label>
+                                <input type="number" id="f-duration-min" min="1" max="1440" value="30">
+                                <span style="font-size:11px;color:var(--dim)">min</span>
+                                <input type="range" id="f-duration-slider" min="1" max="1440" value="30">
+                            </div>
+                        </div>
+                        <div class="form-hint" id="session-hint">Rotating — new IP on each request. Sticky keeps the same IP for the session duration.</div>
+                    </div>
+
+                    <div id="provider-options-panel" class="provider-options-panel" style="display:none"></div>
+                </div>
+
+                <!-- Manual URL mode -->
+                <div class="manual-panel" id="manual-panel">
+                <div class="form-row mono" id="f-template-row">
                     <label>Proxy URL / Template</label>
                     <textarea id="f-template" rows="2"
                         placeholder="http://user-{SID}-dur-30:pass@host.com:{RAND:40001-49999}"></textarea>
@@ -825,6 +1146,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                         </div>
                     </details>
                 </div>
+                </div><!-- /manual-panel -->
 
                 <!-- Parsed preview -->
                 <div class="form-row">
@@ -1140,19 +1462,70 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                         Delete
                     </button>
                 </div>
-                <button class="btn primary" id="btn-save" title="Save profile (⌘S)">
+                <button class="btn primary" id="btn-save" title="Save profile to disk (⌘S) — does not connect">
                     <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                     Save Profile
                 </button>
                 <button class="btn" id="btn-cancel">Cancel</button>
-                <div class="spacer"></div>
-                <span id="save-status" style="font-size:11px;color:var(--dim)"></span>
+                <div class="action-bar-right">
+                    <span id="save-status" style="font-size:11px;color:var(--dim)"></span>
+                </div>
             </div>
 
         </div>
     </div>
 </div>
 
+<div class="pm-modal-backdrop" id="acct-modal-backdrop" aria-hidden="true">
+    <div class="pm-modal" role="dialog" aria-labelledby="acct-modal-title" aria-modal="true">
+        <div class="pm-modal-header">
+            <h2 class="pm-modal-title" id="acct-modal-title">Provider account</h2>
+            <button type="button" class="pm-modal-close" id="acct-modal-close" aria-label="Close">×</button>
+        </div>
+        <div class="pm-modal-body">
+            <div class="form-row" style="margin:0">
+                <label for="acct-modal-provider">Provider</label>
+                <select id="acct-modal-provider"></select>
+            </div>
+            <div class="form-row" style="margin:0">
+                <label for="acct-modal-username">Username</label>
+                <input type="text" id="acct-modal-username" placeholder="Account username" autocomplete="off">
+            </div>
+            <div class="form-row" style="margin:0">
+                <label for="acct-modal-password">Password</label>
+                <input type="password" id="acct-modal-password" placeholder="Account password" autocomplete="off">
+            </div>
+            <div id="acct-modal-test-status" class="acct-modal-test-status">Test the account in 3 random countries before saving.</div>
+        </div>
+        <div class="pm-modal-footer">
+            <button type="button" class="btn danger sm" id="acct-modal-delete" style="display:none">Remove</button>
+            <button type="button" class="btn sm" id="acct-modal-test">Test account</button>
+            <span class="spacer-flex"></span>
+            <button type="button" class="btn sm" id="acct-modal-cancel">Cancel</button>
+            <button type="button" class="btn primary sm" id="acct-modal-save" disabled title="Run account test before saving">Save</button>
+        </div>
+    </div>
+</div>
+
+<div class="pm-modal-backdrop" id="unsaved-modal-backdrop" aria-hidden="true">
+    <div class="pm-modal" role="dialog" aria-labelledby="unsaved-modal-title" aria-modal="true">
+        <div class="pm-modal-header">
+            <h2 class="pm-modal-title" id="unsaved-modal-title">Unsaved changes</h2>
+            <button type="button" class="pm-modal-close" id="unsaved-modal-close" aria-label="Close">×</button>
+        </div>
+        <div class="pm-modal-body">
+            <p id="unsaved-modal-message" class="unsaved-modal-message">You have unsaved changes.</p>
+        </div>
+        <div class="pm-modal-footer">
+            <span class="spacer-flex"></span>
+            <button type="button" class="btn sm" id="unsaved-modal-cancel">Cancel</button>
+            <button type="button" class="btn primary sm" id="unsaved-modal-save">Save and continue</button>
+        </div>
+    </div>
+</div>
+
+<script src="decodo-endpoints.js"></script>
+<script src="proxy-providers.js"></script>
 <script src="proxy-tls-ua-sync.js"></script>
 <script src="proxy-manager-renderer.js"></script>
 </body>

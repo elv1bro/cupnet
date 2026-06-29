@@ -127,8 +127,6 @@ function openEdit(rule) {
     const er = document.getElementById('e-rewrite-host');
     if (er) er.value = rule?.rewrite_host || '';
     document.getElementById('e-enabled').checked = rule ? !!rule.enabled : true;
-    const ec = document.getElementById('e-mitm-cors');
-    if (ec) ec.checked = rule ? !!rule.mitm_inject_cors : false;
     editPanel.classList.add('open');
 }
 
@@ -157,7 +155,7 @@ function renderTable() {
     countLabel.textContent = `${filteredRules.length} / ${allRules.length} rules`;
 
     if (!filteredRules.length) {
-        tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No DNS override rules</td></tr>';
+        tbody.innerHTML = '<tr class="empty-row"><td colspan="6">No DNS override rules</td></tr>';
         return;
     }
 
@@ -166,10 +164,6 @@ function renderTable() {
         const rwEmpty = !String(rwFull).trim();
         const rwTitle = escHtml(rwEmpty ? '—' : rwFull);
         const rwShown = rwEmpty ? '—' : truncateDisplay(rwFull, REWRITE_DISPLAY_MAX);
-        const corsTitle = r.mitm_inject_cors
-            ? 'MITM injects Access-Control-* (needs Origin). Rule on.'
-            : 'BROWSER: server CORS only, no inject.';
-        const corsL2 = r.mitm_inject_cors ? 'MITM' : 'BROWSER';
         const rowClass = `${r.enabled ? 'rule-enabled' : 'rule-disabled'}${selectedRuleId === r.id ? ' row-selected' : ''}`;
         const ipVal = (r.ip || '').trim();
         const ipShown = ipVal ? escHtml(ipVal) : '—';
@@ -202,15 +196,6 @@ function renderTable() {
                 </div>
             </td>
             <td class="cell-rewrite" title="${rwTitle}">${escHtml(rwShown)}</td>
-            <td class="dns-cors-cell">
-                <button type="button"
-                    class="cors-toggle-btn ${r.mitm_inject_cors ? 'cors-toggle-on' : 'cors-toggle-off'} btn-cors-toggle"
-                    aria-pressed="${r.mitm_inject_cors ? 'true' : 'false'}"
-                    title="${escHtml(corsTitle)}">
-                    <span class="cors-l1">CORS</span>
-                    <span class="cors-l2">${escHtml(corsL2)}</span>
-                </button>
-            </td>
             <td title="${escHtml(r.updated_at || '')}">${escHtml(formatDate(r.updated_at || r.created_at))}</td>
             <td>
                 <div class="actions-cell">
@@ -301,29 +286,6 @@ tbody.addEventListener('click', async (e) => {
         return;
     }
 
-    if (e.target.closest('.btn-cors-toggle')) {
-        const nextCors = !rule.mitm_inject_cors;
-        if (!nextCors && !String(rule.ip || '').trim()) {
-            setStatus('Set IPv4 or delete rule to disable MITM CORS.', 'err', 0);
-            return;
-        }
-        const res = await api.saveDnsOverride({
-            id: rule.id,
-            host: rule.host,
-            ip: rule.ip,
-            enabled: rule.enabled,
-            mitm_inject_cors: nextCors,
-            rewrite_host: rule.rewrite_host || '',
-        });
-        if (!res?.success) {
-            setStatus(`CORS toggle failed: ${res?.error || 'unknown'}`, 'err', 0);
-            return;
-        }
-        setStatus(`${rule.host}: MITM CORS ${nextCors ? 'on' : 'off'}`, 'ok');
-        await loadRules();
-        return;
-    }
-
     if (e.target.closest('.btn-delete')) {
         if (!confirm(`Delete DNS rule for "${rule.host}"?`)) return;
         const res = await api.deleteDnsOverride(rule.id);
@@ -375,14 +337,13 @@ document.getElementById('btn-save-rule').addEventListener('click', async () => {
         return;
     }
 
-    const mitm_inject_cors = !!document.getElementById('e-mitm-cors')?.checked;
     if (host.startsWith('*.')) {
-        if (rewrite_host) {
-            setStatus('*. pattern: no Rewrite Host', 'err');
+        if (!editingRule || String(editingRule.host || '') !== host) {
+            setStatus('Wildcard DNS rules cannot be added here. Use the main toolbar CORS bypass, or edit an existing legacy rule.', 'err');
             return;
         }
-        if (!mitm_inject_cors) {
-            setStatus('*. pattern: needs CORS MITM', 'err');
+        if (rewrite_host) {
+            setStatus('*. pattern: no Rewrite Host', 'err');
             return;
         }
         if (ip) {
@@ -400,23 +361,16 @@ document.getElementById('btn-save-rule').addEventListener('click', async () => {
             return;
         }
     }
-    if (mitm_inject_cors) {
-        if (ip && !isValidIpv4(ip)) {
-            setStatus('Invalid IPv4 (example: 1.2.3.4)', 'err');
-            return;
-        }
-    } else {
-        if (!isValidIpv4(ip)) {
-            setStatus('Invalid IPv4 (example: 1.2.3.4)', 'err');
-            return;
-        }
+    const isLegacyCorsOnly = !!(editingRule && editingRule.mitm_inject_cors && !String(editingRule.ip || '').trim());
+    if (!isLegacyCorsOnly && !isValidIpv4(ip)) {
+        setStatus('Invalid IPv4 (example: 1.2.3.4)', 'err');
+        return;
     }
     const payload = {
         id: editingRule?.id || null,
         host,
         ip,
         enabled,
-        mitm_inject_cors,
         rewrite_host,
     };
     const res = await api.saveDnsOverride(payload);
@@ -425,7 +379,7 @@ document.getElementById('btn-save-rule').addEventListener('click', async () => {
         return;
     }
     selectedRuleId = res.id || editingRule?.id || null;
-    setStatus(ip ? `Saved ${host} → ${ip}` : `Saved ${host} (CORS MITM, no IP)`, 'ok');
+    setStatus(ip ? `Saved ${host} → ${ip}` : `Saved ${host}`, 'ok');
     closeEdit();
     await loadRules();
 });

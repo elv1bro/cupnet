@@ -37,6 +37,23 @@ function registerDbLoggingIpc(ctx) {
         }
     });
 
+    ctx.ipcMain.handle('get-omnibox-suggestions', async (_, query, limit) => {
+        try {
+            return ctx.db.getOmniboxSuggestions(query, limit);
+        } catch {
+            return [];
+        }
+    });
+
+    ctx.ipcMain.handle('record-omnibox-visit', async (_, payload) => {
+        try {
+            ctx.db.recordOmniboxVisit(payload || {});
+            return { ok: true };
+        } catch {
+            return { ok: false };
+        }
+    });
+
     ctx.ipcMain.handle('get-sessions', async () => {
         return ctx.db.getSessions(50, 0);
     });

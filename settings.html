@@ -90,6 +90,19 @@
                                 <p class="field-error" id="sp-homepage-url-err" hidden></p>
                                 <p class="hint">Saves automatically after you pause typing. Full traffic mode and proxy profiles are in <strong>Proxy Manager</strong>.</p>
                                 <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
+                                    <label class="sp-field-label" for="sp-search-engine">Default search engine (address bar)</label>
+                                    <select id="sp-search-engine" class="sp-input">
+                                        <option value="duckduckgo">DuckDuckGo</option>
+                                        <option value="google">Google</option>
+                                        <option value="brave">Brave Search</option>
+                                        <option value="yandex">Yandex</option>
+                                        <option value="custom">Custom…</option>
+                                    </select>
+                                    <label class="sp-field-label" for="sp-search-engine-custom" id="sp-search-engine-custom-wrap" hidden>Custom search URL</label>
+                                    <input type="text" id="sp-search-engine-custom" class="sp-input" placeholder="https://example.com/search?q={q}" autocomplete="off" hidden />
+                                    <p class="hint" style="margin-bottom:0">Non-URL queries use this engine. Placeholder: <code>{q}</code> (or append-only template). Saves automatically.</p>
+                                </div>
+                                <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
                                     <p class="sp-field-label" style="margin-bottom:8px">First-run wizard</p>
                                     <p id="sp-onboarding-status" class="sp-help-lead" style="margin:0 0 10px;font-size:13px;color:var(--text-dim)">—</p>
                                     <div class="card-actions" style="justify-content:flex-start">
@@ -151,6 +164,26 @@
                                     <option value="system">Match system</option>
                                 </select>
                                 <p class="hint">CupNet windows that read this preference will follow on next open.</p>
+                            </div>
+                            <div class="card" data-sp-search="toolbar tools dock placement icons bar browser chrome">
+                                <h3 class="card-title">Browser toolbar</h3>
+                                <p class="card-title-desc">Where CupNet tool buttons appear in the main window</p>
+                                <label class="sp-field-label" for="sp-toolbar-tools-placement">Tool buttons placement</label>
+                                <select id="sp-toolbar-tools-placement" class="sp-select">
+                                    <option value="inline">Classic — top toolbar (large, icon + label)</option>
+                                    <option value="subbar">Mini — under address bar (compact, labels visible)</option>
+                                    <option value="bottom">Mini — bottom bar above status (compact, labels visible)</option>
+                                    <option value="separate">Mini — separate side panel (compact, labels visible)</option>
+                                </select>
+                                <div id="sp-toolbar-mini-align-wrap">
+                                    <label class="sp-field-label" for="sp-toolbar-tools-mini-align" style="margin-top:12px">Mini bar alignment</label>
+                                    <select id="sp-toolbar-tools-mini-align" class="sp-select">
+                                        <option value="right">Align right</option>
+                                        <option value="left">Align left</option>
+                                    </select>
+                                    <p class="hint" style="margin-top:8px;margin-bottom:0">Applies to mini bars under the address bar and above the status bar.</p>
+                                </div>
+                                <p class="hint" style="margin-top:8px;margin-bottom:0">Applies immediately to the main browser window. Mini modes keep button names visible.</p>
                             </div>
                             <div class="card" data-sp-search="font size scale zoom ui">
                                 <h3 class="card-title">UI scale</h3>

@@ -2,11 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:">
     <title>[CupNet]</title>
     <link rel="stylesheet" href="shared-dark-theme.css">
     <link rel="stylesheet" href="styles.css">
     <script src="cookies-page-match.js"></script>
+    <script src="favicon-cache.js"></script>
 </head>
 <body>
 
@@ -70,7 +71,14 @@
 
     <!-- Address bar + command palette (omnibox: same field, Cmd/Ctrl+K) -->
     <div class="address-bar-container" id="address-bar-container">
-        <input type="text" id="url-input" placeholder="Type &gt; for commands, or enter a URL…" autocomplete="off" spellcheck="false" aria-autocomplete="list" aria-controls="command-palette-list" aria-expanded="false">
+        <button type="button" id="site-info-btn" class="site-info-btn" draggable="true" title="Site information · drag to copy URL" aria-label="Site information">
+            <svg class="site-info-icon site-info-icon--secure" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a3 3 0 00-3 3v2H4a1 1 0 00-1 1v6a1 1 0 001 1h8a1 1 0 001-1V7a1 1 0 00-1-1h-1V4a3 3 0 00-3-3zm-1 5V4a1 1 0 112 0v2H7z"/></svg>
+        </button>
+        <div class="url-input-stack">
+            <div id="url-display" class="url-display" aria-hidden="true"></div>
+            <input type="text" id="url-input" placeholder="Type &gt; for commands, or enter a URL…" autocomplete="off" spellcheck="false" aria-autocomplete="list" aria-controls="command-palette-list" aria-expanded="false">
+            <button type="button" id="url-clear-btn" class="url-clear-btn" hidden title="Clear" aria-label="Clear address bar">×</button>
+        </div>
         <div id="loading-indicator"></div>
         <div id="url-omnibox-dropdown" class="url-omnibox-dropdown hidden" aria-hidden="true">
             <ul id="command-palette-list" class="command-palette-list" role="listbox" aria-label="Commands"></ul>
@@ -79,6 +87,7 @@
     </div>
 
     <!-- ── Unified tool dock ── -->
+    <div id="tool-dock-mount-inline" class="tool-dock-mount">
     <div class="tool-dock">
 
         <!-- Log pill: [● toggle | Log #N  42] -->
@@ -133,6 +142,15 @@
             <span id="dns-hit-badge" class="rules-hit-badge" aria-hidden="true"></span>
         </button>
 
+        <!-- Global CORS bypass (MITM) -->
+        <button id="cors-btn" class="tool-btn" title="CORS bypass (MITM) — OFF" aria-pressed="false">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M8 1.5L2.5 4v4c0 3.5 2.5 6 5.5 6.5 3-.5 5.5-3 5.5-6.5V4L8 1.5z"/>
+                <path d="M6 8l1.5 1.5L11 6"/>
+            </svg>
+            <span class="tool-label">CORS</span>
+        </button>
+
         <span class="tool-sep"></span>
 
         <!-- Request Editor -->
@@ -164,6 +182,18 @@
                 <path d="M7 5v4"/>
             </svg>
             <span class="tool-label">Analyzer</span>
+        </button>
+
+        <!-- In-page HTTP Lab -->
+        <button id="http-lab-btn" class="tool-btn" title="HTTP Lab — in-page request tools on active tab">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2.5 4.5h11"/>
+                <path d="M2.5 8h7"/>
+                <path d="M2.5 11.5h4"/>
+                <circle cx="12.5" cy="11.5" r="2"/>
+                <path d="M12.5 10v3"/>
+            </svg>
+            <span class="tool-label">HTTP Lab</span>
         </button>
 
         <!-- Notes -->
@@ -226,6 +256,12 @@
         </button>
 
     </div>
+    </div>
+</div>
+
+<!-- Compact tool row under the address bar (optional placement) -->
+<div id="browser-tools-subbar" class="browser-tools-bar" data-mini-align="right" hidden aria-hidden="true">
+    <div id="tool-dock-mount-subbar" class="tool-dock-mount"></div>
 </div>
 
 <!-- Credential save bar (auto-capture prompt) -->
@@ -261,7 +297,19 @@
     </div>
 </div>
 
+<!-- Compact tool row above the status bar (optional placement) -->
+<div id="browser-tools-bottom" class="browser-tools-bar browser-tools-bar--bottom" data-mini-align="right" hidden aria-hidden="true">
+    <div id="tool-dock-mount-bottom" class="tool-dock-mount"></div>
+</div>
+
+<!-- Mini tools — separate vertical strip on the right -->
+<div id="browser-tools-separate" class="browser-tools-side" hidden aria-hidden="true">
+    <div id="tool-dock-mount-separate" class="tool-dock-mount"></div>
+</div>
+
 <footer id="browser-status-bar" class="browser-status-bar" role="status" aria-live="polite">
+    <span id="status-page" class="browser-status-item browser-status-item--page" title="Active tab load state">Page: —</span>
+    <span class="browser-status-sep" aria-hidden="true">·</span>
     <span id="status-mitm" class="browser-status-item" title="MITM proxy">MITM: —</span>
     <span class="browser-status-sep" aria-hidden="true">·</span>
     <span id="status-proxy" class="browser-status-item" title="Proxy">Proxy: —</span>

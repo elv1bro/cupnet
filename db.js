@@ -747,6 +747,18 @@ function createSchema() {
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         );
+
+        CREATE TABLE IF NOT EXISTS omnibox_history (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            url             TEXT    NOT NULL UNIQUE,
+            host            TEXT    NOT NULL DEFAULT '',
+            title           TEXT,
+            visit_count     INTEGER NOT NULL DEFAULT 0,
+            typed_count     INTEGER NOT NULL DEFAULT 0,
+            last_visit_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_omnibox_host ON omnibox_history(host);
+        CREATE INDEX IF NOT EXISTS idx_omnibox_last ON omnibox_history(last_visit_at);
     `);
 }
 
@@ -1342,7 +1354,7 @@ function updateProxyProfileById(id, fields) {
 }
 
 function getProxyProfileEncrypted(id) {
-    const row = db.prepare(`SELECT name, url_encrypted, variables, user_agent, timezone, language,
+    const row = db.prepare(`SELECT name, url_encrypted, url_display, variables, user_agent, timezone, language,
                                    tls_profile, tls_ja3_mode, tls_ja3_custom, traffic_mode
                             FROM proxy_profiles WHERE id = ?`).get(id);
     if (!row) return null;
@@ -1533,7 +1545,6 @@ function saveDnsOverride(rule) {
     if (!host) throw new Error('Host is required');
     const isWildcardHost = host.startsWith('*.');
     if (isWildcardHost && ip) throw new Error('Wildcard host (*.example.com) cannot be combined with IP redirect');
-    if (isWildcardHost && !mitmCors) throw new Error('Wildcard host is only allowed for MITM CORS-only rules');
     if (!ip && !mitmCors) throw new Error('IPv4 is required unless MITM CORS-only (no DNS redirect) is enabled');
 
     const rewriteHost = _normalizeDnsRewriteHost(rule);
@@ -2394,6 +2405,126 @@ function getOmniboxTopHosts(limit = 12) {
     }
 }
 
+function _escapeOmniboxLike(s) {
+    return String(s || '').replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
+}
+
+function _omniboxFrecency(row, nowMs) {
+    const last = Date.parse(row.last_visit_at);
+    const t = Number.isFinite(last) ? last : nowMs;
+    const ageDays = Math.max(0, (nowMs - t) / 86400000);
+    const base = Number(row.visit_count) + Number(row.typed_count) * 3;
+    return base * Math.exp(-ageDays / 14);
+}
+
+/**
+ * Upsert a visit into omnibox history (main-frame navigations).
+ * @param {{ url: string, title?: string|null, typed?: boolean }} payload
+ */
+function recordOmniboxVisit(payload = {}) {
+    if (!db) return;
+    const url = typeof payload.url === 'string' ? payload.url.trim() : '';
+    if (!url || url === 'about:blank') return;
+    if (!/^https?:\/\//i.test(url)) return;
+    const low = url.toLowerCase();
+    if (low.startsWith('devtools:')) return;
+    let host = typeof payload.host === 'string' ? payload.host.trim() : '';
+    if (!host) {
+        try { host = new URL(url).hostname || ''; } catch { host = ''; }
+    }
+    const title = payload.title != null ? String(payload.title).slice(0, 512) : '';
+    const typedInc = payload.typed ? 1 : 0;
+    const now = new Date().toISOString();
+    try {
+        db.prepare(`
+            INSERT INTO omnibox_history (url, host, title, visit_count, typed_count, last_visit_at)
+            VALUES (@url, @host, @title, 1, @typedInc, @now)
+            ON CONFLICT(url) DO UPDATE SET
+                visit_count = omnibox_history.visit_count + 1,
+                typed_count = omnibox_history.typed_count + excluded.typed_count,
+                title = CASE WHEN TRIM(COALESCE(excluded.title, '')) != ''
+                    THEN excluded.title ELSE omnibox_history.title END,
+                last_visit_at = excluded.last_visit_at,
+                host = CASE WHEN TRIM(COALESCE(excluded.host, '')) != ''
+                    THEN excluded.host ELSE omnibox_history.host END
+        `).run({ url, host, title, typedInc, now });
+    } catch (e) {
+        safeCatch({ module: 'db', eventCode: 'omnibox.visit.failed' }, e, 'warn');
+    }
+}
+
+/**
+ * Frecency-ranked omnibox suggestions; falls back to log top-hosts when history is empty.
+ * @param {string} query
+ * @param {number} limit
+ * @returns {Array<{ url: string, host: string, title: string|null, score: number }>}
+ */
+function getOmniboxSuggestions(query, limit = 12) {
+    if (!db) return [];
+    const lim = Math.max(1, Math.min(40, Number(limit) || 12));
+    const q = String(query || '').trim();
+    const nowMs = Date.now();
+    let rows = [];
+    try {
+        if (!q) {
+            rows = db.prepare(`
+                SELECT url, host, title, visit_count, typed_count, last_visit_at
+                FROM omnibox_history
+                ORDER BY last_visit_at DESC
+                LIMIT ?
+            `).all(Math.min(120, lim * 6));
+        } else {
+            const likePat = `%${_escapeOmniboxLike(q)}%`;
+            rows = db.prepare(`
+                SELECT url, host, title, visit_count, typed_count, last_visit_at
+                FROM omnibox_history
+                WHERE LOWER(host) LIKE LOWER(?) ESCAPE '\\'
+                   OR LOWER(url) LIKE LOWER(?) ESCAPE '\\'
+                   OR LOWER(COALESCE(title, '')) LIKE LOWER(?) ESCAPE '\\'
+                ORDER BY last_visit_at DESC
+                LIMIT 80
+            `).all(likePat, likePat, likePat);
+        }
+    } catch (e) {
+        safeCatch({ module: 'db', eventCode: 'omnibox.suggestions.failed' }, e, 'warn');
+        rows = [];
+    }
+    const scored = rows.map((r) => ({
+        url: r.url,
+        host: r.host || '',
+        title: r.title || null,
+        score: _omniboxFrecency(r, nowMs),
+    }));
+    scored.sort((a, b) => b.score - a.score);
+    let out = scored.slice(0, lim);
+    if (!out.length) {
+        const hosts = getOmniboxTopHosts(lim);
+        out = hosts.map((h) => ({
+            url: `https://${h.host}`,
+            host: h.host,
+            title: null,
+            score: 0,
+        }));
+        if (q) {
+            const ql = q.toLowerCase();
+            out = out.filter((x) => String(x.host).toLowerCase().includes(ql));
+        }
+    } else if (q && out.length < lim) {
+        const have = new Set(out.map((x) => x.url));
+        const hosts = getOmniboxTopHosts(lim * 2);
+        const ql = q.toLowerCase();
+        for (const h of hosts) {
+            if (out.length >= lim) break;
+            const u = `https://${h.host}`;
+            if (have.has(u)) continue;
+            if (!String(h.host).toLowerCase().includes(ql)) continue;
+            out.push({ url: u, host: h.host, title: null, score: 0.01 });
+            have.add(u);
+        }
+    }
+    return out;
+}
+
 // ─── System Console logs (persisted from main-process capture) ──────────────
 
 function insertConsoleLogsBatch(rows) {
@@ -2582,7 +2713,7 @@ module.exports = {
     requestRowToInsertEntry, createSessionFromRequestIds,
     createSessionAsync, createExternalSessionAsync, endSessionAsync, renameSessionAsync, deleteSessionAsync, deleteUnnamedSessionsAsync, deleteEmptySessionsAsync, createSessionFromRequestIdsAsync,
     // requests
-    insertRequest, updateRequest, setRequestAnnotation, queryRequests, queryRequestsFull, countRequests, getRequest, ftsSearch, getOmniboxTopHosts,
+    insertRequest, updateRequest, setRequestAnnotation, queryRequests, queryRequestsFull, countRequests, getRequest, ftsSearch, getOmniboxTopHosts, recordOmniboxVisit, getOmniboxSuggestions,
     insertConsoleLogsBatch, insertConsoleLogsBatchAsync, queryConsoleLogs, getConsoleLogSessionsSummary, findRequestsNearTimestamp, purgeConsoleLogsOlderThanDays,
     insertRequestAsync, updateRequestAsync, setRequestAnnotationAsync,
     // ws

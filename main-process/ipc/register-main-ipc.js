@@ -26,6 +26,8 @@ const { registerToolbarActivityBadgeIpc } = require('./handlers/toolbar-activity
 const { registerNotesIpc } = require('./handlers/notes-ipc');
 const { registerCredentialsIpc } = require('./handlers/credentials-ipc');
 const { registerRequestEditorIpc } = require('./handlers/request-editor-ipc');
+const { registerSessionProfileIpc } = require('./handlers/session-profile-ipc');
+const { registerPageHttpLabIpc } = require('./handlers/page-http-lab-ipc');
 
 function registerMainProcessIpc(ctx) {
     registerMitmStartupIpc(ctx);
@@ -50,6 +52,8 @@ function registerMainProcessIpc(ctx) {
     registerNotesIpc(ctx);
     registerCredentialsIpc(ctx);
     registerRequestEditorIpc(ctx);
+    registerSessionProfileIpc(ctx);
+    registerPageHttpLabIpc(ctx);
 }
 
 module.exports = { registerMainProcessIpc };

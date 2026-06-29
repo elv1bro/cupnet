@@ -1,11 +1,11 @@
 'use strict';
 
 /**
- * Нормализация User-Agent для **исходящего HTTP** в MITM (strip CupNet/Electron → Chrome-like).
- * В рендерере `navigator.userAgent` по-прежнему может быть строкой Electron — правка только на wire.
+ * User-Agent normalization for MITM wire headers and tab renderer (`navigator.userAgent`).
+ * Strips CupNet/Electron tokens → Chrome-like string.
  *
- * Отключить: `CUPNET_DISABLE_UA_SANITIZE=1`
- * Юнит-тесты: tests/test-user-agent-utils.js
+ * Disable: `CUPNET_DISABLE_UA_SANITIZE=1`
+ * Unit tests: tests/test-user-agent-utils.js
  */
 
 function isUaSanitizeDisabled() {
@@ -61,8 +61,53 @@ function applyOutboundUserAgentToMitmHeaders(headers, orderedHeaders) {
     }
 }
 
+/**
+ * Chrome-like UA for tabs when no profile override is set.
+ * @param {string|null|undefined} [rawUa] — optional preferred string (e.g. proxy profile)
+ * @returns {string}
+ */
+function resolveRendererUserAgent(rawUa) {
+    if (isUaSanitizeDisabled()) {
+        const explicit = String(rawUa || '').trim();
+        if (explicit) return explicit;
+        try {
+            const { session } = require('electron');
+            return session.defaultSession.getUserAgent();
+        } catch {
+            return DEFAULT_CHROME_UA;
+        }
+    }
+    const sanitizedExplicit = sanitizeUserAgentChromeOnly(rawUa);
+    if (sanitizedExplicit) return sanitizedExplicit;
+    try {
+        const { session } = require('electron');
+        const fromDefault = sanitizeUserAgentChromeOnly(session.defaultSession.getUserAgent());
+        if (fromDefault) return fromDefault;
+    } catch { /* ignore */ }
+    return DEFAULT_CHROME_UA;
+}
+
+/**
+ * Apply sanitized UA to an Electron Session (affects `navigator.userAgent` in that partition).
+ * @param {import('electron').Session|null|undefined} sess
+ * @param {string|null|undefined} [rawUa]
+ * @param {string} [acceptLanguage]
+ */
+function applyRendererUserAgentToSession(sess, rawUa, acceptLanguage) {
+    if (!sess || typeof sess.setUserAgent !== 'function') return;
+    if (isUaSanitizeDisabled() && rawUa == null) return;
+    const ua = resolveRendererUserAgent(rawUa);
+    if (!ua) return;
+    try {
+        sess.setUserAgent(ua, acceptLanguage || '');
+    } catch { /* ignore */ }
+}
+
 module.exports = {
     sanitizeUserAgentChromeOnly,
     applyOutboundUserAgentToMitmHeaders,
+    applyRendererUserAgentToSession,
+    resolveRendererUserAgent,
     isUaSanitizeDisabled,
+    DEFAULT_CHROME_UA,
 };

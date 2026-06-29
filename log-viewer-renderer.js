@@ -77,12 +77,17 @@ const rawBtn         = document.getElementById('lv-raw-btn');
 const copyUrlBtn     = document.getElementById('lv-copy-url');
 const lvDetailIdStrip = document.getElementById('lv-detail-id-strip');
 const dRequestIdEl   = document.getElementById('d-request-id');
-const copyIdBtn      = document.getElementById('lv-copy-id-btn');
+const dRequestMethodEl = document.getElementById('d-request-method');
+const detailUrlBtn   = document.getElementById('lv-detail-url-btn');
+const copyUrlHeaderBtn = document.getElementById('lv-copy-url-header');
+const urlPartsPopover = document.getElementById('lv-url-parts-popover');
 const replayDiff     = document.getElementById('lv-replay-diff');
 const replayResult   = document.getElementById('lv-replay-result');
 const replayBody     = document.getElementById('replay-body');
 const replayStatus   = document.getElementById('replay-status-badge');
-const markPanel      = document.getElementById('lv-mark-panel');
+const toolbarActions = document.getElementById('lv-toolbar-actions');
+const sepActionsMark = document.getElementById('lv-sep-actions-mark');
+const markSection    = document.getElementById('lv-mark-section');
 const tagColorsWrap  = document.getElementById('lv-tag-colors');
 const tagClearBtn    = document.getElementById('lv-tag-clear');
 const notePreview    = document.getElementById('lv-note-preview');
@@ -92,6 +97,12 @@ const commentSaveBtn = document.getElementById('comment-save-btn');
 const markStatus     = document.getElementById('lv-mark-status');
 const tabBtns        = document.querySelectorAll('.lv-tab-btn');
 const tabContents    = document.querySelectorAll('.lv-tab-content');
+const detailFindBar  = document.getElementById('lv-detail-find');
+const detailFindInput = document.getElementById('lv-detail-find-input');
+const detailFindCount = document.getElementById('lv-detail-find-count');
+const detailFindPrev = document.getElementById('lv-detail-find-prev');
+const detailFindNext = document.getElementById('lv-detail-find-next');
+const detailFindClear = document.getElementById('lv-detail-find-clear');
 const protectionModal = document.getElementById('protection-modal');
 const protectionConfirmBtn = document.getElementById('protection-confirm-btn');
 const protectionCancelBtn = document.getElementById('protection-cancel-btn');
@@ -121,6 +132,13 @@ const compareSidePicker = document.getElementById('compare-side-picker');
 const compareSideCancelBtn = document.getElementById('compare-side-cancel-btn');
 const recBtn         = document.getElementById('lv-rec-btn');
 const TAG_COLORS     = ['#ef4444', '#f59e0b', '#facc15', '#22c55e', '#06b6d4', '#3b82f6', '#a855f7', '#f472b6'];
+const LV_ACT_LABELS = {
+    editor: '✏ Editor',
+    url: '⧉ URL',
+    compareAdd: '+ Compare',
+    compareOpen: '⇄ Open',
+    mock: '⚡ Mock',
+};
 const NOTE_AUTOSAVE_MS = 500;
 let _noteAutosaveTimer = null;
 
@@ -250,6 +268,230 @@ function extractHost(url) {
     try { return new URL(url).host || '—'; } catch { return '—'; }
 }
 
+let _urlPartsOutsideHandler = null;
+
+function closeUrlPartsPopover() {
+    if (urlPartsPopover) urlPartsPopover.hidden = true;
+    if (_urlPartsOutsideHandler) {
+        document.removeEventListener('mousedown', _urlPartsOutsideHandler, true);
+        _urlPartsOutsideHandler = null;
+    }
+}
+
+function parseUrlParts(url) {
+    try {
+        const u = new URL(url);
+        return {
+            valid: true,
+            host: u.host,
+            path: u.pathname || '/',
+            search: u.search,
+            queryPairs: [...u.searchParams.entries()].map(([key, value]) => ({ key, value })),
+        };
+    } catch {
+        return { valid: false, raw: url, queryPairs: [] };
+    }
+}
+
+function positionUrlPartsPopover(anchorEl) {
+    if (!urlPartsPopover || !anchorEl) return;
+    urlPartsPopover.hidden = false;
+    const r = anchorEl.getBoundingClientRect();
+    const margin = 8;
+    let left = r.left;
+    const width = urlPartsPopover.offsetWidth || 400;
+    if (left + width > window.innerWidth - margin) {
+        left = Math.max(margin, window.innerWidth - width - margin);
+    }
+    let top = r.bottom + 6;
+    const height = urlPartsPopover.offsetHeight || 200;
+    if (top + height > window.innerHeight - margin) {
+        top = Math.max(margin, r.top - height - 6);
+    }
+    urlPartsPopover.style.left = `${Math.round(left)}px`;
+    urlPartsPopover.style.top = `${Math.round(top)}px`;
+}
+
+function appendUrlPartCopyBtn(parent, text, title = 'Copy') {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'lv-field-copy body-act-btn';
+    btn.title = title;
+    btn.textContent = '⎘';
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(String(text ?? '')).then(
+            () => flashBtn(btn, '✓'),
+            () => flashBtn(btn, '✗'),
+        );
+    });
+    parent.appendChild(btn);
+    return btn;
+}
+
+function openUrlPartsPopover(url, anchorEl) {
+    if (!urlPartsPopover || !anchorEl || !url) return;
+    closeUrlPartsPopover();
+    const parts = parseUrlParts(url);
+
+    urlPartsPopover.innerHTML = '';
+    const head = document.createElement('div');
+    head.className = 'lv-url-parts-head';
+    head.innerHTML = '<span>URL breakdown</span>';
+    appendUrlPartCopyBtn(head, url, 'Copy full URL');
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'body-act-btn';
+    closeBtn.id = 'lv-url-parts-close';
+    closeBtn.textContent = '✕';
+    head.appendChild(closeBtn);
+    urlPartsPopover.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'lv-url-parts-body';
+
+    if (!parts.valid) {
+        const row = document.createElement('div');
+        row.className = 'lv-url-parts-row';
+        row.innerHTML = '<span class="lv-url-parts-label">URL</span>';
+        const rowHead = document.createElement('div');
+        rowHead.className = 'lv-url-parts-row-head';
+        const pre = document.createElement('pre');
+        pre.className = 'lv-url-parts-val';
+        pre.textContent = url;
+        rowHead.appendChild(pre);
+        appendUrlPartCopyBtn(rowHead, url, 'Copy URL');
+        row.appendChild(rowHead);
+        body.appendChild(row);
+    } else {
+        for (const [label, val] of [['Host', parts.host], ['Path', parts.path]]) {
+            const row = document.createElement('div');
+            row.className = 'lv-url-parts-row';
+            const lbl = document.createElement('span');
+            lbl.className = 'lv-url-parts-label';
+            lbl.textContent = label;
+            row.appendChild(lbl);
+            const rowHead = document.createElement('div');
+            rowHead.className = 'lv-url-parts-row-head';
+            const span = document.createElement('span');
+            span.className = 'lv-url-parts-val';
+            span.textContent = val;
+            rowHead.appendChild(span);
+            appendUrlPartCopyBtn(rowHead, val, `Copy ${label.toLowerCase()}`);
+            row.appendChild(rowHead);
+            body.appendChild(row);
+        }
+        if (parts.queryPairs.length) {
+            const sec = document.createElement('div');
+            sec.className = 'lv-url-parts-section';
+            sec.textContent = `Query parameters (${parts.queryPairs.length})`;
+            body.appendChild(sec);
+            const qWrap = document.createElement('div');
+            qWrap.className = 'lv-url-parts-query';
+            for (const { key, value } of parts.queryPairs) {
+                const qRow = document.createElement('div');
+                qRow.className = 'lv-url-parts-query-row';
+                const qHead = document.createElement('div');
+                qHead.className = 'lv-url-parts-query-head';
+                const qKey = document.createElement('span');
+                qKey.className = 'lv-url-parts-q-key';
+                qKey.textContent = key;
+                qHead.appendChild(qKey);
+                appendUrlPartCopyBtn(qHead, value, 'Copy value');
+                qRow.appendChild(qHead);
+                const qVal = document.createElement('span');
+                qVal.className = 'lv-url-parts-q-val';
+                qVal.textContent = value;
+                qRow.appendChild(qVal);
+                qWrap.appendChild(qRow);
+            }
+            body.appendChild(qWrap);
+        } else if (parts.search) {
+            const row = document.createElement('div');
+            row.className = 'lv-url-parts-row';
+            row.innerHTML = '<span class="lv-url-parts-label">Query</span>';
+            const rowHead = document.createElement('div');
+            rowHead.className = 'lv-url-parts-row-head';
+            const span = document.createElement('span');
+            span.className = 'lv-url-parts-val';
+            span.textContent = parts.search;
+            rowHead.appendChild(span);
+            appendUrlPartCopyBtn(rowHead, parts.search.slice(1), 'Copy query string');
+            row.appendChild(rowHead);
+            body.appendChild(row);
+        }
+    }
+    urlPartsPopover.appendChild(body);
+
+    positionUrlPartsPopover(anchorEl);
+    closeBtn.addEventListener('click', closeUrlPartsPopover);
+    _urlPartsOutsideHandler = (e) => {
+        if (urlPartsPopover.contains(e.target) || anchorEl.contains(e.target)) return;
+        closeUrlPartsPopover();
+    };
+    setTimeout(() => document.addEventListener('mousedown', _urlPartsOutsideHandler, true), 0);
+}
+
+function renderDetailRequestLine(entry, opts = {}) {
+    const idForDisplay = entry?.id != null && entry?.id !== '' ? String(entry.id) : '';
+    const cupnetSessMeta = getCupnetSessionTrafficPresentation(entry);
+    let method = opts.method ?? cupnetSessMeta?.method ?? entry?.method ?? '';
+    if (!method && entry?._browserEvent) {
+        method = browserActivityMethodBadge(entry.event_type).text;
+    }
+    const url = opts.url ?? entry?.url ?? '';
+
+    if (dRequestIdEl) {
+        dRequestIdEl.textContent = opts.idText ?? (idForDisplay ? `[${idForDisplay}]` : '[—]');
+        dRequestIdEl.title = idForDisplay ? `Entry id ${idForDisplay}` : '';
+    }
+    if (dRequestMethodEl) {
+        const m = String(method || '').toUpperCase();
+        if (m && m !== '—') {
+            dRequestMethodEl.textContent = m;
+            dRequestMethodEl.className = `method-badge ${methodCls(m)}`;
+            dRequestMethodEl.style.display = '';
+        } else {
+            dRequestMethodEl.style.display = 'none';
+        }
+    }
+    const urlEl = document.getElementById('lv-detail-url');
+    if (urlEl) urlEl.textContent = url || '(no url)';
+    if (detailUrlBtn) {
+        detailUrlBtn.disabled = !url;
+        detailUrlBtn.title = url ? 'Click to show host, path and query parameters' : '';
+    }
+    if (copyUrlHeaderBtn) {
+        copyUrlHeaderBtn.style.display = url ? '' : 'none';
+        copyUrlHeaderBtn.onclick = () => {
+            navigator.clipboard.writeText(url).then(
+                () => flashBtn(copyUrlHeaderBtn, '✓'),
+                () => flashBtn(copyUrlHeaderBtn, '✗'),
+            );
+        };
+    }
+    closeUrlPartsPopover();
+}
+
+function wireDetailUrlPopover() {
+    detailUrlBtn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const entry = _currentDetailEntry;
+        const url = entry?.url || '';
+        if (!url) return;
+        if (urlPartsPopover && !urlPartsPopover.hidden) {
+            closeUrlPartsPopover();
+            return;
+        }
+        openUrlPartsPopover(url, detailUrlBtn);
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeUrlPartsPopover();
+    });
+}
+
+wireDetailUrlPopover();
+
 const CUPNET_SESSION_PROXY_URL = 'cupnet://session/proxy';
 const CUPNET_SESSION_DIRECT_URL = 'cupnet://session/direct';
 
@@ -372,15 +614,231 @@ function notePreviewText(note) {
     const limit = 42;
     return s.length > limit ? s.slice(0, limit) + '…' : s;
 }
+
+function countHeaderEntries(headers) {
+    if (!headers || typeof headers !== 'object') return 0;
+    let n = 0;
+    for (const v of Object.values(headers)) {
+        n += Array.isArray(v) ? v.length : 1;
+    }
+    return n;
+}
+
+function formatTabBadgeCount(count) {
+    const num = Number(count);
+    if (!Number.isFinite(num) || num <= 0) return null;
+    return num > 999 ? '999+' : String(num);
+}
+
+function setDetailTabBadge(tabName, count) {
+    const btn = document.querySelector(`.lv-tab-btn[data-tab="${tabName}"]`);
+    if (!btn) return;
+    const badge = btn.querySelector('.lv-tab-badge:not([data-cookie-badge])');
+    if (!badge) return;
+    const text = formatTabBadgeCount(count);
+    if (!text) {
+        badge.textContent = '';
+        badge.hidden = true;
+        return;
+    }
+    badge.textContent = text;
+    badge.hidden = false;
+}
+
+function setCookieTabBadges(sent, received) {
+    const btn = document.querySelector('.lv-tab-btn[data-tab="cookies"]');
+    if (!btn) return;
+    const pairs = [
+        [btn.querySelector('[data-cookie-badge="sent"]'), sent, '↑', 'Sent cookies'],
+        [btn.querySelector('[data-cookie-badge="recv"]'), received, '↓', 'Received Set-Cookie'],
+    ];
+    for (const [el, count, prefix, title] of pairs) {
+        if (!el) continue;
+        const text = formatTabBadgeCount(count);
+        if (!text) {
+            el.textContent = '';
+            el.hidden = true;
+            continue;
+        }
+        el.textContent = `${prefix}${text}`;
+        el.title = `${title}: ${count}`;
+        el.hidden = false;
+    }
+}
+
+function clearDetailTabBadges() {
+    document.querySelectorAll('.lv-tab-badge').forEach((badge) => {
+        badge.textContent = '';
+        badge.hidden = true;
+    });
+}
+
+function countRequestTabItems(queryPairs, formPairs, multipartParts, reqBodyStored, reqBodyText, missingBodyMsg) {
+    let n = Array.isArray(queryPairs) ? queryPairs.length : 0;
+    if (formPairs?.length) n += formPairs.length;
+    else if (multipartParts?.length) n += multipartParts.length;
+    else if ((reqBodyText || reqBodyStored) && !missingBodyMsg) n += 1;
+    return n;
+}
+
+function countResponseTabItems(respFmt, respParsed, isHtml) {
+    if (isHtml && respFmt) {
+        const forms = parseHtmlFormsFromString(respFmt);
+        if (forms.length) {
+            return forms.reduce((sum, form) => sum + (form.fields?.length || 0), 0);
+        }
+    }
+    if (respFmt) return 1;
+    if (respParsed) return 1;
+    return 0;
+}
+
+function updateDetailTabBadges(stats) {
+    for (const [tab, count] of Object.entries(stats || {})) {
+        setDetailTabBadge(tab, count);
+    }
+}
+
+function updateRawTabBadgeFromText(text) {
+    const raw = String(text || '');
+    if (!raw.trim()) {
+        setDetailTabBadge('raw', 0);
+        return;
+    }
+    setDetailTabBadge('raw', raw.split('\n').length);
+}
 function formatBody(b) {
     if (!b) return null;
     if (typeof b !== 'string') return JSON.stringify(b, null, 2);
+    if (b.startsWith('__b64__:')) {
+        const decoded = decodeStoredBody(b);
+        if (decoded.text == null) return `[Binary — ${formatFileSize(decoded.bytes)}]`;
+        if (/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(decoded.text.slice(0, 4096))) {
+            return `[Binary — ${formatFileSize(decoded.bytes)}]`;
+        }
+        return decoded.text;
+    }
     if (b.startsWith('<base64|')) {
         const parsed = parseBase64Body(b);
         if (parsed) return null; // handled separately as image
         return `[Binary — ${b.slice(0, 60)}…]`;
     }
     try { return JSON.stringify(JSON.parse(b), null, 2); } catch { return b; }
+}
+
+/** Pick request body from DB row / live log entry (snake_case + camelCase). */
+function pickRequestBodyRaw(entry) {
+    if (!entry) return null;
+    const candidates = [
+        entry.request_body,
+        entry.requestBody,
+        entry.request?.body,
+        entry.request?.postData?.text,
+        entry.request?.postData,
+    ];
+    for (const c of candidates) {
+        if (c == null || c === '') continue;
+        if (typeof c === 'object' && c != null && typeof c.text === 'string') return c.text;
+        return c;
+    }
+    return null;
+}
+
+function normalizeRequestDetailRow(row) {
+    if (!row || typeof row !== 'object') return row;
+    return {
+        ...row,
+        request_body: pickRequestBodyRaw(row),
+        request_headers: row.request_headers ?? row.requestHeaders ?? row.request?.headers ?? null,
+        response_body: row.response_body ?? row.responseBody ?? null,
+        response_headers: row.response_headers ?? row.responseHeaders ?? row.response?.headers ?? null,
+    };
+}
+
+function looksLikeBase64Text(s) {
+    if (!s || typeof s !== 'string') return false;
+    const compact = s.replace(/\s/g, '');
+    if (compact.length < 8 || compact.length % 4 !== 0) return false;
+    return /^[A-Za-z0-9+/=]+$/.test(compact);
+}
+
+function b64ToBinaryString(b64) {
+    const clean = String(b64 || '').replace(/\s/g, '');
+    if (!clean) return { ok: false, bin: '', clean: '' };
+    const tryDecode = (input) => {
+        try { return { ok: true, bin: atob(input) }; } catch { return { ok: false, bin: '' }; }
+    };
+    let r = tryDecode(clean);
+    if (r.ok) return { ok: true, bin: r.bin, clean };
+    const padded = clean + '='.repeat((4 - (clean.length % 4)) % 4);
+    r = tryDecode(padded);
+    if (r.ok) return { ok: true, bin: r.bin, clean: padded };
+    return { ok: false, bin: '', clean };
+}
+
+/** Decode MITM/CDP binary body markers to raw text + byte length. */
+function decodeStoredBody(body, contentType) {
+    if (body == null || body === '') return { text: '', bytes: 0, stored: body || '', fromB64: false };
+    if (typeof body !== 'string') {
+        const s = String(body);
+        return { text: s, bytes: s.length, stored: body, fromB64: false };
+    }
+
+    const parsed = parseBase64Body(body);
+    if (parsed) {
+        const dec = b64ToBinaryString(parsed.data);
+        if (dec.ok) {
+            return {
+                text: dec.bin,
+                bytes: dec.bin.length,
+                stored: body,
+                fromB64: true,
+                b64Data: dec.clean,
+            };
+        }
+        return { text: null, bytes: 0, stored: body, fromB64: true, b64Data: parsed.data.replace(/\s/g, ''), decodeError: true };
+    }
+
+    // Legacy: raw base64 without __b64__: prefix (older MITM logging).
+    const ct = String(contentType || '').toLowerCase();
+    if (looksLikeBase64Text(body) && (ct.includes('multipart') || ct.includes('octet-stream') || ct.includes('image/'))) {
+        const dec = b64ToBinaryString(body);
+        if (dec.ok && (dec.bin.startsWith('--') || dec.bin.includes('Content-Disposition') || ct.includes('multipart'))) {
+            return {
+                text: dec.bin,
+                bytes: dec.bin.length,
+                stored: body,
+                fromB64: true,
+                b64Data: dec.clean,
+                legacyRawB64: true,
+            };
+        }
+    }
+
+    return { text: body, bytes: body.length, stored: body, fromB64: false };
+}
+
+function requestBodyMissingMessage(entry, parsedReqHeaders, method, reqBodyStored) {
+    if (reqBodyStored != null && reqBodyStored !== '') return null;
+    const m = String(method || entry?.method || 'GET').toUpperCase();
+    if (m === 'GET' || m === 'HEAD' || m === 'OPTIONS') return null;
+    const ct = String(findHeader(parsedReqHeaders, 'content-type') || '').toLowerCase();
+    const cl = findHeader(parsedReqHeaders, 'content-length');
+    const clNum = cl != null ? parseInt(String(cl), 10) : NaN;
+    const hinted = ct.includes('multipart')
+        || ct.includes('application/x-www-form-urlencoded')
+        || (Number.isFinite(clNum) && clNum > 0);
+    if (!hinted) return null;
+    const sizeHint = Number.isFinite(clNum) && clNum > 0 ? formatFileSize(clNum) : null;
+    let msg = 'Request body was not stored for this entry.';
+    if (ct.includes('multipart')) {
+        msg += ' Older CupNet builds often omitted multipart request bodies in the log.';
+    } else {
+        msg += ' Older CupNet builds may not have persisted the request body.';
+    }
+    if (sizeHint) msg += ` Content-Length: ${sizeHint}.`;
+    msg += ' Re-capture the request or use Request Editor to replay.';
+    return msg;
 }
 
 /** Parse binary body markers:
@@ -438,6 +896,119 @@ function formatFileSize(bytes) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function binaryStringToBase64(bin) {
+    if (!bin) return '';
+    const len = bin.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i) & 0xff;
+    let out = '';
+    const step = 0x8000;
+    for (let i = 0; i < len; i += step) {
+        out += String.fromCharCode.apply(null, bytes.subarray(i, i + step));
+    }
+    return btoa(out);
+}
+
+function sniffImageMime(bin, contentType) {
+    const ct = String(contentType || '').split(';')[0].trim().toLowerCase();
+    if (ct.startsWith('image/') && !ct.includes('svg')) return ct;
+    if (!bin || bin.length < 4) return null;
+    const c0 = bin.charCodeAt(0);
+    const c1 = bin.charCodeAt(1);
+    const c2 = bin.charCodeAt(2);
+    if (c0 === 0xff && c1 === 0xd8 && c2 === 0xff) return 'image/jpeg';
+    if (bin.slice(0, 4) === '\x89PNG') return 'image/png';
+    if (bin.slice(0, 3) === 'GIF') return 'image/gif';
+    if (bin.slice(0, 4) === 'RIFF' && bin.length >= 12 && bin.slice(8, 12) === 'WEBP') return 'image/webp';
+    return null;
+}
+
+let _mpImageOverlay = null;
+let _mpImageEscHandler = null;
+
+function hideMultipartImagePreview() {
+    if (_mpImageOverlay) _mpImageOverlay.classList.remove('visible');
+    if (_mpImageEscHandler) {
+        document.removeEventListener('keydown', _mpImageEscHandler);
+        _mpImageEscHandler = null;
+    }
+}
+
+function showMultipartImagePreview(part) {
+    const bin = part.rawBinary;
+    const mime = part.imageMime || sniffImageMime(bin, part.contentType);
+    if (!bin || !mime) return;
+
+    const b64 = binaryStringToBase64(bin);
+    const src = `data:${mime};base64,${b64}`;
+    const fi = guessFileInfo(part.filename || '', mime);
+    const title = part.key || part.filename || 'Image';
+
+    if (!_mpImageOverlay) {
+        _mpImageOverlay = document.createElement('div');
+        _mpImageOverlay.id = 'mp-image-overlay';
+        _mpImageOverlay.className = 'lv-overlay';
+        _mpImageOverlay.innerHTML = `
+            <div class="lv-dialog mp-image-dialog" role="dialog" aria-modal="true">
+                <div class="lv-dialog-title" id="mp-image-title"></div>
+                <div style="font-size:10px;color:var(--text-dim);margin-bottom:8px" id="mp-image-meta"></div>
+                <div class="ss-action-bar" style="margin-bottom:8px;display:flex;flex-wrap:wrap;gap:6px">
+                    <button type="button" class="body-act-btn" id="mp-image-copy">⎘ Copy image</button>
+                    <button type="button" class="body-act-btn" id="mp-image-save">↓ Save</button>
+                    <button type="button" class="body-act-btn" id="mp-image-close">Close</button>
+                </div>
+                <div class="mp-image-wrap">
+                    <img id="mp-image-img" alt="" style="max-width:100%;max-height:min(70vh,680px);border-radius:6px;border:1px solid var(--border);display:block;margin:0 auto">
+                </div>
+            </div>`;
+        document.body.appendChild(_mpImageOverlay);
+        _mpImageOverlay.addEventListener('click', (ev) => {
+            if (ev.target === _mpImageOverlay) hideMultipartImagePreview();
+        });
+        _mpImageOverlay.querySelector('.mp-image-dialog')?.addEventListener('click', (ev) => ev.stopPropagation());
+    }
+
+    const titleEl = _mpImageOverlay.querySelector('#mp-image-title');
+    const metaEl = _mpImageOverlay.querySelector('#mp-image-meta');
+    const imgEl = _mpImageOverlay.querySelector('#mp-image-img');
+    const copyBtn = _mpImageOverlay.querySelector('#mp-image-copy');
+    const saveBtn = _mpImageOverlay.querySelector('#mp-image-save');
+    const closeBtn = _mpImageOverlay.querySelector('#mp-image-close');
+
+    titleEl.textContent = title;
+    metaEl.textContent = `${mime} · ${formatFileSize(bin.length)}${part.filename ? ` · ${part.filename}` : ''}`;
+    imgEl.src = src;
+    imgEl.alt = title;
+
+    copyBtn.onclick = async () => {
+        try {
+            const blob = await fetch(src).then((r) => r.blob());
+            await navigator.clipboard.write([new ClipboardItem({ [mime]: blob })]);
+            flashBtn(copyBtn, '✓ Copied');
+        } catch {
+            flashBtn(copyBtn, '✗ Failed');
+        }
+    };
+    saveBtn.textContent = `↓ Save .${fi.ext}`;
+    saveBtn.onclick = () => {
+        const a = document.createElement('a');
+        a.href = src;
+        const fn = part.filename && /\.\w+$/.test(part.filename)
+            ? part.filename
+            : `multipart-${part.key || 'image'}-${Date.now()}.${fi.ext}`;
+        a.download = fn;
+        a.click();
+    };
+    closeBtn.onclick = () => hideMultipartImagePreview();
+
+    _mpImageOverlay.classList.add('visible');
+    if (_mpImageEscHandler) document.removeEventListener('keydown', _mpImageEscHandler);
+    _mpImageEscHandler = (ev) => {
+        if (ev.key === 'Escape') hideMultipartImagePreview();
+    };
+    document.addEventListener('keydown', _mpImageEscHandler);
 }
 
 /** WS Messages tab: preview length before expand */
@@ -509,7 +1080,7 @@ function buildCurlCommand(entry) {
     if (headers.length) cmd += ' \\\n  ' + headers.join(' \\\n  ');
     if (reqBody && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
         let body = String(reqBody);
-        if (body.startsWith('<base64|')) body = '[Binary - use Raw tab]';
+        if (body.startsWith('<base64|') || body.startsWith('__b64__:')) body = '[Binary — use Request body tab]';
         else if (body.length > 8000) body = body.slice(0, 8000) + '\n... [truncated]';
         const escaped = body.replace(/\\/g, '\\\\').replace(/'/g, "'\\\\''");
         cmd += ` \\\n  --data-raw '${escaped}'`;
@@ -781,8 +1352,14 @@ function showMultiSelectionDetail() {
     if (multiText) {
         multiText.textContent = `${n} request(s) selected. Use “+ Session from selection” on the toolbar, then enter a name for the new session.`;
     }
-    const urlEl = document.getElementById('lv-detail-url');
-    if (urlEl) urlEl.textContent = `Selected: ${n}`;
+    renderDetailRequestLine(_currentDetailEntry || {}, {
+        idText: `[${n} selected]`,
+        method: '',
+        url: '',
+    });
+    if (dRequestMethodEl) dRequestMethodEl.style.display = 'none';
+    if (copyUrlHeaderBtn) copyUrlHeaderBtn.style.display = 'none';
+    if (detailUrlBtn) detailUrlBtn.disabled = true;
     updateSessionFromSelButton();
 }
 
@@ -1520,7 +2097,7 @@ async function selectEntry(idx) {
         try {
             const full = await api.getRequestDetail(entry.id);
             if (full) {
-                Object.assign(entry, full);
+                Object.assign(entry, normalizeRequestDetailRow(full));
                 entry._detailLoaded = true;
                 if (gen === _selectGen) showDetail(entry);
             }
@@ -1540,23 +2117,7 @@ function showDetail(entry) {
     const url    = entry.url    || '';
     const dur    = entry.duration_ms ?? entry.duration;
 
-    document.getElementById('lv-detail-url').textContent = url;
-
-    const idForDisplay = entry.id != null && entry.id !== '' ? String(entry.id) : '';
-    if (dRequestIdEl) {
-        dRequestIdEl.textContent = idForDisplay || '—';
-        dRequestIdEl.title = idForDisplay ? 'Database entry id' : '';
-    }
-    if (copyIdBtn) {
-        copyIdBtn.style.display = idForDisplay ? '' : 'none';
-        copyIdBtn.onclick = () => {
-            if (!idForDisplay) return;
-            navigator.clipboard.writeText(idForDisplay).then(() => {
-                copyIdBtn.textContent = '✓ Copied';
-                setTimeout(() => { copyIdBtn.textContent = '⧉ Copy ID'; }, 1500);
-            }).catch(() => {});
-        };
-    }
+    renderDetailRequestLine(entry);
     if (lvDetailIdStrip) lvDetailIdStrip.style.display = '';
 
     const dStatus = document.getElementById('d-status');
@@ -1564,18 +2125,20 @@ function showDetail(entry) {
     dStatus.className   = `meta-val lv-status ${entry.error ? 's-err' : statusCls(status)}`;
 
     const cupnetSessMeta = getCupnetSessionTrafficPresentation(entry);
-    document.getElementById('d-method').textContent   = cupnetSessMeta ? cupnetSessMeta.method : (method || '—');
-    document.getElementById('d-type').textContent     = type   || '—';
+    document.getElementById('d-type').textContent = cupnetSessMeta
+        ? cupnetSessMeta.host
+        : (shortTypeLabel(type) || type || '—');
     document.getElementById('d-duration').textContent = formatDur(dur);
     document.getElementById('d-time').textContent     = formatTime(entry.created_at || entry.timestamp);
-    const tabDisplay = (entry.tabId || entry.tab_id || '—');
-    const isExt = entry.source === 'external' || (tabDisplay + '').startsWith('ext_');
-    document.getElementById('d-tab').textContent = isExt ? `EXT :${entry.extPort || tabDisplay}` : tabDisplay;
 
     // Replay bar
     const canAnnotate = entry.id && !String(entry.id).startsWith('ss-') && !entry._browserEvent;
     const showReplay = entry.id && !type.startsWith('websocket') && type !== 'screenshot' && type !== 'cupnet' && !entry._browserEvent;
-    replayBar.classList.toggle('visible', showReplay);
+    const showToolbar = showReplay || canAnnotate;
+    replayBar.classList.toggle('visible', showToolbar);
+    if (toolbarActions) toolbarActions.style.display = showReplay ? '' : 'none';
+    if (sepActionsMark) sepActionsMark.hidden = !(showReplay && canAnnotate);
+    if (markSection) markSection.classList.toggle('visible', !!canAnnotate);
     if (showReplay) replayBtn.dataset.entryId = entry.id;
     replayResult.classList.remove('visible');
     replayDiff.textContent = '';
@@ -1583,8 +2146,7 @@ function showDetail(entry) {
     // Copy URL
     copyUrlBtn.onclick = () => {
         navigator.clipboard.writeText(url).catch(() => {});
-        copyUrlBtn.textContent = '✓ Copied';
-        setTimeout(() => { copyUrlBtn.textContent = '⧉ Copy URL'; }, 1500);
+        flashBtn(copyUrlBtn, '✓');
     };
     if (addToCompareBtn) {
         addToCompareBtn.style.display = showReplay ? '' : 'none';
@@ -1598,17 +2160,16 @@ function showDetail(entry) {
     const ssDirect  = document.getElementById('lv-screenshot-direct');
     const lvTabs    = document.getElementById('lv-tabs');
     const lvTabBody = document.getElementById('lv-tab-body');
-    const urlBar    = document.getElementById('lv-detail-url-bar');
     const metaRow   = document.getElementById('lv-detail-meta');
 
     if (type === 'screenshot') {
         lvTabs.style.display = 'none';
         lvTabBody.style.display = 'none';
-        if (urlBar) urlBar.style.display = 'none';
+        if (detailFindBar) detailFindBar.style.display = 'none';
         if (lvDetailIdStrip) lvDetailIdStrip.style.display = '';
         if (metaRow) metaRow.style.display = 'none';
         replayBar.style.display = 'none';
-        if (markPanel) markPanel.classList.remove('visible');
+        if (markSection) markSection.classList.remove('visible');
         ssDirect.style.display = '';
         ssDirect.innerHTML = '<div class="body-empty" id="ss-loading">⏳ Loading…</div>';
         const ssMeta = getScreenshotMeta(entry) || {};
@@ -1670,27 +2231,24 @@ function showDetail(entry) {
         const ssDirect = document.getElementById('lv-screenshot-direct');
         const lvTabs = document.getElementById('lv-tabs');
         const lvTabBody = document.getElementById('lv-tab-body');
-        const urlBar = document.getElementById('lv-detail-url-bar');
         const metaRow = document.getElementById('lv-detail-meta');
         const eventTabBtn = document.getElementById('lv-tab-event-btn');
         if (ssDirect) ssDirect.style.display = 'none';
         if (lvTabs) lvTabs.style.display = '';
         if (lvTabBody) lvTabBody.style.display = '';
-        if (urlBar) urlBar.style.display = '';
+        if (detailFindBar) detailFindBar.style.display = '';
         if (metaRow) metaRow.style.display = '';
         replayBar.style.display = 'none';
-        if (markPanel) markPanel.classList.remove('visible');
+        if (markSection) markSection.classList.remove('visible');
         if (eventTabBtn) eventTabBtn.style.display = '';
         document.querySelectorAll('.lv-tab-btn').forEach((b) => {
             if (b.dataset.tab === 'event') b.style.display = '';
             else b.style.display = 'none';
         });
         document.getElementById('d-status').textContent = browserActivityStatusLabel(entry.event_type, entry.level).text;
-        document.getElementById('d-method').textContent = browserActivityMethodBadge(entry.event_type).text;
         document.getElementById('d-type').textContent = String(entry.type || 'browser');
         document.getElementById('d-duration').textContent = '—';
         document.getElementById('d-time').textContent = formatTime(entry.created_at || entry.timestamp);
-        document.getElementById('d-tab').textContent = (entry.tabId || entry.tab_id || '—');
         const evPre = document.getElementById('tab-event-body');
         if (evPre) {
             let pretty = String(entry.detail || '');
@@ -1715,6 +2273,7 @@ function showDetail(entry) {
         }
         activateTab('event', false);
         lastActiveTab = 'event';
+        scheduleDetailFindRefresh();
         return;
     }
 
@@ -1723,11 +2282,10 @@ function showDetail(entry) {
 
     lvTabs.style.display = '';
     lvTabBody.style.display = '';
+    if (detailFindBar) detailFindBar.style.display = '';
     ssDirect.style.display = 'none';
-    if (urlBar) urlBar.style.display = '';
     if (metaRow) metaRow.style.display = '';
     replayBar.style.display = '';
-    if (markPanel) markPanel.classList.toggle('visible', !!canAnnotate);
     if (canAnnotate) syncMarkPanel(entry);
 
     document.querySelectorAll('.lv-tab-btn').forEach((b) => {
@@ -1753,8 +2311,18 @@ function showDetail(entry) {
     const parsedRespHeaders = parseHeaders(entry.response_headers || entry.response?.headers);
 
     // Headers
-    renderHeaders(document.getElementById('request-headers'),  parsedReqHeaders);
-    renderHeaders(document.getElementById('response-headers'), parsedRespHeaders);
+    renderHeaders(document.getElementById('request-headers'), parsedReqHeaders, 'req-headers');
+    renderHeaders(document.getElementById('response-headers'), parsedRespHeaders, 'resp-headers');
+    injectViewToggle(
+        document.querySelector('#tab-headers .hdr-section:first-child .hdr-section-title'),
+        'req-headers',
+        () => renderHeaders(document.getElementById('request-headers'), parsedReqHeaders, 'req-headers'),
+    );
+    injectViewToggle(
+        document.querySelector('#tab-headers .hdr-section:last-child .hdr-section-title'),
+        'resp-headers',
+        () => renderHeaders(document.getElementById('response-headers'), parsedRespHeaders, 'resp-headers'),
+    );
 
     // Copy headers as JSON buttons
     const reqHdrCopyBtn  = document.getElementById('req-hdr-copy-btn');
@@ -1786,6 +2354,11 @@ function showDetail(entry) {
         if (queryPairs.length) {
             qpSection.style.display = '';
             renderQueryParams(qpWrap, queryPairs);
+            injectViewToggle(
+                qpSection.querySelector('.body-toolbar'),
+                'query-params',
+                () => renderQueryParams(qpWrap, queryPairs),
+            );
             const qpCopyObj  = document.getElementById('qp-copy-obj-btn');
             const qpCopyText = document.getElementById('qp-copy-text-btn');
             if (qpCopyObj) qpCopyObj.onclick = () => {
@@ -1804,41 +2377,63 @@ function showDetail(entry) {
     }
 
     // ── Request body ─────────────────────────────────────────────────────────
-    const reqBody   = entry.request_body || entry.request?.body;
-    const reqCtRaw  = findHeader(parsedReqHeaders, 'content-type') || '';
-    const reqCt     = reqCtRaw.toLowerCase();
-    const reqWrap   = document.getElementById('request-body-wrap');
-    const reqSizeEl = document.getElementById('req-body-size');
-    const reqBadge  = document.getElementById('req-body-type-badge');
+    const reqBodyStored = pickRequestBodyRaw(entry);
+    const reqDecoded    = decodeStoredBody(reqBodyStored, findHeader(parsedReqHeaders, 'content-type'));
+    const reqBodyText   = reqDecoded.text;
+    const reqCtRaw      = findHeader(parsedReqHeaders, 'content-type') || '';
+    const reqCt         = reqCtRaw.toLowerCase();
+    const reqWrap       = document.getElementById('request-body-wrap');
+    const reqSizeEl     = document.getElementById('req-body-size');
+    const reqBadge      = document.getElementById('req-body-type-badge');
     const reqCopyJsonBtn = document.getElementById('req-copy-json-btn');
+    const missingBodyMsg = requestBodyMissingMessage(entry, parsedReqHeaders, method, reqBodyStored);
 
-    if (reqSizeEl) reqSizeEl.textContent = reqBody ? `${(reqBody.length / 1024).toFixed(1)} KB` : 'No body';
+    if (reqSizeEl) {
+        if (reqBodyText) {
+            reqSizeEl.textContent = formatFileSize(reqDecoded.bytes || reqBodyText.length);
+        } else if (reqDecoded.fromB64 && reqDecoded.bytes > 0) {
+            reqSizeEl.textContent = formatFileSize(reqDecoded.bytes);
+        } else if (missingBodyMsg) {
+            const cl = findHeader(parsedReqHeaders, 'content-length');
+            const clNum = cl != null ? parseInt(String(cl), 10) : NaN;
+            reqSizeEl.textContent = Number.isFinite(clNum) && clNum > 0
+                ? `Not stored · ~${formatFileSize(clNum)}`
+                : 'Not stored';
+        } else {
+            reqSizeEl.textContent = 'No body';
+        }
+    }
 
-    const isFormEncoded = reqCt.includes('application/x-www-form-urlencoded');
-    const isMultipart   = reqCt.includes('multipart/form-data');
-    const isJsonBody    = reqCt.includes('application/json') || reqCt.includes('+json');
-    const formPairs     = (isFormEncoded && reqBody) ? parseFormBody(reqBody) : null;
+    const isFormEncoded  = reqCt.includes('application/x-www-form-urlencoded');
+    const isMultipart    = reqCt.includes('multipart/form-data');
+    const isJsonBody     = reqCt.includes('application/json') || reqCt.includes('+json');
+    const formPairs      = (isFormEncoded && reqBodyText) ? parseFormBody(reqBodyText) : null;
+    const multipartParts = (isMultipart && reqBodyText) ? parseMultipartBody(reqBodyText, reqCtRaw) : null;
+    const copyPairs      = (formPairs && formPairs.length)
+        ? formPairs
+        : ((multipartParts && multipartParts.length) ? multipartPartsToCopyPairs(multipartParts) : null);
 
     // Badge
     if (reqBadge) {
         if (isFormEncoded)      { reqBadge.textContent = 'form-urlencoded'; reqBadge.style.display = ''; }
         else if (isMultipart)   { reqBadge.textContent = 'multipart/form-data'; reqBadge.style.display = ''; }
         else if (isJsonBody)    { reqBadge.textContent = 'application/json'; reqBadge.style.display = ''; }
-        else if (reqBody && reqCt) { reqBadge.textContent = reqCt.split(';')[0].trim(); reqBadge.style.display = ''; }
+        else if (reqBodyStored && reqCt) { reqBadge.textContent = reqCt.split(';')[0].trim(); reqBadge.style.display = ''; }
+        else if (missingBodyMsg && reqCt) { reqBadge.textContent = reqCt.split(';')[0].trim(); reqBadge.style.display = ''; }
         else                    { reqBadge.style.display = 'none'; }
     }
 
     // JSON copy button
     if (reqCopyJsonBtn) {
-        reqCopyJsonBtn.style.display = (isJsonBody && reqBody) ? '' : 'none';
-        if (isJsonBody && reqBody) {
+        reqCopyJsonBtn.style.display = (isJsonBody && reqBodyText) ? '' : 'none';
+        if (isJsonBody && reqBodyText) {
             reqCopyJsonBtn.onclick = () => {
                 try {
-                    const pretty = JSON.stringify(JSON.parse(reqBody), null, 2);
+                    const pretty = JSON.stringify(JSON.parse(reqBodyText), null, 2);
                     navigator.clipboard.writeText(pretty).then(
                         () => flashBtn(reqCopyJsonBtn, '✓'), () => flashBtn(reqCopyJsonBtn, '✗'));
                 } catch {
-                    navigator.clipboard.writeText(reqBody).then(
+                    navigator.clipboard.writeText(reqBodyText).then(
                         () => flashBtn(reqCopyJsonBtn, '✓'), () => flashBtn(reqCopyJsonBtn, '✗'));
                 }
             };
@@ -1846,14 +2441,23 @@ function showDetail(entry) {
     }
 
     if (formPairs && formPairs.length) {
-        renderFormBody(reqWrap, formPairs, reqBody);
-    } else if (isJsonBody && reqBody) {
-        const pretty = formatBody(reqBody);
-        reqWrap.innerHTML = `<div class="body-content json-body">${esc(pretty)}</div>`;
-    } else if (isMultipart && reqBody) {
-        reqWrap.innerHTML = `<div class="body-content" style="color:var(--text-dim)">${esc(reqBody)}</div>`;
+        renderFormBody(reqWrap, formPairs, reqBodyText);
+    } else if (multipartParts && multipartParts.length) {
+        renderMultipartBody(reqWrap, multipartParts, reqCtRaw);
+    } else if (isJsonBody && reqBodyText) {
+        renderJsonBody(reqWrap, reqBodyText, 'req-body-json');
+    } else if (isMultipart && reqBodyText) {
+        const preview = reqBodyText.length > 4000 ? reqBodyText.slice(0, 4000) + '\n… [truncated]' : reqBodyText;
+        reqWrap.innerHTML = `<div class="body-content"><pre style="margin:0;white-space:pre-wrap;word-break:break-word">${esc(preview)}</pre></div>`;
+    } else if (reqDecoded.fromB64 && reqBodyText == null) {
+        const hint = reqDecoded.decodeError
+            ? `[Binary body — base64 decode failed (${formatFileSize(String(reqDecoded.b64Data || '').length)} encoded) · try ↓ Save]`
+            : `[Binary body — ${formatFileSize(reqDecoded.bytes)} · use ↓ Save]`;
+        reqWrap.innerHTML = `<div class="body-content" style="color:var(--text-dim)">${esc(hint)}</div>`;
+    } else if (missingBodyMsg) {
+        reqWrap.innerHTML = `<div class="body-content" style="color:var(--text-dim);padding:12px;line-height:1.45">${esc(missingBodyMsg)}</div>`;
     } else {
-        const reqFmt = formatBody(reqBody);
+        const reqFmt = formatBody(reqBodyText || reqBodyStored);
         if (reqFmt) {
             reqWrap.innerHTML = `<div class="body-content">${esc(reqFmt)}</div>`;
         } else if (!queryPairs.length) {
@@ -1864,7 +2468,12 @@ function showDetail(entry) {
     }
 
     // Wire up request body toolbar buttons
-    wireReqBodyBtns(reqBody, formPairs);
+    wireReqBodyBtns(reqBodyText || reqBodyStored, copyPairs, {
+        fromB64: reqDecoded.fromB64,
+        b64Data: reqDecoded.b64Data,
+        contentType: reqCtRaw,
+        storedRaw: reqBodyStored,
+    });
 
     // Raw HTTP tab (curl -v style + curl command); WebSocket: append frames from DB
     const rawEl = document.getElementById('raw-http-content');
@@ -1872,8 +2481,11 @@ function showDetail(entry) {
     if (rawEl) {
         const isWs = String(entry.type || '').toLowerCase() === 'websocket';
         const setRawText = (wsExtra) => {
-            rawEl.textContent = buildRawHttp(entry) + (wsExtra || '');
+            const text = buildRawHttp(entry) + (wsExtra || '');
+            rawEl.textContent = text;
             if (rawWrap) rawWrap.dataset.curl = buildCurlCommand(entry);
+            updateRawTabBadgeFromText(text);
+            scheduleDetailFindRefresh();
         };
         setRawText('');
         if (isWs && api.getWsEvents) {
@@ -1894,6 +2506,7 @@ function showDetail(entry) {
     }
 
     // Response body
+    resetResponseHtmlViews();
     let respBody   = entry.response_body || entry.responseBody;
     let respParsed = respBody ? parseBase64Body(respBody) : null;
     let respFmt    = respParsed ? null : formatBody(respBody);
@@ -1929,7 +2542,7 @@ function showDetail(entry) {
 
     const isImage = respParsed && respParsed.mime && respParsed.mime.startsWith('image/');
     const isJson  = !isImage && (respCt.includes('json') || (respFmt && respFmt.trimStart().startsWith('{') || respFmt?.trimStart().startsWith('[')));
-    const isHtml  = !isImage && respCt.includes('html');
+    const isHtml  = !isImage && looksLikeHtmlResponse(respFmt || respBody || '', respCt);
 
     if (respParsed) {
         const binaryMime = respParsed.mime || respCt.split(';')[0].trim() || 'application/octet-stream';
@@ -1979,7 +2592,12 @@ function showDetail(entry) {
         }
     } else {
         if (respFmt) {
-            respWrap.innerHTML = `<div class="body-content">${esc(respFmt)}</div>`;
+            if (isJson) {
+                renderJsonBody(respWrap, respFmt, 'resp-body-json');
+            } else {
+                respWrap.innerHTML = `<div class="body-content">${esc(respFmt)}</div>`;
+            }
+            if (isHtml) setupResponseHtmlViews(respFmt, respCt, url);
         } else {
             respWrap.innerHTML = '<div class="body-empty">(empty)</div>';
         }
@@ -2020,22 +2638,37 @@ function showDetail(entry) {
     // Render cookies tab
     renderCookiesTab(entry);
 
+    clearDetailTabBadges();
+    updateDetailTabBadges({
+        headers: countHeaderEntries(parsedReqHeaders) + countHeaderEntries(parsedRespHeaders),
+        request: countRequestTabItems(queryPairs, formPairs, multipartParts, reqBodyStored, reqBodyText, missingBodyMsg),
+        response: countResponseTabItems(respFmt, respParsed, isHtml),
+        comment: (entry.note || '').trim() ? 1 : 0,
+    });
+    updateRawTabBadgeFromText(buildRawHttp(entry));
+
     if (isWsHandshake && lastActiveTab === 'messages') {
         activateTab('messages', false);
     } else {
         activateTab(lastActiveTab);
     }
+    scheduleDetailFindRefresh();
 }
 
 function syncMarkPanel(entry) {
-    if (!markPanel || !entry) return;
+    if (!entry) return;
     const tag = entry.tag || null;
     const note = entry.note || '';
-    if (notePreview) notePreview.textContent = notePreviewText(note);
+    const hasNote = !!String(note).trim();
+    if (notePreview) {
+        notePreview.textContent = notePreviewText(note);
+        notePreview.classList.toggle('has-note', hasNote);
+    }
     if (commentTextarea) commentTextarea.value = note;
     tagColorsWrap?.querySelectorAll('.mark-color').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.color === tag);
     });
+    setDetailTabBadge('comment', hasNote ? 1 : 0);
 }
 
 function flashMarkStatus(text, isError = false) {
@@ -2185,41 +2818,954 @@ function parseFormBody(body) {
     } catch { return []; }
 }
 
-function renderFormBody(container, pairs, rawBody) {
+function extractMultipartBoundary(contentType, bodyText) {
+    const ct = String(contentType || '');
+    const m = ct.match(/boundary=([^;\s]+|"[^"]+"|'[^']+')/i);
+    if (m) {
+        let b = m[1].trim();
+        if ((b.startsWith('"') && b.endsWith('"')) || (b.startsWith("'") && b.endsWith("'"))) {
+            b = b.slice(1, -1);
+        }
+        return b;
+    }
+    const first = String(bodyText || '').match(/^--([^\r\n]+)/);
+    return first ? first[1] : null;
+}
+
+/** Parse multipart/form-data body → [{ key, value, isFile?, filename?, contentType?, size? }] */
+function parseMultipartBody(bodyText, contentType) {
+    if (!bodyText) return [];
+    const boundary = extractMultipartBoundary(contentType, bodyText);
+    if (!boundary) return [];
+    const delim = `--${boundary}`;
+    const parts = [];
+    for (const chunk of bodyText.split(delim)) {
+        let c = chunk.replace(/^\r\n/, '').replace(/\r\n$/, '');
+        if (!c || c === '--' || c.startsWith('--')) continue;
+        const sep = c.search(/\r\n\r\n|\n\n/);
+        if (sep === -1) continue;
+        const head = c.slice(0, sep);
+        let body = c.slice(sep);
+        body = body.replace(/^\r\n\r\n|^\n\n/, '').replace(/(?:\r\n|\n)--$/, '').replace(/\r\n$|\n$/, '');
+        let name = '';
+        let filename = null;
+        let partCt = '';
+        for (const line of head.split(/\r\n|\n/)) {
+            const ll = line.toLowerCase();
+            if (ll.startsWith('content-disposition:')) {
+                const nm = line.match(/name="([^"]*)"/i) || line.match(/name=([^;\s]+)/i);
+                const fn = line.match(/filename="([^"]*)"/i) || line.match(/filename=([^;\s]+)/i);
+                if (nm) name = nm[1];
+                if (fn) filename = fn[1];
+            }
+            if (ll.startsWith('content-type:')) {
+                partCt = line.split(':').slice(1).join(':').trim();
+            }
+        }
+        if (!name && !filename) continue;
+        if (filename != null && filename !== '') {
+            parts.push({
+                key: name || filename,
+                value: `[file: ${partCt || 'application/octet-stream'}, ${formatFileSize(body.length)}]`,
+                isFile: true,
+                filename,
+                contentType: partCt,
+                size: body.length,
+                rawBinary: body,
+                imageMime: sniffImageMime(body, partCt),
+            });
+        } else {
+            const preview = body.length > 500 ? body.slice(0, 500) + '…' : body;
+            parts.push({ key: name, value: preview, isFile: false, rawValue: body });
+        }
+    }
+    return parts;
+}
+
+function multipartPartsToCopyPairs(parts) {
+    return (parts || []).map((p) => ({
+        key: p.key,
+        value: p.isFile ? p.value : p.value,
+        rawKey: p.key,
+        rawValue: p.isFile ? p.value : (p.rawValue ?? p.value),
+    }));
+}
+
+const LV_FIELD_PREVIEW_CHARS = 200;
+
+function getLvViewMode(sectionKey) {
+    try {
+        const v = localStorage.getItem(`cupnet.lv.view.${sectionKey}`);
+        if (v === 'table' || v === 'fields') return v;
+    } catch { /* ignore */ }
+    return 'fields';
+}
+
+function setLvViewMode(sectionKey, mode) {
+    try { localStorage.setItem(`cupnet.lv.view.${sectionKey}`, mode); } catch { /* ignore */ }
+}
+
+function createViewModeToggle(sectionKey, onChange) {
+    const wrap = document.createElement('span');
+    wrap.className = 'lv-view-toggle';
+    const current = getLvViewMode(sectionKey);
+    for (const mode of ['fields', 'table']) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'lv-view-toggle-btn' + (current === mode ? ' active' : '');
+        btn.textContent = mode === 'fields' ? 'Fields' : 'Table';
+        btn.dataset.mode = mode;
+        btn.title = mode === 'fields' ? 'Compact field list' : 'Table view';
+        btn.addEventListener('click', () => {
+            if (getLvViewMode(sectionKey) === mode) return;
+            setLvViewMode(sectionKey, mode);
+            wrap.querySelectorAll('.lv-view-toggle-btn').forEach((b) => {
+                b.classList.toggle('active', b.dataset.mode === mode);
+            });
+            onChange(mode);
+        });
+        wrap.appendChild(btn);
+    }
+    return wrap;
+}
+
+function injectViewToggle(titleEl, sectionKey, onRerender) {
+    if (!titleEl || !sectionKey) return;
+    let host = titleEl.querySelector('.lv-view-toggle-host');
+    if (!host) {
+        host = document.createElement('span');
+        host.className = 'lv-view-toggle-host';
+        const copyBtn = titleEl.querySelector('.hdr-copy-btn, .ck-copy-btn');
+        const flexSpacer = titleEl.querySelector('span[style*="flex:1"], span[style*="flex: 1"]');
+        if (copyBtn) titleEl.insertBefore(host, copyBtn);
+        else if (flexSpacer) titleEl.insertBefore(host, flexSpacer);
+        else titleEl.appendChild(host);
+    }
+    host.innerHTML = '';
+    host.appendChild(createViewModeToggle(sectionKey, onRerender));
+}
+
+function createFieldList() {
+    const el = document.createElement('div');
+    el.className = 'lv-field-list';
+    return el;
+}
+
+function createFieldValueBlock(text, opts = {}) {
+    const previewChars = opts.previewChars ?? LV_FIELD_PREVIEW_CHARS;
+    const wrap = document.createElement('div');
+    wrap.className = 'lv-field-val-wrap';
+    const full = text == null ? '' : String(text);
+    const pre = document.createElement('pre');
+    pre.className = 'lv-field-val lv-kv-value';
+    if (!full) {
+        pre.textContent = opts.emptyLabel || '(empty)';
+        pre.classList.add('is-empty');
+        wrap.appendChild(pre);
+        return wrap;
+    }
+    if (full.length <= previewChars) {
+        pre.textContent = full;
+        wrap.appendChild(pre);
+        return wrap;
+    }
+    pre.textContent = `${full.slice(0, previewChars)}…`;
+    const foot = document.createElement('div');
+    foot.className = 'lv-field-val-foot';
+    const note = document.createElement('span');
+    note.className = 'lv-field-val-len';
+    note.textContent = `(${full.length} chars)`;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'lv-field-expand body-act-btn';
+    btn.textContent = 'Expand';
+    let open = false;
+    btn.addEventListener('click', () => {
+        open = !open;
+        pre.textContent = open ? full : `${full.slice(0, previewChars)}…`;
+        btn.textContent = open ? 'Collapse' : 'Expand';
+    });
+    foot.appendChild(note);
+    foot.appendChild(btn);
+    wrap.appendChild(pre);
+    wrap.appendChild(foot);
+    return wrap;
+}
+
+function appendFieldBadges(parent, badges) {
+    if (!badges?.length) return;
+    const row = document.createElement('div');
+    row.className = 'lv-field-badges';
+    for (const badge of badges) {
+        const span = document.createElement('span');
+        span.className = 'lv-field-badge' + (badge.cls ? ` ${badge.cls}` : '');
+        span.textContent = badge.text;
+        row.appendChild(span);
+    }
+    parent.appendChild(row);
+}
+
+function appendFieldMeta(parent, lines) {
+    const items = (Array.isArray(lines) ? lines : [lines]).filter(Boolean);
+    if (!items.length) return;
+    const meta = document.createElement('div');
+    meta.className = 'lv-field-meta';
+    for (const line of items) {
+        const row = document.createElement('div');
+        row.className = 'lv-field-meta-line';
+        if (typeof line === 'string') row.textContent = line;
+        else row.innerHTML = line;
+        meta.appendChild(row);
+    }
+    parent.appendChild(meta);
+}
+
+function appendWireValueSection(parent, wireValue) {
+    if (wireValue == null) return;
+    const wire = String(wireValue);
+    const det = document.createElement('details');
+    det.className = 'lv-field-wire';
+    const sum = document.createElement('summary');
+    sum.textContent = 'Wire value (URL-encoded)';
+    det.appendChild(sum);
+    det.appendChild(createFieldValueBlock(wire));
+    const actions = document.createElement('div');
+    actions.className = 'lv-field-wire-act';
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'lv-field-copy body-act-btn';
+    copyBtn.title = 'Copy wire value';
+    copyBtn.textContent = '⎘';
+    copyBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        navigator.clipboard.writeText(wire).then(
+            () => flashBtn(copyBtn, '✓'),
+            () => flashBtn(copyBtn, '✗'),
+        );
+    });
+    actions.appendChild(copyBtn);
+    det.appendChild(actions);
+    parent.appendChild(det);
+}
+
+function appendValueCellContent(parent, row, displayText) {
+    const s = displayText == null ? '' : String(displayText);
+    parent.appendChild(createFieldValueBlock(s));
+    if (row.wireValue != null && String(row.wireValue) !== s) {
+        appendWireValueSection(parent, row.wireValue);
+    }
+}
+
+function createFieldCard({ key, subkey, value, meta, badges, footer, copyValue, wireValue }) {
+    const card = document.createElement('div');
+    card.className = 'lv-field-card lv-kv-field';
+
+    const head = document.createElement('div');
+    head.className = 'lv-field-head lv-kv-field-head';
+
+    const keyBox = document.createElement('div');
+    keyBox.className = 'lv-field-keybox';
+    const keyEl = document.createElement('div');
+    keyEl.className = 'lv-field-key lv-kv-label';
+    keyEl.textContent = key;
+    keyBox.appendChild(keyEl);
+    if (subkey) {
+        const sub = document.createElement('div');
+        sub.className = 'lv-field-subkey lv-kv-subkey';
+        sub.textContent = subkey;
+        keyBox.appendChild(sub);
+    }
+    head.appendChild(keyBox);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'lv-field-copy body-act-btn';
+    copyBtn.title = 'Copy value';
+    copyBtn.textContent = '⎘';
+    copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(String(copyValue ?? value ?? '')).then(
+            () => flashBtn(copyBtn, '✓'),
+            () => flashBtn(copyBtn, '✗'),
+        );
+    });
+    head.appendChild(copyBtn);
+
+    card.appendChild(head);
+    card.appendChild(createFieldValueBlock(value));
+    if (wireValue != null && String(wireValue) !== String(value ?? '')) {
+        appendWireValueSection(card, wireValue);
+    }
+    appendFieldBadges(card, badges);
+    appendFieldMeta(card, meta);
+    if (footer) card.appendChild(footer);
+    return card;
+}
+
+function buildKvFieldList(rows) {
+    const list = createFieldList();
+    for (const row of rows) list.appendChild(createFieldCard(row));
+    return list;
+}
+
+function buildKvTable(rows, opts = {}) {
+    const wrap = document.createElement('div');
+    wrap.className = 'lv-kv-table-wrap';
     const table = document.createElement('table');
-    table.className = 'form-table';
-    table.innerHTML = `
-        <thead><tr>
-            <th>Key</th>
-            <th>Value</th>
-        </tr></thead>`;
+    table.className = 'lv-kv-table';
+    const columns = opts.columns || [
+        { key: 'key', label: 'Name', cls: 'lv-kv-td-key' },
+        { key: 'value', label: 'Value', cls: 'lv-kv-td-val' },
+    ];
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    for (const col of columns) {
+        const th = document.createElement('th');
+        th.textContent = col.label;
+        headRow.appendChild(th);
+    }
+    const actTh = document.createElement('th');
+    actTh.textContent = '';
+    headRow.appendChild(actTh);
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
     const tbody = document.createElement('tbody');
-    for (const { key, value, rawKey, rawValue } of pairs) {
+    for (const row of rows) {
         const tr = document.createElement('tr');
-        const showRaw = rawValue !== value;
-        tr.innerHTML = `
-            <td class="form-td-key">${esc(key)}</td>
-            <td class="form-td-val">${esc(value)}${showRaw
-                ? `<br><span class="form-td-raw">${esc(rawValue)}</span>`
-                : ''}</td>`;
+        for (const col of columns) {
+            const td = document.createElement('td');
+            td.className = col.cls || '';
+            const raw = col.render ? col.render(row) : (row[col.key] ?? '');
+            const s = raw == null ? '' : String(raw);
+            if (col.key === 'value') {
+                appendValueCellContent(td, row, s);
+            } else if (s.length > LV_FIELD_PREVIEW_CHARS) {
+                td.textContent = `${s.slice(0, LV_FIELD_PREVIEW_CHARS)}…`;
+                td.title = s;
+            } else {
+                td.textContent = s;
+            }
+            tr.appendChild(td);
+        }
+        const actTd = document.createElement('td');
+        actTd.className = 'lv-kv-td-act';
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'lv-field-copy body-act-btn';
+        copyBtn.title = 'Copy value';
+        copyBtn.textContent = '⎘';
+        const copyVal = String(row.copyValue ?? row.value ?? '');
+        copyBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(copyVal).then(
+                () => flashBtn(copyBtn, '✓'),
+                () => flashBtn(copyBtn, '✗'),
+            );
+        });
+        actTd.appendChild(copyBtn);
+        tr.appendChild(actTd);
         tbody.appendChild(tr);
     }
     table.appendChild(tbody);
-
-    container.innerHTML = `<div style="padding:4px 0 2px 10px">
-        <span class="form-type-badge">application/x-www-form-urlencoded</span>
-        <span style="font-size:10px;color:var(--text-dim)">${pairs.length} field${pairs.length !== 1 ? 's' : ''}</span>
-    </div>`;
-    container.appendChild(table);
+    wrap.appendChild(table);
+    return wrap;
 }
 
-function wireReqBodyBtns(rawBody, formPairs) {
+function renderKeyValueList(container, sectionKey, rows, opts = {}) {
+    if (!container) return;
+    container.innerHTML = '';
+    if (!rows?.length) {
+        container.innerHTML = `<div class="body-empty">${opts.emptyLabel || '(none)'}</div>`;
+        return;
+    }
+    const mode = getLvViewMode(sectionKey);
+    container.appendChild(mode === 'table' ? buildKvTable(rows, opts) : buildKvFieldList(rows));
+}
+
+function headersToRows(headers) {
+    const rows = [];
+    if (!headers || typeof headers !== 'object') return rows;
+    for (const [k, v] of Object.entries(headers)) {
+        const vals = Array.isArray(v) ? v : [v];
+        vals.forEach((item, idx) => {
+            rows.push({
+                key: k,
+                subkey: vals.length > 1 ? `#${idx + 1}` : '',
+                value: String(item),
+            });
+        });
+    }
+    return rows;
+}
+
+function pairsToKvRows(pairs) {
+    return (pairs || []).map(({ key, value, rawValue, subkey }) => {
+        const decoded = value == null ? '' : String(value);
+        const row = {
+            key,
+            subkey: subkey || '',
+            value: decoded,
+            copyValue: decoded,
+        };
+        if (rawValue != null && String(rawValue) !== decoded) {
+            row.wireValue = String(rawValue);
+        }
+        return row;
+    });
+}
+
+function formatJsonLeafValue(v) {
+    if (v === null) return 'null';
+    if (v === undefined) return '';
+    if (typeof v === 'string') return v;
+    if (typeof v === 'boolean' || typeof v === 'number') return String(v);
+    return JSON.stringify(v);
+}
+
+function flattenJsonToRows(value, keyPrefix = '') {
+    const rows = [];
+    const push = (k, v) => {
+        rows.push({
+            key: k,
+            value: formatJsonLeafValue(v),
+            copyValue: formatJsonLeafValue(v),
+        });
+    };
+    const walk = (val, prefix) => {
+        if (val === null || val === undefined) {
+            push(prefix || '(root)', val);
+            return;
+        }
+        if (Array.isArray(val)) {
+            if (!val.length) { push(prefix || '(root)', '[]'); return; }
+            val.forEach((item, i) => {
+                const p = prefix ? `${prefix}[${i}]` : `[${i}]`;
+                if (item !== null && typeof item === 'object') walk(item, p);
+                else push(p, item);
+            });
+            return;
+        }
+        if (typeof val === 'object') {
+            const keys = Object.keys(val);
+            if (!keys.length) { push(prefix || '(root)', '{}'); return; }
+            for (const k of keys) {
+                const p = prefix ? `${prefix}.${k}` : k;
+                const child = val[k];
+                if (child !== null && typeof child === 'object') walk(child, p);
+                else push(p, child);
+            }
+            return;
+        }
+        push(prefix || '(root)', val);
+    };
+    walk(value, keyPrefix);
+    return rows;
+}
+
+function renderJsonBody(container, jsonText, sectionKey) {
+    const section = sectionKey || 'json-body';
+    let parsed;
+    try {
+        parsed = JSON.parse(jsonText);
+    } catch {
+        container.innerHTML = `<div class="body-content json-body">${esc(formatBody(jsonText))}</div>`;
+        return;
+    }
+    const rows = flattenJsonToRows(parsed);
+    const doRender = () => {
+        container.innerHTML = '';
+        renderFieldListHeader(container, 'application/json', rows.length, section, doRender);
+        const body = document.createElement('div');
+        container.appendChild(body);
+        renderKeyValueList(body, section, rows, { emptyLabel: '(empty)' });
+    };
+    doRender();
+}
+
+function buildHtmlFormEditorPrefill(form, baseUrl) {
+    const method = (form.method || 'GET').toUpperCase();
+    let actionUrl = baseUrl || '';
+    if (form.action) {
+        try { actionUrl = new URL(form.action, baseUrl || undefined).href; }
+        catch { actionUrl = form.action; }
+    }
+    const ct = form.enctype || 'application/x-www-form-urlencoded';
+    const params = [];
+    for (const field of form.fields || []) {
+        const name = field.name;
+        if (!name || field.tag === 'button') continue;
+        if (field.type === 'file') {
+            params.push([name, field.displayValue || '[file]']);
+            continue;
+        }
+        if (field.type === 'checkbox' || field.type === 'radio') {
+            if (!field.flags?.includes('checked')) continue;
+        }
+        params.push([name, field.value ?? '']);
+    }
+    const sp = new URLSearchParams();
+    for (const [k, v] of params) sp.append(k, v);
+    const bodyStr = sp.toString();
+    if (method === 'GET' && bodyStr) {
+        const sep = actionUrl.includes('?') ? '&' : '?';
+        return { method, url: actionUrl + sep + bodyStr, headers: {}, body: '' };
+    }
+    const headers = bodyStr ? { 'Content-Type': ct.split(';')[0].trim() } : {};
+    return { method, url: actionUrl, headers, body: bodyStr };
+}
+
+function renderFieldListHeader(container, badgeText, count, sectionKey, onRerender) {
+    const header = document.createElement('div');
+    header.className = 'lv-field-list-header';
+    header.innerHTML = `<span class="form-type-badge">${esc(badgeText)}</span><span class="lv-field-list-count">${count} item${count !== 1 ? 's' : ''}</span>`;
+    if (sectionKey && onRerender) {
+        const host = document.createElement('span');
+        host.className = 'lv-view-toggle-host';
+        host.appendChild(createViewModeToggle(sectionKey, onRerender));
+        header.appendChild(host);
+    }
+    container.appendChild(header);
+}
+
+function renderFormBody(container, pairs, rawBody) {
+    const sectionKey = 'req-body-form';
+    const rows = pairsToKvRows(pairs);
+    const doRender = () => {
+        container.innerHTML = '';
+        renderFieldListHeader(container, 'application/x-www-form-urlencoded', pairs.length, sectionKey, doRender);
+        const body = document.createElement('div');
+        container.appendChild(body);
+        renderKeyValueList(body, sectionKey, rows);
+    };
+    doRender();
+}
+
+function isLikelyHtmlContent(text) {
+    const t = String(text || '').trimStart().slice(0, 800).toLowerCase();
+    return t.startsWith('<!doctype html') || t.startsWith('<html') || (t.includes('<html') && t.includes('<body'));
+}
+
+function looksLikeHtmlResponse(text, contentType) {
+    if (String(contentType || '').toLowerCase().includes('html')) return true;
+    return isLikelyHtmlContent(text);
+}
+
+function htmlFormStyleHidden(style) {
+    const s = String(style || '');
+    if (!s) return false;
+    if (/display\s*:\s*none/i.test(s)) return true;
+    if (/visibility\s*:\s*hidden/i.test(s)) return true;
+    return false;
+}
+
+function parseHtmlFormField(el) {
+    const tag = (el.tagName || '').toLowerCase();
+    if (!tag || tag === 'fieldset') return null;
+
+    let type = (el.getAttribute('type') || '').toLowerCase();
+    if (!type) {
+        if (tag === 'textarea') type = 'textarea';
+        else if (tag === 'select') type = 'select';
+        else if (tag === 'button') type = 'submit';
+        else type = 'text';
+    }
+
+    const hidden = type === 'hidden'
+        || el.hasAttribute('hidden')
+        || htmlFormStyleHidden(el.getAttribute('style'))
+        || el.getAttribute('aria-hidden') === 'true';
+
+    const flags = [];
+    if (hidden) flags.push('hidden');
+    if (el.hasAttribute('disabled')) flags.push('disabled');
+    if (el.hasAttribute('readonly')) flags.push('readonly');
+    if (el.hasAttribute('required')) flags.push('required');
+    if (el.hasAttribute('multiple')) flags.push('multiple');
+    if (el.hasAttribute('checked')) flags.push('checked');
+
+    const attrs = [];
+    for (const name of [
+        'autocomplete', 'placeholder', 'maxlength', 'minlength', 'pattern', 'min', 'max', 'step',
+        'formaction', 'formmethod', 'formenctype', 'formtarget', 'accept', 'inputmode',
+        'data-val', 'data-value', 'data-rule', 'data-msg',
+    ]) {
+        const v = el.getAttribute(name);
+        if (v == null || v === '') continue;
+        attrs.push(`${name}="${v}"`);
+    }
+
+    const field = {
+        tag,
+        type,
+        name: el.getAttribute('name') || '',
+        id: el.getAttribute('id') || '',
+        hidden,
+        flags,
+        attrs,
+        value: '',
+        displayValue: '',
+        options: null,
+    };
+
+    if (tag === 'select') {
+        field.options = Array.from(el.querySelectorAll('option')).map((opt, index) => ({
+            index,
+            value: opt.getAttribute('value') ?? (opt.textContent || '').trim(),
+            text: (opt.textContent || '').trim(),
+            selected: opt.hasAttribute('selected'),
+            disabled: opt.hasAttribute('disabled'),
+        }));
+        const selected = field.options.filter((o) => o.selected);
+        const chosen = selected.length ? selected : field.options.slice(0, 1);
+        field.value = chosen.map((o) => o.value).join(', ');
+        field.displayValue = field.value;
+    } else if (tag === 'textarea') {
+        field.value = el.textContent || '';
+        field.displayValue = field.value;
+    } else if (type === 'checkbox' || type === 'radio') {
+        const attrVal = el.getAttribute('value') || 'on';
+        field.value = attrVal;
+        field.displayValue = el.hasAttribute('checked') ? `checked · ${attrVal}` : `(unchecked) · ${attrVal}`;
+    } else if (type === 'file') {
+        field.displayValue = el.getAttribute('value') ? `[file path attr] ${el.getAttribute('value')}` : '(file input)';
+    } else {
+        field.value = el.getAttribute('value') || '';
+        field.displayValue = field.value;
+    }
+
+    return field;
+}
+
+function parseHtmlFormsFromString(html) {
+    const raw = String(html || '');
+    if (!raw.includes('<form') && !isLikelyHtmlContent(raw)) return [];
+    try {
+        const doc = new DOMParser().parseFromString(raw, 'text/html');
+        return Array.from(doc.querySelectorAll('form')).map((form, index) => {
+            const fields = [];
+            const elements = form.elements ? Array.from(form.elements) : Array.from(form.querySelectorAll('input, select, textarea, button'));
+            for (const el of elements) {
+                const parsed = parseHtmlFormField(el);
+                if (parsed) fields.push(parsed);
+            }
+            return {
+                index,
+                id: form.getAttribute('id') || '',
+                name: form.getAttribute('name') || '',
+                action: form.getAttribute('action') || '',
+                method: (form.getAttribute('method') || 'GET').toUpperCase(),
+                enctype: form.getAttribute('enctype') || '',
+                novalidate: form.hasAttribute('novalidate'),
+                target: form.getAttribute('target') || '',
+                fields,
+            };
+        });
+    } catch {
+        return [];
+    }
+}
+
+let _respHtmlView = 'body';
+let _respHtmlFormsPayload = null;
+
+function resetResponseHtmlViews() {
+    _respHtmlView = 'body';
+    _respHtmlFormsPayload = null;
+    const subtabs = document.getElementById('resp-html-subtabs');
+    const formsWrap = document.getElementById('resp-html-forms-wrap');
+    const bodyWrap = document.getElementById('response-body-wrap');
+    const copyFormsBtn = document.getElementById('resp-forms-copy-btn');
+    if (subtabs) subtabs.style.display = 'none';
+    if (formsWrap) {
+        formsWrap.style.display = 'none';
+        formsWrap.innerHTML = '';
+    }
+    if (bodyWrap) bodyWrap.style.display = '';
+    if (copyFormsBtn) copyFormsBtn.style.display = 'none';
+    document.querySelectorAll('.resp-html-subtab').forEach((btn) => {
+        btn.classList.toggle('active', (btn.dataset.respView || 'body') === 'body');
+    });
+}
+
+function renderHtmlFormsPanel(container, forms, pageUrl = '') {
+    if (!container) return;
+    container.innerHTML = '';
+    if (!forms?.length) {
+        container.innerHTML = '<div class="resp-forms-empty">No &lt;form&gt; elements found in this HTML response.</div>';
+        return;
+    }
+
+    for (const form of forms) {
+        const card = document.createElement('div');
+        card.className = 'resp-form-card';
+        const sectionKey = `resp-form-${form.index}`;
+
+        const label = form.name || form.id || `Form ${form.index + 1}`;
+        const metaParts = [
+            form.method,
+            form.action ? `→ ${form.action}` : '(no action)',
+            form.enctype ? form.enctype : null,
+            `${form.fields.length} field${form.fields.length !== 1 ? 's' : ''}`,
+        ].filter(Boolean);
+
+        const fieldRows = form.fields.map((field, fieldIdx) => {
+            const fieldLabel = field.name || field.id || `(unnamed ${field.tag})`;
+            const badges = (field.flags || []).map((flag) => ({
+                text: flag,
+                cls: flag === 'hidden' ? 'badge-hidden' : '',
+            }));
+            if (field.type) badges.unshift({ text: field.type });
+
+            const meta = [];
+            if (field.id && field.name) meta.push(`id: ${field.id}`);
+            if (field.options?.length) {
+                for (const opt of field.options) {
+                    const mark = opt.selected ? '●' : '○';
+                    let line = `${mark} ${opt.text || opt.value || '(option)'}`;
+                    if (opt.value && opt.value !== opt.text) line += ` (${opt.value})`;
+                    meta.push(line);
+                }
+            }
+            if (field.attrs?.length) meta.push(field.attrs.join(' · '));
+
+            return {
+                key: `${fieldIdx + 1}. ${fieldLabel}`,
+                subkey: field.tag !== field.type ? field.tag : '',
+                value: field.displayValue || field.value || '',
+                copyValue: field.value || field.displayValue || '',
+                badges,
+                meta,
+            };
+        });
+
+        const head = document.createElement('div');
+        head.className = 'resp-form-head';
+        const headTop = document.createElement('div');
+        headTop.className = 'resp-form-head-top';
+        headTop.innerHTML = `<div class="resp-form-head-title">${esc(label)}</div>`;
+        const editorBtn = document.createElement('button');
+        editorBtn.type = 'button';
+        editorBtn.className = 'lv-act-btn lv-act-btn-primary resp-form-editor-btn';
+        editorBtn.textContent = '✏ Submit';
+        editorBtn.title = 'Open in Request Editor with form fields prefilled';
+        editorBtn.addEventListener('click', () => {
+            const prefill = buildHtmlFormEditorPrefill(form, pageUrl);
+            void api.openRequestEditor(prefill).catch((err) => {
+                alert('Could not open Request Editor: ' + (err?.message || err));
+            });
+        });
+        headTop.appendChild(editorBtn);
+        head.appendChild(headTop);
+        const metaHtml = [
+            `<div class="resp-form-head-meta">${esc(metaParts.join(' · '))}</div>`,
+            form.id ? `<div class="resp-form-head-meta">id="${esc(form.id)}"</div>` : '',
+            form.name ? `<div class="resp-form-head-meta">name="${esc(form.name)}"</div>` : '',
+            form.target ? `<div class="resp-form-head-meta">target="${esc(form.target)}"</div>` : '',
+        ].filter(Boolean).join('');
+        if (metaHtml) {
+            const metaWrap = document.createElement('div');
+            metaWrap.innerHTML = metaHtml;
+            head.appendChild(metaWrap);
+        }
+
+        const body = document.createElement('div');
+        const renderFormFields = () => {
+            body.innerHTML = '';
+            const mode = getLvViewMode(sectionKey);
+            if (mode === 'table') {
+                renderKeyValueList(body, sectionKey, fieldRows.map(({ key, subkey, value, copyValue }) => ({
+                    key: subkey ? `${key} (${subkey})` : key,
+                    value,
+                    copyValue,
+                })));
+            } else {
+                const list = createFieldList();
+                for (const row of fieldRows) list.appendChild(createFieldCard(row));
+                body.appendChild(list);
+            }
+        };
+        renderFormFields();
+        injectViewToggle(headTop, sectionKey, renderFormFields);
+
+        card.appendChild(head);
+        card.appendChild(body);
+        container.appendChild(card);
+    }
+}
+
+function setResponseHtmlView(view) {
+    _respHtmlView = view === 'forms' ? 'forms' : 'body';
+    const bodyWrap = document.getElementById('response-body-wrap');
+    const formsWrap = document.getElementById('resp-html-forms-wrap');
+    document.querySelectorAll('.resp-html-subtab').forEach((btn) => {
+        btn.classList.toggle('active', (btn.dataset.respView || 'body') === _respHtmlView);
+    });
+    if (bodyWrap) bodyWrap.style.display = _respHtmlView === 'forms' ? 'none' : '';
+    if (formsWrap) formsWrap.style.display = _respHtmlView === 'forms' ? 'block' : 'none';
+    scheduleDetailFindRefresh();
+}
+
+function setupResponseHtmlViews(htmlText, contentType, pageUrl = '') {
+    resetResponseHtmlViews();
+    if (!looksLikeHtmlResponse(htmlText, contentType) || !htmlText) return;
+
+    const forms = parseHtmlFormsFromString(htmlText);
+    if (!forms.length) return;
+
+    _respHtmlFormsPayload = forms;
+    const subtabs = document.getElementById('resp-html-subtabs');
+    const formsWrap = document.getElementById('resp-html-forms-wrap');
+    const countEl = document.getElementById('resp-forms-count');
+    const copyFormsBtn = document.getElementById('resp-forms-copy-btn');
+
+    if (subtabs) subtabs.style.display = 'flex';
+    if (countEl) countEl.textContent = `(${forms.length})`;
+    renderHtmlFormsPanel(formsWrap, forms, pageUrl);
+
+    document.querySelectorAll('.resp-html-subtab').forEach((btn) => {
+        btn.onclick = () => setResponseHtmlView(btn.dataset.respView || 'body');
+    });
+
+    if (copyFormsBtn) {
+        copyFormsBtn.style.display = '';
+        copyFormsBtn.onclick = () => {
+            navigator.clipboard.writeText(JSON.stringify(_respHtmlFormsPayload, null, 2)).then(
+                () => flashBtn(copyFormsBtn, '✓ Copied'),
+                () => flashBtn(copyFormsBtn, '✗ Failed'),
+            );
+        };
+    }
+}
+
+function renderHeaders(container, headers, sectionKey) {
+    if (!sectionKey) {
+        renderKeyValueList(container, 'headers', headersToRows(headers));
+        return;
+    }
+    const rows = headersToRows(headers);
+    renderKeyValueList(container, sectionKey, rows, { emptyLabel: '(none)' });
+}
+
+function renderMultipartBody(container, parts, contentType) {
+    const sectionKey = 'req-body-multipart';
+    const ctShort = String(contentType || 'multipart/form-data').split(';')[0].trim();
+    let multipartFilter = 'all';
+
+    const buildRows = () => parts.map((part) => {
+        const badges = [];
+        if (part.isFile) badges.push({ text: 'file', cls: 'badge-file' });
+        const meta = [];
+        if (part.filename) meta.push(`filename: ${part.filename}`);
+        if (part.contentType) meta.push(`content-type: ${part.contentType}`);
+
+        let footer = null;
+        if (part.isFile && (part.imageMime || part.rawBinary)) {
+            footer = document.createElement('div');
+            footer.className = 'lv-field-actions';
+            if (part.imageMime && part.rawBinary) {
+                const viewBtn = document.createElement('button');
+                viewBtn.type = 'button';
+                viewBtn.className = 'body-act-btn';
+                viewBtn.textContent = '👁 View image';
+                viewBtn.title = `Preview ${part.imageMime}`;
+                viewBtn.addEventListener('click', () => showMultipartImagePreview(part));
+                footer.appendChild(viewBtn);
+            }
+            if (part.rawBinary) {
+                const saveBtn = document.createElement('button');
+                saveBtn.type = 'button';
+                saveBtn.className = 'body-act-btn';
+                const fi = guessFileInfo(part.filename || '', part.contentType || part.imageMime || '');
+                saveBtn.textContent = `↓ Save .${fi.ext}`;
+                saveBtn.addEventListener('click', () => {
+                    const mime = part.imageMime || part.contentType || 'application/octet-stream';
+                    const arr = new Uint8Array(part.rawBinary.length);
+                    for (let i = 0; i < part.rawBinary.length; i++) arr[i] = part.rawBinary.charCodeAt(i) & 0xff;
+                    const blob = new Blob([arr], { type: mime.split(';')[0].trim() });
+                    const blobUrl = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = blobUrl;
+                    a.download = part.filename && /\.\w+$/.test(part.filename)
+                        ? part.filename
+                        : `multipart-${part.key || 'file'}-${Date.now()}.${fi.ext}`;
+                    a.click();
+                    setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+                });
+                footer.appendChild(saveBtn);
+            }
+        }
+
+        return {
+            key: part.key,
+            value: part.isFile ? part.value : (part.rawValue ?? part.value),
+            copyValue: part.isFile ? part.filename || part.value : (part.rawValue ?? part.value),
+            badges,
+            meta,
+            footer,
+            isFile: !!part.isFile,
+        };
+    });
+
+    const rows = buildRows();
+    const fileCount = rows.filter((r) => r.isFile).length;
+    const showFileFilter = fileCount > 0 && fileCount < rows.length;
+
+    const filteredRows = () => (multipartFilter === 'files' ? rows.filter((r) => r.isFile) : rows);
+
+    const doRender = () => {
+        container.innerHTML = '';
+        const header = document.createElement('div');
+        header.className = 'lv-field-list-header';
+        header.innerHTML = `<span class="form-type-badge">${esc(ctShort)}</span><span class="lv-field-list-count">${filteredRows().length} item${filteredRows().length !== 1 ? 's' : ''}</span>`;
+        if (showFileFilter) {
+            const filterWrap = document.createElement('span');
+            filterWrap.className = 'lv-multipart-filter';
+            for (const mode of ['all', 'files']) {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'lv-multipart-filter-btn' + (multipartFilter === mode ? ' active' : '');
+                btn.textContent = mode === 'all' ? 'All' : `Files (${fileCount})`;
+                btn.addEventListener('click', () => {
+                    if (multipartFilter === mode) return;
+                    multipartFilter = mode;
+                    doRender();
+                });
+                filterWrap.appendChild(btn);
+            }
+            header.appendChild(filterWrap);
+        }
+        const toggleHost = document.createElement('span');
+        toggleHost.className = 'lv-view-toggle-host';
+        toggleHost.appendChild(createViewModeToggle(sectionKey, doRender));
+        header.appendChild(toggleHost);
+        container.appendChild(header);
+
+        const body = document.createElement('div');
+        container.appendChild(body);
+        const visible = filteredRows();
+        if (!visible.length) {
+            body.innerHTML = '<div class="body-empty">No file parts in this request</div>';
+            return;
+        }
+        const mode = getLvViewMode(sectionKey);
+        if (mode === 'table') {
+            renderKeyValueList(body, sectionKey, visible.map(({ key, value, copyValue }) => ({ key, value, copyValue })));
+        } else {
+            const list = createFieldList();
+            for (const row of visible) list.appendChild(createFieldCard(row));
+            body.appendChild(list);
+        }
+    };
+    doRender();
+}
+
+function wireReqBodyBtns(rawBody, formPairs, saveOpts = {}) {
     const btnText = document.getElementById('req-copy-text-btn');
     const btnArr  = document.getElementById('req-copy-arr-btn');
     const btnObj  = document.getElementById('req-copy-obj-btn');
     const btnSave = document.getElementById('req-save-btn');
     const hasForm = formPairs && formPairs.length > 0;
-    const hasBody = !!rawBody;
+    const hasBody = !!rawBody || !!(saveOpts.fromB64 && saveOpts.b64Data) || !!(saveOpts.storedRaw);
 
     // Form-specific buttons (Text/Array/Object) — only for form-urlencoded
     if (btnArr)  btnArr.style.display  = hasForm ? '' : 'none';
@@ -2263,32 +3809,35 @@ function wireReqBodyBtns(rawBody, formPairs) {
     }
     if (btnSave && hasBody) {
         btnSave.onclick = () => {
-            const blob = new Blob([rawBody], { type: 'text/plain' });
+            let blob;
+            const mime = saveOpts.contentType || 'text/plain';
+            if (saveOpts.fromB64 && saveOpts.b64Data) {
+                const dec = b64ToBinaryString(saveOpts.b64Data);
+                if (dec.ok) {
+                    const arr = new Uint8Array(dec.bin.length);
+                    for (let i = 0; i < dec.bin.length; i++) arr[i] = dec.bin.charCodeAt(i);
+                    blob = new Blob([arr], { type: mime.split(';')[0].trim() || 'application/octet-stream' });
+                } else if (saveOpts.storedRaw) {
+                    blob = new Blob([String(saveOpts.storedRaw)], { type: 'text/plain' });
+                } else {
+                    blob = new Blob([rawBody || ''], { type: 'text/plain' });
+                }
+            } else {
+                blob = new Blob([rawBody], { type: mime.split(';')[0].trim() || 'text/plain' });
+            }
             const url  = URL.createObjectURL(blob);
             const a    = document.createElement('a');
-            a.href = url; a.download = `request-body-${Date.now()}.txt`; a.click();
+            const ext  = mime.includes('multipart') ? 'bin' : 'txt';
+            a.href = url; a.download = `request-body-${Date.now()}.${ext}`; a.click();
             setTimeout(() => URL.revokeObjectURL(url), 5000);
         };
     }
 }
 
-function renderHeaders(container, headers) {
-    container.innerHTML = '';
-    if (!headers || typeof headers !== 'object') {
-        container.innerHTML = '<div class="body-empty">(none)</div>';
-        return;
-    }
-    const entries = Object.entries(headers);
-    if (!entries.length) { container.innerHTML = '<div class="body-empty">(none)</div>'; return; }
-    for (const [k, v] of entries) {
-        const vals = Array.isArray(v) ? v : [v];
-        for (const item of vals) {
-            const row = document.createElement('div');
-            row.className = 'hdr-row';
-            row.innerHTML = `<span class="hdr-name">${esc(k)}</span><span class="hdr-val">${esc(String(item))}</span>`;
-            container.appendChild(row);
-        }
-    }
+function renderQueryParams(container, pairs) {
+    const sectionKey = 'query-params';
+    const rows = (pairs || []).map(({ key, value }) => ({ key, value }));
+    renderKeyValueList(container, sectionKey, rows, { emptyLabel: '(none)' });
 }
 
 function findHeader(headers, name) {
@@ -2298,21 +3847,6 @@ function findHeader(headers, name) {
         if (k.toLowerCase() === lc) return Array.isArray(v) ? v[0] : String(v);
     }
     return '';
-}
-
-function renderQueryParams(container, pairs) {
-    container.innerHTML = '';
-    const table = document.createElement('table');
-    table.className = 'form-table';
-    table.innerHTML = `<thead><tr><th>Key</th><th>Value</th></tr></thead>`;
-    const tbody = document.createElement('tbody');
-    for (const { key, value } of pairs) {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td class="form-td-key">${esc(key)}</td><td class="form-td-val">${esc(value)}</td>`;
-        tbody.appendChild(tr);
-    }
-    table.appendChild(tbody);
-    container.appendChild(table);
 }
 
 function headersToJson(headers) {
@@ -2404,32 +3938,32 @@ function renderCookiesTab(entry) {
     const reqHeaders  = parseHeaders(entry.request_headers  || entry.request?.headers);
     const respHeaders = parseHeaders(entry.response_headers || entry.response?.headers);
 
-    // ── Sent cookies (Cookie: header) ────────────────────────────────────────
     const cookieHeader = Object.entries(reqHeaders || {})
         .find(([k]) => k.toLowerCase() === 'cookie')?.[1] || '';
     const sentCookies = parseRequestCookies(cookieHeader);
+    const sentRows = sentCookies.map((c) => ({ key: c.name, value: c.value }));
 
     const sentSection = document.createElement('div');
     sentSection.className = 'ck-section';
-    sentSection.innerHTML = `<div class="ck-section-title">
-        Sent <span style="color:#7dd3fc">Cookie</span>
-        <span class="ck-count">${sentCookies.length}</span>
-        ${sentCookies.length ? '<button class="ck-copy-btn" id="ck-sent-copy">⎘ JSON</button>' : ''}
-    </div>`;
+    const sentTitle = document.createElement('div');
+    sentTitle.className = 'ck-section-title';
+    sentTitle.innerHTML = `Sent <span style="color:#7dd3fc">Cookie</span> <span class="ck-count">${sentCookies.length}</span>`;
+    if (sentCookies.length) {
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'ck-copy-btn';
+        copyBtn.id = 'ck-sent-copy';
+        copyBtn.textContent = '⎘ JSON';
+        sentTitle.appendChild(copyBtn);
+    }
+    sentSection.appendChild(sentTitle);
+    const sentBody = document.createElement('div');
+    sentSection.appendChild(sentBody);
     if (sentCookies.length === 0) {
-        sentSection.innerHTML += '<div class="ck-empty">No cookies sent with this request</div>';
+        sentBody.innerHTML = '<div class="ck-empty">No cookies sent with this request</div>';
     } else {
-        const tbl = document.createElement('table');
-        tbl.className = 'ck-table';
-        tbl.innerHTML = `<thead><tr><th>Name</th><th>Value</th></tr></thead>`;
-        const tbody = document.createElement('tbody');
-        for (const c of sentCookies) {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `<td class="ck-td-name">${esc(c.name)}</td><td class="ck-td-val">${esc(c.value)}</td>`;
-            tbody.appendChild(tr);
-        }
-        tbl.appendChild(tbody);
-        sentSection.appendChild(tbl);
+        const renderSent = () => renderKeyValueList(sentBody, 'cookies-sent', sentRows);
+        renderSent();
+        injectViewToggle(sentTitle, 'cookies-sent', renderSent);
     }
     container.appendChild(sentSection);
     const sentCopyBtn = document.getElementById('ck-sent-copy');
@@ -2442,51 +3976,80 @@ function renderCookiesTab(entry) {
         };
     }
 
-    // ── Received cookies (Set-Cookie: headers) ────────────────────────────────
     const rawSetCookies = getSetCookies(respHeaders);
     const parsed = rawSetCookies.map(parseSetCookie).filter(Boolean);
+    const recvRows = parsed.map((c) => {
+        const badges = [];
+        if (c.flags.includes('Secure')) badges.push({ text: 'Secure', cls: 'badge-secure' });
+        if (c.flags.includes('HttpOnly')) badges.push({ text: 'HttpOnly', cls: 'badge-httponly' });
+        const sameSite = c.flags.find((f) => f.startsWith('SameSite'));
+        if (sameSite) badges.push({ text: sameSite.replace(/^SameSite=/i, 'SameSite '), cls: 'badge-samesite' });
+        if (c.flags.includes('Partitioned')) badges.push({ text: 'Partitioned' });
+        const meta = [
+            c.attrs.path ? `Path: ${c.attrs.path}` : '',
+            c.attrs.domain ? `Domain: ${c.attrs.domain}` : '',
+            c.attrs.expires ? `Expires: ${c.attrs.expires}` : '',
+            c.attrs.maxAge ? `Max-Age: ${c.attrs.maxAge}` : '',
+        ].filter(Boolean);
+        const metaCol = [
+            ...meta,
+            ...(c.flags.length ? [c.flags.join(', ')] : []),
+        ].join(' · ');
+        return {
+            key: c.name,
+            value: c.value,
+            metaCol,
+            badges,
+            meta,
+        };
+    });
 
     const recvSection = document.createElement('div');
     recvSection.className = 'ck-section';
     recvSection.style.marginTop = '12px';
-    recvSection.innerHTML = `<div class="ck-section-title">
-        Received <span style="color:#4ade80">Set-Cookie</span>
-        <span class="ck-count" style="${parsed.length ? '' : 'background:var(--bg2);color:var(--text-dim)'}">${parsed.length}</span>
-        ${parsed.length ? '<button class="ck-copy-btn" id="ck-recv-copy">⎘ JSON</button>' : ''}
-    </div>`;
+    const recvTitle = document.createElement('div');
+    recvTitle.className = 'ck-section-title';
+    recvTitle.innerHTML = `Received <span style="color:#4ade80">Set-Cookie</span> <span class="ck-count" style="${parsed.length ? '' : 'background:var(--bg2);color:var(--text-dim)'}">${parsed.length}</span>`;
+    if (parsed.length) {
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'ck-copy-btn';
+        copyBtn.id = 'ck-recv-copy';
+        copyBtn.textContent = '⎘ JSON';
+        recvTitle.appendChild(copyBtn);
+    }
+    recvSection.appendChild(recvTitle);
+    const recvBody = document.createElement('div');
+    recvSection.appendChild(recvBody);
 
     if (parsed.length === 0) {
-        recvSection.innerHTML += '<div class="ck-empty">No Set-Cookie headers in this response</div>';
+        recvBody.innerHTML = '<div class="ck-empty">No Set-Cookie headers in this response</div>';
     } else {
-        const tbl = document.createElement('table');
-        tbl.className = 'ck-table';
-        tbl.innerHTML = `<thead><tr>
-            <th>Name</th><th>Value</th><th>Path / Domain</th><th>Flags</th>
-        </tr></thead>`;
-        const tbody = document.createElement('tbody');
-        for (const c of parsed) {
-            const tr = document.createElement('tr');
-            const flagsHtml = [
-                c.flags.includes('Secure')    ? '<span class="ck-flag ck-flag-secure">Secure</span>' : '',
-                c.flags.includes('HttpOnly')  ? '<span class="ck-flag ck-flag-httponly">HttpOnly</span>' : '',
-                c.flags.find(f => f.startsWith('SameSite'))
-                    ? `<span class="ck-flag ck-flag-samesite">${esc(c.flags.find(f => f.startsWith('SameSite')))}</span>` : '',
-                c.flags.includes('Partitioned') ? '<span class="ck-flag ck-flag-partitioned">Partitioned</span>' : '',
-            ].join('');
-            const pathDom = [
-                c.attrs.path   ? `Path: ${esc(c.attrs.path)}` : '',
-                c.attrs.domain ? `Domain: ${esc(c.attrs.domain)}` : '',
-                c.attrs.expires ? `Expires: ${esc(c.attrs.expires)}` : '',
-                c.attrs.maxAge  ? `Max-Age: ${esc(c.attrs.maxAge)}` : '',
-            ].filter(Boolean).join('<br>');
-            tr.innerHTML = `<td class="ck-td-name">${esc(c.name)}</td>
-                <td class="ck-td-val">${esc(c.value)}</td>
-                <td class="ck-td-attr ck-attr-row">${pathDom || '—'}</td>
-                <td class="ck-td-attr">${flagsHtml || '<span style="color:var(--text-dim)">—</span>'}</td>`;
-            tbody.appendChild(tr);
-        }
-        tbl.appendChild(tbody);
-        recvSection.appendChild(tbl);
+        const renderRecv = () => {
+            const mode = getLvViewMode('cookies-recv');
+            recvBody.innerHTML = '';
+            if (mode === 'table') {
+                renderKeyValueList(recvBody, 'cookies-recv', recvRows, {
+                    columns: [
+                        { key: 'key', label: 'Name', cls: 'lv-kv-td-key' },
+                        { key: 'value', label: 'Value', cls: 'lv-kv-td-val' },
+                        { key: 'metaCol', label: 'Attributes', cls: 'lv-kv-td-meta' },
+                    ],
+                });
+            } else {
+                const list = createFieldList();
+                for (const row of recvRows) {
+                    list.appendChild(createFieldCard({
+                        key: row.key,
+                        value: row.value,
+                        badges: row.badges,
+                        meta: row.meta,
+                    }));
+                }
+                recvBody.appendChild(list);
+            }
+        };
+        renderRecv();
+        injectViewToggle(recvTitle, 'cookies-recv', renderRecv);
     }
     container.appendChild(recvSection);
     const recvCopyBtn = document.getElementById('ck-recv-copy');
@@ -2505,12 +4068,7 @@ function renderCookiesTab(entry) {
         };
     }
 
-    // Update tab button badge
-    const ckBtn = document.querySelector('.lv-tab-btn[data-tab="cookies"]');
-    if (ckBtn) {
-        const total = sentCookies.length + parsed.length;
-        ckBtn.textContent = total > 0 ? `Cookies (${total})` : 'Cookies';
-    }
+    setCookieTabBadges(sentCookies.length, parsed.length);
 }
 
 /** @param {object} entry — log row with type websocket */
@@ -2577,8 +4135,11 @@ async function loadWsMessagesPanel(entry) {
             parts.push(`<div class="ws-msg-row ${rowClass}"><span class="ws-msg-dir">${esc(dirLabel)}</span><div class="ws-msg-body">${bodyHtml}</div><span class="ws-msg-time">${t}</span></div>`);
         }
         listEl.innerHTML = parts.join('');
+        setDetailTabBadge('messages', rows.length);
+        scheduleDetailFindRefresh();
     } catch (e) {
         _wsMessagesCopyPayload = null;
+        setDetailTabBadge('messages', 0);
         listEl.innerHTML = `<div class="body-empty">Failed to load: ${esc(e.message || String(e))}</div>`;
     }
 }
@@ -2590,7 +4151,294 @@ function activateTab(name, remember = true) {
     if (name === 'messages' && _currentDetailEntry && String(_currentDetailEntry.type || '').toLowerCase() === 'websocket') {
         loadWsMessagesPanel(_currentDetailEntry);
     }
+    scheduleDetailFindRefresh();
 }
+
+// ─── In-tab find (Headers / Request / Response / Raw …) ───────────────────────
+const DETAIL_FIND_SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'INPUT', 'BUTTON', 'TEXTAREA', 'SELECT', 'MARK']);
+let _detailFindMarks = [];
+let _detailFindTextareaRanges = [];
+let _detailFindIndex = -1;
+let _detailFindMode = 'dom'; // 'dom' | 'textarea'
+
+function getActiveDetailTabPane() {
+    return document.querySelector('.lv-tab-content.active');
+}
+
+function getDetailFindRoot() {
+    const pane = getActiveDetailTabPane();
+    if (!pane) return null;
+    if (pane.id === 'tab-response') {
+        const formsWrap = document.getElementById('resp-html-forms-wrap');
+        const bodyWrap = document.getElementById('response-body-wrap');
+        if (formsWrap && formsWrap.style.display !== 'none' && formsWrap.offsetParent !== null) {
+            return formsWrap;
+        }
+        if (bodyWrap && bodyWrap.style.display !== 'none') return bodyWrap;
+    }
+    if (pane.id === 'tab-request') {
+        const reqWrap = document.getElementById('request-body-wrap');
+        if (reqWrap) return reqWrap;
+    }
+    return pane;
+}
+
+function isDetailFindTextareaMode() {
+    const pane = getActiveDetailTabPane();
+    return pane?.id === 'tab-comment' && !!commentTextarea;
+}
+
+function clearDetailFindMarksIn(root) {
+    if (!root) return;
+    root.querySelectorAll('mark.lv-find-mark').forEach((mark) => {
+        const parent = mark.parentNode;
+        if (!parent) return;
+        parent.replaceChild(document.createTextNode(mark.textContent), mark);
+        parent.normalize();
+    });
+}
+
+function clearAllDetailFindHighlights() {
+    const body = document.getElementById('lv-tab-body');
+    if (body) clearDetailFindMarksIn(body);
+    _detailFindMarks = [];
+    _detailFindTextareaRanges = [];
+    _detailFindIndex = -1;
+}
+
+function detailFindShouldSkipNode(node, root) {
+    let p = node.parentElement;
+    while (p && p !== root) {
+        if (DETAIL_FIND_SKIP_TAGS.has(p.tagName)) return true;
+        if (p.classList?.contains('body-toolbar')) return true;
+        if (p.classList?.contains('lv-detail-find-bar')) return true;
+        if (p.classList?.contains('ss-action-bar')) return true;
+        if (p.classList?.contains('lv-view-toggle')) return true;
+        if (p.classList?.contains('lv-multipart-filter')) return true;
+        if (p.classList?.contains('resp-form-head')) return true;
+        if (p.classList?.contains('lv-url-parts-head')) return true;
+        if (p.closest?.('.body-act-btn, .lv-field-copy, .lv-url-copy-btn, .lv-act-btn, button')) return true;
+        const style = window.getComputedStyle(p);
+        if (style.display === 'none' || style.visibility === 'hidden') return true;
+        p = p.parentElement;
+    }
+    return false;
+}
+
+function collectDetailFindTextNodes(root) {
+    const nodes = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+            if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+            if (detailFindShouldSkipNode(node, root)) return NodeFilter.FILTER_REJECT;
+            return NodeFilter.FILTER_ACCEPT;
+        },
+    });
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    return nodes;
+}
+
+function buildDetailFindMarks(root, query) {
+    const marks = [];
+    const q = query.toLowerCase();
+    for (const node of collectDetailFindTextNodes(root)) {
+        const text = node.nodeValue;
+        const lc = text.toLowerCase();
+        let start = 0;
+        let idx = lc.indexOf(q, start);
+        if (idx === -1) continue;
+
+        const fragments = [];
+        while (idx !== -1) {
+            if (idx > start) fragments.push(document.createTextNode(text.slice(start, idx)));
+            const mark = document.createElement('mark');
+            mark.className = 'lv-find-mark';
+            mark.textContent = text.slice(idx, idx + query.length);
+            fragments.push(mark);
+            marks.push(mark);
+            start = idx + query.length;
+            idx = lc.indexOf(q, start);
+        }
+        if (start < text.length) fragments.push(document.createTextNode(text.slice(start)));
+
+        const parent = node.parentNode;
+        if (!parent) continue;
+        for (const frag of fragments) parent.insertBefore(frag, node);
+        parent.removeChild(node);
+    }
+    return marks;
+}
+
+function buildDetailFindTextareaRanges(query) {
+    const ranges = [];
+    const ta = commentTextarea;
+    if (!ta || !query) return ranges;
+    const text = ta.value;
+    const lc = text.toLowerCase();
+    const q = query.toLowerCase();
+    let idx = 0;
+    while ((idx = lc.indexOf(q, idx)) !== -1) {
+        ranges.push({ start: idx, end: idx + query.length });
+        idx += query.length;
+    }
+    return ranges;
+}
+
+function updateDetailFindCountUI() {
+    if (!detailFindCount) return;
+    const query = detailFindInput?.value.trim() || '';
+    if (!query) {
+        detailFindCount.textContent = '';
+        return;
+    }
+    const total = _detailFindMode === 'textarea'
+        ? _detailFindTextareaRanges.length
+        : _detailFindMarks.length;
+    if (!total) {
+        detailFindCount.textContent = 'No matches';
+        return;
+    }
+    const cur = _detailFindIndex >= 0 ? _detailFindIndex + 1 : 0;
+    detailFindCount.textContent = `${cur} / ${total}`;
+}
+
+function focusDetailFindMatch(index, { scroll = true } = {}) {
+    if (_detailFindMode === 'textarea') {
+        const ranges = _detailFindTextareaRanges;
+        if (!ranges.length || !commentTextarea) {
+            _detailFindIndex = -1;
+            updateDetailFindCountUI();
+            return;
+        }
+        _detailFindIndex = ((index % ranges.length) + ranges.length) % ranges.length;
+        const { start, end } = ranges[_detailFindIndex];
+        commentTextarea.focus();
+        commentTextarea.setSelectionRange(start, end);
+        if (scroll) {
+            const style = getComputedStyle(commentTextarea);
+            const lineHeight = parseFloat(style.lineHeight) || 16;
+            const linesBefore = commentTextarea.value.slice(0, start).split('\n').length - 1;
+            commentTextarea.scrollTop = Math.max(0, linesBefore * lineHeight - commentTextarea.clientHeight * 0.35);
+        }
+        updateDetailFindCountUI();
+        return;
+    }
+
+    if (!_detailFindMarks.length) {
+        _detailFindIndex = -1;
+        updateDetailFindCountUI();
+        return;
+    }
+    _detailFindIndex = ((index % _detailFindMarks.length) + _detailFindMarks.length) % _detailFindMarks.length;
+    _detailFindMarks.forEach((m, i) => m.classList.toggle('lv-find-active', i === _detailFindIndex));
+    if (scroll) {
+        _detailFindMarks[_detailFindIndex].scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+    updateDetailFindCountUI();
+}
+
+function refreshDetailFind({ focusFirst = false } = {}) {
+    clearAllDetailFindHighlights();
+    const query = detailFindInput?.value.trim() || '';
+    if (!query || !detailPanel || detailPanel.style.display === 'none' || detailPanel.classList.contains('multi-sel')) {
+        updateDetailFindCountUI();
+        return;
+    }
+
+    if (isDetailFindTextareaMode()) {
+        _detailFindMode = 'textarea';
+        _detailFindTextareaRanges = buildDetailFindTextareaRanges(query);
+        if (_detailFindTextareaRanges.length) {
+            focusDetailFindMatch(focusFirst ? 0 : 0, { scroll: true });
+        } else {
+            updateDetailFindCountUI();
+        }
+        return;
+    }
+
+    _detailFindMode = 'dom';
+    const root = getDetailFindRoot();
+    if (!root) {
+        updateDetailFindCountUI();
+        return;
+    }
+    _detailFindMarks = buildDetailFindMarks(root, query);
+    if (_detailFindMarks.length) {
+        focusDetailFindMatch(focusFirst ? 0 : 0, { scroll: true });
+    } else {
+        updateDetailFindCountUI();
+    }
+}
+
+function scheduleDetailFindRefresh(opts) {
+    requestAnimationFrame(() => refreshDetailFind(opts));
+}
+
+function stepDetailFind(delta) {
+    const query = detailFindInput?.value.trim() || '';
+    if (!query) {
+        detailFindInput?.focus();
+        return;
+    }
+    const total = _detailFindMode === 'textarea'
+        ? _detailFindTextareaRanges.length
+        : _detailFindMarks.length;
+    if (!total) {
+        refreshDetailFind();
+        return;
+    }
+    if (_detailFindIndex < 0) {
+        focusDetailFindMatch(delta >= 0 ? 0 : total - 1);
+        return;
+    }
+    focusDetailFindMatch(_detailFindIndex + delta);
+}
+
+function clearDetailFind() {
+    if (detailFindInput) detailFindInput.value = '';
+    clearAllDetailFindHighlights();
+    updateDetailFindCountUI();
+}
+
+function wireDetailFindBar() {
+    const debouncedRefresh = debounce(() => refreshDetailFind({ focusFirst: true }), 120);
+    detailFindInput?.addEventListener('input', debouncedRefresh);
+    detailFindInput?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            stepDetailFind(e.shiftKey ? -1 : 1);
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            clearDetailFind();
+            detailFindInput.blur();
+        }
+    });
+    detailFindPrev?.addEventListener('click', () => stepDetailFind(-1));
+    detailFindNext?.addEventListener('click', () => stepDetailFind(1));
+    detailFindClear?.addEventListener('click', () => {
+        clearDetailFind();
+        detailFindInput?.focus();
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'f') return;
+        if (!detailPanel || detailPanel.style.display === 'none' || detailPanel.classList.contains('multi-sel')) return;
+        if (e.target === searchInput) return;
+        e.preventDefault();
+        detailFindInput?.focus();
+        detailFindInput?.select();
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'F3') return;
+        if (!detailPanel || detailPanel.style.display === 'none' || detailPanel.classList.contains('multi-sel')) return;
+        if (!detailFindInput?.value.trim()) return;
+        e.preventDefault();
+        stepDetailFind(e.shiftKey ? -1 : 1);
+    });
+}
+
+wireDetailFindBar();
 
 tabBtns.forEach(b => b.addEventListener('click', () => activateTab(b.dataset.tab)));
 document.getElementById('ws-msg-refresh-btn')?.addEventListener('click', () => {
@@ -2631,8 +4479,7 @@ document.getElementById('ws-msg-copy-json-btn')?.addEventListener('click', async
 
 // ─── Replay → Request Editor ──────────────────────────────────────────────────
 if (replayBtn) {
-    // Update button label to indicate it opens an editor
-    replayBtn.textContent = '✏ Request Editor';
+    replayBtn.textContent = LV_ACT_LABELS.editor;
     replayBtn.title = 'Open in Request Editor (Postman-style)';
 }
 
@@ -2640,14 +4487,14 @@ replayBtn?.addEventListener('click', async () => {
     const id = parseInt(replayBtn.dataset.entryId, 10);
     if (!id) return;
     replayBtn.disabled = true;
-    replayBtn.textContent = '⏳ Opening…';
+    replayBtn.textContent = '⏳';
     try {
         await api.openRequestEditor(id);
     } catch (e) {
         alert('Could not open Request Editor: ' + e.message);
     } finally {
         replayBtn.disabled = false;
-        replayBtn.textContent = '✏ Request Editor';
+        replayBtn.textContent = LV_ACT_LABELS.editor;
     }
 });
 
@@ -3401,4 +5248,113 @@ document.addEventListener('click', () => {
         open = !open;
         applyCollapse();
     });
+})();
+
+// ─── Web Request Tools — row context menu ───────────────────────────────────
+(function () {
+    const menu = document.getElementById('wrt-ctx-menu');
+    if (!menu || !lvRows) return;
+
+    /** @type {{ entry: object, idx: number } | null} */
+    let ctxState = null;
+
+    function isHttpRequestEntry(entry) {
+        if (!entry || entry._browserEvent) return false;
+        const type = String(entry.type || '').toLowerCase();
+        if (type === 'screenshot' || type === 'cupnet') return false;
+        if (getCupnetSessionTrafficPresentation(entry)) return false;
+        const url = String(entry.url || '');
+        return /^https?:\/\//i.test(url) && entry.id != null;
+    }
+
+    function hideMenu() {
+        menu.classList.add('hidden');
+        ctxState = null;
+    }
+
+    function showMenu(e, entry, idx) {
+        ctxState = { entry, idx };
+        const id = Number(entry.id);
+        menu.innerHTML =
+            '<div class="wrt-ctx-menu-title">Web Request Tools</div>' +
+            '<div class="wrt-ctx-menu-item" data-action="apply-new">Open with tab context (new tab)</div>' +
+            '<div class="wrt-ctx-menu-item" data-action="apply-active">Open with tab context (active tab)</div>' +
+            '<div class="wrt-ctx-menu-sep"></div>' +
+            '<div class="wrt-ctx-menu-item" data-action="export">Export launch profile…</div>' +
+            '<div class="wrt-ctx-menu-item" data-action="load-file">Load launch profile…</div>' +
+            '<div class="wrt-ctx-menu-sep"></div>' +
+            `<div class="wrt-ctx-menu-item" data-action="editor"${Number.isFinite(id) ? '' : ' class="disabled"'}>Request Editor</div>` +
+            '<div class="wrt-ctx-menu-item" data-action="curl">Copy as curl</div>';
+
+        menu.style.left = `${Math.min(e.clientX, window.innerWidth - 240)}px`;
+        menu.style.top = `${Math.min(e.clientY, window.innerHeight - 280)}px`;
+        menu.classList.remove('hidden');
+    }
+
+    lvRows.addEventListener('contextmenu', (e) => {
+        const row = e.target.closest?.('.lv-row');
+        if (!row) return;
+        const idx = parseInt(row.dataset.index, 10);
+        const entry = filteredEntries[idx];
+        if (!isHttpRequestEntry(entry)) return;
+        e.preventDefault();
+        if (!selectedRequestIds.has(entry.id)) {
+            selectedRequestIds.clear();
+            selectedRequestIds.add(entry.id);
+            selectionAnchorIdx = idx;
+            selectedIndex = idx;
+            selectEntry(idx);
+        }
+        showMenu(e, entry, idx);
+    });
+
+    menu.addEventListener('click', (e) => {
+        const item = e.target.closest?.('.wrt-ctx-menu-item');
+        if (!item || item.classList.contains('disabled') || !ctxState) return;
+        const action = item.dataset.action;
+        const entry = ctxState.entry;
+        const id = Number(entry.id);
+        hideMenu();
+
+        if (action === 'apply-new') {
+            void api.applyLaunchProfileFromRequest?.(id, { newTab: true }).then((r) => {
+                if (!r?.success) alert(r?.error || 'Could not apply launch profile');
+            }).catch((err) => alert(String(err?.message || err)));
+            return;
+        }
+        if (action === 'apply-active') {
+            void api.applyLaunchProfileFromRequest?.(id, { newTab: false }).then((r) => {
+                if (!r?.success) alert(r?.error || 'Could not apply launch profile');
+            }).catch((err) => alert(String(err?.message || err)));
+            return;
+        }
+        if (action === 'export') {
+            void api.exportLaunchProfileFromRequest?.(id).then((r) => {
+                if (r?.canceled) return;
+                if (!r?.success) alert(r?.error || 'Export failed');
+            }).catch((err) => alert(String(err?.message || err)));
+            return;
+        }
+        if (action === 'load-file') {
+            void api.openSessionProfileModal?.();
+            return;
+        }
+        if (action === 'editor') {
+            if (!Number.isFinite(id)) return;
+            void api.openRequestEditor(id).catch((err) => alert(String(err?.message || err)));
+            return;
+        }
+        if (action === 'curl') {
+            const text = buildCurlCommand(entry);
+            void navigator.clipboard.writeText(text).catch((err) => alert(String(err?.message || err)));
+        }
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!menu.classList.contains('hidden') && !menu.contains(e.target)) hideMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') hideMenu();
+    });
+    window.addEventListener('blur', hideMenu);
 })();

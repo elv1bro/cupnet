@@ -63,24 +63,33 @@ function registerTabsIpc(ctx) {
         const raw = String(rawInput || '').trim();
         const alias = raw.toLowerCase();
         if (alias === 'cupnet://settings' || alias === 'cupnet:settings') {
-            ctx.tabManager.navigate(ctx.getInternalPageUrl('settings'));
+            ctx.tabManager.navigate(ctx.getInternalPageUrl('settings'), undefined, { omniboxTyped: true });
             return;
         }
         if (alias === 'cupnet://guide' || alias === 'cupnet:guide') {
-            ctx.tabManager.navigate(ctx.getInternalPageUrl('guide'));
+            ctx.tabManager.navigate(ctx.getInternalPageUrl('guide'), undefined, { omniboxTyped: true });
             return;
         }
         if (alias === 'cupnet://home'
             || alias === 'cupnet:home'
             || alias === 'cupnet://new-tab'
             || alias === 'cupnet:new-tab') {
-            ctx.tabManager.navigate(ctx.getNewTabUrl());
+            ctx.tabManager.navigate(ctx.getNewTabUrl(), undefined, { omniboxTyped: true });
             return;
         }
-        const url = ctx.resolveNavigationUrl(rawInput);
+        const se = typeof ctx.getSearchEngineUrl === 'function' ? ctx.getSearchEngineUrl() : null;
+        const seOpts = se ? { searchEngineUrl: se } : {};
+        const tab = ctx.tabManager.getActiveTab();
+        const base = tab?.view?.webContents?.getURL() || tab?.url || '';
+        let url = null;
+        if (typeof ctx.resolveNavigationUrlWithBase === 'function') {
+            url = ctx.resolveNavigationUrlWithBase(rawInput, base, seOpts);
+        } else if (typeof ctx.resolveNavigationUrl === 'function') {
+            url = ctx.resolveNavigationUrl(rawInput, seOpts);
+        }
         if (!url) return;
         // Always load in active tab — avoids sender-id confusion (URL bar vs new-tab)
-        ctx.tabManager.navigate(url);
+        ctx.tabManager.navigate(url, undefined, { omniboxTyped: true });
     });
     ctx.ipcMain.on('nav-back', () => {
         ctx.tabManager.ensureActiveTabViewVisible?.();
@@ -96,6 +105,13 @@ function registerTabsIpc(ctx) {
         ctx.tabManager.ensureActiveTabViewVisible?.();
         const tab = ctx.tabManager.getActiveTab();
         if (tab) tab.view.webContents.reload();
+    });
+    ctx.ipcMain.on('nav-stop', () => {
+        ctx.tabManager.ensureActiveTabViewVisible?.();
+        const tab = ctx.tabManager.getActiveTab();
+        if (tab && tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
+            try { tab.view.webContents.stop(); } catch (_) { /* ignore */ }
+        }
     });
     ctx.ipcMain.on('nav-home', () => {
         ctx.tabManager.navigate(ctx.getNewTabUrl());

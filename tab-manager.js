@@ -7,9 +7,22 @@ const { WebContentsView, session } = require('electron');
 const path = require('path');
 const { attachWindowSwitcherHotkeyToTabWebContents } = require('./main-process/services/window-switcher-hotkey.js');
 const { isDevtoolsHostileUrl } = require('./main-process/services/devtools-hostile-sites.js');
+const { attachTabWebRequestToolsContextMenu, maybeRestorePageHttpLab, setHttpLabActive } = require('./main-process/services/page-http-lab.js');
+const {
+    isTabErrorPageUrl,
+    getTabDisplayUrl,
+    loadTabErrorPage,
+    clearTabErrorPageState,
+    attachMainFrameStatusTracker,
+    shouldShowHttpErrorPage,
+    shouldSkipErrorPageForUrl,
+} = require('./main-process/services/tab-error-page.js');
+const { getPasteUnlockScript } = require('./main-process/services/paste-unlock.js');
 const db = require('./db');
 const { networkPolicy } = require('./network-policy');
+const { resolveNavigationUrlWithBase } = require('./utils');
 const settingsStore = require('./main-process/services/settings-store');
+const { applyRendererUserAgentToSession } = require('./user-agent-utils');
 const loggingState = require('./main-process/services/logging-state.js');
 let mainWindow = null;
 let onTabEventCb = null;
@@ -45,6 +58,27 @@ function displayUrl(url) {
     return url;
 }
 
+/** Resolve site-relative paths (e.g. `/account/login`) against a tab base URL. */
+function _resolveTabLoadUrl(rawUrl, baseUrl) {
+    const s = String(rawUrl || '').trim();
+    if (!s || s === 'about:blank') return s;
+    if (/^https?:\/\//i.test(s)) return s;
+    const resolved = resolveNavigationUrlWithBase(s, baseUrl);
+    return resolved || s;
+}
+
+function _loadTabUrl(webContents, tabId, rawUrl, baseUrl) {
+    if (!webContents || webContents.isDestroyed()) return;
+    const target = _resolveTabLoadUrl(rawUrl, baseUrl);
+    webContents.loadURL(target).catch((err) => {
+        onTabEventCb('tab-load-error', tabId, {
+            errorCode: -300,
+            errorDescription: err?.message || String(err),
+            url: target,
+        });
+    });
+}
+
 const tabs = new Map();
 let activeTabId = null;
 /** True while a shell HTML overlay has detached the active tab WebContentsView (see setWindowSwitcherOverlayVisible). */
@@ -53,12 +87,17 @@ let _shellOverlayHidesTabView = false;
 let _shellOverlayHideRefCount = 0;
 let nextTabNumber = 1;
 let extraTopOffset = 0;
+let extraBottomOffset = 0;
+let extraRightOffset = 0;
 let _broadcastTimer = null;
 let _relayoutTimer = null;
 /** Single hardcoded bypass: <local> keeps Chromium loopback/link-local off the MITM. */
 let _currentBypassRules = '<local>';
 let _trafficOpts = {};
 let _upstreamProxyRules = null;
+
+/** When user submits from the omnibox, next did-navigate for that tab counts as typed for frecency. */
+const _pendingOmniboxTypedTabIds = new Set();
 
 /** Local MITM without credentials in proxyRules; tab id for MITM/AzureTLS comes from X-CupNet-Rid on each request. */
 function mitmProxyRulesForTabId(_tabId) {
@@ -88,17 +127,11 @@ function getProxyOptsForTab(tabLike = {}) {
 let _pasteUnlockEnabled = true;
 
 /** Script injected into every page when paste-unlock is active. */
-const PASTE_UNLOCK_SCRIPT = `(function () {
-    if (window.__cupnetPasteUnlocked) return;
-    window.__cupnetPasteUnlocked = true;
-    const unblock = (e) => { e.stopImmediatePropagation(); return true; };
-    ['copy', 'cut', 'paste', 'contextmenu'].forEach(t =>
-        document.addEventListener(t, unblock, true)
-    );
-})();`;
+const PASTE_UNLOCK_SCRIPT = getPasteUnlockScript();
 
 function setPasteUnlock(enabled) {
     _pasteUnlockEnabled = !!enabled;
+    reinjectPasteUnlockAllTabs();
 }
 
 function getPasteUnlock() {
@@ -127,6 +160,19 @@ function injectPasteUnlock(webContents) {
     if (!_pasteUnlockEnabled) return;
     if (!webContents || webContents.isDestroyed()) return;
     webContents.executeJavaScript(PASTE_UNLOCK_SCRIPT).catch(() => {});
+}
+
+function reinjectPasteUnlockAllTabs() {
+    if (!_pasteUnlockEnabled || _STEALTH >= 1) return;
+    const script = PASTE_UNLOCK_SCRIPT;
+    for (const tab of tabs.values()) {
+        try {
+            const wc = tab.view?.webContents;
+            if (!wc || wc.isDestroyed()) continue;
+            wc.send('paste-unlock-update', { script });
+            injectPasteUnlock(wc);
+        } catch { /* ignore */ }
+    }
 }
 
 /** Injected into pages: form submit + login-like button clicks + fetch/XHR login hints (SPA). */
@@ -376,6 +422,16 @@ function setExtraTopOffset(px) {
     resizeActiveView();
 }
 
+function setExtraBottomOffset(px) {
+    extraBottomOffset = px || 0;
+    resizeActiveView();
+}
+
+function setExtraRightOffset(px) {
+    extraRightOffset = px || 0;
+    resizeActiveView();
+}
+
 const TOOLBAR_HEIGHT = 95;
 /** Reserved height at bottom of main window for HTML status bar (see browser.html). */
 const STATUS_BAR_HEIGHT = 26;
@@ -418,11 +474,16 @@ function init(win, onEvent) {
  */
 function attachTabListeners(tab) {
     const { id: tabId, view } = tab;
+    attachMainFrameStatusTracker(tab);
 
     view.webContents.on('page-title-updated', (_, title) => {
-        tab.title = title;
+        if (isTabErrorPageUrl(view.webContents.getURL())) {
+            tab.title = 'Page unavailable';
+        } else {
+            tab.title = title;
+        }
         broadcastTabList();
-        onTabEventCb('tab-title-changed', tabId, { title });
+        onTabEventCb('tab-title-changed', tabId, { title: tab.title });
     });
 
     view.webContents.on('page-favicon-updated', (_, favicons) => {
@@ -433,25 +494,39 @@ function attachTabListeners(tab) {
     // Fires when user clicks a link or JS sets window.location — before the page loads.
     // Use this to immediately update the address bar so typed-but-unsubmitted text is cleared.
     view.webContents.on('will-navigate', (_, url) => {
+        if (!isTabErrorPageUrl(url)) clearTabErrorPageState(tab);
         if (tabId === activeTabId && mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('tab-will-navigate', { tabId, url: displayUrl(url) });
+            mainWindow.webContents.send('tab-will-navigate', { tabId, url: getTabDisplayUrl({ ...tab, url }) });
         }
     });
 
     view.webContents.on('did-navigate', (_, url) => {
         tab.url = url;
+        if (isTabErrorPageUrl(url)) tab._loadingErrorPage = false;
+        else clearTabErrorPageState(tab);
         broadcastTabList();
-        const disp = displayUrl(url);
+        const disp = getTabDisplayUrl(tab);
         onTabEventCb('tab-url-changed', tabId, { url: disp });
         if (tabId === activeTabId && mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('url-updated', disp);
         }
+        const typed = _pendingOmniboxTypedTabIds.delete(tabId);
+        try {
+            if (url && url !== 'about:blank' && !isTabErrorPageUrl(url)) {
+                db.recordOmniboxVisit({
+                    url,
+                    title: view.webContents.getTitle(),
+                    typed,
+                });
+            }
+        } catch (_) { /* ignore */ }
     });
 
     view.webContents.on('did-navigate-in-page', (_, url) => {
         tab.url = url;
+        if (!isTabErrorPageUrl(url)) clearTabErrorPageState(tab);
         broadcastTabList();
-        const disp = displayUrl(url);
+        const disp = getTabDisplayUrl(tab);
         onTabEventCb('tab-url-changed', tabId, { url: disp });
         if (tabId === activeTabId && mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('url-updated', disp);
@@ -470,29 +545,77 @@ function attachTabListeners(tab) {
         }
     });
 
-    view.webContents.on('did-fail-load', (_, errorCode, errorDescription, validatedURL) => {
+    view.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        if (!isMainFrame) return;
+        if (errorCode === -3) return; // ERR_ABORTED
+        if (isTabErrorPageUrl(validatedURL)) return;
         if (tabId === activeTabId && mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('set-loading-state', false);
+        }
+        if (!shouldSkipErrorPageForUrl(validatedURL)) {
+            loadTabErrorPage(view.webContents, tab, {
+                url: validatedURL,
+                errorCode,
+                errorDescription,
+            });
         }
         onTabEventCb('tab-load-error', tabId, { errorCode, errorDescription, url: validatedURL });
     });
 
+    view.webContents.on('did-finish-load', () => {
+        const currentUrl = view.webContents.getURL();
+        if (isTabErrorPageUrl(currentUrl)) {
+            tab._loadingErrorPage = false;
+            injectPasteUnlock(view.webContents);
+            return;
+        }
+        if (tab._loadingErrorPage) return;
+
+        setTimeout(() => {
+            if (view.webContents.isDestroyed()) return;
+            const urlNow = view.webContents.getURL();
+            if (isTabErrorPageUrl(urlNow) || tab._loadingErrorPage) return;
+
+            const status = tab.lastMainFrameStatus;
+            const checkUrl = tab.lastMainFrameUrl || urlNow;
+            if (shouldShowHttpErrorPage(status, checkUrl) && !tab.isErrorPage) {
+                loadTabErrorPage(view.webContents, tab, {
+                    url: checkUrl,
+                    statusCode: status,
+                    errorDescription: `HTTP ${status}`,
+                });
+                onTabEventCb('tab-load-error', tabId, {
+                    errorCode: status,
+                    errorDescription: `HTTP ${status}`,
+                    url: checkUrl,
+                });
+                if (tabId === activeTabId && mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('url-updated', getTabDisplayUrl(tab));
+                }
+                return;
+            }
+
+            injectPasteUnlock(view.webContents);
+            void maybeRestorePageHttpLab(tabId, view.webContents);
+            if (isDevtoolsHostileUrl(urlNow)) return;
+            injectCredentialFormCapture(view.webContents);
+            injectStorageActivityMonitor(view.webContents);
+        }, 32);
+    });
+
     view.webContents.setWindowOpenHandler(({ url }) => {
-        onTabEventCb('open-in-new-tab', tabId, { url });
+        const base = view.webContents.getURL() || tab.url || '';
+        onTabEventCb('open-in-new-tab', tabId, { url, baseUrl: base });
         return { action: 'deny' };
     });
 
-    // Inject paste-unlock script after every page load.
-    // did-finish-load fires after all page scripts ran — our capture listener
-    // still wins because capture phase fires before site bubble-phase listeners.
-    view.webContents.on('did-finish-load', () => {
-        if (isDevtoolsHostileUrl(view.webContents.getURL())) return;
-        injectPasteUnlock(view.webContents);
-        injectCredentialFormCapture(view.webContents);
-        injectStorageActivityMonitor(view.webContents);
-    });
-
     attachWindowSwitcherHotkeyToTabWebContents(view.webContents, () => mainWindow);
+
+    attachTabWebRequestToolsContextMenu(
+        tab,
+        () => mainWindow,
+        (url, baseUrl) => { onTabEventCb('open-in-new-tab', tabId, { url, baseUrl }); },
+    );
 }
 
 /**
@@ -679,6 +802,7 @@ async function createTab(opts = {}) {
         proxyProfileId = null,
         proxyRules = null,
         existingSessionId = null,
+        baseUrl = null,
     } = opts;
 
     const tabId    = `tab_${Date.now()}_${nextTabNumber++}`;
@@ -689,6 +813,7 @@ async function createTab(opts = {}) {
     await tabSession.setProxy(getProxyOptsForTab({ id: tabId })).catch(e => console.error('[tab] setProxy', e?.message));
     applyTrafficFiltersToSession(tabSession);
     applyCupNetRidHeaderToSession(tabSession, tabId);
+    applyRendererUserAgentToSession(tabSession);
     installMediaPermissionHandlers(tabSession, settingsStore.normalizeDevicePermissions(settingsStore.loadSettings().devicePermissions).cameraMode);
 
     const view = new WebContentsView({ webPreferences: buildTabViewWebPreferences(tabSession) });
@@ -727,7 +852,7 @@ async function createTab(opts = {}) {
     }
 
     if (url && url !== 'about:blank') {
-        view.webContents.loadURL(url).catch(() => {});
+        _loadTabUrl(view.webContents, tabId, url, baseUrl || '');
     }
 
     // Do not attach the new WebContentsView here. Only `switchTab` adds the active tab's view
@@ -777,6 +902,7 @@ async function setTabCookieGroup(tabId, cookieGroupId) {
     await newSession.setProxy(getProxyOptsForTab(tab)).catch(() => {});
     applyTrafficFiltersToSession(newSession);
     applyCupNetRidHeaderToSession(newSession, tid);
+    applyRendererUserAgentToSession(newSession);
     installMediaPermissionHandlers(newSession, settingsStore.normalizeDevicePermissions(settingsStore.loadSettings().devicePermissions).cameraMode);
 
     const newView = new WebContentsView({ webPreferences: buildTabViewWebPreferences(newSession) });
@@ -854,7 +980,7 @@ function switchTab(tabId) {
             _contentViewAddTabView(mainWindow, tab.view);
             resizeActiveView();
         }
-        mainWindow.webContents.send('url-updated', displayUrl(tab.url));
+        mainWindow.webContents.send('url-updated', getTabDisplayUrl(tab));
         mainWindow.webContents.send('set-loading-state', tab.view.webContents.isLoading());
     }
 
@@ -869,6 +995,8 @@ function switchTab(tabId) {
 function closeTab(tabId) {
     const tab = tabs.get(tabId);
     if (!tab) return false;
+
+    setHttpLabActive(tabId, false);
 
     if (_mitmTabUpstreamCleanup) {
         try { _mitmTabUpstreamCleanup(tabId); } catch (e) { console.error('[tab-manager] mitm tab cleanup:', e?.message || e); }
@@ -915,13 +1043,20 @@ function ensureActiveTabViewVisible() {
 /**
  * Navigate the active (or specified) tab to a URL.
  */
-function navigate(url, tabId) {
+/**
+ * @param {string} url
+ * @param {string} [tabId]
+ * @param {{ omniboxTyped?: boolean }} [opts]
+ */
+function navigate(url, tabId, opts = {}) {
     const tid = tabId || activeTabId;
     if (!tid) return false;
     const tab = tabs.get(tid);
     if (!tab) return false;
     ensureActiveTabViewVisible();
-    tab.view.webContents.loadURL(url).catch(() => {});
+    if (opts && opts.omniboxTyped) _pendingOmniboxTypedTabIds.add(tid);
+    const base = tab.view.webContents.getURL() || tab.url || '';
+    _loadTabUrl(tab.view.webContents, tid, url, base);
     return true;
 }
 
@@ -933,7 +1068,7 @@ function getTabList() {
         id:              t.id,
         num:             i + 1,
         title:           t.title,
-        url:             displayUrl(t.url),
+        url:             getTabDisplayUrl(t),
         faviconUrl:      t.faviconUrl || null,
         sessionId:       t.sessionId,
         proxyRules:      t.proxyRules,
@@ -1050,8 +1185,14 @@ function resizeActiveView() {
     if (!tab) return;
     const { width, height } = mainWindow.getContentBounds();
     const topY = TOOLBAR_HEIGHT + extraTopOffset;
-    const bottomReserve = STATUS_BAR_HEIGHT;
-    tab.view.setBounds({ x: 0, y: topY, width, height: Math.max(0, height - topY - bottomReserve) });
+    const bottomReserve = STATUS_BAR_HEIGHT + extraBottomOffset;
+    const rightReserve = extraRightOffset;
+    tab.view.setBounds({
+        x: 0,
+        y: topY,
+        width: Math.max(0, width - rightReserve),
+        height: Math.max(0, height - topY - bottomReserve),
+    });
     _layoutOmniboxOverlayBounds();
 }
 
@@ -1059,8 +1200,8 @@ function _layoutOmniboxOverlayBounds() {
     if (!omniboxOverlayView || !mainWindow || mainWindow.isDestroyed()) return;
     if (omniboxOverlayView.webContents.isDestroyed()) return;
     const { width, height } = mainWindow.getContentBounds();
-    const topY = TOOLBAR_HEIGHT + extraTopOffset;
-    const bottomReserve = STATUS_BAR_HEIGHT;
+    const topY = TOOLBAR_HEIGHT;
+    const bottomReserve = STATUS_BAR_HEIGHT + extraBottomOffset;
     omniboxOverlayView.setBounds({
         x: 0,
         y: topY,
@@ -1093,7 +1234,6 @@ async function showOmniboxOverlay() {
     if (omniboxOverlayView && !omniboxOverlayView.webContents.isDestroyed()) {
         _layoutOmniboxOverlayBounds();
         try {
-            _contentViewRemoveTabView(mainWindow, omniboxOverlayView);
             _contentViewAddTabView(mainWindow, omniboxOverlayView);
         } catch (_) { /* ignore */ }
         return true;
@@ -1134,7 +1274,10 @@ async function showOmniboxOverlay() {
 }
 
 function hideOmniboxOverlay() {
-    _destroyOmniboxOverlayView();
+    if (!omniboxOverlayView || !mainWindow || mainWindow.isDestroyed()) return;
+    try {
+        _contentViewRemoveTabView(mainWindow, omniboxOverlayView);
+    } catch (_) { /* ignore */ }
 }
 
 function updateOmniboxOverlay(payload) {
@@ -1357,7 +1500,7 @@ module.exports = {
     init, createTab, isolateTab, switchTab, closeTab, navigate, ensureActiveTabViewVisible,
     getTabList, getActiveTabId, getTab, getActiveTab, getAllTabs, getTabIdByWebContentsId,
     setProxy, setProxyAll, relayout, destroyAll,
-    broadcastTabList, setExtraTopOffset,
+    broadcastTabList, setExtraTopOffset, setExtraBottomOffset, setExtraRightOffset,
     setTrustMitmCA,
     setMitmTabUpstreamCleanup,
     reapplyMitmTrustToSharedSession,

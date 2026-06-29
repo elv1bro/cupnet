@@ -44,6 +44,9 @@ const spCamModeGroup = document.getElementById('sp-cam-mode-group');
 const hubSearch = document.getElementById('settings-hub-search');
 const spHomepageUrl = document.getElementById('sp-homepage-url');
 const spHomepageErr = document.getElementById('sp-homepage-url-err');
+const spSearchEngine = document.getElementById('sp-search-engine');
+const spSearchEngineCustom = document.getElementById('sp-search-engine-custom');
+const spSearchEngineCustomWrap = document.getElementById('sp-search-engine-custom-wrap');
 const spOnboardingStatus = document.getElementById('sp-onboarding-status');
 const spResetOnboarding = document.getElementById('sp-reset-onboarding');
 const spEffectiveTraffic = document.getElementById('sp-effective-traffic');
@@ -59,12 +62,16 @@ const spImportFile = document.getElementById('sp-import-file');
 
 const spUiTheme = document.getElementById('sp-ui-theme');
 const spUiScale = document.getElementById('sp-ui-scale');
+const spToolbarToolsPlacement = document.getElementById('sp-toolbar-tools-placement');
+const spToolbarToolsMiniAlign = document.getElementById('sp-toolbar-tools-mini-align');
+const spToolbarMiniAlignWrap = document.getElementById('sp-toolbar-mini-align-wrap');
 
 let activeTab = 'general';
 let perfTimer = null;
 let trackingSaveTimer = null;
 let deviceSaveTimer = null;
 let homepageSaveTimer = null;
+let searchEngineSaveTimer = null;
 let filtersSaveTimer = null;
 let activitySaveTimer = null;
 let maxTabsSaveDebounce = null;
@@ -620,6 +627,37 @@ async function saveHomepageNow() {
     }
 }
 
+function syncSearchEngineCustomVisibility() {
+    const c = spSearchEngine && spSearchEngine.value === 'custom';
+    if (spSearchEngineCustom) spSearchEngineCustom.hidden = !c;
+    if (spSearchEngineCustomWrap) spSearchEngineCustomWrap.hidden = !c;
+}
+
+function scheduleSearchEngineSave() {
+    if (searchEngineSaveTimer) clearTimeout(searchEngineSaveTimer);
+    markUnsaved();
+    searchEngineSaveTimer = setTimeout(async () => {
+        searchEngineSaveTimer = null;
+        if (!api.saveSearchEngineSettings) return;
+        beginSave();
+        try {
+            await api.saveSearchEngineSettings({
+                searchEngine: spSearchEngine?.value || 'duckduckgo',
+                searchEngineCustomUrl: (spSearchEngineCustom?.value || '').trim(),
+            });
+            endSave(true);
+        } catch (e) {
+            endSave(false, e && e.message ? String(e.message) : 'Search engine save failed');
+        }
+    }, 400);
+}
+
+spSearchEngine?.addEventListener('change', () => {
+    syncSearchEngineCustomVisibility();
+    scheduleSearchEngineSave();
+});
+spSearchEngineCustom?.addEventListener('input', () => { scheduleSearchEngineSave(); });
+
 function scheduleFiltersSave() {
     if (filtersSaveTimer) clearTimeout(filtersSaveTimer);
     markUnsaved();
@@ -870,6 +908,33 @@ async function initAppearance() {
         applyAppearanceToDocument();
         setPersistState('saved');
     });
+    spToolbarToolsPlacement?.addEventListener('change', async () => {
+        syncToolbarMiniAlignVisibility();
+        if (!api.saveToolbarToolsPlacement) return;
+        beginSave();
+        try {
+            const res = await api.saveToolbarToolsPlacement(spToolbarToolsPlacement.value);
+            endSave(!!res?.success, res?.error);
+        } catch (e) {
+            endSave(false, e?.message || 'Save failed');
+        }
+    });
+    spToolbarToolsMiniAlign?.addEventListener('change', async () => {
+        if (!api.saveToolbarToolsMiniAlign) return;
+        beginSave();
+        try {
+            const res = await api.saveToolbarToolsMiniAlign(spToolbarToolsMiniAlign.value);
+            endSave(!!res?.success, res?.error);
+        } catch (e) {
+            endSave(false, e?.message || 'Save failed');
+        }
+    });
+}
+
+function syncToolbarMiniAlignVisibility() {
+    const placement = spToolbarToolsPlacement?.value || 'subbar';
+    const show = placement === 'subbar' || placement === 'bottom';
+    if (spToolbarMiniAlignWrap) spToolbarMiniAlignWrap.hidden = !show;
 }
 
 function applyAppearanceToDocument() {
@@ -979,6 +1044,16 @@ async function init() {
             spActivityRate.value = String(r);
             if (spActivityRateVal) spActivityRateVal.textContent = String(r);
         }
+        if (spSearchEngine) spSearchEngine.value = data?.searchEngine || 'duckduckgo';
+        if (spSearchEngineCustom) spSearchEngineCustom.value = data?.searchEngineCustomUrl || '';
+        syncSearchEngineCustomVisibility();
+        if (spToolbarToolsPlacement) {
+            spToolbarToolsPlacement.value = data?.toolbarToolsPlacement || 'subbar';
+        }
+        if (spToolbarToolsMiniAlign) {
+            spToolbarToolsMiniAlign.value = data?.toolbarToolsMiniAlign || 'right';
+        }
+        syncToolbarMiniAlignVisibility();
         applyOnboardingStatusLine(data);
         switchTab('general');
         if (activeTab === 'devices') refreshCameraDevices();

@@ -216,3 +216,56 @@ test('applyMitmCorsToResponse: Referer used when Origin missing', () => {
     assert.equal(out.headers['Access-Control-Allow-Origin'], 'https://spa.example');
 });
 
+// ─── setGlobalCorsEnabled (toolbar / settings) ─────────────────────────────
+
+test('MITM CORS global: enables arbitrary host when setGlobalCorsEnabled(true)', () => {
+    const p = mkProxy();
+    p.setDnsOverrides([]);
+    assert.equal(p._mitmCorsEnabledForUrl('https://random.api.example/v1'), false);
+    p.setGlobalCorsEnabled(true);
+    assert.equal(p._mitmCorsEnabledForUrl('https://random.api.example/v1'), true);
+    p.setGlobalCorsEnabled(false);
+    assert.equal(p._mitmCorsEnabledForUrl('https://random.api.example/v1'), false);
+});
+
+test('MITM CORS global: challenge / captcha URLs stay off (shouldSkipMitmCorsForUrl)', () => {
+    const p = mkProxy();
+    p.setGlobalCorsEnabled(true);
+    assert.equal(p._mitmCorsEnabledForUrl('https://challenges.cloudflare.com/x'), false);
+    assert.equal(p._mitmCorsEnabledForUrl('https://hcaptcha.com/1/api.js'), false);
+});
+
+test('MITM CORS global: _mitmCorsMatchDetail is * while global on', () => {
+    const p = mkProxy();
+    p.setGlobalCorsEnabled(true);
+    assert.deepEqual(p._mitmCorsMatchDetail('https://api.any.test/z'), { host: 'api.any.test', pattern: '*' });
+    p.setGlobalCorsEnabled(false);
+    assert.equal(p._mitmCorsMatchDetail('https://api.any.test/z'), null);
+});
+
+test('MITM CORS global: per-host DNS pattern still works when global off', () => {
+    const p = mkProxy();
+    p.setGlobalCorsEnabled(false);
+    p.setDnsOverrides([{ host: 'only.cors', enabled: true, mitm_inject_cors: true, ip: '192.0.2.1' }]);
+    assert.equal(p._mitmCorsEnabledForUrl('https://only.cors/'), true);
+    assert.equal(p._mitmCorsEnabledForUrl('https://other.test/'), false);
+});
+
+test('MITM CORS global: disabled DNS rule does not add CORS pattern', () => {
+    const p = mkProxy();
+    p.setDnsOverrides([{ host: 'off.cors', enabled: false, mitm_inject_cors: true, ip: '192.0.2.2' }]);
+    assert.equal(p._mitmCorsEnabledForUrl('https://off.cors/'), false);
+});
+
+test('applyMitmCorsToResponse: skips injection for challenge URL even if enabled=true', () => {
+    const res = { statusCode: 200, headers: { 'content-type': 'text/javascript' } };
+    const out = applyMitmCorsToResponse(
+        true,
+        'https://challenges.cloudflare.com/turnstile/v0/api.js',
+        { Origin: 'https://app.test' },
+        'GET',
+        res,
+    );
+    assert.strictEqual(out, res);
+});
+

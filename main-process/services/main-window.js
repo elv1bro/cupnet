@@ -2,7 +2,8 @@
 
 const { screen } = require('electron');
 const { confirmOpenAnotherTab } = require('./tab-open-confirm');
-const { isDevtoolsHostileWebContents } = require('./devtools-hostile-sites');
+const { resolveNavigationUrlWithBase } = require('../../utils');
+const { toggleManagedDevToolsForTab } = require('./managed-devtools');
 const windowStateStore = require('./window-state-store');
 
 /**
@@ -14,15 +15,8 @@ function createMainWindowApi(d) {
 
     function toggleActiveTabDevTools() {
         const tab = d.tabManager?.getActiveTab();
-        const wc = tab?.view?.webContents;
-        if (!wc || wc.isDestroyed()) return false;
-        if (isDevtoolsHostileWebContents(wc)) {
-            if (wc.isDevToolsOpened()) {
-                try { wc.closeDevTools(); } catch (_) { /* ignore */ }
-            }
-            return false;
-        }
-        wc.toggleDevTools();
+        if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return false;
+        void toggleManagedDevToolsForTab(tab, d.tabManager);
         return true;
     }
 
@@ -124,10 +118,14 @@ function createMainWindowApi(d) {
             d.startLogStatusUpdater();
             try { d.db.deleteEmptySessions(d.currentSessionId); } catch (e) { d.sysLog('warn', 'db', 'deleteEmptySessions failed: ' + (e?.message || e)); }
 
+            const se = d.settingsStore.normalizeSearchEngineSettings(s);
             d.mainWindow.webContents.send('init-settings', {
                 filterPatterns: s.filterPatterns || [],
                 pasteUnlock: s.pasteUnlock !== false,
                 tracking: d.getTrackingSettings(),
+                searchEngine: se.searchEngine,
+                searchEngineCustomUrl: se.searchEngineCustomUrl,
+                corsBypassEnabled: s.corsBypassEnabled === true,
             });
             d.notifyProxyProfilesList();
             d.notifyProxyStatus();
@@ -181,7 +179,16 @@ function createMainWindowApi(d) {
         d.tabManager.init(d.mainWindow, async (event, tabId, data) => {
             if (event === 'open-in-new-tab') {
                 if (!(await confirmOpenAnotherTab(d))) return;
-                const newTabId = await d.tabManager.createTab(d.persistentAnonymizedProxyUrl || null, data.url, false, d.currentSessionId);
+                const opener = d.tabManager.getTab(tabId);
+                const base = data.baseUrl || opener?.view?.webContents?.getURL() || opener?.url || '';
+                const resolved = resolveNavigationUrlWithBase(data.url, base) || data.url;
+                const newTabId = await d.tabManager.createTab({
+                    proxyRules: d.persistentAnonymizedProxyUrl || null,
+                    url: resolved,
+                    cookieGroupId: 1,
+                    existingSessionId: d.currentSessionId,
+                    baseUrl: base,
+                });
                 d.tabManager.switchTab(newTabId);
                 const newTab = d.tabManager.getTab(newTabId);
                 if (newTab) {
@@ -260,6 +267,8 @@ function createMainWindowApi(d) {
                         d.mainWindow?.webContents.send('focus-url-bar');
                     }},
                     { type: 'separator' },
+                    { label: 'Launch Profile…', click: () => sub.createSessionProfileModalWindow?.() },
+                    { type: 'separator' },
                     { label: 'Proxy Manager', accelerator: 'CmdOrCtrl+P', click: () => sub.createProxyManagerWindow() },
                     { label: 'Network Activity', accelerator: 'CmdOrCtrl+Shift+L', click: () => sub.createLogViewerWindow() },
                     { label: 'Cookie Manager', accelerator: 'CmdOrCtrl+Alt+C', click: () => sub.createCookieManagerWindow(d.tabManager?.getActiveTabId()) },
@@ -267,6 +276,12 @@ function createMainWindowApi(d) {
                     { label: 'Rules & Interceptor', click: () => sub.createRulesWindow() },
                     { label: 'System Console', accelerator: 'CmdOrCtrl+Shift+K', click: () => sub.createConsoleViewerWindow() },
                     { label: 'Page Analyzer', accelerator: 'CmdOrCtrl+Shift+A', click: () => sub.createPageAnalyzerWindow() },
+                    { label: 'Web Request Tools (HTTP Lab)', accelerator: 'CmdOrCtrl+Shift+H', click: () => {
+                        const tabId = d.tabManager?.getActiveTabId();
+                        const tab = d.tabManager?.getTab(tabId);
+                        const { injectPageHttpLab } = require('./page-http-lab');
+                        void injectPageHttpLab(tab?.view?.webContents, { importForms: true }, tabId);
+                    }},
                     { label: 'Notes', accelerator: 'CmdOrCtrl+Shift+N', click: () => sub.createNotesWindow() },
                     { label: 'Credentials', accelerator: 'CmdOrCtrl+Alt+L', click: () => sub.createCredentialsWindow() },
                     { label: 'API Scout', click: () => sub.createIvacScoutWindow() },

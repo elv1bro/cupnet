@@ -223,16 +223,10 @@ async function borrowClient(browser, proxy, ja3, tabId) {
         if (pool.idle.length) {
             const c = pool.idle.pop();
             pool.inUse++;
-            // #region agent log
-            fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',location:'azure-tls-worker.js:borrowClient-idle',message:'borrowed IDLE client',data:{key,idleLeft:pool.idle.length,inUse:pool.inUse,sessionId:String(c.sessionId||'?')},timestamp:Date.now()})}).catch(()=>{});
-            // #endregion
             return { client: c, key };
         }
         if (pool.inUse < max) {
             pool.inUse++;
-            // #region agent log
-            fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',location:'azure-tls-worker.js:borrowClient-new',message:'creating NEW client',data:{key,inUse:pool.inUse,max,profileName},timestamp:Date.now()})}).catch(()=>{});
-            // #endregion
             return { client: createAzureClient(profileName, proxy), key };
         }
         const c = await new Promise((resolve) => pool.waiters.push(resolve));
@@ -304,6 +298,41 @@ function decHttpInflight() {
         for (const r of zeroInflightWaiters.splice(0)) r();
     }
 }
+
+async function gracefulWorkerExit() {
+    if (awaitClear) return;
+    awaitClear = true;
+    try {
+        await waitZeroInflight();
+    } catch (_) { /* ignore */ }
+    closeAllPoolClients();
+    finishClearing();
+    process.exit(0);
+}
+
+/** Exit when parent CupNet/Electron dies so orphaned workers do not spin forever. */
+function startParentWatchdog() {
+    if (process.env.CUPNET_WORKER_NO_WATCHDOG === '1') return;
+    const parentPid = process.ppid;
+    if (!parentPid || parentPid <= 1) return;
+
+    const tick = setInterval(() => {
+        if (process.ppid === 1) {
+            clearInterval(tick);
+            gracefulWorkerExit();
+            return;
+        }
+        try {
+            process.kill(parentPid, 0);
+        } catch {
+            clearInterval(tick);
+            gracefulWorkerExit();
+        }
+    }, 5000);
+    if (tick.unref) tick.unref();
+}
+
+startParentWatchdog();
 
 process.stdin.setEncoding('utf8');
 let buf = '';
@@ -409,18 +438,7 @@ async function handleLine(line) {
                 );
             }
 
-            // #region agent log
-            const _t0ffi = Date.now();
-            fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'ALL',location:'azure-tls-worker.js:pre-ffi',message:'before FFI call',data:{url,method:method||'GET',attempt,retryLimit,forceHttp1:effectiveForceHttp1,poolKey,clientSessionId:String(client.sessionId||'?'),proxy:proxy||null,tabId:tabId||null},timestamp:_t0ffi})}).catch(()=>{});
-            // #endregion
-
             const result = await client.request(opts);
-
-            // #region agent log
-            const _t1ffi = Date.now();
-            const _connHdrs = result.headers ? {connection:result.headers['connection']||result.headers['Connection']||'',server:result.headers['server']||result.headers['Server']||'',keepAlive:result.headers['keep-alive']||result.headers['Keep-Alive']||'',altSvc:result.headers['alt-svc']||result.headers['Alt-Svc']||''} : {};
-            fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'ALL',location:'azure-tls-worker.js:post-ffi',message:'after FFI call',data:{url,status:result.statusCode,error:result.error||null,elapsedMs:_t1ffi-_t0ffi,forceHttp1:effectiveForceHttp1,attempt,finalUrl:result.url||'',connHeaders:_connHdrs},timestamp:_t1ffi})}).catch(()=>{});
-            // #endregion
 
             if (WORKER_VERBOSE) process.stderr.write(`[worker-dbg] response: status=${result.statusCode} url=${url} error=${result.error||''}\n`);
             if (WORKER_VERBOSE && result.headers) {
@@ -452,16 +470,10 @@ async function handleLine(line) {
                         disableRedirects: disableRedirects === true,
                         maxRedirects:     disableRedirects === true ? 0 : undefined,
                     });
-                    // #region agent log
-                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_UA',location:'azure-tls-worker.js:fresh-retry-ok',message:'fresh retry OK',data:{url,status:freshRes.statusCode,error:freshRes.error||null,elapsedMs:Date.now()-_brT0},timestamp:Date.now()})}).catch(()=>{});
-                    // #endregion
                     send({ id, statusCode: freshRes.statusCode, bodyBase64: freshRes.bodyBase64 || '', headers: freshRes.headers, error: freshRes.error || null });
                     releaseClient(poolKey, freshClient);
                     return;
                 } catch (retryErr) {
-                    // #region agent log
-                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_UA',location:'azure-tls-worker.js:fresh-retry-fail',message:'fresh retry FAILED',data:{url,error:retryErr.message,elapsedMs:Date.now()-_brT0},timestamp:Date.now()})}).catch(()=>{});
-                    // #endregion
                     try { freshClient.close(); } catch (_) {}
                 }
 
@@ -475,16 +487,10 @@ async function handleLine(line) {
                         disableRedirects: disableRedirects === true,
                         maxRedirects:     disableRedirects === true ? 0 : undefined,
                     });
-                    // #region agent log
-                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_BARE',location:'azure-tls-worker.js:bare-ok',message:'bare request OK',data:{url,status:bareRes.statusCode,error:bareRes.error||null,elapsedMs:Date.now()-_brT1},timestamp:Date.now()})}).catch(()=>{});
-                    // #endregion
                     send({ id, statusCode: bareRes.statusCode, bodyBase64: bareRes.bodyBase64 || '', headers: bareRes.headers, error: bareRes.error || null });
                     try { bareClient.close(); } catch (_) {}
                     return;
                 } catch (bareErr) {
-                    // #region agent log
-                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_BARE',location:'azure-tls-worker.js:bare-fail',message:'bare request FAILED',data:{url,error:bareErr.message,elapsedMs:Date.now()-_brT1},timestamp:Date.now()})}).catch(()=>{});
-                    // #endregion
                     try { bareClient.close(); } catch (_) {}
                     send({ id, statusCode: 0, body: null, headers: {}, error: bareErr.message });
                     return;
@@ -503,9 +509,6 @@ async function handleLine(line) {
             decHttpInflight();
             return;
         } catch (e) {
-            // #region agent log
-            fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'ALL',location:'azure-tls-worker.js:post-ffi-error',message:'FFI threw',data:{url,error:e.message,forceHttp1:effectiveForceHttp1,attempt,hadConnError,clientSessionId:String(client?.sessionId||'?')},timestamp:Date.now()})}).catch(()=>{});
-            // #endregion
             lastError = e;
             const isConnErr = CONNECTION_ERRORS.test(e.message || '');
             if (isConnErr && isIdempotent) {
@@ -529,16 +532,10 @@ async function handleLine(line) {
                         disableRedirects: disableRedirects === true,
                         maxRedirects:     disableRedirects === true ? 0 : undefined,
                     });
-                    // #region agent log
-                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_UA',location:'azure-tls-worker.js:exc-fresh-retry-ok',message:'fresh retry (exc) OK',data:{url,status:freshRes.statusCode,error:freshRes.error||null,elapsedMs:Date.now()-_brT0e},timestamp:Date.now()})}).catch(()=>{});
-                    // #endregion
                     send({ id, statusCode: freshRes.statusCode, bodyBase64: freshRes.bodyBase64 || '', headers: freshRes.headers, error: freshRes.error || null });
                     releaseClient(poolKey, freshClient);
                     return;
                 } catch (retryErr) {
-                    // #region agent log
-                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_UA',location:'azure-tls-worker.js:exc-fresh-retry-fail',message:'fresh retry (exc) FAILED',data:{url,error:retryErr.message,elapsedMs:Date.now()-_brT0e},timestamp:Date.now()})}).catch(()=>{});
-                    // #endregion
                     try { freshClient.close(); } catch (_) {}
                 }
 
@@ -552,16 +549,10 @@ async function handleLine(line) {
                         disableRedirects: disableRedirects === true,
                         maxRedirects:     disableRedirects === true ? 0 : undefined,
                     });
-                    // #region agent log
-                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_BARE',location:'azure-tls-worker.js:exc-bare-ok',message:'bare request (exc) OK',data:{url,status:bareRes.statusCode,error:bareRes.error||null,elapsedMs:Date.now()-_brT1e},timestamp:Date.now()})}).catch(()=>{});
-                    // #endregion
                     send({ id, statusCode: bareRes.statusCode, bodyBase64: bareRes.bodyBase64 || '', headers: bareRes.headers, error: bareRes.error || null });
                     try { bareClient.close(); } catch (_) {}
                     return;
                 } catch (bareErr) {
-                    // #region agent log
-                    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'H_BARE',location:'azure-tls-worker.js:exc-bare-fail',message:'bare request (exc) FAILED',data:{url,error:bareErr.message,elapsedMs:Date.now()-_brT1e},timestamp:Date.now()})}).catch(()=>{});
-                    // #endregion
                     try { bareClient.close(); } catch (_) {}
                     send({ id, statusCode: 0, body: null, headers: {}, error: bareErr.message });
                     return;
@@ -579,19 +570,6 @@ async function handleLine(line) {
 function send(obj) {
     process.stdout.write(JSON.stringify(obj) + '\n');
 }
-
-// #region agent log — env/FD diagnostics at startup
-{
-    const fs = require('fs');
-    let fdCount = 0;
-    try { fdCount = fs.readdirSync('/dev/fd').length; } catch (_) {}
-    const proxyEnv = {};
-    for (const k of ['http_proxy','https_proxy','HTTP_PROXY','HTTPS_PROXY','no_proxy','NO_PROXY','ALL_PROXY','ELECTRON_RUN_AS_NODE','NODE_EXTRA_CA_CERTS','UV_THREADPOOL_SIZE','GODEBUG','GOMAXPROCS','GOTRACEBACK']) {
-        if (process.env[k] !== undefined) proxyEnv[k] = process.env[k];
-    }
-    fetch('http://127.0.0.1:7421/ingest/a7220150-7708-4b54-b74d-f1260f624f8e',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'7c0789'},body:JSON.stringify({sessionId:'7c0789',hypothesisId:'ENV',location:'azure-tls-worker.js:startup',message:'worker env at startup',data:{pid:process.pid,ppid:process.ppid,nodeVersion:process.version,execPath:process.execPath,cwd:process.cwd(),fdCount,proxyEnv,argv:process.argv},timestamp:Date.now()})}).catch(()=>{});
-}
-// #endregion
 
 // Signal ready
 send({ id: '__init__', status: 'ready' });
