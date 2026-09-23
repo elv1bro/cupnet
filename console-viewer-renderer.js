@@ -932,7 +932,9 @@ async function populateDbSessions() {
 dbSessionSelect?.addEventListener('change', async () => {
     const v = dbSessionSelect.value;
     if (!v) {
+        // Back to Live: reset and reload live history instead of leaving DB rows on screen. (A-068)
         liveMode = true;
+        await loadLiveHistory();
         return;
     }
     liveMode = false;
@@ -985,10 +987,11 @@ api.onConsoleLog?.((data) => {
     if (countEl) countEl.textContent = `${visibleCount()} visible`;
 });
 
-(async () => {
-    loadBookmarks();
-    await syncDebugMitmSelect();
-    await populateDbSessions();
+// Reset to and (re)load the live console history. Also used when switching the DB-session
+// select back to "Live", which previously kept the old session's rows on screen. (A-068)
+async function loadLiveHistory() {
+    entries = [];
+    countAll = countMitm = countSystem = 0;
     try {
         const history = await api.getConsoleHistory?.();
         if (history?.length) {
@@ -1004,9 +1007,16 @@ api.onConsoleLog?.((data) => {
                 else countSystem++;
             }
             entrySeq = Math.max(entrySeq, maxSeq);
-            updateBadges();
-            rebuildFilteredIndices();
         }
     } catch { /* ignore */ }
+    updateBadges();
+    rebuildFilteredIndices();
     if (countEl) countEl.textContent = `${visibleCount()} visible`;
+}
+
+(async () => {
+    loadBookmarks();
+    await syncDebugMitmSelect();
+    await populateDbSessions();
+    await loadLiveHistory();
 })();

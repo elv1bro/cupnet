@@ -91,10 +91,20 @@ function registerMiscIpc(ctx) {
     ctx.ipcMain.handle('get-app-version', () => ctx.app.getVersion());
 
     ctx.ipcMain.handle('get-ui-pref', (_, key, def) => {
+        if (typeof key !== 'string' || key.length > 128) return def !== undefined ? def : null;
         const v = ctx.uiPrefsStore.loadUiPrefs()[key];
         return v !== undefined ? v : (def !== undefined ? def : null);
     });
-    ctx.ipcMain.handle('set-ui-pref', (_, key, value) => { ctx.uiPrefsStore.saveUiPref(key, value); return true; });
+    ctx.ipcMain.handle('set-ui-pref', (_, key, value) => {
+        // Bound key and value size so a renderer cannot force multi-MB fsync writes or
+        // fill the disk with a loop of set-ui-pref calls. (A-110)
+        if (typeof key !== 'string' || key.length === 0 || key.length > 128) return false;
+        try {
+            if (value !== undefined && JSON.stringify(value).length > 64 * 1024) return false;
+        } catch { return false; }
+        ctx.uiPrefsStore.saveUiPref(key, value);
+        return true;
+    });
 
     ctx.ipcMain.handle('check-ip-geo', async (_, tabId) => ctx.checkCurrentIpGeo(tabId));
 
