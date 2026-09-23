@@ -711,6 +711,9 @@ refreshProxyInfo();
 if (api.onProxyStatusChanged) api.onProxyStatusChanged(applyProxyInfo);
 
 async function sendRequest() {
+    // Enter fires without a preceding blur, so sync params from a query typed directly
+    // in the URL field before building the URL (otherwise buildUrlWithParams drops it).
+    if (urlIn.value.includes('?')) parseUrlToParams(urlIn.value);
     const built = buildUrlWithParams().trim();
     if (!built) { urlIn.focus(); return; }
     const method = methodSel.value;

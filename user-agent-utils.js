@@ -111,7 +111,10 @@ function applyRendererUserAgentToSession(sess, rawUa, acceptLanguage) {
     const ua = resolveRendererUserAgent(rawUa);
     if (!ua) return;
     try {
-        sess.setUserAgent(ua, acceptLanguage || '');
+        // Passing an empty acceptLanguage clears the partition's Accept-Language.
+        // Only override it when one is actually configured; otherwise keep the default.
+        if (acceptLanguage) sess.setUserAgent(ua, acceptLanguage);
+        else sess.setUserAgent(ua);
     } catch { /* ignore */ }
 }
 

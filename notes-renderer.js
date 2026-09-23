@@ -783,6 +783,9 @@ function newNote(skipConfirm) {
 
 async function saveNoteInternal() {
     if (pendingLocked) throw new Error('Unlock the note first');
+    // Note being saved. If the user switches notes while notesSave is in flight, the
+    // resolved save must not re-bind the editor (currentId) to this note. See A-043.
+    const savingId = currentId;
     const isEnc = el.chkEnc.checked;
     const title = el.title.value;
     const bodyHtml = quill.root.innerHTML;
@@ -807,8 +810,9 @@ async function saveNoteInternal() {
             tags,
             is_pinned,
         });
-        currentId = id;
         pwdCache.set(id, password);
+        if (currentId !== savingId) { await loadList(); return; }
+        currentId = id;
         el.pw1.value = '';
         setPwVisibility(el.pw1, el.btnPwToggle, false);
         await loadList();
@@ -822,6 +826,7 @@ async function saveNoteInternal() {
         tags,
         is_pinned,
     });
+    if (currentId !== savingId) { await loadList(); return; }
     currentId = id;
     pwdCache.delete(id);
     await loadList();

@@ -242,7 +242,7 @@ function renderForms(forms, tabId) {
                 <div class="form-meta">${esc(form.action || '—')} · ${form.fields.length} fields</div>
             </div>
             <div class="form-badges">
-                <span class="fbadge fbadge-method">${form.method}</span>
+                <span class="fbadge fbadge-method">${esc(form.method)}</span>
                 ${hiddenCount ? `<span class="fbadge fbadge-hidden">${hiddenCount} hidden</span>` : ''}
                 ${readonlyCount ? `<span class="fbadge fbadge-readonly">${readonlyCount} readonly</span>` : ''}
             </div>
