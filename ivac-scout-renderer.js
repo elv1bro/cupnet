@@ -119,27 +119,30 @@ function applySummary(summary) {
     setNextActions(summary.nextActions || []);
 }
 
+let urlEdited = false;
+targetUrlInput.addEventListener('input', () => { urlEdited = true; });
+
 async function refreshContext() {
     try {
         const ctx = await api.getIvacScoutContext();
         if (!ctx) return;
         proxyStatusEl.textContent = ctx.proxyLabel || 'Direct';
         tlsStatusEl.textContent = ctx.tlsProfile || 'chrome';
-        if (isHttpUrl(ctx.url)) targetUrlInput.value = ctx.url;
+        // Don't clobber a URL the user typed with the active tab's URL. (A-080)
+        if (!urlEdited && isHttpUrl(ctx.url)) targetUrlInput.value = ctx.url;
     } catch {
         // ignore
     }
 }
 
 startBtn.addEventListener('click', async () => {
-    await refreshContext();
     const url = (targetUrlInput.value || '').trim();
     if (!url) return;
 
     allEndpoints = [];
     renderEndpoints();
     clearSummary();
-    setNextActions(['Ждем завершения сканирования и summary...']);
+    setNextActions(['Waiting for the scan to finish and summary...']);
     logEl.textContent = '';
     setRunning(true, 'starting...');
     appendLog(`[ui] start: ${url}`);

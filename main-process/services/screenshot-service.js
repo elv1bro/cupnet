@@ -69,6 +69,16 @@ function createScreenshotService({
                 return { success: false, skipped: true, reason: 'home' };
             }
 
+            const isLoggingEnabled = typeof getIsLoggingEnabled === 'function' ? getIsLoggingEnabled() : false;
+            const currentSessionId = typeof getCurrentSessionId === 'function' ? getCurrentSessionId() : null;
+            const db = typeof getDb === 'function' ? getDb() : null;
+
+            // Don't capture (which also flashes the page) for automatic triggers when we are
+            // not recording. Manual and forced captures still run. (A-145)
+            if (!opts.force && reason !== 'manual' && (!isLoggingEnabled || !currentSessionId || !db)) {
+                return { success: false, skipped: true, reason: 'not_recording' };
+            }
+
             const image = await wc.capturePage();
             const buffer = image.toPNG();
 
@@ -76,10 +86,6 @@ function createScreenshotService({
                 return { success: false, skipped: true, reason: 'duplicate' };
             }
             lastScreenshotBuffer = buffer;
-
-            const isLoggingEnabled = typeof getIsLoggingEnabled === 'function' ? getIsLoggingEnabled() : false;
-            const currentSessionId = typeof getCurrentSessionId === 'function' ? getCurrentSessionId() : null;
-            const db = typeof getDb === 'function' ? getDb() : null;
 
             if (isLoggingEnabled && currentSessionId && db) {
                 const now = new Date();

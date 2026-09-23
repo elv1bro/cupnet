@@ -32,6 +32,20 @@ async function upsertLastSessionProxyProfile(ctx, proxy, fingerprint) {
         }
     }
 
+    // Fail closed: without ciphertext (safeStorage unavailable or encrypt failed), do not
+    // persist a proxy URL that carries credentials in plaintext. (A-147)
+    if (!urlEncrypted) {
+        let hasSecret = false;
+        try {
+            const u = new URL(template.replace(/\{[^}]+\}/g, 'x'));
+            hasSecret = !!u.password;
+        } catch { hasSecret = /:[^@/\s]+@/.test(template); }
+        if (hasSecret) {
+            ctx.sysLog?.('warn', 'session-profile', 'Refusing to persist session proxy with credentials: OS secure storage unavailable');
+            return null;
+        }
+    }
+
     const hasTemplateVars = /\{[A-Za-z][A-Za-z0-9_:-]*\}/.test(template);
     const tlsProfile = proxy.tlsProfile || 'chrome';
     const ja3 = proxy.ja3 || null;
