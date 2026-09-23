@@ -255,7 +255,7 @@
             face.innerHTML =
                 '<div class="cn-req-head">'
                 + '<span class="cn-req-method" style="color:' + methodColor(p.method) + '">' + esc(p.method) + '</span>'
-                + (p.status != null ? '<span class="cn-req-status cn-req-status--' + statusCls + '">' + p.status + '</span>' : '')
+                + (p.status != null ? '<span class="cn-req-status cn-req-status--' + statusCls + '">' + esc(p.status) + '</span>' : '')
                 + '<span class="cn-req-url">' + esc(truncate(p.url, 200)) + '</span>'
                 + '</div>';
 
@@ -263,10 +263,10 @@
             const metaParts = [];
             if (p.mimeType) metaParts.push(esc(p.mimeType));
             if (p.responseSize != null) metaParts.push(fmtBytes(p.responseSize));
-            if (p.timing) metaParts.push(p.timing + ' ms');
+            if (p.timing) metaParts.push(esc(p.timing) + ' ms');
             if (p.protocol) metaParts.push(esc(p.protocol));
             if (p.tlsVersion) metaParts.push(esc(p.tlsVersion));
-            if (p.requestId != null) metaParts.push('ID ' + p.requestId);
+            if (p.requestId != null) metaParts.push('ID ' + esc(p.requestId));
             if (metaParts.length) {
                 const meta = document.createElement('div');
                 meta.className = 'cn-req-meta';

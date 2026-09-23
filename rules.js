@@ -1357,7 +1357,7 @@ function wireEvents() {
     onClick('btn-export-rules', async () => {
         const r = await api.exportInterceptRules();
         if (r && r.ok) showMsg('Exported');
-        else if (r && r.error) showMsg(r.error, true);
+        else if (r && r.error && r.error !== 'Canceled') showMsg(r.error, true);
     });
 
     onClick('btn-import-rules', async () => {
@@ -1370,7 +1370,7 @@ function wireEvents() {
                 showMsg(`Imported ${r.imported || 0} rule(s)`);
             }
             await loadRules();
-        } else if (r && r.error) showMsg(r.error, true);
+        } else if (r && r.error && r.error !== 'Canceled') showMsg(r.error, true);
     });
 
     onClick('btn-history', () => { void showHistoryModal(); });
@@ -1399,14 +1399,14 @@ function wireEvents() {
         const entries = getFilteredActivity();
         const r = await api.exportRulesActivityLog({ entries });
         if (r && r.ok) showMsg('Activity exported');
-        else if (r && r.error) showMsg(r.error, true);
+        else if (r && r.error && r.error !== 'Canceled') showMsg(r.error, true);
     });
 
     onClick('btn-activity-export-csv', async () => {
         const entries = getFilteredActivity();
         const r = await api.exportRulesActivityLog({ entries, format: 'csv' });
         if (r && r.ok) showMsg('Activity exported (CSV)');
-        else if (r && r.error) showMsg(r.error, true);
+        else if (r && r.error && r.error !== 'Canceled') showMsg(r.error, true);
     });
 
     onClick('btn-activity-clear', () => {
