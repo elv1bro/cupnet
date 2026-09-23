@@ -31,3 +31,4 @@ _debug*.zip
 # Локальные полные zip-бэкапы рабочей копии (не коммитить)
 cupnet2-workspace-backup-*.zip
 cupnet-pre-rewrite.bundle
+.DS_Store
