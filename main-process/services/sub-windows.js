@@ -512,7 +512,7 @@ function createSubWindowsApi(d) {
                 : { ...process.env };
 
             d.ivacScoutProcess = d.spawn(nodeBin, args, {
-                cwd: _cupnetRoot,
+                cwd: d.cupnetRoot,
                 env,
                 stdio: ['ignore', 'pipe', 'pipe'],
             });

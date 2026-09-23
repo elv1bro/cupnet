@@ -1532,6 +1532,12 @@ function parseInterceptRuleRow(row) {
             r.tags = r.tags.split(',').map((s) => s.trim()).filter(Boolean);
         }
     }
+    // SQLite stores these as INTEGER 0/1. Normalize to real booleans so callers that use
+    // strict comparisons (e.g. `enabled !== false`) do not misread a disabled rule (0) as enabled.
+    if ('enabled' in r) r.enabled = !!r.enabled;
+    if ('breakpoint_enabled' in r) r.breakpoint_enabled = !!r.breakpoint_enabled;
+    // stop_on_match defaults to true when the column is missing/undefined (matches interceptRuleToRow).
+    if ('stop_on_match' in r) r.stop_on_match = r.stop_on_match !== 0 && r.stop_on_match !== false;
     return r;
 }
 
