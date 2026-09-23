@@ -169,6 +169,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     importInterceptRules:      ()     => ipcRenderer.invoke('import-intercept-rules'),
     reorderInterceptRules:     (pairs) => ipcRenderer.invoke('reorder-intercept-rules', pairs),
     getInterceptRuleHistory:   (id, lim) => ipcRenderer.invoke('get-intercept-rule-history', id, lim),
+    formatInterceptRuleDiffHtml: (l, r) => ipcRenderer.invoke('format-intercept-rule-diff-html', l, r),
     exportRulesActivityLog:   (payload) => ipcRenderer.invoke('export-rules-activity-log', payload || {}),
     getMonacoVsPath:          ()        => ipcRenderer.invoke('get-monaco-vs-path'),
 
