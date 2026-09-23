@@ -2,6 +2,51 @@
 
 const api = window.electronAPI;
 
+// askText: a Promise-based replacement for window.prompt(), which throws in Electron.
+// Builds a modal <dialog> on the fly; resolves to the entered string, or null on cancel/Esc. (A-048)
+function askText(message, defaultValue = '', opts = {}) {
+    return new Promise((resolve) => {
+        const dlg = document.createElement('dialog');
+        dlg.className = 'cupnet-ask-dialog';
+        dlg.style.cssText = 'border:1px solid #4a4a55;border-radius:8px;padding:16px;min-width:300px;background:#23232b;color:#e8e8ef;font:13px system-ui,sans-serif;';
+        const lbl = document.createElement('div');
+        lbl.textContent = message;
+        lbl.style.cssText = 'margin-bottom:10px;';
+        const input = document.createElement('input');
+        input.type = opts.password ? 'password' : 'text';
+        input.value = defaultValue == null ? '' : String(defaultValue);
+        input.style.cssText = 'width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #4a4a55;border-radius:4px;background:#1a1a20;color:#e8e8ef;';
+        const menu = document.createElement('div');
+        menu.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:14px;';
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button'; cancelBtn.textContent = 'Cancel';
+        const okBtn = document.createElement('button');
+        okBtn.type = 'button'; okBtn.textContent = 'OK';
+        for (const b of [cancelBtn, okBtn]) b.style.cssText = 'padding:5px 14px;border-radius:4px;border:1px solid #4a4a55;background:#2f2f38;color:#e8e8ef;cursor:pointer;';
+        okBtn.style.background = '#3b6ea5';
+        menu.append(cancelBtn, okBtn);
+        dlg.append(lbl, input, menu);
+        document.body.appendChild(dlg);
+        let settled = false;
+        const done = (val) => {
+            if (settled) return;
+            settled = true;
+            try { dlg.close(); } catch { /* ignore */ }
+            dlg.remove();
+            resolve(val);
+        };
+        okBtn.addEventListener('click', () => done(input.value));
+        cancelBtn.addEventListener('click', () => done(null));
+        dlg.addEventListener('cancel', (e) => { e.preventDefault(); done(null); });
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); done(input.value); }
+        });
+        dlg.showModal();
+        input.focus();
+        input.select();
+    });
+}
+
 // ─── State ────────────────────────────────────────────────────────────────────
 let allCookies      = [];
 let filteredCookies = [];
@@ -66,7 +111,7 @@ function populateCookieGroups() {
 
 if (btnNewGroup) {
     btnNewGroup.addEventListener('click', async () => {
-        const name = prompt('New cookie group name:');
+        const name = await askText('New cookie group name:');
         if (!name) return;
         const res = await api.createCookieGroup(name);
         if (res?.success) {
@@ -82,7 +127,7 @@ if (btnCopyGroup) {
     btnCopyGroup.addEventListener('click', async () => {
         const fromId = Number(cookieGroupSelect?.value || 1);
         const fromGroup = cookieGroups.find(g => g.id === fromId);
-        const name = prompt('Name for the copy:', (fromGroup?.name || 'Default') + ' (copy)');
+        const name = await askText('Name for the copy:', (fromGroup?.name || 'Default') + ' (copy)');
         if (!name) return;
         const res = await api.copyCookieGroup(fromId, name);
         if (res?.success) {
@@ -99,7 +144,7 @@ if (btnRenameGroup) {
         const id = Number(cookieGroupSelect?.value || 1);
         if (id === 1) { setStatus('Cannot rename Default group', 'err'); return; }
         const current = cookieGroups.find(g => g.id === id);
-        const name = prompt('New name:', current?.name || '');
+        const name = await askText('New name:', current?.name || '');
         if (!name) return;
         const res = await api.renameCookieGroup(id, name);
         if (res?.success) {
