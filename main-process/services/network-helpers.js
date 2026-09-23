@@ -23,13 +23,16 @@ function sanitizeProxyUrl(proxyUrl) {
     if (!proxyUrl || typeof proxyUrl !== 'string') {
         throw new Error('Proxy URL must be a non-empty string');
     }
+    // Only treat the input as already having a scheme when it uses "scheme://". Otherwise a
+    // bare "host:port" (or "user:pass@host:port") would parse with the host as a bogus scheme
+    // and be rejected, breaking proxy failover. Default such inputs to http://. (A-132)
+    const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(proxyUrl);
+    const input = hasScheme ? proxyUrl : 'http://' + proxyUrl;
     let u;
     try {
-        u = new URL(proxyUrl);
+        u = new URL(input);
     } catch {
-        try { u = new URL('http://' + proxyUrl); } catch {
-            throw new Error(`Invalid proxy URL format: "${proxyUrl}"`);
-        }
+        throw new Error(`Invalid proxy URL format: "${proxyUrl}"`);
     }
     const allowed = ['http:', 'https:', 'socks4:', 'socks4a:', 'socks5:', 'socks5h:'];
     if (!allowed.includes(u.protocol)) {
@@ -38,9 +41,9 @@ function sanitizeProxyUrl(proxyUrl) {
     if (!u.hostname) throw new Error('Proxy URL is missing a hostname');
     const masked = u.password
         ? `${u.protocol}//${u.username}:***@${u.hostname}${u.port ? ':' + u.port : ''}`
-        : proxyUrl;
+        : input;
     Object.defineProperty(sanitizeProxyUrl, '_lastMasked', { value: masked, writable: true, configurable: true });
-    return proxyUrl;
+    return input;
 }
 
 function withTimeout(promise, timeoutMs, timeoutMessage = 'Operation timeout') {

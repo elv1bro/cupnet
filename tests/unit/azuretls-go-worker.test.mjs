@@ -35,17 +35,27 @@ const haveBinary = goBin && existsSync(goBin);
 function spawnWorker() {
     const proc = spawn(goBin, [], { stdio: ['pipe', 'pipe', 'pipe'] });
     const rl = createInterface({ input: proc.stdout, crlfDelay: Infinity });
+    // Queue every line: a one-shot rl.once('line') dropped lines that arrived while no
+    // consumer was waiting (e.g. several concurrent responses in one pipe read), which
+    // hung the concurrency test. Buffer lines and hand them out in order. (A-190)
+    const queue = [];
+    const waiters = [];
+    rl.on('line', (line) => {
+        const w = waiters.shift();
+        if (w) w(line);
+        else queue.push(line);
+    });
     const nextJson = () =>
         new Promise((resolve, reject) => {
-            const onLine = (line) => {
+            const take = (line) => {
                 try {
                     resolve(JSON.parse(line));
                 } catch (e) {
                     reject(e);
                 }
             };
-            rl.once('line', onLine);
-            rl.once('error', reject);
+            if (queue.length) take(queue.shift());
+            else waiters.push(take);
         });
     return { proc, rl, nextJson };
 }

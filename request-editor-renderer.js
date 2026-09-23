@@ -95,6 +95,7 @@ let respView = null;
 let bodyLangComp = null;
 let respLangComp = null;
 let currentCancelToken = null;
+let _sendInFlight = false;
 
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -756,11 +757,16 @@ refreshProxyInfo();
 if (api.onProxyStatusChanged) api.onProxyStatusChanged(applyProxyInfo);
 
 async function sendRequest() {
+    // In-flight guard: once a request has a cancel token it is guarded, but the multipart
+    // build awaits before the token is set, so also use a synchronous flag to stop a rapid
+    // second send (e.g. Cmd+Enter) from firing a duplicate request. (A-176)
+    if (currentCancelToken || _sendInFlight) return;
+    _sendInFlight = true;
     // Enter fires without a preceding blur, so sync params from a query typed directly
     // in the URL field before building the URL (otherwise buildUrlWithParams drops it).
     if (urlIn.value.includes('?')) parseUrlToParams(urlIn.value);
     const built = buildUrlWithParams().trim();
-    if (!built) { urlIn.focus(); return; }
+    if (!built) { _sendInFlight = false; urlIn.focus(); return; }
     const method = methodSel.value;
     // Do not pass live state.headers/state.formFields here: collectSnapshotBase() already
     // copies them (copyRows). Passing the live refs made recorded history mutate on later
@@ -807,6 +813,7 @@ async function sendRequest() {
         }
         const mp = await api.requestEditorBuildMultipart({ text: textParts, files });
         if (!mp.success) {
+            _sendInFlight = false;
             alert(mp.error || 'Multipart build failed');
             return;
         }
@@ -821,6 +828,7 @@ async function sendRequest() {
     }
 
     currentCancelToken = 're_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+    _sendInFlight = false; // token now guards re-entry
     sendBtn.disabled = true;
     sendBtn.innerHTML = '<span class="spin"></span>';
     if (cancelBtn) { cancelBtn.classList.add('visible'); cancelBtn.dataset.token = currentCancelToken; }
@@ -856,7 +864,7 @@ if (cancelBtn) {
 }
 
 sendBtn.addEventListener('click', sendRequest);
-urlIn.addEventListener('keydown', e => { if (e.key === 'Enter') sendRequest(); });
+urlIn.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) sendRequest(); });
 
 function setRespText(s) {
     const m = loadCM();
