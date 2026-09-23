@@ -171,11 +171,16 @@ function registerSessionProfileIpc(ctx) {
         try {
             const built = await buildLaunchProfileFromRequest(ctx, requestId);
             if (!built.success) return built;
+            // loadSessionProfile expects a NORMALIZED profile (as produced by
+            // parseLaunchProfile); passing the raw built profile crashed after the proxy
+            // switch + empty tab were already applied. Normalize (and fail cleanly). (A-034)
+            const parsed = parseLaunchProfile(built.profile);
+            if (!parsed.ok) return { success: false, error: parsed.error };
             const loadOpts = {
                 newTab: opts?.newTab != null ? !!opts.newTab : true,
                 urlOverride: opts?.urlOverride,
             };
-            return loadSessionProfile(ctx, built.profile, loadOpts);
+            return loadSessionProfile(ctx, parsed.profile, loadOpts);
         } catch (e) {
             return { success: false, error: e?.message || 'Apply failed' };
         }

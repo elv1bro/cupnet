@@ -14,6 +14,10 @@ function registerTrackingIpc(ctx) {
             const xNorm = Number(payload.xNorm);
             const yNorm = Number(payload.yNorm);
             if (!Number.isFinite(xNorm) || !Number.isFinite(yNorm)) return;
+            // Mouse movement inside a tab page counts as activity for idle tracking /
+            // mouse-activity screenshots (throttled to 1s). (A-296)
+            const nowTs = Date.now();
+            if (nowTs - (ctx.lastMouseMoveTime || 0) > 1000) ctx.lastMouseMoveTime = nowTs;
             ctx._lastPointerByTabId.set(tabId, {
                 xNorm: Math.max(0, Math.min(1, xNorm)),
                 yNorm: Math.max(0, Math.min(1, yNorm)),

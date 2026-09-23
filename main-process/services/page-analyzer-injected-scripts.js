@@ -4,8 +4,21 @@ module.exports._analyzeFormsScript = `function(){
     var forms = document.querySelectorAll('form');
     var result = [];
     forms.forEach(function(form, fi) {
-        var f = { index: fi, id: form.id||'', name: form.name||'', action: form.action||'', method: (form.method||'GET').toUpperCase(), className: form.className||'', fields: [] };
-        var els = form.elements;
+      try {
+        /* Read via getAttribute: an <input name="action"/"method"/"id"> clobbers
+           form.action/method/id, which otherwise breaks the whole scan. (A-133) */
+        var aAttr = form.getAttribute('action');
+        var f = {
+            index: fi,
+            id: form.getAttribute('id')||'',
+            name: form.getAttribute('name')||'',
+            action: aAttr ? new URL(aAttr, document.baseURI).href : location.href,
+            method: String(form.getAttribute('method')||'GET').toUpperCase(),
+            className: String(form.getAttribute('class')||''),
+            fields: []
+        };
+        /* name="elements" also clobbers form.elements, so query the controls directly. */
+        var els = form.querySelectorAll('input,select,textarea,button');
         for (var i=0; i<els.length; i++) {
             var el = els[i];
             var tag = el.tagName.toLowerCase();
@@ -23,6 +36,7 @@ module.exports._analyzeFormsScript = `function(){
             });
         }
         result.push(f);
+      } catch (e) { /* one malformed form must not drop the others (A-133) */ }
     });
     return result;
 }`;
@@ -61,8 +75,8 @@ module.exports._analyzeCaptchaScript = `function(){
         return { gt:gt, challenge:challenge, apiServer:apiServer };
     }
 
-    /* ── reCAPTCHA v2 (widget divs) ── */
-    document.querySelectorAll('.g-recaptcha, [data-sitekey]').forEach(function(el){
+    /* ── reCAPTCHA v2 (widget divs) — exclude Turnstile/hCaptcha, which also use data-sitekey (A-305) ── */
+    document.querySelectorAll('.g-recaptcha, [data-sitekey]:not(.cf-turnstile):not(.h-captcha):not([data-hcaptcha-widget-id]):not([data-turnstile-widget-id])').forEach(function(el){
         var sk = el.getAttribute('data-sitekey')||'';
         if (!sk) { var s=document.querySelector('script[src*="recaptcha"]'); if(s){var m=(s.src||'').match(/[?&]render=([^&]+)/);if(m)sk=m[1];} }
         r.recaptcha.push({ version:'v2', sitekey:sk, action:'', dataS:el.getAttribute('data-s')||'',
@@ -183,7 +197,9 @@ module.exports._analyzeCaptchaScript = `function(){
         }
         var mAction = txt.match(/action\\s*[:=]\\s*['"]([^'"]{1,80})['"]/i);
         var mCdata = txt.match(/cData\\s*[:=]\\s*['"]([^'"]{1,200})['"]/i);
-        if(mSitekey && mSitekey[1]){
+        /* Only treat as Turnstile when the sitekey looks like one (0x…) or the script
+           mentions turnstile — a generic data-sitekey is not Turnstile. (A-305) */
+        if(mSitekey && mSitekey[1] && (/^0x/.test(mSitekey[1]) || txt.indexOf('turnstile') !== -1)){
             addTurnstile({
                 sitekey: mSitekey[1] || '',
                 action: mAction ? mAction[1] : '',
