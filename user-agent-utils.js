@@ -22,7 +22,19 @@ function sanitizeUserAgentChromeOnly(ua) {
     return s;
 }
 
-const DEFAULT_CHROME_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+// Derive the fallback UA's Chrome major from the running Chromium (Electron) when available,
+// so the wire UA tracks the real engine; fall back to a current stable major otherwise.
+const FALLBACK_CHROME_MAJOR = '154';
+const _chromeMajor = (() => {
+    try {
+        const v = process.versions && process.versions.chrome;
+        const m = v && String(v).split('.')[0];
+        return m && /^\d+$/.test(m) ? m : FALLBACK_CHROME_MAJOR;
+    } catch (_) {
+        return FALLBACK_CHROME_MAJOR;
+    }
+})();
+const DEFAULT_CHROME_UA = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${_chromeMajor}.0.0.0 Safari/537.36`;
 
 /**
  * Перед upstream (AzureTLS worker / raw WS) подменить User-Agent в объекте заголовков и в orderedHeaders.

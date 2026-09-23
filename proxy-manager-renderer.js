@@ -115,11 +115,11 @@ const fpSection     = document.getElementById('fp-section');
 
 // UA presets
 const UA_PRESETS = {
-    'chrome-win': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
-    'chrome-mac': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
-    'firefox':    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:138.0) Gecko/20100101 Firefox/138.0',
-    'safari':     'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Safari/605.1.15',
-    'mobile':     'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1',
+    'chrome-win': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
+    'chrome-mac': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
+    'firefox':    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0',
+    'safari':     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Safari/605.1.15',
+    'mobile':     'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0 Mobile/15E148 Safari/604.1',
 };
 
 document.querySelectorAll('.fp-preset').forEach(btn => {
@@ -140,12 +140,12 @@ fUa?.addEventListener('input', updateFpBadge);
 // ─── TLS Fingerprint ──────────────────────────────────────────────────────────
 // Combined profile: TLS fingerprint + HTTP/2 settings + User-Agent
 const TLS_TEMPLATE_DESCS = {
-    chrome:  'Chrome 133 (Windows)\nUA: Chrome/133.0.0.0\nHTTP/2: Chrome SETTINGS · WINDOW=15663105 · m,a,s,p\nJA3: TLS 1.3+GREASE+X25519MLKEM768. Industry standard.',
-    firefox: 'Firefox 138 (Windows)\nUA: Firefox/138.0\nHTTP/2: Firefox SETTINGS (WINDOW=65536, MAX_FRAME=16384) · m,p,s,a\nJA3: no GREASE, unique extension order. Best privacy.',
-    safari:  'Safari 18 (macOS)\nUA: Safari/605.1.15 Version/18.3\nHTTP/2: Safari SETTINGS (WINDOW=10485760) · m,s,a,p\nJA3: Apple TLS stack, fewer extensions.',
-    ios:     'iOS 18 (Mobile Safari)\nUA: iPhone Mobile Safari\nHTTP/2: same as Safari · m,s,a,p\nJA3: mobile Apple fingerprint.',
-    edge:    'Edge 133 (Windows)\nUA: Edg/133.0.0.0\nHTTP/2: identical to Chrome · m,a,s,p\nJA3: Chromium-based, Chrome-identical TLS.',
-    opera:   'Opera 119 (Windows)\nUA: OPR/119.0.0.0\nHTTP/2: identical to Chrome · m,a,s,p\nJA3: Chromium-based, Chrome-identical TLS.',
+    chrome:  'Chrome 154 (Windows)\nUA: Chrome/154.0.0.0\nHTTP/2: Chrome SETTINGS · WINDOW=15663105 · m,a,s,p\nJA3: TLS 1.3+GREASE+X25519MLKEM768. Industry standard.',
+    firefox: 'Firefox 156 (Windows)\nUA: Firefox/156.0\nHTTP/2: Firefox SETTINGS (WINDOW=12517377, MAX_FRAME=16384) · m,p,a,s\nJA3: no GREASE, unique extension order. Best privacy.',
+    safari:  'Safari 27 (macOS)\nUA: Safari/605.1.15 Version/27.0\nHTTP/2: Safari SETTINGS (WINDOW=10420225) · m,s,a,p\nJA3: Apple TLS stack, fewer extensions.',
+    ios:     'iOS 27 (Mobile Safari)\nUA: iPhone Mobile Safari\nHTTP/2: same as Safari · m,s,a,p\nJA3: mobile Apple fingerprint.',
+    edge:    'Edge 153 (Windows)\nUA: Edg/153.0.0.0\nHTTP/2: identical to Chrome · m,a,s,p\nJA3: Chromium-based, Chrome-identical TLS.',
+    opera:   'Opera 136 (Windows)\nUA: OPR/136.0.0.0\nHTTP/2: identical to Chrome · m,a,s,p\nJA3: Chromium-based, Chrome-identical TLS.',
 };
 
 // Real JA3 strings measured via tls.peet.ws for each AzureTLS profile

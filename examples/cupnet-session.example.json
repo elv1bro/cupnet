@@ -21,11 +21,11 @@
       "USER": "your_proxy_user",
       "PASS": "your_proxy_password"
     },
-    "tlsProfile": "chrome_120"
+    "tlsProfile": "chrome"
   },
 
   "fingerprint": {
-    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
     "language": "en-US",
     "timezone": "Europe/Moscow"
   },

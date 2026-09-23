@@ -105,7 +105,7 @@ The load dialog can override **new tab** without editing the file. Proxy from th
     "USER": "alice",
     "PASS": "s3cr3t"
   },
-  "tlsProfile": "chrome_120",
+  "tlsProfile": "chrome",
   "ja3": null
 }
 ```
