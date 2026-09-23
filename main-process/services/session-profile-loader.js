@@ -35,7 +35,15 @@ async function loadSessionProfile(ctx, profile, opts = {}) {
     let tabId;
 
     if (wantNewTab) {
-        const cookieGroupId = profile.tab.cookieGroupId || 1;
+        // An isolated profile (or one that clears cookies/storage) must not target the shared
+        // Default group (1) — that would wipe every site's data. Create a dedicated group. (A-146)
+        let cookieGroupId = profile.tab.cookieGroupId || null;
+        if (!cookieGroupId && (profile.tab.isolated || profile.clearCookiesBeforeLoad || profile.clearStorageBeforeLoad)) {
+            const g = await ctx.db.createCookieGroupAsync(profile.tab.cookieGroupName || `Session ${Date.now()}`);
+            if (!g) return { success: false, error: 'Failed to create cookie group' };
+            cookieGroupId = g.id;
+        }
+        cookieGroupId = cookieGroupId || 1;
         tabId = await ctx.tabManager.createTab({
             url: null,
             cookieGroupId,

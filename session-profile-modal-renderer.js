@@ -92,8 +92,13 @@ function countCookiesFromText(text) {
 }
 
 /** @param {object} profile */
+// Keep the imported profile so buildProfileFromForm can preserve fields with no form input
+// (tab.isolated, tab.cookieGroupId, proxy.ja3, proxy.profileName). (A-186)
+let baseProfile = null;
+
 function fillFormFromProfile(profile) {
     const p = profile || {};
+    baseProfile = p;
     if (els.name) els.name.value = p.name || '';
     if (els.description) els.description.value = p.description || '';
     if (els.format) els.format.value = p.format === 'cupnet-session' ? 'cupnet-session' : 'cupnet-launch';
@@ -175,7 +180,7 @@ function buildProfileFromForm() {
         version: 1,
         name: String(els.name?.value || '').trim() || 'Unnamed session',
         description: String(els.description?.value || '').trim(),
-        tab: { newTab: !!els.newTab?.checked },
+        tab: { ...(baseProfile?.tab || {}), newTab: !!els.newTab?.checked },
         navigate: {
             url: String(els.url?.value || '').trim(),
             timeoutMs: Math.min(300000, Math.max(5000, parseInt(els.timeout?.value, 10) || 120000)),
@@ -200,6 +205,9 @@ function buildProfileFromForm() {
             ...(String(els.proxyTls?.value || '').trim()
                 ? { tlsProfile: String(els.proxyTls.value).trim() }
                 : {}),
+            // Preserve fields the form has no input for. (A-186)
+            ...(baseProfile?.proxy?.ja3 ? { ja3: baseProfile.proxy.ja3 } : {}),
+            ...(baseProfile?.proxy?.profileName ? { profileName: baseProfile.proxy.profileName } : {}),
         };
     }
 
