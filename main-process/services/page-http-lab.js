@@ -18,18 +18,24 @@ const INTERNAL_FILE_MARKERS = [
     'session-profile-modal.html',
 ];
 
-/** @type {Set<number>} tab ids with HTTP Lab active (persists across navigations) */
+/** @type {Set<string>} tab ids with HTTP Lab active (persists across navigations) */
 const httpLabActiveTabIds = new Set();
 
+// Tab ids can be non-numeric (e.g. isolated_<id>), so key by string. Using Number()
+// made every such id NaN and the active-state tracking silently never worked. (A-134)
+function httpLabKey(tabId) {
+    return tabId == null ? '' : String(tabId);
+}
+
 function setHttpLabActive(tabId, active) {
-    const id = Number(tabId);
-    if (!Number.isFinite(id)) return;
+    const id = httpLabKey(tabId);
+    if (!id) return;
     if (active) httpLabActiveTabIds.add(id);
     else httpLabActiveTabIds.delete(id);
 }
 
 function isHttpLabActive(tabId) {
-    return httpLabActiveTabIds.has(Number(tabId));
+    return httpLabActiveTabIds.has(httpLabKey(tabId));
 }
 
 function isHttpLabEligibleUrl(url) {

@@ -983,10 +983,11 @@ function syncMockProtocolHandlers(tabSession) {
 }
 
 function _removeAllHooks(tabSession) {
-    // Снимаем legacy webRequest (на случай если остались от предыдущей версии)
-    try { tabSession.webRequest.onBeforeSendHeaders(null); } catch { /* ignore */ }
-    try { tabSession.webRequest.onHeadersReceived(null); }   catch { /* ignore */ }
-    // Снимаем protocol handlers
+    // The interceptor installs NO webRequest hooks (see note above: CF detects them), so we
+    // must NOT clear onBeforeSendHeaders/onHeadersReceived here — that would strip the shared
+    // session's X-CupNet-Rid injector (owned by tab-manager) while other tabs still use it,
+    // breaking per-tab proxy attribution and MITM/CDP dedup. (A-179)
+    // Only remove the protocol handlers this module may have registered.
     try { tabSession.protocol.unhandle('http'); }  catch { /* ignore */ }
     try { tabSession.protocol.unhandle('https'); } catch { /* ignore */ }
 }
