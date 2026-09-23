@@ -46,6 +46,7 @@ let _storageApplyLoading = null;
 let _lastScout = {};
 let _autoRefreshTimer = null;
 let _analysisInFlight = false;
+let _pendingScout = false;
 let _inlineEditCount = 0;
 /** Фокус в textarea Web Storage — не дергать авто-анализ (иначе сброс текста и потеря фокуса). */
 let _storageEditorActiveCount = 0;
@@ -136,7 +137,12 @@ async function runAnalysis(opts = {}) {
     const includeScout = opts.includeScout === true;
     const force = opts.force === true;
     if (!force && (_inlineEditCount > 0 || _storageEditorActiveCount > 0)) return;
-    if (_analysisInFlight) return;
+    if (_analysisInFlight) {
+        // Don't silently drop an Explore request that lands during an auto-refresh;
+        // queue it and run it when the current analysis finishes. (A-347)
+        if (includeScout) _pendingScout = true;
+        return;
+    }
     const tabId = getSelectedTabId();
     if (!tabId) {
         statusEl.textContent = 'No tab selected';
@@ -183,6 +189,10 @@ async function runAnalysis(opts = {}) {
         statusEl.textContent = 'Error: ' + (err.message || err);
     } finally {
         _analysisInFlight = false;
+        if (_pendingScout) {
+            _pendingScout = false;
+            void runAnalysis({ includeScout: true, force: true });
+        }
     }
 }
 
@@ -1122,7 +1132,8 @@ scoutRunBtn?.addEventListener('click', () => {
     document.querySelector('.atab[data-panel="scout"]')?.classList.add('active');
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     document.getElementById('panel-scout')?.classList.add('active');
-    runAnalysis({ includeScout: true });
+    // force:true so an open inline editor doesn't block an explicit Explore click. (A-347)
+    runAnalysis({ includeScout: true, force: true });
 });
 scoutCopyBtn?.addEventListener('click', () => {
     const eps = (_lastScout.endpoints || []).join('\n');
