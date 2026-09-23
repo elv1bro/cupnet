@@ -527,12 +527,13 @@ function rowElement(entry, ei) {
 
 function renderWrapMode() {
     if (!logEl) return;
-    const max = Math.min(filteredIdx.length, WRAP_MAX_ROWS);
+    // Render the LAST WRAP_MAX_ROWS rows (the live tail), not the oldest ones. (A-219)
+    const start = Math.max(0, filteredIdx.length - WRAP_MAX_ROWS);
     logEl.style.paddingTop = '0';
     logEl.style.paddingBottom = '0';
     logEl.innerHTML = '';
     const frag = document.createDocumentFragment();
-    for (let fi = 0; fi < max; fi++) {
+    for (let fi = start; fi < filteredIdx.length; fi++) {
         const ei = filteredIdx[fi];
         const entry = entries[ei];
         if (!entry) continue;
@@ -543,8 +544,9 @@ function renderWrapMode() {
     }
     logEl.appendChild(frag);
     if (filteredIdx.length > WRAP_MAX_ROWS && countEl) {
-        countEl.textContent = `${visibleCount()} visible (showing first ${WRAP_MAX_ROWS} in wrap mode)`;
+        countEl.textContent = `${visibleCount()} visible (showing last ${WRAP_MAX_ROWS} in wrap mode)`;
     } else if (countEl) countEl.textContent = `${visibleCount()} visible`;
+    if (autoScroll) scrollToBottom();
 }
 
 function openDetail(entry) {
@@ -935,12 +937,15 @@ dbSessionSelect?.addEventListener('change', async () => {
     }
     liveMode = false;
     try {
+        // Fetch the NEWEST 5000 rows (order desc), then reverse to chronological order,
+        // so a large session shows its latest lines instead of only the oldest startup ones. (A-222)
         const rows = await api.getConsoleLogsFromDb?.({
             sessionId: Number(v),
             limit: 5000,
             offset: 0,
-            order: 'asc',
+            order: 'desc',
         });
+        if (Array.isArray(rows)) rows.reverse();
         entries = [];
         countAll = countMitm = countSystem = 0;
         let maxSeq = 0;

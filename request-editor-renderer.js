@@ -717,9 +717,12 @@ async function sendRequest() {
     const built = buildUrlWithParams().trim();
     if (!built) { urlIn.focus(); return; }
     const method = methodSel.value;
+    // Do not pass live state.headers/state.formFields here: collectSnapshotBase() already
+    // copies them (copyRows). Passing the live refs made recorded history mutate on later
+    // edits, so history could not replay the original request. (A-353)
     pendingHistoryId = pushHistorySnapshot({
-        method, url: built, headers: state.headers, bodyType: state.bodyType,
-        bodyText: getBodyText(), formFields: state.formFields,
+        method, url: built, bodyType: state.bodyType,
+        bodyText: getBodyText(),
     });
 
     const hdrObj = {};
@@ -764,6 +767,11 @@ async function sendRequest() {
         }
         if (mp.warning) console.warn('Multipart:', mp.warning);
         bodyBase64 = mp.bodyBase64;
+        // Drop any pre-existing Content-Type (any casing) so we don't send two with
+        // conflicting boundaries when the body came from a logged multipart request. (A-355)
+        for (const k of Object.keys(hdrObj)) {
+            if (k.toLowerCase() === 'content-type') delete hdrObj[k];
+        }
         hdrObj['Content-Type'] = mp.contentType;
     }
 
@@ -1425,11 +1433,19 @@ document.getElementById('import-apply')?.addEventListener('click', () => {
     const raw = ta.value.trim();
     if (!raw) return;
     let parsed = null;
+    let jsonParsed = false;
     if (raw.startsWith('{')) {
         try {
             const j = JSON.parse(raw);
+            jsonParsed = true;
             parsed = window.CupNetParsePostman?.(j);
         } catch { /* ignore */ }
+    }
+    // Only fall back to cURL parsing when the input was NOT valid JSON. Otherwise a
+    // valid-but-unsupported collection would be misparsed as cURL and load the schema URL. (A-356)
+    if (!parsed && jsonParsed) {
+        alert('Unsupported collection format (Postman v2.1 with at least one request is required)');
+        return;
     }
     if (!parsed) parsed = window.CupNetParseCurl?.(raw);
     if (!parsed) {
