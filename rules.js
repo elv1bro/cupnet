@@ -348,14 +348,17 @@ const RULE_TEMPLATES = {
         },
     },
     'slow-network': {
+        // A pass-through rule that only delays; 'block' would fail matching requests
+        // with 403 instead of delaying them. delay_ms is applied on the MITM path
+        // before the type branch, so an empty modifyHeaders still delays. (A-182)
         name: 'Slow network (2s)',
-        type: 'block',
+        type: 'modifyHeaders',
         url_pattern: '*example.com*',
         method: '*',
         group_name: 'Debug',
         tags: ['delay'],
         delay_ms: 2000,
-        params: {},
+        params: { requestHeaders: {}, responseHeaders: {} },
     },
     'mock-404': {
         name: 'Mock 404',
@@ -686,6 +689,11 @@ function collectRuleFromForm() {
     if (type === 'modifyHeaders') {
         params.requestHeaders = JSON.parse(monacoGet('edit-req-headers') || '{}');
         params.responseHeaders = JSON.parse(monacoGet('edit-resp-headers') || '{}');
+        // The editor has no UI for the remove-header lists, so preserve them from the
+        // existing rule instead of dropping them on save (e.g. the "Strip CSP" rule). (A-183)
+        const prevP = (idRaw && allRules.find((x) => x.id === Number(idRaw))?.params) || {};
+        if (Array.isArray(prevP.removeRequestHeaders)) params.removeRequestHeaders = prevP.removeRequestHeaders;
+        if (Array.isArray(prevP.removeResponseHeaders)) params.removeResponseHeaders = prevP.removeResponseHeaders;
     } else if (type === 'mock') {
         params.status = parseInt(document.getElementById('edit-mock-status').value, 10);
         params.mimeType = getMockMimeValue();
@@ -1208,6 +1216,11 @@ function bindKeyboard() {
             const row = document.querySelector('.rule-row.selected .rule-enabled');
             if (row) row.click();
         } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            // Don't hijack arrow keys while the user is editing a field (caret move,
+            // number spinner, select, Monaco) — it would switch rules and drop edits. (A-181)
+            const t = e.target;
+            if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT'
+                || t.isContentEditable || t.closest?.('.monaco-editor'))) return;
             const list = getFilteredRules();
             if (!list.length) return;
             e.preventDefault();
