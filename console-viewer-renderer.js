@@ -226,14 +226,31 @@ function escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function highlightSearch(html, term) {
-    if (!term) return html;
+// Highlight matches in RAW text and HTML-escape each segment. Working on already-escaped
+// HTML corrupted entities (e.g. searching "amp" hit "&amp;"); this also respects regex mode. (A-220)
+function highlightSearch(rawText, term) {
+    const text = String(rawText ?? '');
+    if (!term) return escapeHtml(text);
+    const literal = () => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    let re;
     try {
-        const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        return html.replace(new RegExp(`(${escaped})`, 'gi'), '<span class="cv-highlight">$1</span>');
+        re = new RegExp(useRegex ? term : literal(), 'gi');
     } catch {
-        return html;
+        try { re = new RegExp(literal(), 'gi'); } catch { return escapeHtml(text); }
     }
+    let out = '';
+    let last = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+        if (m.index >= last) {
+            out += escapeHtml(text.slice(last, m.index));
+            out += '<span class="cv-highlight">' + escapeHtml(m[0]) + '</span>';
+            last = m.index + m[0].length;
+        }
+        if (m.index === re.lastIndex) re.lastIndex++; // guard zero-length matches
+    }
+    out += escapeHtml(text.slice(last));
+    return out;
 }
 
 function formatTime(d) {
@@ -360,10 +377,11 @@ function pushRate(ts) {
 }
 
 function trimEntriesIfNeeded() {
-    if (entries.length <= MAX_LINES) return;
+    if (entries.length <= MAX_LINES) return false;
     const remove = Math.min(TRIM_BATCH, entries.length - MAX_LINES + TRIM_BATCH);
     entries.splice(0, remove);
     rebuildFilteredIndices();
+    return true; // filteredIdx was rebuilt (already includes the new entry)
 }
 
 function addEntry(entry) {
@@ -387,11 +405,14 @@ function addEntry(entry) {
     countAll++;
     if (entry.category === 'mitm') countMitm++;
     else countSystem++;
-    trimEntriesIfNeeded();
+    // If trimming rebuilt filteredIdx it already includes this entry; don't push it again. (A-216)
+    const rebuilt = trimEntriesIfNeeded();
     updateBadges();
     pushRate(Date.now());
-    if (entryMatchesFilters(entry)) {
+    if (!rebuilt && entryMatchesFilters(entry)) {
         filteredIdx.push(entries.length - 1);
+    }
+    if (rebuilt || entryMatchesFilters(entry)) {
         updateEmptyState();
         updateStatusBar();
         if (!wordWrap) {
@@ -502,7 +523,7 @@ function rowElement(entry, ei) {
 
     const msg = document.createElement('span');
     msg.className = 'cv-msg ' + getLineClass(entry.text);
-    msg.innerHTML = highlightSearch(escapeHtml(entry.text), searchTerm);
+    msg.innerHTML = highlightSearch(entry.text, searchTerm);
 
     div.appendChild(pin);
     div.appendChild(ts);

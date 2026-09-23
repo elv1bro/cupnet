@@ -243,8 +243,8 @@ function startCountdown() {
     }, 1000);
 }
 
-// First hover cancels timer forever — no resume
-card.addEventListener('mouseenter', cancelTimer, { once: true });
+// Hover cancels the auto-confirm timer; not {once} so it still works after a re-init. (A-334)
+card.addEventListener('mouseenter', cancelTimer);
 
 // ── Receive init data ────────────────────────────────────────────────────────
 if (window.electronAPI?.onModalLoggingInit) {

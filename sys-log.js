@@ -130,13 +130,24 @@ function registerSysLogWindow(win) {
 }
 
 function flushOnExit() {
-    const criticals = _entries.filter(e => e.level === 'critical' || e.level === 'error');
-    if (criticals.length === 0) return;
+    // Only 'error' entries need flushing: 'critical' entries are already persisted by
+    // writeToCriticalLog at runtime, so flushing them again duplicated every critical. (A-379)
+    const errors = _entries.filter(e => e.level === 'error');
+    if (errors.length === 0) return;
     try {
         const logPath = getCriticalLogPath();
-        const lines = criticals.map(e =>
+        const lines = errors.map(e =>
             `[${e.ts}] [${e.level.toUpperCase()}] [${e.module}] ${e.message}${e.data ? ' ' + JSON.stringify(e.data) : ''}`
         ).join('\n') + '\n';
+        // Same size-based rotation as writeToCriticalLog.
+        try {
+            const stat = fs.statSync(logPath);
+            if (stat.size > MAX_CRITICAL_LOG_SIZE) {
+                try { fs.renameSync(logPath, logPath + '.1'); } catch { /* ignore */ }
+                fs.writeFileSync(logPath, lines);
+                return;
+            }
+        } catch {}
         fs.appendFileSync(logPath, lines);
     } catch {}
 }

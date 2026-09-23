@@ -38,11 +38,15 @@ function buildTabTlsInfo(ctx, tabId) {
             tlsProfile: null,
             tlsJa3Mode: null,
             tlsJa3Custom: null,
-            connectedProfileId: ctx.connectedProfileId ?? null,
-            connectedProfileName: ctx.connectedProfileName || null,
+            connectedProfileId: null,
+            connectedProfileName: null,
             lastRequest: null,
         };
-        const pid = ctx.connectedProfileId;
+        // Prefer the tab's per-tab proxy profile over the global one, so the site-info
+        // popover shows the TLS/JA3 actually used for this tab. (A-281)
+        const pid = tab.proxyProfileId || ctx.connectedProfileId;
+        out.connectedProfileId = pid ?? null;
+        out.perTabProfile = !!tab.proxyProfileId;
         if (pid && ctx.db && typeof ctx.db.getProxyProfileEncrypted === 'function') {
             try {
                 const prof = ctx.db.getProxyProfileEncrypted(pid);
@@ -50,8 +54,12 @@ function buildTabTlsInfo(ctx, tabId) {
                     out.tlsProfile = prof.tls_profile || null;
                     out.tlsJa3Mode = prof.tls_ja3_mode || null;
                     out.tlsJa3Custom = prof.tls_ja3_custom || null;
+                    out.connectedProfileName = prof.name || (tab.proxyProfileId ? `#${pid}` : ctx.connectedProfileName || null);
                 }
             } catch { /* ignore */ }
+        }
+        if (!out.connectedProfileName) {
+            out.connectedProfileName = tab.proxyProfileId ? `#${pid}` : (ctx.connectedProfileName || null);
         }
         if (host && ctx.db && typeof ctx.db.queryRequests === 'function') {
             try {
