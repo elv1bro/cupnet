@@ -53,7 +53,9 @@ function isValidDnsHost(host) {
 function isValidIpv4(ip) {
     const value = String(ip || '').trim();
     if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(value)) return false;
-    return value.split('.').every(part => Number(part) >= 0 && Number(part) <= 255);
+    // Reject leading zeros: WHATWG URL parses e.g. 010 as octal, so 010.1.2.3 would
+    // resolve to 8.1.2.3 and send traffic to a different host. (A-240)
+    return value.split('.').every(part => /^(0|[1-9]\d{0,2})$/.test(part) && Number(part) <= 255);
 }
 
 function isValidDnsRewriteHost(value) {

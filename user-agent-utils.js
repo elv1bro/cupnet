@@ -18,6 +18,9 @@ function sanitizeUserAgentChromeOnly(ua) {
     if (isUaSanitizeDisabled()) return s;
     s = s.replace(/\s+CupNet\/[^\s]+/gi, '');
     s = s.replace(/\s+Electron\/[^\s]+/gi, '');
+    // Reduce the Chrome/Chromium version to the major-only form (x.0.0.0), matching real
+    // Chrome UA reduction. Otherwise the full Electron Chromium patch version leaks. (A-192)
+    s = s.replace(/\b(Chrome|Chromium)\/(\d+)\.\d+\.\d+\.\d+/g, '$1/$2.0.0.0');
     s = s.replace(/\s{2,}/g, ' ').trim();
     return s;
 }
@@ -43,10 +46,12 @@ const DEFAULT_CHROME_UA = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Apple
 function applyOutboundUserAgentToMitmHeaders(headers, orderedHeaders) {
     if (isUaSanitizeDisabled() || !headers || typeof headers !== 'object') return;
     let foundInHeaders = false;
+    let uaFromHeaders = '';
     for (const k of Object.keys(headers)) {
         if (String(k).toLowerCase() === 'user-agent') {
             const sanitized = sanitizeUserAgentChromeOnly(String(headers[k] ?? ''));
             headers[k] = sanitized || DEFAULT_CHROME_UA;
+            uaFromHeaders = headers[k];
             foundInHeaders = true;
             break;
         }
@@ -54,6 +59,9 @@ function applyOutboundUserAgentToMitmHeaders(headers, orderedHeaders) {
     if (!foundInHeaders) {
         headers['user-agent'] = DEFAULT_CHROME_UA;
     }
+    // When orderedHeaders has no UA of its own, mirror the real UA from the headers map
+    // (if any) rather than always injecting the stale default. (A-390)
+    const orderedFallbackUa = uaFromHeaders || DEFAULT_CHROME_UA;
 
     let foundInOrdered = false;
     if (Array.isArray(orderedHeaders)) {
@@ -68,7 +76,7 @@ function applyOutboundUserAgentToMitmHeaders(headers, orderedHeaders) {
             }
         }
         if (!foundInOrdered) {
-            orderedHeaders.push(['User-Agent', DEFAULT_CHROME_UA]);
+            orderedHeaders.push(['User-Agent', orderedFallbackUa]);
         }
     }
 }

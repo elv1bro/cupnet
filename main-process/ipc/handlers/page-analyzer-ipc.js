@@ -302,19 +302,30 @@ function registerPageAnalyzerIpc(ctx) {
         const urls = Array.isArray(collect?.scriptUrls) ? collect.scriptUrls : [];
         for (const u of urls) {
             try {
+                // Only fetch http(s). A page-supplied file:// or other scheme must not be
+                // read into the analyzer (local-file disclosure). (A-284)
+                let scheme = '';
+                try { scheme = new URL(u).protocol; } catch { scheme = ''; }
+                if (scheme !== 'http:' && scheme !== 'https:') {
+                    externalScripts.push({ url: u, body: '', statusCode: 0, error: 'unsupported scheme' });
+                    continue;
+                }
                 const ctrl = new AbortController();
                 const timer = setTimeout(() => ctrl.abort(), FETCH_SCRIPT_MS);
                 let resp;
+                let body;
                 try {
                     resp = await sess.fetch(u, {
                         bypassCustomProtocolHandlers: true,
                         cache: 'no-store',
                         signal: ctrl.signal,
                     });
+                    // Read the body under the same timeout, otherwise a streaming/huge
+                    // script spins forever after the fetch resolves. (A-284)
+                    body = await resp.text();
                 } finally {
                     clearTimeout(timer);
                 }
-                const body = await resp.text();
                 externalScripts.push({
                     url: u,
                     body,
@@ -351,7 +362,7 @@ function registerPageAnalyzerIpc(ctx) {
                 if(!forms[${fi}]) return 'no-form';
                 var el=forms[${fi}].elements[${fld}];
                 if(!el) return 'no-field';
-                var act='${action.type}';
+                var act=${JSON.stringify(String(action?.type || ''))};
                 var newValue=${valueLiteral};
                 function ensureVisible(node) {
                     if (!node || node.nodeType !== 1) return;

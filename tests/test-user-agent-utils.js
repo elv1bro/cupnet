@@ -30,9 +30,11 @@ test('sanitizeUserAgentChromeOnly: убирает CupNet и Electron, остаё
     const out = sanitizeUserAgentChromeOnly(SAMPLE_ELECTRON_UA);
     assert.match(out, CHROME_LIKE_UA);
     assertNoLeak(out);
+    // The Chrome version is reduced to the major-only form (x.0.0.0), matching real Chrome
+    // UA reduction, so the full Electron Chromium patch version does not leak. (A-192)
     assert.equal(
         out,
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.291 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     );
 });
 
