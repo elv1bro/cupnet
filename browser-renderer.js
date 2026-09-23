@@ -1337,6 +1337,7 @@ function _bindProfileDrawer() {
         }
     });
 
+    // Single-profile gate: locks the session and re-shows the unlock gate (re-enter password).
     statusProfileManage?.addEventListener('click', () => {
         _setProfileDrawerOpen(false);
         void api.profileOpenSwitchGate?.();

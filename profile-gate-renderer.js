@@ -172,24 +172,7 @@ function renderPicker() {
         });
         profileGrid.appendChild(card);
     }
-
-    const addBtn = document.createElement('button');
-    addBtn.type = 'button';
-    addBtn.className = 'pg-profile-card add';
-    const addAvatar = document.createElement('div');
-    addAvatar.className = 'pg-avatar add-icon';
-    addAvatar.textContent = '+';
-    addBtn.appendChild(addAvatar);
-    const addLabel = document.createElement('span');
-    addLabel.className = 'pg-profile-name';
-    addLabel.textContent = 'New profile';
-    addBtn.appendChild(addLabel);
-    const addMeta = document.createElement('span');
-    addMeta.className = 'pg-profile-meta';
-    addMeta.textContent = 'Separate vault';
-    addBtn.appendChild(addMeta);
-    addBtn.addEventListener('click', () => openEditScreen('create', null));
-    profileGrid.appendChild(addBtn);
+    // Single-profile gate: no "add another profile" affordance.
 }
 
 function maybeAutoOpenSetup() {
@@ -342,24 +325,20 @@ async function doEditSave() {
 
     editSaveBtn.disabled = true;
     const prevLabel = editSaveBtn.textContent;
-    editSaveBtn.textContent = editMode === 'setup' ? 'Setting up…' : 'Creating…';
+    editSaveBtn.textContent = 'Setting up…';
 
     try {
-        let r;
+        // Single-profile gate: only the first-run setup path exists.
         const payload = {
             name,
             password,
             confirm,
             avatarColor: editPick.color,
         };
-        if (editMode === 'setup') {
-            r = await api.profileCompleteSetup({
-                ...payload,
-                legacyVaultId: legacyVaultId ?? selectedProfile?.id ?? gateState?.legacyVaultId,
-            });
-        } else {
-            r = await api.profileCreate(payload);
-        }
+        const r = await api.profileCompleteSetup({
+            ...payload,
+            legacyVaultId: legacyVaultId ?? selectedProfile?.id ?? gateState?.legacyVaultId,
+        });
         if (!r?.success) setError(editError, r?.error || 'Could not save profile.');
     } catch (e) {
         setError(editError, String(e?.message || e));

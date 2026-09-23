@@ -273,32 +273,7 @@ function registerProfileIpc(ctx) {
         }
     });
 
-    handle('profile-create', async (_, payload) => {
-        try {
-            if (!ctx.db) return { success: false, error: 'Database unavailable' };
-            const name = String(payload?.name || '').trim();
-            const password = String(payload?.password || '');
-            const confirm = String(payload?.confirm || '');
-            const avatarColor = normalizeAvatarColor(payload?.avatarColor || defaultColorForName(name));
-            const avatarIcon = profileInitials(name);
-            if (!name) return { success: false, error: 'Profile name is required' };
-            const pwCheckCreate = validatePassword(password);
-            if (!pwCheckCreate.ok) return { success: false, error: pwCheckCreate.error };
-            if (password !== confirm) return { success: false, error: 'Passwords do not match' };
-
-            const blob = await createVaultVerifyBlob(password);
-            const vaultId = ctx.db.createVault(name, blob);
-            ctx.db.updateVaultAvatar(vaultId, avatarIcon, avatarColor);
-            initNewProfileDataFiles(vaultId);
-
-            if (needsProfileSetup(ctx.db)) markProfileSetupComplete();
-            await finishProfileLogin(ctx, { vaultId, name, password });
-            return { success: true, vaultId, name };
-        } catch (e) {
-            ctx.sysLog?.('warn', 'profile', String(e?.message || e));
-            return { success: false, error: String(e?.message || e) };
-        }
-    });
+    // Single-profile gate: creating additional profiles is not offered.
 
     handle('profile-logout', () => {
         vaultSession.lockAll('logout');

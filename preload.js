@@ -349,7 +349,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     profileGateStatus:         ()        => ipcRenderer.invoke('profile-gate-status'),
     profileCompleteSetup:      (p)       => ipcRenderer.invoke('profile-complete-setup', p),
     profileLogin:              (p)       => ipcRenderer.invoke('profile-login', p),
-    profileCreate:             (p)       => ipcRenderer.invoke('profile-create', p),
     profileLogout:             ()        => ipcRenderer.invoke('profile-logout'),
     profileOpenSwitchGate:     ()        => ipcRenderer.invoke('profile-open-switch-gate'),
     profileSessionStatus:      ()        => ipcRenderer.invoke('profile-session-status'),
