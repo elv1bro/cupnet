@@ -123,15 +123,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setUiPref: (key, value) => ipcRenderer.invoke('set-ui-pref', key, value),
 });
 
-/** Page scripts (injected) call this on login form submit — main saves to vault if unlocked. */
-contextBridge.exposeInMainWorld('cupnetCredentials', {
-    reportCapture: (payload) => {
-        try {
-            ipcRenderer.send('credential-form-captured', payload);
-        } catch (_) { /* ignore */ }
-    },
-});
-
 /** Injected storage wrapper (tab-manager) reports localStorage/sessionStorage ops with stack traces. */
 contextBridge.exposeInMainWorld('cupnetStorageActivity', {
     report: (payload) => {

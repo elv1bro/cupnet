@@ -178,198 +178,6 @@ function reinjectPasteUnlockAllTabs() {
     }
 }
 
-/** Injected into pages: form submit + login-like button clicks + fetch/XHR login hints (SPA). */
-const CREDENTIAL_FORM_CAPTURE_SCRIPT = `(function () {
-    if (window.__cupnetCredCaptureInstalled) return;
-    window.__cupnetCredCaptureInstalled = true;
-
-    function findLoginForPassword(pwd) {
-        var login = '';
-        var form = pwd.closest && pwd.closest('form');
-        var scope = form || document;
-        var inputs = scope.querySelectorAll('input');
-        for (var i = 0; i < inputs.length; i++) {
-            var el = inputs[i];
-            if (el === pwd) continue;
-            var t = (el.type || '').toLowerCase();
-            if (t === 'password' || t === 'hidden' || t === 'submit' || t === 'button' || t === 'reset' || t === 'image' || t === 'file') continue;
-            if (el.value && String(el.value).trim()) {
-                login = String(el.value).trim();
-                break;
-            }
-        }
-        return login;
-    }
-
-    function report(login, password) {
-        try {
-            if (typeof window.cupnetCredentials !== 'undefined' && window.cupnetCredentials.reportCapture) {
-                window.cupnetCredentials.reportCapture({ login: login, password: password, source: 'cupnet-capture' });
-            }
-        } catch (_) {}
-    }
-
-    function maybeLoginPath(url) {
-        try {
-            var p = new URL(url, location.origin).pathname.toLowerCase();
-            return /login|signin|auth|session|oauth|token/.test(p);
-        } catch (_) { return false; }
-    }
-
-    document.addEventListener('submit', function (e) {
-        var form = e.target;
-        if (!form || form.tagName !== 'FORM') return;
-        var pwd = form.querySelector('input[type="password"]');
-        if (!pwd || !pwd.value) return;
-        report(findLoginForPassword(pwd), pwd.value);
-    }, true);
-
-    document.addEventListener('click', function (e) {
-        var t = e.target;
-        if (!t || !t.closest) return;
-        var btn = t.closest('button,[role="button"],input[type="submit"],input[type="button"]');
-        if (!btn) return;
-        var txt = (btn.innerText || btn.value || btn.getAttribute('aria-label') || '').trim().toLowerCase();
-        if (!/log\\s*in|sign\\s*in|signin|submit|continue|next|enter/.test(txt)) return;
-        var scope = btn.closest('form') || document;
-        var pwd = scope.querySelector('input[type="password"]:not([disabled])');
-        if (!pwd || !pwd.value) return;
-        report(findLoginForPassword(pwd), pwd.value);
-    }, true);
-
-    function extractCredsFromBody(body) {
-        var user = '', pass = '';
-        if (!body || typeof body !== 'string' || body.length > 65536) return null;
-        var trimmed = body.trim();
-        if (trimmed.charAt(0) === '{') {
-            try {
-                var obj = JSON.parse(trimmed);
-                var keys = Object.keys(obj);
-                for (var i = 0; i < keys.length; i++) {
-                    var k = keys[i].toLowerCase();
-                    var v = obj[keys[i]];
-                    if (typeof v !== 'string') continue;
-                    if (/password|passwd|pwd/.test(k) && !pass) pass = v;
-                    if (/user|login|email|identifier|account|username/.test(k) && !user) user = v;
-                }
-            } catch (_) {}
-        }
-        if (!pass) {
-            var pairs = body.split('&');
-            for (var i = 0; i < pairs.length; i++) {
-                var kv = pairs[i].split('=');
-                var k = decodeURIComponent(kv[0] || '').toLowerCase();
-                var v = decodeURIComponent(kv.slice(1).join('=') || '');
-                if (/password|passwd|pwd/.test(k) && !pass) pass = v;
-                if (/user|login|email|identifier|account/.test(k) && !user) user = v;
-            }
-        }
-        return pass ? { user: user, pass: pass } : null;
-    }
-
-    var _origFetch = window.fetch;
-    if (typeof _origFetch === 'function') {
-        window.fetch = function (input, init) {
-            try {
-                var url = typeof input === 'string' ? input : (input && input.url);
-                var method = (init && init.method) || 'GET';
-                var body = init && init.body;
-                if (maybeLoginPath(url) && String(method).toUpperCase() !== 'GET' && body && typeof body === 'string') {
-                    var creds = extractCredsFromBody(body);
-                    if (creds) report(creds.user, creds.pass);
-                }
-            } catch (_) {}
-            return _origFetch.apply(this, arguments);
-        };
-    }
-
-    try {
-        var XHROpen = XMLHttpRequest.prototype.open;
-        var XHRSend = XMLHttpRequest.prototype.send;
-        XMLHttpRequest.prototype.open = function (method, url) {
-            this.__cupnetUrl = url;
-            this.__cupnetMethod = method;
-            return XHROpen.apply(this, arguments);
-        };
-        XMLHttpRequest.prototype.send = function (body) {
-            try {
-                var url = this.__cupnetUrl;
-                var method = this.__cupnetMethod || 'GET';
-                if (maybeLoginPath(url) && String(method).toUpperCase() !== 'GET' && body && typeof body === 'string') {
-                    var creds = extractCredsFromBody(body);
-                    if (creds) report(creds.user, creds.pass);
-                }
-            } catch (_) {}
-            return XHRSend.apply(this, arguments);
-        };
-    } catch (_) {}
-
-    try {
-        var obs = new MutationObserver(function () { /* reserved: dynamic forms */ });
-        obs.observe(document.documentElement, { childList: true, subtree: true });
-    } catch (_) {}
-})();`;
-
-/**
- * Storage activity inject: patch Storage.prototype (setItem/removeItem/clear) for stack traces.
- * Property assignment (localStorage.k = v) is logged via CDP DOMStorage (always enabled when
- * Activity Monitor is on, alongside inject for stack traces when that option is enabled).
- */
-const STORAGE_ACTIVITY_SCRIPT = `(function () {
-    if (window.__cupnetStorageActInstalled) return;
-    window.__cupnetStorageActInstalled = true;
-    function report(payload) {
-        try {
-            if (window.cupnetStorageActivity && window.cupnetStorageActivity.report) {
-                window.cupnetStorageActivity.report(payload);
-            }
-        } catch (_) {}
-    }
-    try {
-        var Sp = Storage.prototype;
-        if (Sp.__cupnetStorageActHooked) return;
-        Sp.__cupnetStorageActHooked = true;
-        var oSet = Sp.setItem;
-        var oRemove = Sp.removeItem;
-        var oClear = Sp.clear;
-        function kindOf(st) {
-            try {
-                if (st === window.localStorage) return 'ls';
-                if (st === window.sessionStorage) return 'ss';
-            } catch (_) {}
-            return 'ls';
-        }
-        Sp.setItem = function (k, v) {
-            try {
-                report({
-                    kind: kindOf(this),
-                    op: 'set',
-                    key: String(k),
-                    newValue: String(v),
-                    stack: new Error().stack
-                });
-            } catch (_) {}
-            return oSet.call(this, k, v);
-        };
-        Sp.removeItem = function (k) {
-            try {
-                report({
-                    kind: kindOf(this),
-                    op: 'remove',
-                    key: String(k),
-                    stack: new Error().stack
-                });
-            } catch (_) {}
-            return oRemove.call(this, k);
-        };
-        Sp.clear = function () {
-            try {
-                report({ kind: kindOf(this), op: 'clear', stack: new Error().stack });
-            } catch (_) {}
-            return oClear.call(this);
-        };
-    } catch (_) {}
-})();`;
 
 function injectStorageActivityMonitor(webContents) {
     if (_STEALTH >= 1) return;
@@ -378,12 +186,6 @@ function injectStorageActivityMonitor(webContents) {
     if (!s.activityMonitorEnabled || !s.activityMonitorStorageStackTraces) return;
     if (!loggingState.isRecordingEnabled()) return;
     webContents.executeJavaScript(STORAGE_ACTIVITY_SCRIPT).catch(() => {});
-}
-
-function injectCredentialFormCapture(webContents) {
-    if (_STEALTH >= 1) return;
-    if (!webContents || webContents.isDestroyed()) return;
-    webContents.executeJavaScript(CREDENTIAL_FORM_CAPTURE_SCRIPT).catch(() => {});
 }
 
 /**
@@ -603,7 +405,6 @@ function attachTabListeners(tab) {
             injectPasteUnlock(view.webContents);
             void maybeRestorePageHttpLab(tabId, view.webContents);
             if (isDevtoolsHostileUrl(urlNow)) return;
-            injectCredentialFormCapture(view.webContents);
             injectStorageActivityMonitor(view.webContents);
         }, 32);
     });
@@ -1516,7 +1317,6 @@ module.exports = {
     setMitmTabUpstreamCleanup,
     reapplyMitmTrustToSharedSession,
     setPasteUnlock, getPasteUnlock,
-    injectCredentialFormCapture,
     injectStorageActivityMonitor,
     setTrafficOpts,
     applyWebRtcPolicy, resetWebRtcPolicy,
