@@ -42,6 +42,7 @@ const getAssetPath = (name) => path.join(_cupnetRoot, name);
 const {
     resolveNavigationUrl,
     resolveNavigationUrlWithBase,
+    resolveLoadUrlForWebContents,
     parseProxyTemplate,
     extractTemplateVars,
     formatBytes,
@@ -85,6 +86,8 @@ const { createTrafficModeService } = require('./services/traffic-mode-service');
 const { createProxyMitmService } = require('./services/proxy-service');
 const { createSubWindowsApi } = require('./services/sub-windows');
 const { createMainWindowApi } = require('./services/main-window');
+const { createProfileGateWindowApi } = require('./services/profile-gate-window');
+const profileSession = require('./services/profile-session');
 const { STEALTH, applyCupnetEarlyChromiumFlags } = require('./runtime-early-flags');
 
 // ─── MITM Proxy (required lazily inside app.whenReady) ───────────────────────
@@ -172,6 +175,13 @@ let logEntryCount              = 0;
 let activeFingerprint          = null; // { user_agent, timezone, language } or null
 let mitmStartPromise           = null; // Promise resolving when MITM is ready
 let mitmReady                  = false;
+/** @type {'starting'|'ready'|'failed'} */
+let mitmState                  = 'starting';
+let mitmError                  = '';
+let _statsBroadcastTimer       = null;
+let _mouseTrackingTimer        = null;
+/** Block check-ip-geo until first tab + proxy notify finished (avoids startup setProxy/cert races). */
+let ipGeoChecksEnabled         = false;
 let startupMetrics             = {
     appReadyTs: 0,
     windowCreatedTs: 0,
@@ -222,6 +232,8 @@ function syncAppContextSnapshot() {
 
     appCtx.fingerprint.active = activeFingerprint;
     appCtx.mitm.ready = mitmReady;
+    appCtx.mitm.state = mitmState;
+    appCtx.mitm.error = mitmError;
     appCtx.mitm.startPromise = mitmStartPromise;
     appCtx.settings.cached = settingsStore.getCached();
 
@@ -245,6 +257,8 @@ const proxyNotify = createProxyNotifyBroadcast({
     getConnectedResolvedVars: () => connectedResolvedVars,
     getCurrentTrafficMode: () => normalizeTrafficMode(currentTrafficMode),
     getMitmReady: () => mitmReady,
+    getMitmState: () => mitmState,
+    getMitmError: () => mitmError,
 });
 const { notifyProxyStatus, notifyMitmReady, notifyProxyProfilesList } = proxyNotify;
 const proxyResilience = new ProxyResilienceManager(networkPolicy.breaker);
@@ -478,7 +492,17 @@ function getInternalPageUrl(pageName) {
 /** Returns the URL to open in a new tab (homepage or built-in new-tab page). */
 function getNewTabUrl() {
     const hp = settingsStore.getCached()?.homepage?.trim();
-    if (hp) return hp;
+    if (!hp) return getInternalPageUrl('new-tab');
+    const alias = hp.toLowerCase();
+    if (alias === 'cupnet://settings' || alias === 'cupnet:settings') return getInternalPageUrl('settings');
+    if (alias === 'cupnet://guide' || alias === 'cupnet:guide') return getInternalPageUrl('guide');
+    if (alias === 'cupnet://home' || alias === 'cupnet:home'
+        || alias === 'cupnet://new-tab' || alias === 'cupnet:new-tab') {
+        return getInternalPageUrl('new-tab');
+    }
+    const resolved = resolveLoadUrlForWebContents(hp, '');
+    if (resolved) return resolved;
+    console.warn(`[cupnet] invalid homepage "${hp.slice(0, 80)}" — using built-in new tab`);
     return getInternalPageUrl('new-tab');
 }
 
@@ -545,6 +569,7 @@ const proxySvc = createProxyMitmService({
     proxyResilience,
     getMitmReady: () => mitmReady,
     getMitmStartPromise: () => mitmStartPromise,
+    getIpGeoChecksEnabled: () => ipGeoChecksEnabled,
     setActProxy: (v) => { actProxy = v; },
     setPersistentAnonymizedProxyUrl: (v) => { persistentAnonymizedProxyUrl = v; },
 });
@@ -553,6 +578,7 @@ const {
     netFetchWithTimeout,
     getRealIp,
     checkCurrentIpGeo,
+    clearIpGeoFailCache,
     testProxy,
     quickChangeProxy,
     parseFallbackProxyList,
@@ -665,6 +691,12 @@ Object.assign(dMain, {
     sendLogStatus,
     requestScreenshot,
     bootstrapSessionTrafficMetaLog,
+    getMitmStartPromise: () => mitmStartPromise,
+    getMitmReady: () => mitmReady,
+    enableIpGeoChecks: () => {
+        ipGeoChecksEnabled = true;
+        clearIpGeoFailCache?.();
+    },
 });
 Object.defineProperties(dMain, {
     forceAppQuit:    { get() { return forceAppQuit; },    set(v) { forceAppQuit = v; },    enumerable: true, configurable: true },
@@ -678,6 +710,19 @@ const {
     createMainWindow,
     buildMenu,
 } = createMainWindowApi(dMain);
+
+const profileGateApi = createProfileGateWindowApi({
+    app,
+    path,
+    cupnetRoot: _cupnetRoot,
+    getAssetPath,
+    iconPath,
+    get mainWindow() { return mainWindow; },
+    set mainWindow(v) { mainWindow = v; },
+    get forceAppQuit() { return forceAppQuit; },
+    createMainWindow,
+    syncAppContextSnapshot,
+});
 
 const {
     openRequestEditorWindow,
@@ -750,8 +795,26 @@ function _syncDnsOverrideHostsSet() {
 }
 
 if (STEALTH < 3) {
+    function _isCupnetMitmCertificate(certificate) {
+        if (!certificate || typeof certificate !== 'object') return false;
+        const parts = [
+            certificate.issuerName,
+            certificate.subjectName,
+            certificate.issuer,
+            certificate.subject,
+            certificate.commonName,
+        ].filter(Boolean);
+        const blob = parts.join('|');
+        return /CupNet MITM/i.test(blob);
+    }
+
     app.on('certificate-error', (event, webContents, url, error, certificate, callback) => {
         try {
+            if (_isCupnetMitmCertificate(certificate)) {
+                event.preventDefault();
+                callback(true);
+                return;
+            }
             const u = new URL(url);
             const host = u.hostname.toLowerCase();
             if (host === '127.0.0.1' || host === 'localhost' || _dnsOverrideHosts.has(host)) {
@@ -780,9 +843,34 @@ app.whenReady().then(async () => {
     db         = require('../db');
     tabManager = require('../tab-manager');
     db.init();
+    try {
+        const { runProfileDataMigration, ensureProfileSetupFlag, readMigrationState } = require('./services/profile-data-migration.js');
+        runProfileDataMigration({ db, sysLog });
+        ensureProfileSetupFlag(readMigrationState());
+    } catch (e) {
+        safeCatch({ module: 'main', eventCode: 'profile.migration.failed' }, e, 'warn');
+    }
     try { db.purgeConsoleLogsOlderThanDays(14); } catch { /* ignore */ }
     _syncDnsOverrideHostsSet();
     loadSettings();
+    try {
+        const vaultSession = require('./services/vault-session-service.js');
+        vaultSession.initFromSettings(settingsStore.getCached() || settingsStore.loadSettings());
+        vaultSession.onLock(() => {
+            try {
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('credentials-locked');
+                    mainWindow.webContents.send('profile-session-changed', {
+                        active: false,
+                        vaultId: null,
+                        name: '',
+                        avatarColor: '#3b82f6',
+                        initials: '',
+                    });
+                }
+            } catch { /* ignore */ }
+        });
+    } catch { /* ignore */ }
     tabManager.applyDevicePermissions();
     tabManager.setProxyAll(null).catch((err) => {
         safeCatch({ module: 'main', eventCode: 'traffic.mode.apply.failed', context: { source: 'startup.preload' } }, err, 'info');
@@ -843,15 +931,20 @@ app.whenReady().then(async () => {
     });
 
     // Start MITM proxy in background so first window appears immediately
-    if (STEALTH >= 5) {
-        console.log('[stealth] MITM startup skipped (level >= 5)');
-        mitmReady = true;
+    function _clearMitmProxyInstance() {
+        const existing = mitmProxy;
+        if (!existing) return;
+        try { existing.stop(); } catch (_) { /* ignore */ }
+        mitmProxy = null;
         syncAppContextSnapshot();
-        notifyMitmReady();
     }
-    if (STEALTH < 5) mitmStartPromise = startMitmProxy().then(async proxy => {
+
+    function _delayMs(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    async function wireMitmAfterStart(proxy) {
         const { session: electronSession } = require('electron');
-        const caCertPem = proxy.getCACert(); // eslint-disable-line no-unused-vars
 
         function trustMitmCA(sess) {
             sess.setCertificateVerifyProc((_, callback) => callback(0));
@@ -864,6 +957,7 @@ app.whenReady().then(async () => {
             });
             trustMitmCA(electronSession.fromPartition(tabManager.partitionForGroup(1)));
             trustMitmCA(electronSession.fromPartition('persist:cupnet-shared'));
+            trustMitmCA(electronSession.defaultSession);
         } else {
             console.log('[stealth] trustMitmCA skipped (level >= 4)');
         }
@@ -871,6 +965,7 @@ app.whenReady().then(async () => {
         await applyEffectiveTrafficMode(getCurrentTrafficMode(), persistentAnonymizedProxyUrl, {
             source: 'startup',
             force: true,
+            skipNotify: true,
         }).catch((e) => {
             safeCatch({ module: 'main', eventCode: 'traffic.mode.apply.failed', context: { source: 'startup' } }, e);
         });
@@ -886,15 +981,13 @@ app.whenReady().then(async () => {
             }
         } catch (_) { /* ignore */ }
         console.log(`[main] MITM startup profile: ${startupProfile}`);
-        mitmReady = true;
-        startupMetrics.mitmReadyTs = Date.now();
-        syncAppContextSnapshot();
-        notifyMitmReady();
-        maybeLogStartupMetrics();
+    }
 
-        // Push stats to all windows every second (only if something changed)
+    function startMitmMonitoringIntervals() {
+        if (_statsBroadcastTimer) return;
+
         let _prevStatsJson = '';
-        const statsBroadcast = setInterval(() => {
+        _statsBroadcastTimer = setInterval(() => {
             if (!mitmProxy) return;
             const stats = mitmProxy.getStats();
             stabilityMetrics.gauges.queueDepth = Number(stats.workerQueueDepth || 0);
@@ -946,14 +1039,24 @@ app.whenReady().then(async () => {
 
             const wins = BrowserWindow.getAllWindows().filter(w => !w.isDestroyed());
             if (!wins.length) return;
-            const json  = `${stats.requests}|${stats.pending}|${stats.errors}|${stats.avgMs}|${stats.reqPerSec}|${stats.browser}`;
+            const json  = `${stats.requests}|${stats.pending}|${stats.errors}|${stats.avgMs}|${stats.reqPerSec}|${stats.browser}|${stats.workerReady}`;
             if (json === _prevStatsJson) return;
             _prevStatsJson = json;
-            wins.forEach(w => w.webContents.send('mitm-stats-update', stats));
+            wins.forEach(w => {
+                try {
+                    if (!w.webContents.isDestroyed()) w.webContents.send('mitm-stats-update', stats);
+                } catch (_) { /* window tearing down */ }
+            });
         }, 1000);
-        app.on('before-quit', () => clearInterval(statsBroadcast));
+        app.on('before-quit', () => {
+            if (_statsBroadcastTimer) {
+                clearInterval(_statsBroadcastTimer);
+                _statsBroadcastTimer = null;
+            }
+        });
 
-        const mouseTrackingTimer = setInterval(() => {
+        if (_mouseTrackingTimer) return;
+        _mouseTrackingTimer = setInterval(() => {
             const tracking = getTrackingSettings();
             if (!tracking.onMouseActivity) return;
             if (!isWindowActive) return;
@@ -962,15 +1065,116 @@ app.whenReady().then(async () => {
                 safeCatch({ module: 'main', eventCode: 'screenshot.capture.failed', context: { reason: 'mouse-activity' } }, err, 'info');
             });
         }, 5000);
-        app.on('before-quit', () => clearInterval(mouseTrackingTimer));
+        app.on('before-quit', () => {
+            if (_mouseTrackingTimer) {
+                clearInterval(_mouseTrackingTimer);
+                _mouseTrackingTimer = null;
+            }
+        });
+    }
 
-        return proxy;
-    }).catch(e => {
-        console.error('[main] MITM proxy failed to start:', e.message);
-        mitmReady = false;
+    function _markMitmReady() {
+        mitmReady = true;
+        mitmState = 'ready';
+        mitmError = '';
+        ipGeoChecksEnabled = true;
+        clearIpGeoFailCache?.();
+        startupMetrics.mitmReadyTs = Date.now();
         syncAppContextSnapshot();
         notifyMitmReady();
-    });
+        maybeLogStartupMetrics();
+    }
+
+    function _markMitmFailed(err) {
+        mitmReady = false;
+        mitmState = 'failed';
+        mitmError = String(err?.message || err || 'Unknown MITM error');
+        console.error('[main] MITM proxy failed to start:', mitmError);
+        syncAppContextSnapshot();
+        notifyMitmReady();
+    }
+
+    async function startMitmWithRetry(maxAttempts = 3) {
+        let lastErr = null;
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                mitmState = 'starting';
+                mitmError = '';
+                mitmReady = false;
+                syncAppContextSnapshot();
+                notifyMitmReady();
+                _clearMitmProxyInstance();
+                if (attempt > 1) await _delayMs(500 * (attempt - 1));
+                const proxy = await startMitmProxy();
+                await wireMitmAfterStart(proxy);
+                return proxy;
+            } catch (e) {
+                lastErr = e;
+                console.error(`[main] MITM start attempt ${attempt}/${maxAttempts} failed:`, e?.message || e);
+                _clearMitmProxyInstance();
+            }
+        }
+        throw lastErr || new Error('MITM failed to start');
+    }
+
+    async function restartMitmProxy() {
+        try {
+            mitmState = 'starting';
+            mitmReady = false;
+            mitmError = '';
+            syncAppContextSnapshot();
+            notifyMitmReady();
+
+            _clearMitmProxyInstance();
+            await _delayMs(300);
+
+            const proxy = await startMitmProxy();
+            await wireMitmAfterStart(proxy);
+            _markMitmReady();
+            startMitmMonitoringIntervals();
+
+            await applyEffectiveTrafficMode(getCurrentTrafficMode(), persistentAnonymizedProxyUrl, {
+                source: 'mitm-restart',
+                force: true,
+            }).catch((e) => {
+                safeCatch({ module: 'main', eventCode: 'traffic.mode.apply.failed', context: { source: 'mitm-restart' } }, e);
+            });
+
+            const active = tabManager?.getActiveTab?.();
+            if (active && typeof tabManager.reloadActiveTab === 'function') {
+                tabManager.reloadActiveTab(active, { ignoreCache: true });
+            }
+
+            notifyProxyStatus();
+            return { success: true };
+        } catch (e) {
+            _markMitmFailed(e);
+            return { success: false, error: mitmError };
+        }
+    }
+
+    if (STEALTH >= 5) {
+        console.log('[stealth] MITM startup skipped (level >= 5)');
+        mitmReady = true;
+        mitmState = 'ready';
+        mitmError = '';
+        ipGeoChecksEnabled = true;
+        syncAppContextSnapshot();
+        notifyMitmReady();
+    }
+    if (STEALTH < 5) {
+        mitmState = 'starting';
+        mitmError = '';
+        syncAppContextSnapshot();
+        notifyMitmReady();
+        mitmStartPromise = startMitmWithRetry(3).then((proxy) => {
+            _markMitmReady();
+            startMitmMonitoringIntervals();
+            return proxy;
+        }).catch((e) => {
+            _markMitmFailed(e);
+        });
+    }
 
 
     const { buildIpcScopeObject } = require('./ipc/build-ipc-scope-delegates.js');
@@ -1082,6 +1286,8 @@ app.whenReady().then(async () => {
             case 'maybeLogStartupMetrics': return maybeLogStartupMetrics;
             case 'mitmProxy': return mitmProxy;
             case 'mitmReady': return mitmReady;
+            case 'mitmState': return mitmState;
+            case 'mitmError': return mitmError;
             case 'nativeImage': return nativeImage;
             case 'netFetchWithTimeout': return netFetchWithTimeout;
             case 'networkPolicy': return networkPolicy;
@@ -1103,9 +1309,11 @@ app.whenReady().then(async () => {
             case 'quickChangeProxy': return quickChangeProxy;
             case 'reattachInterceptorToAllTabs': return reattachInterceptorToAllTabs;
             case 'requestScreenshot': return requestScreenshot;
+            case 'restartMitmProxy': return restartMitmProxy;
             case 'resetFingerprintOnWebContents': return resetFingerprintOnWebContents;
             case 'resolveNavigationUrl': return resolveNavigationUrl;
             case 'resolveNavigationUrlWithBase': return resolveNavigationUrlWithBase;
+            case 'resolveLoadUrlForWebContents': return resolveLoadUrlForWebContents;
             case 'requestEditorExtraWindows': return requestEditorExtraWindows;
             case 'requestEditorWindow': return requestEditorWindow;
             case 'rulesWindow': return rulesWindow;
@@ -1149,6 +1357,12 @@ app.whenReady().then(async () => {
         syncAppContextSnapshot();
     }
     const ipcScope = buildIpcScopeObject(ipcScopeKeyList, ipcScopeWritableKeys, ipcScopeGet, ipcScopeSet);
+    ipcScope.onProfileLoggedIn = async () => {
+        profileGateApi.openMainAfterLogin();
+    };
+    ipcScope.onProfileSwitchGate = async () => {
+        profileGateApi.openProfileSwitchGate();
+    };
     const { registerAllMainIpc } = require('./ipc/register-all.js');
     registerAllMainIpc(ipcScope);
 
@@ -1194,8 +1408,12 @@ app.whenReady().then(async () => {
         attachRendererConsoleForward(win);
     });
 
-    // Start app window after IPC handlers are registered, but without waiting for MITM readiness.
-    createMainWindow();
+    // Profile gate first (unless E2E / skip flag), then main browser window.
+    if (profileSession.shouldSkipProfileGate()) {
+        createMainWindow();
+    } else {
+        profileGateApi.createProfileGateWindow();
+    }
     syncAppContextSnapshot();
 
     setImmediate(() => {
@@ -1210,7 +1428,13 @@ app.whenReady().then(async () => {
     });
 
     app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+        if (BrowserWindow.getAllWindows().length === 0) {
+            if (profileSession.shouldSkipProfileGate() || profileSession.isProfileActive()) {
+                createMainWindow();
+            } else {
+                profileGateApi.createProfileGateWindow();
+            }
+        }
         syncAppContextSnapshot();
     });
 });

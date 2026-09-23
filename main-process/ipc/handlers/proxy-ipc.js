@@ -2,6 +2,7 @@
 
 const { insertCupnetTrafficSnapshot, insertCupnetTrafficSnapshotWithGeo } = require('../../services/cupnet-network-meta-log');
 const { connectGlobalProxyProfile, disconnectGlobalProxy } = require('../../services/global-proxy-connect');
+const { guardIpcHandler } = require('../ipc-trusted-sender.js');
 
 /**
  * Текущий прокси, connect/disconnect, профили, тесты.
@@ -75,21 +76,26 @@ function registerProxyIpc(ctx) {
 
     ctx.ipcMain.handle('save-proxy-profile-full', async (_, profile) => {
         try {
+            if (!ctx.safeStorage.isEncryptionAvailable()) {
+                return { success: false, error: 'OS secure storage unavailable — proxy URL cannot be saved safely' };
+            }
             // profile: { id?, name, template, variables, notes, country }
             let urlEncrypted = null, urlDisplay = profile.template;
             try {
-                if (ctx.safeStorage.isEncryptionAvailable()) {
-                    urlEncrypted = ctx.safeStorage.encryptString(profile.template);
-                    // Mask password in display string
-                    try {
-                        const u = new URL(profile.template.replace(/\{[^}]+\}/g, 'PLACEHOLDER'));
-                        if (u.password) urlDisplay = profile.template.replace(u.password, '***');
-                    } catch (err) {
-                        ctx.safeCatch({ module: 'main', eventCode: 'proxy.profile.parse.failed', context: { op: 'mask-password-template' } }, err, 'info');
-                    }
+                urlEncrypted = ctx.safeStorage.encryptString(profile.template);
+                // Mask password in display string
+                try {
+                    const u = new URL(profile.template.replace(/\{[^}]+\}/g, 'PLACEHOLDER'));
+                    if (u.password) urlDisplay = profile.template.replace(u.password, '***');
+                } catch (err) {
+                    ctx.safeCatch({ module: 'main', eventCode: 'proxy.profile.parse.failed', context: { op: 'mask-password-template' } }, err, 'info');
                 }
             } catch (err) {
                 ctx.safeCatch({ module: 'main', eventCode: 'proxy.profile.encrypt.failed', context: { op: 'save-proxy-profile-full' } }, err);
+                return { success: false, error: 'Failed to encrypt proxy URL' };
+            }
+            if (!urlEncrypted) {
+                return { success: false, error: 'Failed to encrypt proxy URL' };
             }
 
             if (profile.id) {
@@ -108,6 +114,7 @@ function registerProxyIpc(ctx) {
                     tls_profile:   profile.tls_profile    || 'chrome',
                     tls_ja3_mode:  profile.tls_ja3_mode   || 'template',
                     tls_ja3_custom: profile.tls_ja3_custom || null,
+                    force_http1:   profile.force_http1 ? 1 : 0,
                 });
                 ctx.notifyProxyProfilesList();
                 return { success: true, id: profile.id };
@@ -125,6 +132,7 @@ function registerProxyIpc(ctx) {
                 tls_profile:   profile.tls_profile    || 'chrome',
                 tls_ja3_mode:  profile.tls_ja3_mode   || 'template',
                 tls_ja3_custom: profile.tls_ja3_custom || null,
+                force_http1:   profile.force_http1 ? 1 : 0,
             });
             ctx.notifyProxyProfilesList();
             return { success: true, id };
@@ -171,35 +179,36 @@ function registerProxyIpc(ctx) {
     });
 
     ctx.ipcMain.handle('save-proxy-profile', async (_, name, url, country) => {
+        if (!ctx.safeStorage.isEncryptionAvailable()) {
+            return { success: false, error: 'OS secure storage unavailable — proxy URL cannot be saved safely' };
+        }
         let urlEncrypted = null;
         let urlDisplay   = url;
         try {
-            if (ctx.safeStorage.isEncryptionAvailable()) {
-                urlEncrypted = ctx.safeStorage.encryptString(url);
-                // Strip password from display
-                try {
-                    const u = new URL(url);
-                    if (u.password) u.password = '***';
-                    urlDisplay = u.toString();
-                } catch (err) {
-                    ctx.safeCatch({ module: 'main', eventCode: 'proxy.profile.parse.failed', context: { op: 'mask-password' } }, err, 'info');
-                }
+            urlEncrypted = ctx.safeStorage.encryptString(url);
+            try {
+                const u = new URL(url);
+                if (u.password) u.password = '***';
+                urlDisplay = u.toString();
+            } catch (err) {
+                ctx.safeCatch({ module: 'main', eventCode: 'proxy.profile.parse.failed', context: { op: 'mask-password' } }, err, 'info');
             }
         } catch (err) {
             ctx.safeCatch({ module: 'main', eventCode: 'proxy.profile.encrypt.failed', context: { op: 'save-proxy-profile' } }, err);
+            return { success: false, error: 'Failed to encrypt proxy URL' };
         }
         const opts = country != null && typeof country === 'object' ? country : { country: country || null };
         return ctx.db.saveProxyProfileAsync(name, urlEncrypted, urlDisplay, opts);
     });
 
-    ctx.ipcMain.handle('get-proxy-profile-url', async (_, id) => {
+    ctx.ipcMain.handle('get-proxy-profile-url', guardIpcHandler('get-proxy-profile-url', async (_, id) => {
         const row = ctx.db.getProxyProfileEncrypted(id);
         if (!row) return null;
         if (row.url_encrypted && ctx.safeStorage.isEncryptionAvailable()) {
             try { return ctx.safeStorage.decryptString(row.url_encrypted); } catch (e) { ctx.sysLog('warn', 'proxy', 'decrypt profile URL failed: ' + (e?.message || e)); }
         }
         return null;
-    });
+    }));
 
     ctx.ipcMain.handle('delete-proxy-profile', async (_, id) => {
         await ctx.db.deleteProxyProfileAsync(id);

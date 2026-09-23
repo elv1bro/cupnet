@@ -82,7 +82,9 @@ function registerTabsIpc(ctx) {
         const tab = ctx.tabManager.getActiveTab();
         const base = tab?.view?.webContents?.getURL() || tab?.url || '';
         let url = null;
-        if (typeof ctx.resolveNavigationUrlWithBase === 'function') {
+        if (typeof ctx.resolveLoadUrlForWebContents === 'function') {
+            url = ctx.resolveLoadUrlForWebContents(rawInput, base, seOpts);
+        } else if (typeof ctx.resolveNavigationUrlWithBase === 'function') {
             url = ctx.resolveNavigationUrlWithBase(rawInput, base, seOpts);
         } else if (typeof ctx.resolveNavigationUrl === 'function') {
             url = ctx.resolveNavigationUrl(rawInput, seOpts);
@@ -104,7 +106,12 @@ function registerTabsIpc(ctx) {
     ctx.ipcMain.on('nav-reload', () => {
         ctx.tabManager.ensureActiveTabViewVisible?.();
         const tab = ctx.tabManager.getActiveTab();
-        if (tab) tab.view.webContents.reload();
+        if (tab) ctx.tabManager.reloadActiveTab(tab);
+    });
+    ctx.ipcMain.on('retry-failed-navigation', (event) => {
+        const tabId = ctx.tabManager.getTabIdByWebContentsId(event.sender.id);
+        const tab = tabId ? ctx.tabManager.getTab(tabId) : ctx.tabManager.getActiveTab();
+        if (tab) ctx.tabManager.reloadActiveTab(tab);
     });
     ctx.ipcMain.on('nav-stop', () => {
         ctx.tabManager.ensureActiveTabViewVisible?.();

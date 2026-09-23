@@ -11,7 +11,11 @@ const {
 const { resolveProxyTemplateFromDbRow } = require('../../services/proxy-profile-resolve');
 const {
     buildCookieRequestUrl,
+    cookieMatchesDomainFilter,
+    cookiesMatchIdentity,
+    consolidateCookiesToParent,
     normalizeRemoveCookieArgs,
+    purgeCookiesForHostnameAllTabs,
     removeSessionCookiePrecise,
 } = require('../../services/session-cookie-utils.js');
 
@@ -20,6 +24,22 @@ const {
  * @param {object} ctx
  */
 function registerCookiesDnsIpc(ctx) {
+    const { guardIpcHandler } = require('../ipc-trusted-sender.js');
+
+    function _tabForCookieAccess(event, tabId) {
+        const tab = tabId ? ctx.tabManager.getTab(tabId) : ctx.tabManager.getActiveTab();
+        if (!tab?.view?.webContents) return null;
+        if (tab.view.webContents.id === event.sender.id) return tab;
+        return null;
+    }
+
+    function _cookieSessionTab(event, tabId) {
+        const owned = _tabForCookieAccess(event, tabId);
+        if (owned) return owned;
+        const { assertTrustedShell } = require('../ipc-trusted-sender.js');
+        assertTrustedShell(event, 'cookies');
+        return tabId ? ctx.tabManager.getTab(tabId) : ctx.tabManager.getActiveTab();
+    }
     function getResolvedProxyUpstreamFromProfile(profile, ephemeralVars) {
         return resolveProxyTemplateFromDbRow(ctx, profile, ephemeralVars);
     }
@@ -41,19 +61,20 @@ function registerCookiesDnsIpc(ctx) {
             upstream: resolvedUrl,
             browser:  profile.tls_profile || null,
             ja3:      profile.tls_ja3_mode === 'custom' ? profile.tls_ja3_custom : null,
+            forceHttp1: !!profile.force_http1,
         });
         if (ctx.applyFingerprintFromProfile && tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
             await ctx.applyFingerprintFromProfile(tab.view.webContents, proxyProfileId);
         }
     }
-    ctx.ipcMain.handle('get-cookies', async (_, tabId, filter) => {
-        const tab = tabId ? ctx.tabManager.getTab(tabId) : ctx.tabManager.getActiveTab();
+    ctx.ipcMain.handle('get-cookies', async (event, tabId, filter) => {
+        const tab = _cookieSessionTab(event, tabId);
         if (!tab) return [];
         return tab.tabSession.cookies.get(filter || {});
     });
 
-    ctx.ipcMain.handle('set-cookie', async (_, tabId, details) => {
-        const tab = tabId ? ctx.tabManager.getTab(tabId) : ctx.tabManager.getActiveTab();
+    ctx.ipcMain.handle('set-cookie', async (event, tabId, details) => {
+        const tab = _cookieSessionTab(event, tabId);
         if (!tab) return { success: false, error: 'Tab not found' };
         try {
             await tab.tabSession.cookies.set(details);
@@ -69,6 +90,10 @@ function registerCookiesDnsIpc(ctx) {
             const cookie = normalizeRemoveCookieArgs(cookieOrUrl, name);
             await removeSessionCookiePrecise(tab.tabSession, cookie);
             await tab.tabSession.cookies.flushStore();
+            const left = await tab.tabSession.cookies.get({});
+            if (left.some((c) => cookiesMatchIdentity(c, cookie))) {
+                return { success: false, error: 'Cookie was not removed' };
+            }
             return { success: true };
         } catch (e) {
             return { success: false, error: e.message };
@@ -79,8 +104,23 @@ function registerCookiesDnsIpc(ctx) {
         const tab = tabId ? ctx.tabManager.getTab(tabId) : ctx.tabManager.getActiveTab();
         if (!tab) return { success: false, error: 'Tab not found' };
         try {
-            const filter = domain ? { domain } : {};
-            const cookies = await tab.tabSession.cookies.get(filter);
+            const dom = domain ? String(domain).trim() : '';
+
+            if (!dom) {
+                const before = (await tab.tabSession.cookies.get({})).length;
+                await tab.tabSession.clearStorageData({ storages: ['cookies'] });
+                await tab.tabSession.cookies.flushStore();
+                const remaining = (await tab.tabSession.cookies.get({})).length;
+                return {
+                    success: remaining === 0,
+                    count: before,
+                    remaining,
+                    error: remaining > 0 ? `${remaining} cookie(s) still in jar` : undefined,
+                };
+            }
+
+            const cookies = (await tab.tabSession.cookies.get({}))
+                .filter((c) => cookieMatchesDomainFilter(c, dom));
             for (const c of cookies) {
                 try {
                     await removeSessionCookiePrecise(tab.tabSession, { ...c, url: buildCookieRequestUrl(c) });
@@ -89,11 +129,35 @@ function registerCookiesDnsIpc(ctx) {
                 }
             }
             await tab.tabSession.cookies.flushStore();
-            return { success: true, count: cookies.length };
+            const remaining = (await tab.tabSession.cookies.get({}))
+                .filter((c) => cookieMatchesDomainFilter(c, dom)).length;
+            return {
+                success: remaining === 0,
+                count: cookies.length,
+                remaining,
+                error: remaining > 0 ? `${remaining} cookie(s) still in jar` : undefined,
+            };
         } catch (e) { return { success: false, error: e.message }; }
     });
 
-    ctx.ipcMain.handle('share-cookies', async (_, fromTabId, toTabId, domain) => {
+    ctx.ipcMain.handle('consolidate-cookies', async (_, tabId, anchorHost) => {
+        const tab = tabId ? ctx.tabManager.getTab(tabId) : ctx.tabManager.getActiveTab();
+        if (!tab) return { success: false, error: 'Tab not found' };
+        try {
+            let anchor = String(anchorHost || '').trim();
+            if (!anchor) {
+                const raw = tab.displayUrlOverride || tab.url || tab.view?.webContents?.getURL?.() || '';
+                try { anchor = new URL(raw).hostname; } catch { anchor = ''; }
+            }
+            if (!anchor) return { success: false, error: 'No anchor host (open a site tab or set domain filter)' };
+            const result = await consolidateCookiesToParent(tab.tabSession, { anchorHost: anchor });
+            return { success: true, ...result };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
+    });
+
+    ctx.ipcMain.handle('share-cookies', guardIpcHandler('share-cookies', async (_, fromTabId, toTabId, domain) => {
         const fromTab = ctx.tabManager.getTab(fromTabId);
         const toTab   = ctx.tabManager.getTab(toTabId);
         if (!fromTab || !toTab) return { success: false, error: 'Tab not found' };
@@ -108,7 +172,7 @@ function registerCookiesDnsIpc(ctx) {
             await toTab.tabSession.cookies.flushStore();
             return { success: true, count };
         } catch (e) { return { success: false, error: e.message }; }
-    });
+    }));
 
     // ── DNS Overrides ────────────────────────────────────────────────────────
     ctx.ipcMain.handle('open-dns-manager', async () => {
@@ -143,6 +207,17 @@ function registerCookiesDnsIpc(ctx) {
         try {
             const savedId = await ctx.db.saveDnsOverrideAsync({ id, host, ip, enabled, mitm_inject_cors, rewrite_host });
             ctx.syncDnsOverridesToMitm();
+            if (rewrite_host && !isWildcard) {
+                const dnsHost = host.replace(/^\*\./, '');
+                const rewriteNorm = rewrite_host.toLowerCase();
+                if (dnsHost && dnsHost !== rewriteNorm) {
+                    try {
+                        await purgeCookiesForHostnameAllTabs(ctx.tabManager, dnsHost);
+                    } catch (e) {
+                        ctx.sysLog('warn', 'tabs', 'purge cookies on DNS rewrite failed: ' + (e?.message || e));
+                    }
+                }
+            }
             return { success: true, id: savedId };
         } catch (e) {
             return { success: false, error: e.message };
@@ -295,7 +370,7 @@ function registerCookiesDnsIpc(ctx) {
 
             const cookies = await srcSession.cookies.get({});
             for (const c of cookies) {
-                const url = `${c.secure ? 'https' : 'http'}://${c.domain.replace(/^\./, '')}${c.path || '/'}`;
+                const url = buildCookieRequestUrl(c);
                 try { await dstSession.cookies.set({ ...c, url }); } catch {}
             }
             await dstSession.cookies.flushStore();

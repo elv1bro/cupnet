@@ -21,6 +21,7 @@ function registerQuickConnectIpc(ctx) {
                 ctx.connectedProfileId = null;
                 ctx.connectedProfileName = null;
                 ctx.connectedResolvedVars = {};
+                ctx.mitmProxy?.setEgressBlocked?.(false);
                 await ctx.applyEffectiveTrafficMode(ctx.getCurrentTrafficMode(), null, {
                     source: 'quick-connect-profile.disconnect',
                 });

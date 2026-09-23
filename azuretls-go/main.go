@@ -52,7 +52,8 @@ func startParentWatchdog() {
 	}
 	parentPid := os.Getppid()
 	if parentPid <= 1 {
-		return
+		fmt.Fprintf(os.Stderr, "[azuretls-go] orphaned at startup (ppid<=1), exiting\n")
+		os.Exit(1)
 	}
 	go func() {
 		t := time.NewTicker(5 * time.Second)

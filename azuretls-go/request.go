@@ -282,7 +282,7 @@ func handleHTTPRequest(in *incomingLine) outgoingLine {
 					out := responseToOutgoing(resp2)
 					out.ID = id
 					out.Error = nil
-					releaseSession(pkey, fresh)
+					reinsertFreshSession(pkey, fresh)
 					return out
 				}
 				fresh.Close()

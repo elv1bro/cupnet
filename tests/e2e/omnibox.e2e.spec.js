@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * E2E: Chrome-like omnibox (history suggestions, inline ghost, command palette, mod+Enter, site popover, search engine).
+ * E2E: Chrome-like omnibox (history suggestions, command palette, mod+Enter, site popover, search engine).
  * Requires network for httpbin.org (same as cupnet.e2e).
  */
 
@@ -53,28 +53,24 @@ test('omni-1) history suggestions API returns visited URL', async () => {
     expect(rows.some((r) => String(r.url || '').includes('httpbin.org'))).toBe(true);
 });
 
-test('omni-2) inline ghost selection then Tab accepts', async () => {
+test('omni-2) typing does not auto-complete the address bar', async () => {
     await navigateAndWait(electronApp, HTTPBIN_GET);
+    const typed = 'https://httpbin.org/ge';
     const urlInput = mainWindow.locator('#url-input');
     await urlInput.click();
-    await urlInput.fill('https://httpbin.org/ge');
+    await urlInput.fill(typed);
     await mainWindow.waitForFunction(
-        () => {
-            const el = document.getElementById('url-input');
-            if (!el) return false;
-            const v = String(el.value || '');
-            return v.length > 'https://httpbin.org/ge'.length && el.selectionEnd > el.selectionStart;
-        },
+        () => document.getElementById('address-bar-container')?.classList.contains('omnibox-open'),
         null,
         { timeout: 15_000 }
     );
-    await urlInput.press('Tab');
+    await new Promise((r) => setTimeout(r, 400));
     const after = await mainWindow.evaluate(() => {
         const el = document.getElementById('url-input');
         return { value: el?.value || '', start: el?.selectionStart ?? 0, end: el?.selectionEnd ?? 0 };
     });
+    expect(after.value).toBe(typed);
     expect(after.start).toBe(after.end);
-    expect(after.value).toContain('httpbin.org');
 });
 
 test('omni-3) Ctrl/Cmd+K opens command palette with >', async () => {

@@ -7,7 +7,6 @@
     <link rel="stylesheet" href="shared-dark-theme.css">
     <link rel="stylesheet" href="styles.css">
     <script src="cookies-page-match.js"></script>
-    <script src="favicon-cache.js"></script>
 </head>
 <body>
 
@@ -217,9 +216,9 @@
             </button>
             <div id="cred-popup" class="cred-popup hidden" role="dialog" aria-label="Credentials for this site">
                 <div id="cred-popup-unlock" class="cred-popup-section hidden">
-                    <label class="cred-popup-label" for="cred-popup-pw">Master password</label>
+                    <label class="cred-popup-label" for="cred-popup-pw">Profile password</label>
                     <div class="cred-popup-unlock-row">
-                        <input type="password" id="cred-popup-pw" class="cred-popup-input" placeholder="Master password" autocomplete="current-password" spellcheck="false">
+                        <input type="password" id="cred-popup-pw" class="cred-popup-input" placeholder="Profile password" autocomplete="current-password" spellcheck="false">
                         <button type="button" id="cred-popup-unlock-btn" class="cred-popup-primary-btn">Unlock</button>
                     </div>
                     <p id="cred-popup-unlock-err" class="cred-popup-err hidden" role="alert"></p>
@@ -271,7 +270,7 @@
         <span id="cred-save-text">Save password for <b id="cred-save-domain"></b>?</span>
         <span id="cred-save-login" style="color:var(--text-muted);font-size:12px;margin-left:4px"></span>
         <div id="cred-save-unlock-row" class="hidden" style="display:flex;align-items:center;gap:6px;margin-left:8px">
-            <input type="password" id="cred-save-pw" placeholder="Master password" style="font-size:12px;padding:3px 8px;width:160px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border);border-radius:4px;">
+            <input type="password" id="cred-save-pw" placeholder="Profile password" style="font-size:12px;padding:3px 8px;width:160px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border);border-radius:4px;">
         </div>
         <div style="display:flex;gap:6px;margin-left:auto">
             <button type="button" id="cred-save-yes" class="cred-save-btn cred-save-btn-primary">Save</button>
@@ -307,10 +306,34 @@
     <div id="tool-dock-mount-separate" class="tool-dock-mount"></div>
 </div>
 
+<div id="status-profile-drawer" class="browser-status-profile-drawer" aria-hidden="true">
+    <div class="browser-status-profile-panel">
+        <div class="browser-status-profile-panel-head">Switch profile</div>
+        <div id="status-profile-list" class="browser-status-profile-list"></div>
+        <div id="status-profile-switch-form" class="browser-status-profile-switch-form hidden">
+            <label class="browser-status-profile-switch-label" for="status-profile-switch-password">Password for <span id="status-profile-switch-name"></span></label>
+            <input type="password" id="status-profile-switch-password" class="browser-status-profile-switch-input" autocomplete="current-password" placeholder="Profile password">
+            <div id="status-profile-switch-error" class="browser-status-profile-switch-error"></div>
+            <div class="browser-status-profile-switch-actions">
+                <button type="button" id="status-profile-switch-cancel" class="browser-status-profile-action">Cancel</button>
+                <button type="button" id="status-profile-switch-confirm" class="browser-status-profile-action browser-status-profile-action--primary">Switch</button>
+            </div>
+        </div>
+        <div class="browser-status-profile-panel-foot">
+            <button type="button" id="status-profile-manage" class="browser-status-profile-action">Manage profiles…</button>
+        </div>
+    </div>
+</div>
+
+<div id="status-resources-drawer" class="browser-status-resources-drawer" aria-hidden="true">
+    <div id="status-resources-popover" class="browser-status-resources-popover"></div>
+</div>
+
 <footer id="browser-status-bar" class="browser-status-bar" role="status" aria-live="polite">
     <span id="status-page" class="browser-status-item browser-status-item--page" title="Active tab load state">Page: —</span>
     <span class="browser-status-sep" aria-hidden="true">·</span>
-    <span id="status-mitm" class="browser-status-item" title="MITM proxy">MITM: —</span>
+    <button type="button" id="status-mitm" class="browser-status-item browser-status-item--mitm" title="MITM proxy — click to restart if unhealthy">MITM: —</button>
+    <button type="button" id="status-mitm-restart" class="browser-status-mitm-restart hidden" title="Restart MITM proxy" aria-label="Restart MITM">↻</button>
     <span class="browser-status-sep" aria-hidden="true">·</span>
     <span id="status-proxy" class="browser-status-item" title="Proxy">Proxy: —</span>
     <span class="browser-status-sep" aria-hidden="true">·</span>
@@ -319,6 +342,30 @@
     <span id="status-requests" class="browser-status-item" title="Logged requests">Requests: —</span>
     <span class="browser-status-sep" aria-hidden="true">·</span>
     <span id="status-errors" class="browser-status-item" title="MITM / worker errors (recent)">Errors: —</span>
+    <span class="browser-status-sep" aria-hidden="true">·</span>
+    <span class="browser-status-sep browser-status-sep--profile" aria-hidden="true">·</span>
+    <span id="status-profile-wrap" class="browser-status-profile-wrap">
+        <button type="button" id="status-profile" class="browser-status-item browser-status-item--profile-btn" aria-expanded="false" aria-controls="status-profile-drawer" title="Switch profile">
+            <span id="status-profile-avatar" class="browser-status-profile-avatar">?</span>
+            <span id="status-profile-label" class="browser-status-profile-label">Profile</span>
+            <span class="browser-status-profile-chevron" aria-hidden="true">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 10l4-4 4 4"/>
+                </svg>
+            </span>
+        </button>
+    </span>
+    <span class="browser-status-sep browser-status-sep--resources" aria-hidden="true">·</span>
+    <span id="status-resources-wrap" class="browser-status-resources-wrap">
+        <button type="button" id="status-resources" class="browser-status-item browser-status-item--resources" aria-expanded="false" aria-controls="status-resources-drawer" title="Show CPU and RAM breakdown">
+            <span id="status-resources-metrics" class="browser-status-resources-metrics">CPU — · RAM —</span>
+            <span class="browser-status-resources-chevron" aria-hidden="true">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 10l4-4 4 4"/>
+                </svg>
+            </span>
+        </button>
+    </span>
 </footer>
 
 <script src="toast-notifications.js"></script>

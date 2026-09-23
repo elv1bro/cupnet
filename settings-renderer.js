@@ -65,6 +65,10 @@ const spUiScale = document.getElementById('sp-ui-scale');
 const spToolbarToolsPlacement = document.getElementById('sp-toolbar-tools-placement');
 const spToolbarToolsMiniAlign = document.getElementById('sp-toolbar-tools-mini-align');
 const spToolbarMiniAlignWrap = document.getElementById('sp-toolbar-mini-align-wrap');
+const spVaultAutolock = document.getElementById('sp-vault-autolock');
+const spTrafficLogEncryption = document.getElementById('sp-traffic-log-encryption');
+const spTrafficLogRaw = document.getElementById('sp-traffic-log-raw');
+const spAllowPlaintextExport = document.getElementById('sp-allow-plaintext-export');
 
 let activeTab = 'general';
 let perfTimer = null;
@@ -74,6 +78,7 @@ let homepageSaveTimer = null;
 let searchEngineSaveTimer = null;
 let filtersSaveTimer = null;
 let activitySaveTimer = null;
+let securitySaveTimer = null;
 let maxTabsSaveDebounce = null;
 
 let saveInFlight = 0;
@@ -454,8 +459,8 @@ function renderPerfRows(metrics) {
         const cpuCls = cpu > 30 ? ' style="color:#f87171;font-weight:700"' : '';
         const name = m.name ? ` (${m.name})` : '';
         parts.push(`<tr>
-            <td><span style="color:${typeClass(m.type)}">${m.type}${name}</span></td>
-            <td>${m.pid}</td>
+            <td><span style="color:${typeClass(m.type)}">${escapeHtml(m.type)}${escapeHtml(name)}</span></td>
+            <td>${escapeHtml(String(m.pid))}</td>
             <td class="num"${cpuCls}>${cpu.toFixed(1)}%</td>
             <td class="num">${fmtMb(m.memWorkingSet)}</td>
             <td class="num">${fmtMb(m.memPrivate)}</td>
@@ -833,6 +838,34 @@ function scheduleActivityMonitorSave() {
 spActivityMonitorEnabled?.addEventListener('change', scheduleActivityMonitorSave);
 spActivityStorageStack?.addEventListener('change', scheduleActivityMonitorSave);
 
+function scheduleSecuritySave() {
+    if (securitySaveTimer) clearTimeout(securitySaveTimer);
+    markUnsaved();
+    securitySaveTimer = setTimeout(async () => {
+        securitySaveTimer = null;
+        if (!api.saveSecuritySettings) return;
+        beginSave();
+        try {
+            await api.saveSecuritySettings({
+                vaultAutoLockMinutes: Number(spVaultAutolock?.value ?? 15),
+                trafficLogEncryption: spTrafficLogEncryption?.value || 'encrypt',
+                trafficLogRawMode: !!spTrafficLogRaw?.checked,
+                allowPlaintextExport: !!spAllowPlaintextExport?.checked,
+            });
+            endSave(true);
+        } catch (e) {
+            const msg = e && e.message ? String(e.message) : 'Could not save security settings';
+            if (typeof showToast === 'function') showToast(msg, { type: 'error' });
+            endSave(false, msg);
+        }
+    }, 400);
+}
+
+spVaultAutolock?.addEventListener('change', scheduleSecuritySave);
+spTrafficLogEncryption?.addEventListener('change', scheduleSecuritySave);
+spTrafficLogRaw?.addEventListener('change', scheduleSecuritySave);
+spAllowPlaintextExport?.addEventListener('change', scheduleSecuritySave);
+
 spCamModeGroup?.addEventListener('change', (e) => {
     const t = e.target;
     if (!t || t.name !== 'sp-cam-mode') return;
@@ -1055,6 +1088,15 @@ async function init() {
         }
         syncToolbarMiniAlignVisibility();
         applyOnboardingStatusLine(data);
+        if (spVaultAutolock) {
+            const mins = Number(data?.vaultAutoLockMinutes ?? 15);
+            spVaultAutolock.value = String(Number.isFinite(mins) ? mins : 15);
+        }
+        if (spTrafficLogEncryption) {
+            spTrafficLogEncryption.value = data?.trafficLogEncryption || 'encrypt';
+        }
+        if (spTrafficLogRaw) spTrafficLogRaw.checked = data?.trafficLogRawMode === true;
+        if (spAllowPlaintextExport) spAllowPlaintextExport.checked = data?.allowPlaintextExport === true;
         switchTab('general');
         if (activeTab === 'devices') refreshCameraDevices();
         applySettingsHubFilter();

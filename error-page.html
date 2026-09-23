@@ -162,6 +162,10 @@
         }
 
         document.getElementById('btn-reload').addEventListener('click', () => {
+            if (window.electronAPI?.retryFailedNavigation) {
+                window.electronAPI.retryFailedNavigation();
+                return;
+            }
             if (failedUrl && /^https?:\/\//i.test(failedUrl)) {
                 location.href = failedUrl;
             } else {

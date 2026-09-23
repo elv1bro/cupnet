@@ -8,6 +8,7 @@ const fs = require('fs');
 const { app } = require('electron');
 const { normalizeTrafficMode } = require('../../traffic-mode-router');
 const { sysLog } = require('../../sys-log');
+const { writeFileSecureAsync, hardenExistingFile, ensureSecureDir } = require('./secure-fs.js');
 
 /** Schema version in settings.json — bump when adding migrations. */
 const CURRENT_SETTINGS_VERSION = 1;
@@ -74,13 +75,23 @@ const SETTINGS_DEFAULTS = {
     corsBypassEnabled: false,
     /** Tool dock placement: inline (toolbar) | subbar (under address bar) | bottom | separate. */
     toolbarToolsPlacement: 'subbar',
-    /** Mini horizontal bars (subbar / bottom): left | right alignment. */
+    /** Toolbar tools mini horizontal bars (subbar / bottom): left | right alignment. */
     toolbarToolsMiniAlign: 'right',
+    /** Auto-lock vault/profile after N minutes idle (0 = disabled). */
+    vaultAutoLockMinutes: 15,
+    /** Traffic log at rest: off | redact | encrypt */
+    trafficLogEncryption: 'encrypt',
+    /** When true, store full request/response bodies without redaction/encryption. */
+    trafficLogRawMode: false,
+    /** Allow exporting credentials vault as plaintext JSON/CSV. */
+    allowPlaintextExport: false,
 };
 
 let _cached = null;
 let _saveSettingsTimer = null;
 let _onEffectiveTrafficModeLoaded = null;
+/** When set, settings load/save use userData/profiles/{id}/settings.json */
+let _activeProfileVaultId = null;
 
 function configure(opts = {}) {
     if (typeof opts.onEffectiveTrafficModeLoaded === 'function') {
@@ -90,6 +101,27 @@ function configure(opts = {}) {
 
 function getSettingsFilePath() {
     return path.join(app.getPath('userData'), 'settings.json');
+}
+
+function setActiveProfileVaultId(vaultId) {
+    _activeProfileVaultId = vaultId != null ? Number(vaultId) : null;
+    _cached = null;
+}
+
+function getActiveProfileVaultId() {
+    return _activeProfileVaultId;
+}
+
+function getEffectiveSettingsFilePath() {
+    if (_activeProfileVaultId != null) {
+        return path.join(app.getPath('userData'), 'profiles', String(_activeProfileVaultId), 'settings.json');
+    }
+    return getSettingsFilePath();
+}
+
+function reloadSettings() {
+    _cached = null;
+    return loadSettings();
 }
 
 function getCached() {
@@ -196,6 +228,7 @@ function settingsForDisk(s) {
     } catch {
         return s;
     }
+    delete out.currentProxy;
     return out;
 }
 
@@ -243,7 +276,24 @@ function materializeSettingsFromRaw(raw) {
         merged.effectiveTrafficMode = 'mitm';
     }
     delete merged.capmonster;
+    delete merged.currentProxy;
+    merged.vaultAutoLockMinutes = normalizeVaultAutoLockMinutes(merged);
+    merged.trafficLogEncryption = normalizeTrafficLogEncryption(merged);
+    merged.trafficLogRawMode = merged.trafficLogRawMode === true;
+    merged.allowPlaintextExport = merged.allowPlaintextExport === true;
     return merged;
+}
+
+function normalizeVaultAutoLockMinutes(raw) {
+    const n = Number(raw?.vaultAutoLockMinutes ?? SETTINGS_DEFAULTS.vaultAutoLockMinutes);
+    if (!Number.isFinite(n) || n < 0) return SETTINGS_DEFAULTS.vaultAutoLockMinutes;
+    return Math.min(480, Math.floor(n));
+}
+
+function normalizeTrafficLogEncryption(raw) {
+    const mode = String(raw?.trafficLogEncryption || SETTINGS_DEFAULTS.trafficLogEncryption).toLowerCase();
+    if (mode === 'off' || mode === 'redact' || mode === 'encrypt') return mode;
+    return SETTINGS_DEFAULTS.trafficLogEncryption;
 }
 
 /**
@@ -264,6 +314,8 @@ function buildFactoryResetSettings() {
  */
 function exportSettingsSafe(s) {
     const out = JSON.parse(JSON.stringify(s || SETTINGS_DEFAULTS));
+    delete out.currentProxy;
+    delete out.effectiveTrafficMode;
     out._exportMeta = {
         app: 'CupNet',
         exportedAt: new Date().toISOString(),
@@ -306,14 +358,15 @@ function mergeImportedSettings(current, imported) {
 
 function loadSettings() {
     if (_cached) return _cached;
-    const settingsFilePath = getSettingsFilePath();
+    const settingsFilePath = getEffectiveSettingsFilePath();
     try {
         if (fs.existsSync(settingsFilePath)) {
             const raw = JSON.parse(fs.readFileSync(settingsFilePath, 'utf8'));
             const hadBrowserProxy = raw.effectiveTrafficMode === 'browser_proxy';
+            const hadLegacyProxy = !!(raw.currentProxy && String(raw.currentProxy).trim());
             const { migrated } = migrateSettingsVersion(raw);
             _cached = materializeSettingsFromRaw(raw);
-            if (migrated || hadBrowserProxy) {
+            if (migrated || hadBrowserProxy || hadLegacyProxy) {
                 saveSettings(_cached);
             }
             _syncTrafficModeFromSettings();
@@ -339,10 +392,14 @@ function loadSettings() {
 function saveSettings(s) {
     _cached = s;
     if (_saveSettingsTimer) clearTimeout(_saveSettingsTimer);
+    // Resolve the destination path NOW, not when the timer fires. Otherwise a profile switch
+    // (setActiveProfileVaultId) during the 300ms debounce would redirect this write to a
+    // different profile's settings.json, corrupting it with another profile's settings.
+    const filePath = getEffectiveSettingsFilePath();
     _saveSettingsTimer = setTimeout(() => {
         _saveSettingsTimer = null;
-        fs.writeFile(getSettingsFilePath(), JSON.stringify(settingsForDisk(s), null, 2), (err) => {
-            if (err) sysLog('warn', 'settings', 'Failed to save: ' + err.message);
+        writeFileSecureAsync(filePath, JSON.stringify(settingsForDisk(s), null, 2)).catch((err) => {
+            sysLog('warn', 'settings', 'Failed to save: ' + err.message);
         });
     }, 300);
 }
@@ -360,6 +417,10 @@ module.exports = {
     configure,
     getCached,
     getSettingsFilePath,
+    getEffectiveSettingsFilePath,
+    setActiveProfileVaultId,
+    getActiveProfileVaultId,
+    reloadSettings,
     loadSettings,
     saveSettings,
     cancelPendingSave,
@@ -370,6 +431,8 @@ module.exports = {
     normalizeMaxTabsBeforeWarning,
     normalizeToolbarToolsPlacement,
     normalizeToolbarToolsMiniAlign,
+    normalizeVaultAutoLockMinutes,
+    normalizeTrafficLogEncryption,
     buildFactoryResetSettings,
     exportSettingsSafe,
     mergeImportedSettings,

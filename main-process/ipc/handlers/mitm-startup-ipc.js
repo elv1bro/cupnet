@@ -5,7 +5,12 @@
  * @param {object} ctx
  */
 function registerMitmStartupIpc(ctx) {
-    ctx.ipcMain.handle('mitm-ready-state', () => ({ ready: !!ctx.mitmReady, ts: Date.now() }));
+    ctx.ipcMain.handle('mitm-ready-state', () => ({
+        ready: !!ctx.mitmReady,
+        state: ctx.mitmState || (ctx.mitmReady ? 'ready' : 'starting'),
+        error: ctx.mitmError || '',
+        ts: Date.now(),
+    }));
     ctx.ipcMain.on('ui-first-paint', () => {
         if (!ctx.startupMetrics.firstPaintTs) {
             ctx.startupMetrics.firstPaintTs = Date.now();

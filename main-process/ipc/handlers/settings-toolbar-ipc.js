@@ -106,6 +106,40 @@ function registerSettingsToolbarIpc(ctx) {
             corsBypassEnabled: s.corsBypassEnabled === true,
             toolbarToolsPlacement: ctx.settingsStore.normalizeToolbarToolsPlacement(s),
             toolbarToolsMiniAlign: ctx.settingsStore.normalizeToolbarToolsMiniAlign(s),
+            vaultAutoLockMinutes: ctx.settingsStore.normalizeVaultAutoLockMinutes(s),
+            trafficLogEncryption: ctx.settingsStore.normalizeTrafficLogEncryption(s),
+            trafficLogRawMode: s.trafficLogRawMode === true,
+            allowPlaintextExport: s.allowPlaintextExport === true,
+        };
+    });
+
+    ctx.ipcMain.handle('save-security-settings', (_, opts) => {
+        const o = opts && typeof opts === 'object' ? opts : {};
+        const s = ctx.loadSettings();
+        if (o.vaultAutoLockMinutes != null) {
+            s.vaultAutoLockMinutes = ctx.settingsStore.normalizeVaultAutoLockMinutes({
+                vaultAutoLockMinutes: o.vaultAutoLockMinutes,
+            });
+        }
+        if (o.trafficLogEncryption != null) {
+            s.trafficLogEncryption = ctx.settingsStore.normalizeTrafficLogEncryption({
+                trafficLogEncryption: o.trafficLogEncryption,
+            });
+        }
+        if (o.trafficLogRawMode != null) s.trafficLogRawMode = !!o.trafficLogRawMode;
+        if (o.allowPlaintextExport != null) s.allowPlaintextExport = !!o.allowPlaintextExport;
+        ctx.saveSettings(s);
+        try {
+            const vaultSession = require('../../services/vault-session-service.js');
+            vaultSession.initFromSettings(s);
+            vaultSession.bumpActivity();
+        } catch { /* ignore */ }
+        return {
+            success: true,
+            vaultAutoLockMinutes: s.vaultAutoLockMinutes,
+            trafficLogEncryption: s.trafficLogEncryption,
+            trafficLogRawMode: s.trafficLogRawMode,
+            allowPlaintextExport: s.allowPlaintextExport,
         };
     });
 

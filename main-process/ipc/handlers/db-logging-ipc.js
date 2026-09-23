@@ -2,6 +2,14 @@
 
 const { insertSessionBootstrapTrafficRow } = require('../../services/cupnet-network-meta-log');
 
+async function clearBrowserCacheOnRecStart(ctx) {
+    const fn = ctx.tabManager?.clearHttpCacheForAllTabSessions;
+    if (typeof fn !== 'function') return;
+    await fn().catch((err) => {
+        ctx.sysLog?.('warn', 'logging', `clear HTTP cache on Rec start failed: ${err?.message || err}`);
+    });
+}
+
 /**
  * БД запросов/сессий и управление логированием.
  * @param {object} ctx
@@ -80,6 +88,7 @@ function registerDbLoggingIpc(ctx) {
             const sess = await ctx.db.createSessionAsync(ctx.actProxy || null, null);
             ctx.currentSessionId = sess ? sess.id : null;
             ctx.logEntryCount = 0;
+            await clearBrowserCacheOnRecStart(ctx);
             ctx.isLoggingEnabled = true;
             await insertSessionBootstrapTrafficRow(ctx).catch(() => {});
             for (const tab of ctx.tabManager.getAllTabs()) {
@@ -104,6 +113,7 @@ function registerDbLoggingIpc(ctx) {
         }
 
         // First enable ever with a pre-created empty session — start silently
+        await clearBrowserCacheOnRecStart(ctx);
         ctx.isLoggingEnabled = true;
         await insertSessionBootstrapTrafficRow(ctx).catch(() => {});
         // Иначе setupNetworkLogging ранее мог выйти рано (!logging && !fp) — CDP не висит, в MITM пишет только CDP.
@@ -120,6 +130,7 @@ function registerDbLoggingIpc(ctx) {
 
     ctx.ipcMain.handle('confirm-logging-start', async (_, { mode, renameOld }) => {
         if (mode === 'continue') {
+            await clearBrowserCacheOnRecStart(ctx);
             ctx.isLoggingEnabled = true;
             ctx.hadLoggingBeenStopped = false;
             // Re-attach logging for every tab so new tabs opened while paused also log
@@ -137,6 +148,7 @@ function registerDbLoggingIpc(ctx) {
         ctx.currentSessionId = sess ? sess.id : null;
         ctx.logEntryCount = 0;
         ctx.hadLoggingBeenStopped = false;
+        await clearBrowserCacheOnRecStart(ctx);
         ctx.isLoggingEnabled = true;
         await insertSessionBootstrapTrafficRow(ctx).catch(() => {});
         for (const tab of ctx.tabManager.getAllTabs()) {

@@ -34,6 +34,7 @@ const {
     summarizeMitmGatewayError,
     resolveMitmGatewayDnsContext,
 } = require('./mitm-gateway-error');
+const { absolutizeMitmRedirectResponse } = require('./utils');
 
 /**
  * Native Node.js HTTPS fallback when Go azureTLS library fails with connection errors.
@@ -756,6 +757,23 @@ function _matchHostPattern(pattern, hostname) {
     return h === p;
 }
 
+function _shouldAutoRetryHttp1(message) {
+    const m = String(message || '').toLowerCase();
+    return /upstream connect error|connection termination|reset reason|disconnect.*before headers|protocol_error|err_http2|http2.*error|stream error/i.test(m);
+}
+
+function _responseSuggestsHttp1Retry(res) {
+    if (!res) return false;
+    let body = '';
+    try {
+        body = res.bodyBase64 ? Buffer.from(res.bodyBase64, 'base64').toString('utf8').slice(0, 4096) : '';
+    } catch { /* ignore */ }
+    const hay = `${body}\n${res.error || ''}`;
+    if (!_shouldAutoRetryHttp1(hay)) return false;
+    const code = Number(res.statusCode);
+    return !Number.isFinite(code) || code === 0 || code === 502 || code === 503 || code === 504;
+}
+
 function _buildProxyAuthorizationHeader(upstreamUrl) {
     const username = upstreamUrl?.username ? decodeURIComponent(upstreamUrl.username) : '';
     const password = upstreamUrl?.password ? decodeURIComponent(upstreamUrl.password) : '';
@@ -768,12 +786,21 @@ class MitmProxy {
         this.port       = opts.port != null ? opts.port : networkPolicy.mitmPort;
         this.browser    = opts.browser || 'chrome_120';
         this.upstream   = opts.upstream || null;
+        /**
+         * Fail-closed guard: when true, requests that would otherwise egress with no proxy
+         * are refused (502) instead of leaking the real IP directly. Set only when a proxy
+         * profile connect failed; cleared on any working upstream or intentional direct mode.
+         */
+        this._egressBlocked = false;
+        this._egressBlockReason = '';
         this.workerPath = opts.workerPath;
         this.onRequestLogged = opts.onRequestLogged || null;
         this.onGatewayError = opts.onGatewayError || null;
         this.worker = createMitmAzureBackend(this.workerPath);
         this._server    = null;
         this._activeJa3 = null;
+        /** Global outbound HTTP version when connected profile sets force HTTP/1.1 */
+        this.forceHttp1 = false;
         this._dnsOverrides = new Map();
         /** @type {string[]} паттерны хоста из DNS rules с mitm_inject_cors (exact или *.suffix, см. _matchHostPattern). */
         this._dnsCorsPatterns = [];
@@ -811,12 +838,32 @@ class MitmProxy {
         if (this._statTimer.unref) this._statTimer.unref();
     }
 
-    setUpstream(proxyUrl) { this.upstream = proxyUrl || null; }
+    setUpstream(proxyUrl) {
+        this.upstream = proxyUrl || null;
+        // A working upstream means egress is routed again — lift any fail-closed block.
+        if (this.upstream) this._egressBlocked = false;
+    }
+
+    /**
+     * Fail-closed control. When blocked, MITM refuses to route requests that have no proxy
+     * (global or per-tab) instead of falling back to direct egress.
+     * @param {boolean} blocked
+     * @param {string} [reason]
+     */
+    setEgressBlocked(blocked, reason = '') {
+        this._egressBlocked = !!blocked;
+        this._egressBlockReason = blocked ? String(reason || 'Proxy required but unavailable') : '';
+    }
+
+    /** Force HTTP/1.1 for all upstream AzureTLS requests (global profile setting). */
+    setForceHttp1(enabled) {
+        this.forceHttp1 = !!enabled;
+    }
 
     /**
      * Set per-tab upstream proxy override.
      * @param {string} tabId
-     * @param {{ upstream: string|null, browser?: string, ja3?: string }} config
+     * @param {{ upstream: string|null, browser?: string, ja3?: string, forceHttp1?: boolean|null }} config
      */
     setTabUpstream(tabId, config) {
         if (!tabId) return;
@@ -824,6 +871,7 @@ class MitmProxy {
             upstream: config.upstream || null,
             browser:  config.browser  || null,
             ja3:      config.ja3      || null,
+            forceHttp1: config.forceHttp1 != null ? !!config.forceHttp1 : null,
         });
     }
 
@@ -832,13 +880,15 @@ class MitmProxy {
     }
 
     _resolveUpstreamForTab(tabId) {
-        if (!tabId) return { proxy: this.upstream, browser: this.browser, ja3: this._activeJa3 };
+        if (!tabId) return { proxy: this.upstream, browser: this.browser, ja3: this._activeJa3, forceHttp1: !!this.forceHttp1 };
         const override = this._tabProxyMap.get(tabId);
-        if (!override) return { proxy: this.upstream, browser: this.browser, ja3: this._activeJa3 };
+        if (!override) return { proxy: this.upstream, browser: this.browser, ja3: this._activeJa3, forceHttp1: !!this.forceHttp1 };
+        const forceHttp1 = override.forceHttp1 != null ? !!override.forceHttp1 : !!this.forceHttp1;
         return {
             proxy:   override.upstream ?? this.upstream,
             browser: override.browser  || this.browser,
             ja3:     override.ja3      || this._activeJa3,
+            forceHttp1,
         };
     }
 
@@ -933,7 +983,14 @@ class MitmProxy {
 
         this._server = net.createServer(socket => this._handleConnection(socket));
         await new Promise((res, rej) =>
-            this._server.listen(this.port, '127.0.0.1', err => err ? rej(err) : res())
+            this._server.listen(this.port, '127.0.0.1', err => {
+                if (!err) return res();
+                if (err.code === 'EADDRINUSE') {
+                    err.message = `MITM port 127.0.0.1:${this.port} is already in use (stale CupNet/Electron?). `
+                        + 'Quit other CupNet instances or run: pkill -f "Electron.*cupnet2"';
+                }
+                rej(err);
+            })
         );
         mitmUserLog(`Proxy listening 127.0.0.1:${this.port} · profile=${this.browser}`);
         return this;
@@ -955,10 +1012,51 @@ class MitmProxy {
                 dbg(`[mitm] CONNECT ${hostport}${_clientTag(socket)}\n`);
                 this._handleConnect(socket, head, data);
             } else {
-                this._handleHttp(socket, head, data);
+                this._readFullHttpRequestThenHandle(socket, data);
             }
         });
         socket.on('error', () => { try { socket.destroy(); } catch {} });
+    }
+
+    /**
+     * Plain-HTTP requests can arrive with the body split across TCP segments. Accumulate until
+     * headers + the full Content-Length body are buffered before dispatching; otherwise POST/PUT
+     * bodies would be truncated or missing when they don't fit in the first segment.
+     */
+    _readFullHttpRequestThenHandle(socket, firstChunk) {
+        const MAX_HTTP_REQ = 10 * 1024 * 1024;
+        let buf = firstChunk;
+        const contentLengthOf = (headerStr) => {
+            for (const line of headerStr.split('\r\n')) {
+                const idx = line.indexOf(':');
+                if (idx > 0 && line.slice(0, idx).trim().toLowerCase() === 'content-length') {
+                    const n = parseInt(line.slice(idx + 1).trim(), 10);
+                    return Number.isFinite(n) && n > 0 ? n : 0;
+                }
+            }
+            return 0;
+        };
+        const onData = (chunk) => {
+            buf = Buffer.concat([buf, chunk]);
+            if (buf.length > MAX_HTTP_REQ) {
+                socket.removeListener('data', onData);
+                try { socket.destroy(); } catch {}
+                return;
+            }
+            tryDispatch();
+        };
+        const tryDispatch = () => {
+            const sep = buf.indexOf('\r\n\r\n');
+            if (sep === -1) return false; // headers not complete yet
+            const cl = contentLengthOf(buf.toString('utf8', 0, sep));
+            const bodyStart = sep + 4;
+            if (cl > 0 && buf.length < bodyStart + cl) return false; // body not complete yet
+            socket.removeListener('data', onData);
+            const end = cl > 0 ? bodyStart + cl : buf.length;
+            this._handleHttp(socket, buf.toString('utf8', 0, end), buf);
+            return true;
+        };
+        if (!tryDispatch()) socket.on('data', onData);
     }
 
     // ── HTTPS CONNECT ──────────────────────────────────────────────────────────
@@ -1040,7 +1138,7 @@ class MitmProxy {
                     if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(res.headers));
                     if (debugMitmLevel >= 4) mitmUserLog(_fmtBody(null, res.bodyBase64, 'res body'));
                     const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, res);
-                    entry.data = buildHttpResponse(resOut);
+                    entry.data = buildHttpResponse(resOut, url);
                     if (this.onRequestLogged) {
                         let logBody = null;
                         if (resOut.bodyBase64) {
@@ -1073,7 +1171,7 @@ class MitmProxy {
                         req, tabId, dnsOverride: e.mitmDnsOverride || null,
                     });
                     const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
-                    entry.data = buildHttpResponse(resOut);
+                    entry.data = buildHttpResponse(resOut, url);
                 })
                 .finally(() => { entry.done = true; flushPipeline(); });
         };
@@ -1265,7 +1363,7 @@ class MitmProxy {
                 if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(res.headers));
                 if (debugMitmLevel >= 4) mitmUserLog(_fmtBody(null, res.bodyBase64, 'res body'));
                 const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, res);
-                const resp = buildHttpResponse(resOut);
+                const resp = buildHttpResponse(resOut, url);
                 socket.write(resp);
                 socket.end();
             })
@@ -1275,7 +1373,7 @@ class MitmProxy {
                     req, tabId, dnsOverride: e.mitmDnsOverride || null,
                 });
                 const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
-                socket.write(buildHttpResponse(resOut));
+                socket.write(buildHttpResponse(resOut, url));
                 socket.end();
             });
     }
@@ -1294,20 +1392,17 @@ class MitmProxy {
             const rw = d.rewriteHost ? ` · Host→${d.rewriteHost}` : '';
             dbg(`[mitm] dns  ${d.host}  →  ${d.ip}${rw}\n`);
         }
-        // YouTube/googlevideo: HTTP/2 → PROTOCOL_ERROR; force HTTP/1.1
-        // CUPNET_FORCE_HTTP1=1 — force for ALL requests (debug)
-        let forceHttp1 = process.env.CUPNET_FORCE_HTTP1 === '1';
-        if (!forceHttp1) {
-            try {
-                const host = new URL(url).hostname || '';
-                forceHttp1 = /\.(youtube|googlevideo)\.com$/i.test(host);
-            } catch {}
-        }
-        // DNS override: HTTP/2 `:authority` берётся из URL (IP) — шлюз его не маршрутизирует.
-        // HTTP/1.1 + fhttp уважает Host из OrderedHeaders — форсируем HTTP/1.1.
-        if (dnsAdjusted.dnsOverride) forceHttp1 = true;
-
         const tabUpstream = this._resolveUpstreamForTab(opts.tabId);
+        // Fail closed: a proxy profile connect failed and no per-tab/global proxy is available.
+        // Refuse rather than egress directly and leak the real IP.
+        if (this._egressBlocked && !tabUpstream.proxy) {
+            st.errors++;
+            st.pending--;
+            const reason = this._egressBlockReason || 'Proxy required but unavailable';
+            return this._build502Response(url, `Egress blocked: ${reason}`, {
+                req: opts, tabId: opts.tabId, dnsOverride: dnsAdjusted.dnsOverride || null,
+            });
+        }
         try {
             const { planMitmIntercept, finalizeMitmInterceptResponseAsync } = require('./request-interceptor');
             const mitmOpts = {
@@ -1336,27 +1431,56 @@ class MitmProxy {
                 ? networkPolicy.retry.maxRetries
                 : 0;
             const isIdempotent = /^(GET|HEAD|OPTIONS)$/i.test(up.method || '');
-            const CONN_ERR = /\bEOF\b|connection reset|ECONNRESET|ETIMEDOUT|ECONNREFUSED|broken pipe/i;
+            const CONN_ERR = /\bEOF\b|connection reset|ECONNRESET|ETIMEDOUT|ECONNREFUSED|broken pipe|connection termination/i;
+
+            // YouTube/googlevideo: HTTP/2 → PROTOCOL_ERROR; force HTTP/1.1
+            // CUPNET_FORCE_HTTP1=1 — force for ALL requests (debug)
+            // Profile setting force_http1 — per connected proxy profile
+            let forceHttp1 = process.env.CUPNET_FORCE_HTTP1 === '1' || !!tabUpstream.forceHttp1;
+            if (!forceHttp1) {
+                try {
+                    const host = new URL(url).hostname || '';
+                    forceHttp1 = /\.(youtube|googlevideo)\.com$/i.test(host);
+                } catch {}
+            }
+            // DNS override: HTTP/2 `:authority` from IP — force HTTP/1.1 so Host header is used.
+            if (dnsAdjusted.dnsOverride) forceHttp1 = true;
+
+            const workerReqBase = {
+                method:            up.method,
+                url:               up.url,
+                headers:           up.headers,
+                orderedHeaders:    up.orderedHeaders || undefined,
+                body:              noBodyUp ? undefined : (up.bodyBase64 ? undefined : (up.body || null)),
+                bodyBase64:        noBodyUp ? undefined : (up.bodyBase64 || undefined),
+                proxy:             tabUpstream.proxy || null,
+                browser:           tabUpstream.browser,
+                ja3:               tabUpstream.ja3 || undefined,
+                tabId:             opts.tabId != null && opts.tabId !== '' ? String(opts.tabId) : undefined,
+                requestId:         opts.requestId || undefined,
+                maxRetries:        retryCountUp,
+                timeout:           networkPolicy.timeouts.upstreamRequestMs,
+                disableRedirects:  opts.disableRedirects !== false,
+            };
+            const runWorker = (useHttp1) => this.worker.request({ ...workerReqBase, forceHttp1: !!useHttp1 });
 
             let workerError = null;
             try {
-                const res = await this.worker.request({
-                    method:            up.method,
-                    url:               up.url,
-                    headers:           up.headers,
-                    orderedHeaders:    up.orderedHeaders || undefined,
-                    body:              noBodyUp ? undefined : (up.bodyBase64 ? undefined : (up.body || null)),
-                    bodyBase64:        noBodyUp ? undefined : (up.bodyBase64 || undefined),
-                    proxy:             tabUpstream.proxy || null,
-                    browser:           tabUpstream.browser,
-                    ja3:               tabUpstream.ja3 || undefined,
-                    tabId:             opts.tabId != null && opts.tabId !== '' ? String(opts.tabId) : undefined,
-                    requestId:         opts.requestId || undefined,
-                    maxRetries:        retryCountUp,
-                    timeout:           networkPolicy.timeouts.upstreamRequestMs,
-                    disableRedirects:  opts.disableRedirects !== false,
-                    forceHttp1:        forceHttp1,
-                });
+                let res;
+                try {
+                    res = await runWorker(forceHttp1);
+                } catch (e) {
+                    if (!forceHttp1 && _shouldAutoRetryHttp1(e.message)) {
+                        dbg(`[mitm] ↻ http/1.1 retry after worker error ${url} (${e.message})\n`);
+                        res = await runWorker(true);
+                    } else {
+                        throw e;
+                    }
+                }
+                if (!forceHttp1 && _responseSuggestsHttp1Retry(res)) {
+                    dbg(`[mitm] ↻ http/1.1 retry after gateway body ${url}\n`);
+                    res = await runWorker(true);
+                }
                 const ms = Date.now() - t0;
                 st.totalMs += ms;
                 if (ms < st.minMs) st.minMs = ms;
@@ -1604,7 +1728,7 @@ class MitmProxy {
                         out = await finalizeMitmInterceptResponseAsync(out, plan.postProcess);
                     }
                     const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, out);
-                    try { clientTls.write(buildHttpResponse(resOut)); } catch {}
+                    try { clientTls.write(buildHttpResponse(resOut, url)); } catch {}
                     try { clientTls.end(); } catch {}
                 };
                 await finishShort().catch((err) => {
@@ -1669,7 +1793,8 @@ class MitmProxy {
                     bodyBase64: Buffer.from(String(err?.message || 'WebSocket tunnel failed'), 'utf8').toString('base64'),
                 };
                 clientTls.write(buildHttpResponse(
-                    applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes)
+                    applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes),
+                    url,
                 ));
             } catch {}
             try { clientTls.end(); } catch {}
@@ -2010,12 +2135,13 @@ function applyMitmCorsToResponse(enabled, url, requestHeaders, requestMethod, re
 const HOP_BY_HOP_HEADERS = new Set(['transfer-encoding', 'connection', 'keep-alive', 'content-length', 'content-encoding']);
 
 const STATUS_TEXT = { 301: 'Moved Permanently', 302: 'Found', 303: 'See Other', 307: 'Temporary Redirect', 308: 'Permanent Redirect' };
-function buildHttpResponse(res) {
-    const statusCode = res.statusCode || 200;
-    const headers    = res.headers || {};
+function buildHttpResponse(res, requestUrl) {
+    const payload = requestUrl ? absolutizeMitmRedirectResponse(res, requestUrl) : res;
+    const statusCode = payload.statusCode || 200;
+    const headers    = payload.headers || {};
     const statusText = STATUS_TEXT[statusCode] || 'OK';
 
-    const bodyBuf = res.bodyBase64 ? Buffer.from(res.bodyBase64, 'base64') : Buffer.alloc(0);
+    const bodyBuf = payload.bodyBase64 ? Buffer.from(payload.bodyBase64, 'base64') : Buffer.alloc(0);
 
     let headerStr = `HTTP/1.1 ${statusCode} ${statusText}\r\n`;
     headerStr += `Content-Length: ${bodyBuf.length}\r\n`;
@@ -2175,7 +2301,7 @@ class ExternalProxyPort {
                 this.parent._doRequest({ method: r.method, url, headers, orderedHeaders, body: r.body, bodyBase64: r.bodyBase64, disableRedirects: !this.followRedirects, tabId })
                     .then(res => {
                         const resOut = applyMitmCorsToResponse(this.parent._mitmCorsEnabledForUrl(url), url, headers, r.method, res);
-                        entry.data = buildHttpResponse(resOut);
+                        entry.data = buildHttpResponse(resOut, url);
                         let logBody = null;
                         if (resOut.bodyBase64) {
                             const ct = _headerVal(resOut.headers, 'content-type');
@@ -2197,10 +2323,10 @@ class ExternalProxyPort {
                     .catch((e) => {
                         dbg(`[mitm] ✗ ${url} ${e.message}${ctagExt}\n`);
                         const errRes = this.parent._build502Response(url, e.message, {
-                            req: r, tabId: connectTabId, dnsOverride: e.mitmDnsOverride || null,
+                            req: r, tabId, dnsOverride: e.mitmDnsOverride || null,
                         });
                         const resOut = applyMitmCorsToResponse(this.parent._mitmCorsEnabledForUrl(url), url, headers, r.method, errRes);
-                        entry.data = buildHttpResponse(resOut);
+                        entry.data = buildHttpResponse(resOut, url);
                     })
                     .finally(() => { entry.done = true; flushPipeline(); });
             };
@@ -2267,7 +2393,7 @@ class ExternalProxyPort {
         this.parent._doRequest({ method: req.method, url, headers, orderedHeaders, body: req.body, bodyBase64: req.bodyBase64, disableRedirects: !this.followRedirects, tabId })
             .then(res => {
                 const resOut = applyMitmCorsToResponse(this.parent._mitmCorsEnabledForUrl(url), url, headers, req.method, res);
-                socket.write(buildHttpResponse(resOut));
+                socket.write(buildHttpResponse(resOut, url));
                 socket.end();
                 let logBody = null;
                 if (resOut.bodyBase64) {
@@ -2292,7 +2418,7 @@ class ExternalProxyPort {
                     req, tabId: null, dnsOverride: e.mitmDnsOverride || null,
                 });
                 const resOut = applyMitmCorsToResponse(this.parent._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
-                socket.write(buildHttpResponse(resOut));
+                socket.write(buildHttpResponse(resOut, url));
                 socket.end();
             });
     }
@@ -2318,6 +2444,8 @@ module.exports = {
     _testApplyMitmCorsToResponse: applyMitmCorsToResponse,
     _testShouldSkipMitmCorsForUrl: shouldSkipMitmCorsForUrl,
     _testMatchHostPattern: _matchHostPattern,
+    _shouldAutoRetryHttp1,
+    _responseSuggestsHttp1Retry,
 };
 
 if (require.main === module) {

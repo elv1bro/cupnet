@@ -272,6 +272,7 @@ function tlsGetSaveData() {
         tls_profile:    tlsGetTemplate(),
         tls_ja3_mode:   mode,
         tls_ja3_custom: mode === 'custom' ? ja3BuildFull() : null,
+        force_http1:    document.getElementById('tls-force-http1')?.checked ? 1 : 0,
     };
 }
 
@@ -280,6 +281,8 @@ function tlsLoadFromProfile(profile) {
     const tpl  = profile.tls_profile  || 'chrome';
     tlsSetMode(mode);
     tlsSetTemplate(tpl);
+    const http1Cb = document.getElementById('tls-force-http1');
+    if (http1Cb) http1Cb.checked = !!(profile.force_http1);
     if (mode === 'custom' && profile.tls_ja3_custom) {
         ja3ParseFull(profile.tls_ja3_custom);
         ja3SyncFull();
@@ -1399,6 +1402,9 @@ function renderProfileList() {
         const ipBadge  = p.last_ip
             ? `<span class="pi-badge geo" style="color:#a5f3fc">${esc(p.last_ip)}</span>` : '';
         const connLabel = p.id === connectedId ? `<span class="pi-connected-label">● CONNECTED</span>` : '';
+        const reSaveBadge = p.needsReSave
+            ? `<span class="pi-badge" style="color:#fbbf24" title="Re-save required: upstream URL was stored without OS encryption">⚠ Re-save</span>`
+            : '';
 
         const meta = pp.getProfileProviderMeta?.(p.variables);
         let providerBadge = '';
@@ -1426,7 +1432,7 @@ function renderProfileList() {
             <div class="pi-name">${esc(p.name)}</div>
             ${subtitle}
             ${hostRow}
-            <div class="pi-meta">${providerBadge}${geoBadge}${ipBadge}${latBadge}${connLabel}</div>`;
+            <div class="pi-meta">${providerBadge}${reSaveBadge}${geoBadge}${ipBadge}${latBadge}${connLabel}</div>`;
 
         el.title = proxyProfileListTitle(hostLine, p.name, p.url_display);
 

@@ -254,8 +254,8 @@ function createCdpNetworkLogging({
             safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Network.enable', tabId: state.tabId } }, err, 'info');
         });
 
-        // При включённом логе отключаем HTTP-кеш страницы — иначе document/JS часто не дают полноценных CDP-событий в лог.
-        await cdp.sendCommand('Network.setCacheDisabled', { cacheDisabled: !!loggingEnabled }).catch((err) => {
+        // Keep Chromium HTTP cache enabled during logging; cache is cleared once when Rec starts (see db-logging-ipc).
+        await cdp.sendCommand('Network.setCacheDisabled', { cacheDisabled: false }).catch((err) => {
             safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Network.setCacheDisabled', tabId: state.tabId } }, err, 'info');
         });
 

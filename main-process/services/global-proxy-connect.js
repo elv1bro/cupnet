@@ -35,6 +35,9 @@ async function disconnectGlobalProxy(ctx, opts = {}) {
     ctx.connectedProfileId = null;
     ctx.connectedProfileName = null;
     ctx.connectedResolvedVars = {};
+    ctx.mitmProxy?.setForceHttp1?.(false);
+    // Disconnect is an intentional switch to direct — clear any fail-closed egress block.
+    ctx.mitmProxy?.setEgressBlocked?.(false);
     await ctx.applyEffectiveTrafficMode?.(ctx.getCurrentTrafficMode?.(), null, {
         source: 'disconnect-proxy',
         force: true,
@@ -125,8 +128,12 @@ async function connectGlobalProxyProfile(ctx, profileId, ephemeralVars = {}) {
                 ctx.mitmProxy.setBrowser(tlsProfile);
                 ctx.mitmProxy._activeJa3 = null;
             }
+            ctx.mitmProxy.setForceHttp1(!!row.force_http1);
             ctx.broadcastTlsProfileChanged?.(tlsProfile);
         }
+
+        // Proxy is up — ensure egress is allowed again.
+        ctx.mitmProxy?.setEgressBlocked?.(false);
 
         ctx.connectedProfileId = profileId;
         ctx.connectedProfileName = row.name || null;
@@ -157,7 +164,9 @@ async function connectGlobalProxyProfile(ctx, profileId, ephemeralVars = {}) {
 
         return { success: true, resolvedUrl, resolvedVars };
     } catch (e) {
-        ctx.sysLog?.('warn', 'proxy', `connect global proxy failed, switching to direct: ${e?.message || e}`);
+        // Fail closed: the user asked for a proxy profile and it could not be established.
+        // Block egress instead of silently routing direct (which would leak the real IP).
+        ctx.sysLog?.('warn', 'proxy', `connect global proxy failed, blocking egress (fail-closed): ${e?.message || e}`);
         try {
             if (ctx.persistentAnonymizedProxyUrl) {
                 await ctx.withTimeout?.(
@@ -171,16 +180,18 @@ async function connectGlobalProxyProfile(ctx, profileId, ephemeralVars = {}) {
             ctx.connectedProfileId = null;
             ctx.connectedProfileName = null;
             ctx.connectedResolvedVars = {};
+            // Keep MITM sessions consistent (no upstream) but refuse to route until a proxy works.
+            ctx.mitmProxy?.setEgressBlocked?.(true, `Proxy profile "${row.name || profileId}" failed to connect`);
             await ctx.applyEffectiveTrafficMode?.(profileTrafficMode, null, {
-                source: 'connect-proxy-template.fallback',
+                source: 'connect-proxy-template.failclosed',
                 profileId,
             });
             ctx.buildMenu?.();
             ctx.notifyProxyStatus?.();
         } catch (fallbackErr) {
-            ctx.sysLog?.('warn', 'proxy', `direct fallback after proxy failure also failed: ${fallbackErr?.message || fallbackErr}`);
+            ctx.sysLog?.('warn', 'proxy', `egress block after proxy failure also failed: ${fallbackErr?.message || fallbackErr}`);
         }
-        return { success: false, error: e.message, fallback: 'direct' };
+        return { success: false, error: e.message, fallback: 'blocked' };
     }
 }
 

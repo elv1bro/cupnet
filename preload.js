@@ -217,6 +217,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setCookie:               (tid, d)  => ipcRenderer.invoke('set-cookie', tid, d),
     removeCookie:            (tid,u,n) => ipcRenderer.invoke('remove-cookie', tid, u, n),
     clearCookies:            (tid, dm) => ipcRenderer.invoke('clear-cookies', tid, dm),
+    consolidateCookies:      (tid, host) => ipcRenderer.invoke('consolidate-cookies', tid, host),
     shareCookies:            (f,t,dm)  => ipcRenderer.invoke('share-cookies', f, t, dm),
     openCookieManager:       (tid)     => ipcRenderer.invoke('open-cookie-manager', tid),
     onSetActiveCookieTab:    (cb)      => sub('set-active-tab', cb),
@@ -259,7 +260,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // ── MITM / AzureTLS stats ──────────────────────────────────────────────────
     getMitmStats:            ()        => ipcRenderer.invoke('mitm-get-stats'),
     getMitmCaCert:           ()        => ipcRenderer.invoke('mitm-get-ca-cert'),
+    restartMitm:             ()        => ipcRenderer.invoke('mitm-restart'),
     onMitmStatsUpdate:       (cb)      => sub('mitm-stats-update', cb),
+    onMitmReadyChanged:      (cb)      => sub('mitm-ready-changed', cb),
 
     // ── Inline settings (browser toolbar) ──────────────────────────────────────
     setToolbarHeight:        (px)      => ipcRenderer.invoke('set-toolbar-height', px),
@@ -269,6 +272,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     saveToolbarToolsMiniAlign: (a)     => ipcRenderer.invoke('save-toolbar-tools-mini-align', a),
     getSettingsAll:          ()        => ipcRenderer.invoke('get-settings-all'),
     saveActivityMonitorSettings: (opts) => ipcRenderer.invoke('save-activity-monitor-settings', opts),
+    saveSecuritySettings:      (opts) => ipcRenderer.invoke('save-security-settings', opts),
     completeOnboarding:      ()        => ipcRenderer.invoke('onboarding-complete'),
     resetOnboardingWizard: ()        => ipcRenderer.invoke('reset-onboarding-wizard'),
     setAutoScreenshot:       (en)      => ipcRenderer.invoke('set-auto-screenshot', en),
@@ -339,6 +343,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onNotesInit:             (cb)      => sub('notes-init', cb),
     onNotesContextUpdate:    (cb)      => sub('notes-context-update', cb),
     onNotesEmbedBlock:       (cb)      => sub('notes-embed-block', cb),
+
+    // ── CupNet profiles (sign-in gate) ────────────────────────────────────────
+    profileList:               ()        => ipcRenderer.invoke('profile-list'),
+    profileGateStatus:         ()        => ipcRenderer.invoke('profile-gate-status'),
+    profileCompleteSetup:      (p)       => ipcRenderer.invoke('profile-complete-setup', p),
+    profileLogin:              (p)       => ipcRenderer.invoke('profile-login', p),
+    profileCreate:             (p)       => ipcRenderer.invoke('profile-create', p),
+    profileLogout:             ()        => ipcRenderer.invoke('profile-logout'),
+    profileOpenSwitchGate:     ()        => ipcRenderer.invoke('profile-open-switch-gate'),
+    profileSessionStatus:      ()        => ipcRenderer.invoke('profile-session-status'),
+    profileGateQuit:           ()        => ipcRenderer.invoke('profile-gate-quit'),
+    vaultSessionActivity:      ()        => ipcRenderer.invoke('vault-session-activity'),
+    onProfileSessionChanged:   (cb)      => sub('profile-session-changed', cb),
+    onCredentialsLocked:       (cb)      => sub('credentials-locked', cb),
 
     // ── Credentials vault ─────────────────────────────────────────────────────
     openCredentialsWindow:   ()        => ipcRenderer.invoke('open-credentials-window'),

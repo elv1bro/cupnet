@@ -17,11 +17,9 @@ let navCountAll = 0, navCountFav = 0, navCountSite = 0, navCountTrash = 0;
 let typeCounts = { login: 0, card: 0, identity: 0, note: 0, total: 0 };
 let folders = [];
 let totpTimer = null;
-let autolockTimer = null;
 let clipboardClearTimer = null;
 let credFormBaseline = '';
 let kbListIdx = -1;
-const AUTOLOCK_STORAGE_KEY = 'credentials-autolock-minutes';
 const CLIPBOARD_CLEAR_MS = 20000;
 const MATCH_TYPES = ['Default','Base domain','Host','Starts with','Exact','RegExp','Never'];
 
@@ -276,8 +274,7 @@ function showScreen(name) {
     for (const el of document.querySelectorAll('[id^="modal-"]')) el.classList.add('hidden');
     const target = $('screen-' + name);
     if (target) target.classList.remove('hidden');
-    if (name === 'vault') { setAutolockSelectFromStorage(); resetAutolockTimer(); refreshVaultSwitcher(); }
-    else { clearTimeout(autolockTimer); autolockTimer = null; }
+    if (name === 'vault') { refreshVaultSwitcher(); }
     if (name === 'unlock') {
         setTimeout(() => $('unlock-pw')?.focus(), 50);
         api.credentialsVaultStatus().then(st => {
@@ -293,9 +290,19 @@ function showScreen(name) {
 
 async function bootstrap() {
     const st = await api.credentialsVaultStatus();
+    const profileSt = api.profileSessionStatus ? await api.profileSessionStatus().catch(() => null) : null;
     if (!st.exists) {
+        if (profileSt?.active) {
+            showScreen('vault');
+            await refreshAll();
+            return;
+        }
         if ($('setup-back-btn')) $('setup-back-btn').style.display = 'none';
         showScreen('setup');
+        return;
+    }
+    if (st.unlocked || profileSt?.vaultUnlocked) {
+        await enterVault();
         return;
     }
     if (st.vaultCount > 1 && !st.unlocked) { showScreen('picker'); return; }
@@ -391,25 +398,9 @@ async function refreshAll() {
 }
 
 // ─── Autolock ──────────────────────────────────────────────────────────────
-function getAutolockMinutes() {
-    const v = Number(localStorage.getItem(AUTOLOCK_STORAGE_KEY));
-    return v > 0 ? v : (v === 0 ? 0 : 5);
+function bumpActivity() {
+    try { api.vaultSessionActivity?.(); } catch { /* ignore */ }
 }
-function setAutolockSelectFromStorage() {
-    const sel = $('autolock-select');
-    if (sel) sel.value = String(getAutolockMinutes());
-}
-function resetAutolockTimer() {
-    clearTimeout(autolockTimer);
-    const mins = getAutolockMinutes();
-    if (mins <= 0) return;
-    autolockTimer = setTimeout(async () => {
-        await api.credentialsLock();
-        showScreen('unlock');
-        toastCred('Vault locked after ' + mins + ' min idle', 'info');
-    }, mins * 60 * 1000);
-}
-function bumpActivity() { resetAutolockTimer(); }
 
 // ─── Nav & data ────────────────────────────────────────────────────────────
 async function refreshTypeCounts() {
@@ -567,10 +558,10 @@ function renderList() {
         const letter = avatarLetter(r);
         const hue = hueForKey(r.domain || r.label || '');
         const isActive = r.id === currentId;
-        const favicon = r.domain && r.domain !== '(no site)' ? `<img class="cred-favicon" src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(r.domain)}&sz=32" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'"><div class="cred-avatar" style="display:none;--ah:${hue}">${escapeHtml(letter)}</div>` : `<div class="cred-avatar" style="--ah:${hue}">${escapeHtml(letter)}</div>`;
+        const avatar = `<div class="cred-avatar" style="--ah:${hue}">${escapeHtml(letter)}</div>`;
         const typeBadge = r.item_type && r.item_type !== 'login' ? `<span class="type-badge">${escapeHtml(r.item_type)}</span>` : '';
         h += `<div class="cred-row${isActive ? ' active' : ''}" data-id="${r.id}" tabindex="0">
-            <div class="cred-avatar-wrap">${favicon}</div>
+            <div class="cred-avatar-wrap">${avatar}</div>
             <div class="cred-row-text">
                 <div class="title">${escapeHtml(r.label || r.domain)}</div>
                 <div class="sub">${escapeHtml(r.login || r.domain || '')}</div>
@@ -1259,11 +1250,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Autolock
-    $('autolock-select').addEventListener('change', () => {
-        localStorage.setItem(AUTOLOCK_STORAGE_KEY, $('autolock-select').value);
-        resetAutolockTimer();
-    });
+    // Autolock — removed (global vault-session-service via Settings → Security)
 
     // Search
     $('cred-search').addEventListener('input', loadRowsDebounced);
@@ -1364,11 +1351,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Export
     const runExport = async (format) => {
-        const res = await api.credentialsExport({ format });
+        let exportPassword;
+        if (format === 'vault' || format === 'cupnet-vault-export') {
+            exportPassword = prompt('Export password (min 12 characters):');
+            if (!exportPassword) return;
+        }
+        const res = await api.credentialsExport({ format: format === 'vault' ? 'vault' : format, exportPassword });
         if (res?.canceled) return;
         if (res?.error) toastCred(res.error, 'error');
         else toastCred('Exported to ' + (res.filePath || format), 'success');
     };
+    $('btn-export-vault').addEventListener('click', () => runExport('vault'));
     $('btn-export-json').addEventListener('click', () => runExport('json'));
     $('btn-export-csv').addEventListener('click', () => runExport('csv'));
 
@@ -1416,10 +1409,20 @@ document.addEventListener('DOMContentLoaded', () => {
     $('cm-cancel').addEventListener('click', () => $('modal-master').classList.add('hidden'));
     $('master-backdrop').addEventListener('click', () => $('modal-master').classList.add('hidden'));
     $('cm-submit').addEventListener('click', async () => {
+        const newPw = $('cm-new').value;
+        const confirmPw = $('cm-new2').value;
+        if (newPw.length < 12) {
+            $('cm-err').textContent = 'New password must be at least 12 characters.';
+            return;
+        }
+        if (newPw !== confirmPw) {
+            $('cm-err').textContent = 'New passwords do not match.';
+            return;
+        }
         const res = await api.credentialsChangeMaster({
             oldPassword: $('cm-old').value,
-            newPassword: $('cm-new').value,
-            confirm: $('cm-new2').value,
+            newPassword: newPw,
+            confirm: confirmPw,
         });
         if (res.success) {
             const hint = $('cm-hint').value.trim();
@@ -1455,7 +1458,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Activity tracking for autolock
+    // Activity tracking — reset global vault idle timer
     for (const ev of ['mousedown','keydown','scroll','touchstart']) {
         document.addEventListener(ev, bumpActivity, { passive: true });
     }

@@ -58,12 +58,11 @@ function createTrafficModeService(d) {
         await d.session.defaultSession.setProxy(defaultSessionOpts);
 
         const s = d.loadSettings();
-        s.currentProxy = upstreamProxyUrl || '';
         s.effectiveTrafficMode = nextMode;
         d.saveSettings(s);
 
         d.sysLog('info', 'traffic.mode.applied', `mode=${nextMode} source=${context.source || 'unknown'}`);
-        d.notifyProxyStatus();
+        if (!context.skipNotify) d.notifyProxyStatus();
     }
 
     function applyTrafficFilters(trafficOpts) {

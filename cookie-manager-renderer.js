@@ -390,7 +390,7 @@ function renderTable() {
         const flags = [
             c.httpOnly ? `<span class="flag http">HttpOnly</span>` : '',
             c.secure   ? `<span class="flag sec">Secure</span>` : '',
-            c.sameSite ? `<span class="flag same">${c.sameSite}</span>` : '',
+            c.sameSite ? `<span class="flag same">${escHtml(c.sameSite)}</span>` : '',
             !c.expirationDate ? `<span class="flag sess">Session</span>` : '',
         ].filter(Boolean).join('');
 
@@ -518,6 +518,34 @@ async function deleteCookie(c) {
 // ─── Toolbar buttons ──────────────────────────────────────────────────────────
 document.getElementById('btn-add-new').addEventListener('click', () => openEdit(null));
 
+document.getElementById('btn-consolidate').addEventListener('click', async () => {
+    if (!activeTabId) return;
+    const anchor = filterDomain.value.trim() || currentTabDomain;
+    if (!anchor) {
+        setStatus('Set domain filter or select a tab with a site URL', 'err');
+        return;
+    }
+    const parentHint = anchor.split('.').length >= 3
+        ? anchor.split('.').slice(1).join('.')
+        : anchor;
+    const msg = `Merge cookies on subdomains of "${parentHint}" into .${parentHint}?\n\n`
+        + `Example: armenia.${parentHint} → .${parentHint}\n`
+        + 'Narrower entries (host-only and subdomain scopes) will be removed.';
+    if (!confirm(msg)) return;
+
+    const result = await api.consolidateCookies(activeTabId, anchor);
+    if (result?.success) {
+        setStatus(
+            `Consolidated ${result.groupsMerged} group(s) → ${result.parentDomain} `
+            + `(removed ${result.cookiesRemoved}, wrote ${result.cookiesWritten})`,
+            'ok',
+        );
+        await loadCookies();
+    } else {
+        setStatus(`Error: ${result?.error || 'consolidate failed'}`, 'err');
+    }
+});
+
 document.getElementById('btn-clear-all').addEventListener('click', async () => {
     const domFilter = filterDomain.value.trim();
     const msg = domFilter
@@ -529,7 +557,9 @@ document.getElementById('btn-clear-all').addEventListener('click', async () => {
         setStatus(`Deleted ${result.count} cookies`, 'ok');
         await loadCookies();
     } else {
-        setStatus(`Error: ${result.error}`, 'err');
+        const left = result.remaining ?? '?';
+        setStatus(`Error: ${result.error || 'clear incomplete'} (${left} remaining)`, 'err');
+        await loadCookies();
     }
 });
 
@@ -598,7 +628,7 @@ importFileInput.addEventListener('change', async () => {
 
     let ok = 0, fail = 0;
     for (const c of cookies) {
-        const url = `${c.secure ? 'https' : 'http'}://${(c.domain || '').replace(/^\./, '')}${c.path || '/'}`;
+        const url = `${c.secure === false ? 'http' : 'https'}://${(c.domain || '').replace(/^\./, '')}${c.path || '/'}`;
         const result = await api.setCookie(activeTabId, { ...c, url });
         result.success ? ok++ : fail++;
     }

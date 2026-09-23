@@ -94,6 +94,130 @@ function resolveNavigationUrlWithBase(input, baseUrl, opts = {}) {
     return resolveNavigationUrl(s, opts);
 }
 
+/** True when string is safe for Electron webContents.loadURL (not a bare site-relative path). */
+function isWebContentsLoadUrl(target) {
+    const s = String(target || '').trim();
+    if (!s || s === 'about:blank') return true;
+    return /^https?:\/\//i.test(s) || /^file:\/\//i.test(s);
+}
+
+/**
+ * Resolve navigation target for webContents.loadURL — never returns bare `/path` (Electron rejects those).
+ * @param {string} rawUrl
+ * @param {string|null|undefined} baseUrl
+ * @param {{ searchEngineUrl?: string, cupnetAliases?: Record<string, string> }} [opts]
+ * @returns {string|null}
+ */
+/**
+ * Resolve a redirect Location header value against the request URL.
+ * Proxied Chromium can fail when upstream returns a site-relative Location (e.g. BLS /Global/Account/LogIn).
+ * @param {string} location
+ * @param {string} requestUrl
+ * @returns {string}
+ */
+function preventRedirectSchemeDowngrade(resolved, requestUrl) {
+    if (!resolved || !requestUrl) return resolved;
+    try {
+        const req = new URL(String(requestUrl));
+        const red = new URL(String(resolved));
+        if (req.protocol !== 'https:' || red.protocol !== 'http:') return resolved;
+        if (req.hostname.toLowerCase() !== red.hostname.toLowerCase()) return resolved;
+        red.protocol = 'https:';
+        if (red.port === '80') red.port = '';
+        return red.href;
+    } catch {
+        return resolved;
+    }
+}
+
+function resolveRedirectLocationHeader(location, requestUrl) {
+    const loc = String(location ?? '').trim();
+    if (!loc) return loc;
+
+    let resolved = loc;
+    if (/^https?:\/\//i.test(loc)) {
+        resolved = loc;
+    } else if (loc.startsWith('//')) {
+        try {
+            const base = new URL(String(requestUrl || ''));
+            resolved = `${base.protocol}${loc}`;
+        } catch {
+            return loc;
+        }
+    } else {
+        try {
+            resolved = new URL(loc, requestUrl).href;
+        } catch {
+            return loc;
+        }
+    }
+    return preventRedirectSchemeDowngrade(resolved, requestUrl);
+}
+
+/**
+ * Make 3xx MITM responses safe for Chromium: absolutize relative Location headers.
+ * @param {{ statusCode?: number, headers?: Record<string, string|string[]>, [k: string]: unknown }} res
+ * @param {string} requestUrl
+ */
+function absolutizeMitmRedirectResponse(res, requestUrl) {
+    const code = Number(res?.statusCode);
+    if (!res || !requestUrl || !Number.isFinite(code) || code < 300 || code >= 400) return res;
+    const headers = res.headers || {};
+    let changed = false;
+    const nextHeaders = { ...headers };
+    for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() !== 'location') continue;
+        const raw = headers[key];
+        if (Array.isArray(raw)) {
+            const mapped = raw.map((v) => resolveRedirectLocationHeader(v, requestUrl));
+            if (mapped.some((v, i) => v !== raw[i])) {
+                nextHeaders[key] = mapped;
+                changed = true;
+            }
+        } else {
+            const mapped = resolveRedirectLocationHeader(raw, requestUrl);
+            if (mapped !== raw) {
+                nextHeaders[key] = mapped;
+                changed = true;
+            }
+        }
+    }
+    return changed ? { ...res, headers: nextHeaders } : res;
+}
+
+function resolveLoadUrlForWebContents(rawUrl, baseUrl, opts = {}) {
+    const s = String(rawUrl || '').trim();
+    if (!s || s === 'about:blank') return s;
+    if (/^https?:\/\//i.test(s)) {
+        try {
+            new URL(s);
+            return s;
+        } catch {
+            return null;
+        }
+    }
+    if (/^file:\/\//i.test(s)) return s;
+
+    const aliases = opts.cupnetAliases || {};
+    const aliasKey = s.toLowerCase();
+    if (aliases[aliasKey]) return aliases[aliasKey];
+
+    let resolved = resolveNavigationUrlWithBase(s, baseUrl, opts);
+    if (resolved && isWebContentsLoadUrl(resolved)) return resolved;
+
+    const base = String(baseUrl || '').trim();
+    if (s.startsWith('/') && base && /^https?:\/\//i.test(base) && !base.startsWith('about:')) {
+        try {
+            const abs = new URL(s, base).href;
+            new URL(abs);
+            return abs;
+        } catch { /* ignore */ }
+    }
+
+    if (resolved && !isWebContentsLoadUrl(resolved)) return null;
+    return resolved;
+}
+
 /**
  * Parse a proxy template string, replacing:
  *   {RAND:min-max}  → random integer in [min, max]
@@ -198,6 +322,10 @@ function shouldSkipOmniboxInlineGhost(trimmed) {
 module.exports = {
     resolveNavigationUrl,
     resolveNavigationUrlWithBase,
+    isWebContentsLoadUrl,
+    resolveLoadUrlForWebContents,
+    resolveRedirectLocationHeader,
+    absolutizeMitmRedirectResponse,
     parseProxyTemplate,
     extractTemplateVars,
     formatBytes,

@@ -1,6 +1,7 @@
 'use strict';
 
 const api = window.electronAPI;
+const HtmlPreview = window.HtmlResponsePreview || {};
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let allEntries        = [];
@@ -1528,7 +1529,7 @@ function buildRow(entry, idx) {
 
     const scCount = countSetCookies(entry);
     const extBadge = (entry.source === 'external' || (entry.tabId || entry.tab_id || '').startsWith('ext_'))
-        ? `<span class="ext-badge" title="External proxy :${entry.extPort || ''}">EXT</span>` : '';
+        ? `<span class="ext-badge" title="External proxy :${esc(entry.extPort || '')}">EXT</span>` : '';
     const mockBadge = String(type).toLowerCase() === 'mock'
         ? '<span class="mock-badge" title="Mocked by intercept rule">MOCK</span>'
         : '';
@@ -1560,7 +1561,7 @@ function buildRow(entry, idx) {
     row.innerHTML =
         `<div class="lv-td col-idx">${esc(rowIdx)}</div>` +
         `<div class="lv-td col-method"><span class="method-badge ${methodCls(rowMethod)}">${esc(rowMethod) || '—'}</span></div>` +
-        `<div class="lv-td col-status"><span class="lv-status ${entry.error ? 's-err' : statusCls(status)}">${status || (entry.error ? 'ERR' : '—')}${cookieMarkV3}</span></div>` +
+        `<div class="lv-td col-status"><span class="lv-status ${entry.error ? 's-err' : statusCls(status)}">${esc(status) || (entry.error ? 'ERR' : '—')}${cookieMarkV3}</span></div>` +
         `<div class="lv-td col-mark">${tagDot}</div>` +
         `<div class="lv-td col-host"><span class="host-chip${cupnetSess ? ' host-chip-cupnet-sess' : ''}" title="${esc(rowHostTitle)}">${esc(rowHost)}</span></div>` +
         `<div class="lv-td col-type">${typeChipHtml}</div>` +
@@ -3467,24 +3468,126 @@ function parseHtmlFormsFromString(html) {
 
 let _respHtmlView = 'body';
 let _respHtmlFormsPayload = null;
+let _respHtmlSource = '';
 
 function resetResponseHtmlViews() {
     _respHtmlView = 'body';
     _respHtmlFormsPayload = null;
+    _respHtmlSource = '';
     const subtabs = document.getElementById('resp-html-subtabs');
+    const previewBar = document.getElementById('resp-html-preview-bar');
+    const previewWrap = document.getElementById('resp-html-preview-wrap');
+    const textWrap = document.getElementById('resp-html-text-wrap');
     const formsWrap = document.getElementById('resp-html-forms-wrap');
     const bodyWrap = document.getElementById('response-body-wrap');
     const copyFormsBtn = document.getElementById('resp-forms-copy-btn');
+    const iframe = document.getElementById('resp-html-preview-iframe');
+    const textPre = document.getElementById('resp-html-text-pre');
     if (subtabs) subtabs.style.display = 'none';
+    if (previewBar) previewBar.style.display = 'none';
+    if (previewWrap) previewWrap.style.display = 'none';
+    if (textWrap) textWrap.style.display = 'none';
     if (formsWrap) {
         formsWrap.style.display = 'none';
         formsWrap.innerHTML = '';
     }
     if (bodyWrap) bodyWrap.style.display = '';
     if (copyFormsBtn) copyFormsBtn.style.display = 'none';
+    if (iframe) {
+        iframe.srcdoc = '';
+        delete iframe.dataset.previewHash;
+    }
+    if (textPre) textPre.textContent = '';
     document.querySelectorAll('.resp-html-subtab').forEach((btn) => {
         btn.classList.toggle('active', (btn.dataset.respView || 'body') === 'body');
+        if ((btn.dataset.respView || '') === 'forms') btn.style.display = 'none';
     });
+}
+
+function mountResponseHtmlPreview(htmlText) {
+    const iframe = document.getElementById('resp-html-preview-iframe');
+    if (!iframe || typeof HtmlPreview.buildSandboxPreviewDoc !== 'function') return;
+    const safeDoc = HtmlPreview.buildSandboxPreviewDoc(htmlText);
+    const h = typeof HtmlPreview.previewDocHash === 'function'
+        ? HtmlPreview.previewDocHash(safeDoc)
+        : String(safeDoc.length);
+    if (iframe.dataset.previewHash !== h) {
+        iframe.dataset.previewHash = h;
+        iframe.srcdoc = safeDoc;
+    }
+}
+
+function mountResponseHtmlPlainText(htmlText) {
+    const pre = document.getElementById('resp-html-text-pre');
+    if (!pre) return;
+    const text = typeof HtmlPreview.extractHtmlPlainText === 'function'
+        ? HtmlPreview.extractHtmlPlainText(htmlText)
+        : String(htmlText || '');
+    pre.textContent = text || '(no visible text)';
+}
+
+function setResponseHtmlView(view) {
+    const allowed = new Set(['body', 'preview', 'text', 'forms']);
+    let next = allowed.has(view) ? view : 'body';
+    if (next === 'forms' && !_respHtmlFormsPayload?.length) next = 'body';
+
+    _respHtmlView = next;
+    const bodyWrap = document.getElementById('response-body-wrap');
+    const previewBar = document.getElementById('resp-html-preview-bar');
+    const previewWrap = document.getElementById('resp-html-preview-wrap');
+    const textWrap = document.getElementById('resp-html-text-wrap');
+    const formsWrap = document.getElementById('resp-html-forms-wrap');
+
+    document.querySelectorAll('.resp-html-subtab').forEach((btn) => {
+        const v = btn.dataset.respView || 'body';
+        btn.classList.toggle('active', v === _respHtmlView);
+    });
+
+    if (bodyWrap) bodyWrap.style.display = _respHtmlView === 'body' ? '' : 'none';
+    if (previewBar) previewBar.style.display = _respHtmlView === 'preview' ? 'flex' : 'none';
+    if (previewWrap) previewWrap.style.display = _respHtmlView === 'preview' ? 'flex' : 'none';
+    if (textWrap) textWrap.style.display = _respHtmlView === 'text' ? 'block' : 'none';
+    if (formsWrap) formsWrap.style.display = _respHtmlView === 'forms' ? 'block' : 'none';
+
+    if (_respHtmlView === 'preview') mountResponseHtmlPreview(_respHtmlSource);
+    if (_respHtmlView === 'text') mountResponseHtmlPlainText(_respHtmlSource);
+    scheduleDetailFindRefresh();
+}
+
+function setupResponseHtmlViews(htmlText, contentType, pageUrl = '') {
+    resetResponseHtmlViews();
+    if (!looksLikeHtmlResponse(htmlText, contentType) || !htmlText) return;
+
+    _respHtmlSource = htmlText;
+    const forms = parseHtmlFormsFromString(htmlText);
+    _respHtmlFormsPayload = forms.length ? forms : null;
+
+    const subtabs = document.getElementById('resp-html-subtabs');
+    const formsWrap = document.getElementById('resp-html-forms-wrap');
+    const countEl = document.getElementById('resp-forms-count');
+    const copyFormsBtn = document.getElementById('resp-forms-copy-btn');
+    const formsBtn = subtabs?.querySelector('[data-resp-view="forms"]');
+
+    if (subtabs) subtabs.style.display = 'flex';
+    if (formsBtn) formsBtn.style.display = forms.length ? '' : 'none';
+    if (countEl) countEl.textContent = forms.length ? `(${forms.length})` : '';
+    if (forms.length) renderHtmlFormsPanel(formsWrap, forms, pageUrl);
+
+    document.querySelectorAll('.resp-html-subtab').forEach((btn) => {
+        btn.onclick = () => setResponseHtmlView(btn.dataset.respView || 'body');
+    });
+
+    if (copyFormsBtn) {
+        copyFormsBtn.style.display = forms.length ? '' : 'none';
+        copyFormsBtn.onclick = forms.length ? () => {
+            navigator.clipboard.writeText(JSON.stringify(_respHtmlFormsPayload, null, 2)).then(
+                () => flashBtn(copyFormsBtn, '✓ Copied'),
+                () => flashBtn(copyFormsBtn, '✗ Failed'),
+            );
+        } : null;
+    }
+
+    setResponseHtmlView('body');
 }
 
 function renderHtmlFormsPanel(container, forms, pageUrl = '') {
@@ -3590,50 +3693,6 @@ function renderHtmlFormsPanel(container, forms, pageUrl = '') {
         card.appendChild(head);
         card.appendChild(body);
         container.appendChild(card);
-    }
-}
-
-function setResponseHtmlView(view) {
-    _respHtmlView = view === 'forms' ? 'forms' : 'body';
-    const bodyWrap = document.getElementById('response-body-wrap');
-    const formsWrap = document.getElementById('resp-html-forms-wrap');
-    document.querySelectorAll('.resp-html-subtab').forEach((btn) => {
-        btn.classList.toggle('active', (btn.dataset.respView || 'body') === _respHtmlView);
-    });
-    if (bodyWrap) bodyWrap.style.display = _respHtmlView === 'forms' ? 'none' : '';
-    if (formsWrap) formsWrap.style.display = _respHtmlView === 'forms' ? 'block' : 'none';
-    scheduleDetailFindRefresh();
-}
-
-function setupResponseHtmlViews(htmlText, contentType, pageUrl = '') {
-    resetResponseHtmlViews();
-    if (!looksLikeHtmlResponse(htmlText, contentType) || !htmlText) return;
-
-    const forms = parseHtmlFormsFromString(htmlText);
-    if (!forms.length) return;
-
-    _respHtmlFormsPayload = forms;
-    const subtabs = document.getElementById('resp-html-subtabs');
-    const formsWrap = document.getElementById('resp-html-forms-wrap');
-    const countEl = document.getElementById('resp-forms-count');
-    const copyFormsBtn = document.getElementById('resp-forms-copy-btn');
-
-    if (subtabs) subtabs.style.display = 'flex';
-    if (countEl) countEl.textContent = `(${forms.length})`;
-    renderHtmlFormsPanel(formsWrap, forms, pageUrl);
-
-    document.querySelectorAll('.resp-html-subtab').forEach((btn) => {
-        btn.onclick = () => setResponseHtmlView(btn.dataset.respView || 'body');
-    });
-
-    if (copyFormsBtn) {
-        copyFormsBtn.style.display = '';
-        copyFormsBtn.onclick = () => {
-            navigator.clipboard.writeText(JSON.stringify(_respHtmlFormsPayload, null, 2)).then(
-                () => flashBtn(copyFormsBtn, '✓ Copied'),
-                () => flashBtn(copyFormsBtn, '✗ Failed'),
-            );
-        };
     }
 }
 

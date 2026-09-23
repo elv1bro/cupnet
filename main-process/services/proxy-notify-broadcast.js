@@ -17,6 +17,8 @@ function createProxyNotifyBroadcast({
     getConnectedResolvedVars,
     getCurrentTrafficMode,
     getMitmReady,
+    getMitmState,
+    getMitmError,
 }) {
     let _lastProxyStatusSig = '';
 
@@ -113,7 +115,9 @@ function createProxyNotifyBroadcast({
 
     function notifyMitmReady() {
         const mitmReady = typeof getMitmReady === 'function' ? getMitmReady() : false;
-        const info = { ready: !!mitmReady, ts: Date.now() };
+        const state = typeof getMitmState === 'function' ? getMitmState() : (mitmReady ? 'ready' : 'starting');
+        const error = typeof getMitmError === 'function' ? getMitmError() : '';
+        const info = { ready: !!mitmReady, state, error: error || '', ts: Date.now() };
         for (const win of BrowserWindow.getAllWindows()) {
             try {
                 if (!win.isDestroyed()) win.webContents.send('mitm-ready-changed', info);

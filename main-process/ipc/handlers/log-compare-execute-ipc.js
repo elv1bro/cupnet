@@ -407,7 +407,7 @@ function registerLogCompareExecuteIpc(ctx) {
             // Use AzureTLS worker only in MITM mode.
             if (ctx.getCurrentTrafficMode() === 'mitm' && ctx.mitmProxy && ctx.mitmProxy.worker && ctx.mitmProxy.worker.ready) {
                 const profile = tlsProfile || ctx.loadSettings().tlsProfile || 'chrome';
-                const currentProxy = ctx.persistentAnonymizedProxyUrl || ctx.loadSettings().currentProxy || null;
+                const currentProxy = ctx.persistentAnonymizedProxyUrl || null;
                 const workerReq = ctx.mitmProxy.worker.request({
                     method:            reqMethod,
                     url,

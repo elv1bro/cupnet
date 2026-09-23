@@ -1350,6 +1350,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; f
                             Applied to all outbound connections via AzureTLS MITM proxy.
                         </div>
 
+                        <label class="tls-radio-label" style="margin-top:12px;display:flex;align-items:flex-start;gap:8px;cursor:pointer">
+                            <input type="checkbox" id="tls-force-http1" style="margin-top:2px">
+                            <span>
+                                <b>Force HTTP/1.1</b>
+                                <span class="fp-sublabel" style="display:block;margin-top:4px;line-height:1.45">
+                                    Use HTTP/1.1 instead of HTTP/2 to the origin. Helps with some upstream proxies that reset HTTP/2 tunnels
+                                    (<code>connection termination</code>, <code>upstream connect error</code>). Reconnect after changing.
+                                </span>
+                            </span>
+                        </label>
+
                         <!-- Deep Customization — Coming Soon -->
                         <details class="deep-custom-section" disabled>
                             <summary class="deep-custom-summary">

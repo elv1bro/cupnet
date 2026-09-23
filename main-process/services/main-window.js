@@ -1,8 +1,9 @@
 'use strict';
 
 const { screen } = require('electron');
+const { registerTrustedShell } = require('../ipc/ipc-trusted-sender.js');
 const { confirmOpenAnotherTab } = require('./tab-open-confirm');
-const { resolveNavigationUrlWithBase } = require('../../utils');
+const { resolveLoadUrlForWebContents } = require('../../utils');
 const { toggleManagedDevToolsForTab } = require('./managed-devtools');
 const windowStateStore = require('./window-state-store');
 
@@ -88,6 +89,7 @@ function createMainWindowApi(d) {
             icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js') },
         });
+        registerTrustedShell(d.mainWindow.webContents);
         d.mainWindow.loadFile(d.getAssetPath('browser.html'));
         d.mainWindow.once('ready-to-show', () => {
             applyRuntimeAppIcon();
@@ -103,6 +105,24 @@ function createMainWindowApi(d) {
 
         d.mainWindow.webContents.once('did-finish-load', async () => {
             const s = d.loadSettings();
+
+            // MITM CA trust + session proxy must be ready before tabs or IP/geo checks.
+            try {
+                const mitmP = typeof d.getMitmStartPromise === 'function' ? d.getMitmStartPromise() : null;
+                if (mitmP) {
+                    await Promise.race([
+                        mitmP,
+                        new Promise((_, reject) => setTimeout(
+                            () => reject(new Error('MITM startup timed out after 120s')),
+                            120_000,
+                        )),
+                    ]);
+                }
+            } catch (e) {
+                d.sysLog?.('warn', 'startup', `MITM init before first tab failed: ${e?.message || e}`);
+            }
+            d.enableIpGeoChecks?.();
+
             d.tabManager.setPasteUnlock(s.pasteUnlock !== false);
             if (s.trafficOpts) d.applyTrafficFilters(s.trafficOpts);
 
@@ -128,6 +148,7 @@ function createMainWindowApi(d) {
                 corsBypassEnabled: s.corsBypassEnabled === true,
             });
             d.notifyProxyProfilesList();
+            await new Promise((r) => setTimeout(r, 250));
             d.notifyProxyStatus();
 
             try {
@@ -144,13 +165,13 @@ function createMainWindowApi(d) {
 
         d.mainWindow.webContents.on('before-input-event', (event, input) => {
             const tab = d.tabManager ? d.tabManager.getActiveTab() : null;
-            if (!tab || tab.view.webContents.isDestroyed()) return;
+            if (!tab || !tab.view || tab.view.webContents.isDestroyed()) return;
             if (input.key === 'F12' && input.type === 'keyDown') {
                 toggleActiveTabDevTools();
                 event.preventDefault();
             }
             if ((input.key === 'F5' || (input.key === 'r' && input.control)) && input.type === 'keyDown') {
-                tab.view.webContents.reload();
+                d.tabManager.reloadActiveTab(tab);
                 event.preventDefault();
             }
         });
@@ -181,7 +202,11 @@ function createMainWindowApi(d) {
                 if (!(await confirmOpenAnotherTab(d))) return;
                 const opener = d.tabManager.getTab(tabId);
                 const base = data.baseUrl || opener?.view?.webContents?.getURL() || opener?.url || '';
-                const resolved = resolveNavigationUrlWithBase(data.url, base) || data.url;
+                const resolved = resolveLoadUrlForWebContents(data.url, base);
+                if (!resolved) {
+                    console.warn(`[tab] open-in-new-tab skipped unresolved url: ${String(data.url || '').slice(0, 120)}`);
+                    return;
+                }
                 const newTabId = await d.tabManager.createTab({
                     proxyRules: d.persistentAnonymizedProxyUrl || null,
                     url: resolved,
@@ -317,9 +342,15 @@ function createMainWindowApi(d) {
             ]},
             { label: 'View', submenu: [
                 { label: 'Reload Page', accelerator: 'CmdOrCtrl+R',
-                  click: () => d.tabManager?.getActiveTab()?.view.webContents.reload() },
+                  click: () => {
+                      const tab = d.tabManager?.getActiveTab();
+                      if (tab) d.tabManager.reloadActiveTab(tab);
+                  } },
                 { label: 'Force Reload', accelerator: 'CmdOrCtrl+Shift+R',
-                  click: () => d.tabManager?.getActiveTab()?.view.webContents.reloadIgnoringCache() },
+                  click: () => {
+                      const tab = d.tabManager?.getActiveTab();
+                      if (tab) d.tabManager.reloadActiveTab(tab, { ignoreCache: true });
+                  } },
                 { label: 'Developer Tools (Page)', accelerator: 'F12',
                   click: () => toggleActiveTabDevTools() },
                 { label: 'Developer Tools (Shell)', accelerator: 'CmdOrCtrl+Shift+I',

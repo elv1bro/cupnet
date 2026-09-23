@@ -28,6 +28,7 @@ const { registerCredentialsIpc } = require('./handlers/credentials-ipc');
 const { registerRequestEditorIpc } = require('./handlers/request-editor-ipc');
 const { registerSessionProfileIpc } = require('./handlers/session-profile-ipc');
 const { registerPageHttpLabIpc } = require('./handlers/page-http-lab-ipc');
+const { registerProfileIpc } = require('./handlers/profile-ipc');
 
 function registerMainProcessIpc(ctx) {
     registerMitmStartupIpc(ctx);
@@ -54,6 +55,7 @@ function registerMainProcessIpc(ctx) {
     registerRequestEditorIpc(ctx);
     registerSessionProfileIpc(ctx);
     registerPageHttpLabIpc(ctx);
+    registerProfileIpc(ctx);
 }
 
 module.exports = { registerMainProcessIpc };

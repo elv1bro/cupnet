@@ -61,7 +61,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getDirectIp:     ()     => ipcRenderer.invoke('get-direct-ip'),
     getCurrentProxy: ()     => ipcRenderer.invoke('get-current-proxy'),
     getMitmReady:    ()     => ipcRenderer.invoke('mitm-ready-state'),
-    getMitmCaCert:   ()     => ipcRenderer.invoke('mitm-get-ca-cert'),
     openProxyManager:()     => ipcRenderer.invoke('open-proxy-manager'),
     onProxyStatusChanged: (cb) => {
         ipcRenderer.removeAllListeners('proxy-status-changed');
@@ -76,6 +75,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // Navigation from new-tab.html search bar — load URL in current tab
     navigateTo: (url) => ipcRenderer.send('navigate-to', url),
+    retryFailedNavigation: () => ipcRenderer.send('retry-failed-navigation'),
 
     reportHttpLabUiState: (state) => ipcRenderer.send('http-lab-ui-state', state),
 
@@ -118,29 +118,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     extProxySetPort:   (oldPort, newPort) => ipcRenderer.invoke('ext-proxy:set-port', oldPort, newPort),
     extProxySetRedirects: (port, follow) => ipcRenderer.invoke('ext-proxy:set-redirects', port, follow),
 
-    // Settings page (must mirror preload.js APIs used by settings.html / settings-renderer.js)
-    openSettingsTab:    ()        => ipcRenderer.invoke('open-settings-tab'),
-    getSettingsAll:     ()        => ipcRenderer.invoke('get-settings-all'),
-    saveActivityMonitorSettings: (opts) => ipcRenderer.invoke('save-activity-monitor-settings', opts),
-    resetOnboardingWizard: ()     => ipcRenderer.invoke('reset-onboarding-wizard'),
-    setPasteUnlock:     (enabled) => ipcRenderer.invoke('set-paste-unlock', enabled),
-    setMaxTabsBeforeWarning: (n) => ipcRenderer.invoke('set-max-tabs-before-warning', n),
-    getHomepage:        ()        => ipcRenderer.invoke('get-homepage'),
-    setHomepage:        (url)     => ipcRenderer.invoke('set-homepage', url),
-    getMitmCaCert:      ()        => ipcRenderer.invoke('mitm-get-ca-cert'),
-    saveFilterPatterns: (patterns)=> ipcRenderer.invoke('save-filter-patterns', patterns),
-    saveTrackingSettings:(cfg)    => ipcRenderer.invoke('save-tracking-settings', cfg),
-    solveTurnstileCaptcha: (tabId, captcha, options) => ipcRenderer.invoke('solve-turnstile-captcha', tabId, captcha, options),
-    injectTurnstileToken: (tabId, payload) => ipcRenderer.invoke('inject-turnstile-token', tabId, payload),
-    getAppMetrics:      ()        => ipcRenderer.invoke('get-app-metrics'),
-    enumerateMediaDevices: ()     => ipcRenderer.invoke('enumerate-media-devices'),
-    saveDevicePermissions: (cfg) => ipcRenderer.invoke('save-device-permissions', cfg),
-    saveToolbarToolsPlacement: (p) => ipcRenderer.invoke('save-toolbar-tools-placement', p),
-    saveToolbarToolsMiniAlign: (a) => ipcRenderer.invoke('save-toolbar-tools-mini-align', a),
-    saveSearchEngineSettings: (opts) => ipcRenderer.invoke('save-search-engine-settings', opts),
-    exportSettingsJson: () => ipcRenderer.invoke('export-settings-json'),
-    importSettingsJson: (json) => ipcRenderer.invoke('import-settings-json', json),
-    resetSettingsToDefaults: () => ipcRenderer.invoke('reset-settings-to-defaults'),
+    // UI prefs only (new-tab quick links) — no privileged settings export/import
     getUiPref: (key, fallback) => ipcRenderer.invoke('get-ui-pref', key, fallback),
     setUiPref: (key, value) => ipcRenderer.invoke('set-ui-pref', key, value),
 });

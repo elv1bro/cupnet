@@ -5,6 +5,10 @@ const require = createRequire(import.meta.url);
 const {
     resolveNavigationUrl,
     resolveNavigationUrlWithBase,
+    isWebContentsLoadUrl,
+    resolveLoadUrlForWebContents,
+    resolveRedirectLocationHeader,
+    absolutizeMitmRedirectResponse,
     formatBytes,
     parseProxyTemplate,
     extractTemplateVars,
@@ -26,6 +30,42 @@ describe('utils', () => {
             .toBe('https://app.example.com/account/login?next=%2Ffoo');
         expect(resolveNavigationUrlWithBase('https://example.com/x', base))
             .toBe('https://example.com/x');
+    });
+
+    it('resolveLoadUrlForWebContents never returns bare relative paths', () => {
+        expect(resolveLoadUrlForWebContents('/', '')).toMatch(/^https:\/\//);
+        expect(resolveLoadUrlForWebContents('/Global/Account/LogIn', '')).toMatch(/^https:\/\//);
+        expect(resolveLoadUrlForWebContents('/foo', 'https://bls.example.com/page'))
+            .toBe('https://bls.example.com/foo');
+        expect(resolveLoadUrlForWebContents('https://example.com/x', '')).toBe('https://example.com/x');
+        expect(isWebContentsLoadUrl('/')).toBe(false);
+        expect(isWebContentsLoadUrl('https://example.com/')).toBe(true);
+    });
+
+    it('resolveRedirectLocationHeader absolutizes site-relative redirects', () => {
+        const req = 'http://armenia.blsspainrussia.ru/Global/home';
+        expect(resolveRedirectLocationHeader('/Global/Account/LogIn?ReturnUrl=%2Ffoo', req))
+            .toBe('http://armenia.blsspainrussia.ru/Global/Account/LogIn?ReturnUrl=%2Ffoo');
+        expect(resolveRedirectLocationHeader('https://other.example/x', req))
+            .toBe('https://other.example/x');
+        const out = absolutizeMitmRedirectResponse({
+            statusCode: 302,
+            headers: { Location: '/Global/Account/LogIn' },
+        }, req);
+        expect(out.headers.Location).toBe('http://armenia.blsspainrussia.ru/Global/Account/LogIn');
+    });
+
+    it('resolveRedirectLocationHeader blocks https→http downgrade on same host', () => {
+        const req = 'https://armenia.blsspainrussia.ru/Global/home';
+        expect(resolveRedirectLocationHeader('http://armenia.blsspainrussia.ru/Global/Account/LogIn', req))
+            .toBe('https://armenia.blsspainrussia.ru/Global/Account/LogIn');
+        expect(resolveRedirectLocationHeader('http://other.example/login', req))
+            .toBe('http://other.example/login');
+        const out = absolutizeMitmRedirectResponse({
+            statusCode: 302,
+            headers: { Location: 'http://armenia.blsspainrussia.ru/Global/Account/LogIn' },
+        }, req);
+        expect(out.headers.Location).toBe('https://armenia.blsspainrussia.ru/Global/Account/LogIn');
     });
 
     it('formatBytes formats small sizes', () => {

@@ -8,8 +8,36 @@ function parseHeaders(headers) {
     return headers;
 }
 
+/**
+ * Decode stored binary-body markers into readable text:
+ *   MITM: `__b64__:DATA`
+ *   CDP:  `<base64|mime|image/png|DATA>`
+ * Returns decoded UTF-8 text when it is printable, a `[Binary body — N bytes]`
+ * placeholder for real binary payloads, and the input unchanged otherwise.
+ */
+function decodeBodyMarker(body) {
+    if (typeof body !== 'string') return body;
+    let b64 = null;
+    if (body.startsWith('__b64__:')) {
+        b64 = body.slice(8);
+    } else if (body.startsWith('<base64|')) {
+        const inner = body.slice(8, body.endsWith('>') ? body.length - 1 : body.length);
+        const parts = inner.split('|');
+        if (parts[0] === 'mime' && parts.length >= 3) b64 = parts.slice(2).join('|');
+    }
+    if (b64 == null) return body;
+    let buf;
+    try { buf = Buffer.from(b64, 'base64'); } catch { return body; }
+    const text = buf.toString('utf8');
+    // Control chars (except \t \n \r) or replacement chars → real binary payload
+    if (/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFD]/.test(text.slice(0, 4096))) {
+        return `[Binary body — ${buf.length} bytes]`;
+    }
+    return text;
+}
+
 function normalizeBody(body) {
-    const raw = body == null ? '' : String(body);
+    const raw = body == null ? '' : String(decodeBodyMarker(body));
     const compact = raw.replace(/\s+/g, ' ').trim();
     return {
         raw,

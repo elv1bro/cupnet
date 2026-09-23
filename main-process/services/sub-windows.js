@@ -1,8 +1,10 @@
 'use strict';
 
 const { screen } = require('electron');
+const { registerTrustedShell } = require('../ipc/ipc-trusted-sender.js');
 const { getNoteDomainFromUrl } = require('../../note-domain-utils.js');
 const { clearCredentialsVaultSession } = require('../ipc/handlers/credentials-ipc.js');
+const profileSession = require('./profile-session.js');
 const windowStateStore = require('./window-state-store');
 
 /**
@@ -16,6 +18,13 @@ function createSubWindowsApi(d) {
             title: title || 'Request Editor', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false },
         });
+        registerTrustedShell(win.webContents);
+        return win;
+    }
+
+    function _spawnTrustedToolWindow(opts) {
+        const win = new d.BrowserWindow(opts);
+        registerTrustedShell(win.webContents);
         return win;
     }
 
@@ -78,7 +87,7 @@ function createSubWindowsApi(d) {
             savedLv = { ...savedLv, ...windowStateStore.sanitizeBounds(savedLv, display) };
         } catch (_) { /* ignore */ }
 
-        const win = new d.BrowserWindow({
+        const win = _spawnTrustedToolWindow({
             x: savedLv.x,
             y: savedLv.y,
             width: savedLv.width,
@@ -275,7 +284,7 @@ function createSubWindowsApi(d) {
             _broadcastCompareUpdated();
             return d.compareViewerWindow;
         }
-        d.compareViewerWindow = new d.BrowserWindow({
+        d.compareViewerWindow = _spawnTrustedToolWindow({
             width: 1360,
             height: 920,
             minWidth: 980,
@@ -303,7 +312,7 @@ function createSubWindowsApi(d) {
             d.consoleViewerWindow.focus();
             return;
         }
-        d.consoleViewerWindow = new d.BrowserWindow({
+        d.consoleViewerWindow = _spawnTrustedToolWindow({
             width: 1000, height: 600, minWidth: 600, minHeight: 300,
             title: 'System Console', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false },
@@ -318,7 +327,7 @@ function createSubWindowsApi(d) {
             _sendAnalyzerTabs();
             return;
         }
-        d.pageAnalyzerWindow = new d.BrowserWindow({
+        d.pageAnalyzerWindow = _spawnTrustedToolWindow({
             width: 1020, height: 700, minWidth: 700, minHeight: 450,
             title: 'Page Analyzer', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false },
@@ -344,7 +353,7 @@ function createSubWindowsApi(d) {
             d.notesWindow.webContents.send('notes-context-update', { pageUrl, domain });
             return;
         }
-        d.notesWindow = new d.BrowserWindow({
+        d.notesWindow = _spawnTrustedToolWindow({
             width: 920, height: 640, minWidth: 560, minHeight: 400,
             title: 'Notes', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false },
@@ -388,7 +397,7 @@ function createSubWindowsApi(d) {
             } catch { /* ignore */ }
             return;
         }
-        d.credentialsWindow = new d.BrowserWindow({
+        d.credentialsWindow = _spawnTrustedToolWindow({
             width: 960, height: 640, minWidth: 720, minHeight: 480,
             title: 'Credentials', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false },
@@ -400,7 +409,9 @@ function createSubWindowsApi(d) {
             } catch { /* ignore */ }
         });
         d.credentialsWindow.on('closed', () => {
-            clearCredentialsVaultSession();
+            if (!profileSession.isProfileActive()) {
+                clearCredentialsVaultSession();
+            }
             d.credentialsWindow = null;
             try {
                 if (d.mainWindow && !d.mainWindow.isDestroyed()) {
@@ -430,7 +441,7 @@ function createSubWindowsApi(d) {
             d.ivacScoutWindow.focus();
             return;
         }
-        d.ivacScoutWindow = new d.BrowserWindow({
+        d.ivacScoutWindow = _spawnTrustedToolWindow({
             width: 980, height: 760, minWidth: 740, minHeight: 540,
             title: 'API Scout', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false },
@@ -439,7 +450,11 @@ function createSubWindowsApi(d) {
         d.ivacScoutWindow.webContents.once('did-finish-load', () => {
             d.ivacScoutWindow.webContents.send('ivac-scout-state', { running: !!d.ivacScoutProcess });
         });
-        d.ivacScoutWindow.on('closed', () => { d.ivacScoutWindow = null; });
+        d.ivacScoutWindow.on('closed', () => {
+            d.ivacScoutWindow = null;
+            // Don't orphan the scout child process when its window is closed mid-run.
+            try { stopIvacScoutProcess(); } catch (_) { /* ignore */ }
+        });
     }
 
     function sendIvacScoutLog(line) {
@@ -653,7 +668,7 @@ function createSubWindowsApi(d) {
             if (initialTabId) d.cookieManagerWindow.webContents.send('set-active-tab', initialTabId);
             return;
         }
-        d.cookieManagerWindow = new d.BrowserWindow({
+        d.cookieManagerWindow = _spawnTrustedToolWindow({
             width: 980, height: 680, minWidth: 700, minHeight: 480,
             title: 'Cookie Manager', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false }
@@ -671,7 +686,7 @@ function createSubWindowsApi(d) {
             d.dnsManagerWindow.focus();
             return;
         }
-        d.dnsManagerWindow = new d.BrowserWindow({
+        d.dnsManagerWindow = _spawnTrustedToolWindow({
             width: 980, height: 660, minWidth: 760, minHeight: 480,
             title: 'DNS Manager', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false }
@@ -718,7 +733,7 @@ function createSubWindowsApi(d) {
             winOpts.parent = d.mainWindow;
         }
 
-        d.sessionProfileModalWindow = new d.BrowserWindow(winOpts);
+        d.sessionProfileModalWindow = _spawnTrustedToolWindow(winOpts);
         d.sessionProfileModalWindow.loadFile(d.getAssetPath('session-profile-modal.html'));
         d.sessionProfileModalWindow.once('ready-to-show', () => {
             if (d.sessionProfileModalWindow && !d.sessionProfileModalWindow.isDestroyed()) {
@@ -755,7 +770,7 @@ function createSubWindowsApi(d) {
             }
         }
 
-        d.loggingModalWindow = new d.BrowserWindow({
+        d.loggingModalWindow = _spawnTrustedToolWindow({
             width: W, height: H,
             x, y,
             resizable: false,
@@ -825,7 +840,7 @@ function createSubWindowsApi(d) {
             return;
         }
 
-        d.siteInfoPopoverWindow = new d.BrowserWindow({
+        d.siteInfoPopoverWindow = _spawnTrustedToolWindow({
             width: W,
             height: H,
             x,
@@ -872,7 +887,7 @@ function createSubWindowsApi(d) {
         if (d.proxyManagerWindow && !d.proxyManagerWindow.isDestroyed()) {
             d.proxyManagerWindow.focus(); return;
         }
-        d.proxyManagerWindow = new d.BrowserWindow({
+        d.proxyManagerWindow = _spawnTrustedToolWindow({
             width: 920, height: 620, minWidth: 680, minHeight: 440,
             title: 'Proxy Manager', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false }
@@ -896,7 +911,7 @@ function createSubWindowsApi(d) {
             return;
         }
         const parent = d.mainWindow && !d.mainWindow.isDestroyed() ? d.mainWindow : null;
-        d.onboardingWindow = new d.BrowserWindow({
+        d.onboardingWindow = _spawnTrustedToolWindow({
             width: 540,
             height: 480,
             minWidth: 400,
@@ -918,7 +933,7 @@ function createSubWindowsApi(d) {
 
     function createRulesWindow() {
         if (d.rulesWindow) { d.rulesWindow.focus(); return; }
-        d.rulesWindow = new d.BrowserWindow({
+        d.rulesWindow = _spawnTrustedToolWindow({
             width: 900, height: 700, minWidth: 640, minHeight: 480,
             title: 'Rules & Interceptor', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false }
@@ -956,7 +971,7 @@ function createSubWindowsApi(d) {
             }
             return;
         }
-        d.breakpointWindow = new d.BrowserWindow({
+        d.breakpointWindow = _spawnTrustedToolWindow({
             width: 680, height: 560, minWidth: 480, minHeight: 420,
             title: 'Breakpoint', icon: d.iconPath,
             webPreferences: {

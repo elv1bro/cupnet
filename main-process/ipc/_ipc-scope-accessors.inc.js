@@ -25,8 +25,8 @@ function ipcScopeGet(k) {
         case 'app': return app;
         case 'applyEffectiveTrafficMode': return applyEffectiveTrafficMode;
         case 'applyFingerprintFromProfile': return applyFingerprintFromProfile;
-        case 'applyFingerprintToWebContents': return applyFingerprintToWebContents;
         case 'applyFingerprintToAllTabs': return applyFingerprintToAllTabs;
+        case 'applyFingerprintToWebContents': return applyFingerprintToWebContents;
         case 'applyTrafficFilters': return applyTrafficFilters;
         case 'broadcastInterceptRuleMatched': return broadcastInterceptRuleMatched;
         case 'broadcastTlsProfileChanged': return broadcastTlsProfileChanged;
@@ -60,6 +60,7 @@ function ipcScopeGet(k) {
         case 'createProxyManagerWindow': return createProxyManagerWindow;
         case 'createRequestEditorWindow': return createRequestEditorWindow;
         case 'createRulesWindow': return createRulesWindow;
+        case 'createSessionProfileModalWindow': return createSessionProfileModalWindow;
         case 'createSiteInfoPopoverWindow': return createSiteInfoPopoverWindow;
         case 'currentSessionId': return currentSessionId;
         case 'db': return db;
@@ -99,6 +100,8 @@ function ipcScopeGet(k) {
         case 'maybeLogStartupMetrics': return maybeLogStartupMetrics;
         case 'mitmProxy': return mitmProxy;
         case 'mitmReady': return mitmReady;
+        case 'mitmState': return mitmState;
+        case 'mitmError': return mitmError;
         case 'nativeImage': return nativeImage;
         case 'netFetchWithTimeout': return netFetchWithTimeout;
         case 'networkPolicy': return networkPolicy;
@@ -121,9 +124,11 @@ function ipcScopeGet(k) {
         case 'quickChangeProxy': return quickChangeProxy;
         case 'reattachInterceptorToAllTabs': return reattachInterceptorToAllTabs;
         case 'requestScreenshot': return requestScreenshot;
+        case 'restartMitmProxy': return restartMitmProxy;
         case 'resetFingerprintOnWebContents': return resetFingerprintOnWebContents;
         case 'resolveNavigationUrl': return resolveNavigationUrl;
         case 'resolveNavigationUrlWithBase': return resolveNavigationUrlWithBase;
+        case 'resolveLoadUrlForWebContents': return resolveLoadUrlForWebContents;
         case 'requestEditorExtraWindows': return requestEditorExtraWindows;
         case 'requestEditorWindow': return requestEditorWindow;
         case 'rulesWindow': return rulesWindow;
@@ -133,6 +138,7 @@ function ipcScopeGet(k) {
         case 'saveSettings': return saveSettings;
         case 'sendLogStatus': return sendLogStatus;
         case 'session': return session;
+        case 'sessionProfileModalWindow': return sessionProfileModalWindow;
         case 'siteInfoPopoverWindow': return siteInfoPopoverWindow;
         case 'settingsStore': return settingsStore;
         case 'setupNetworkLogging': return setupNetworkLogging;

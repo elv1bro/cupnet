@@ -8,7 +8,9 @@ const {
     getNoteIndexDomainFromMatch,
     noteMatchesUrlMatch,
 } = require('../../../note-domain-utils.js');
-const { encryptNotePayload, decryptNotePayload } = require('../../../notes-crypto.js');
+const { encryptNotePayload, decryptNotePayload, encryptNotePayloadWithKey, decryptNotePayloadWithKey } = require('../../../notes-crypto.js');
+const profileSession = require('../../services/profile-session.js');
+const vaultSession = require('../../services/vault-session-service.js');
 const TurndownService = require('turndown');
 
 const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', hr: '---' });
@@ -143,11 +145,68 @@ function resolveNoteDomains(payload) {
     return { urlMatch, domain };
 }
 
+function _profileNoteFilter(extra = {}) {
+    const pid = profileSession.getActiveVaultId();
+    if (pid != null) return { ...extra, profileId: pid };
+    return extra;
+}
+
+function _resolveNotePassword(explicitPassword) {
+    const pw = String(explicitPassword || '');
+    if (pw) return pw;
+    return '';
+}
+
+function _decryptNoteBody(row, password) {
+    const buf = Buffer.isBuffer(row.body_encrypted)
+        ? row.body_encrypted
+        : Buffer.from(row.body_encrypted || []);
+    const key = vaultSession.getMasterKey();
+    if (key) {
+        try {
+            return decryptNotePayloadWithKey(buf, key, password || null);
+        } catch { /* fall through */ }
+    }
+    if (password) return decryptNotePayload(buf, password);
+    throw new Error('Note locked');
+}
+
+function migrateNotesToMasterKey(db, profilePassword) {
+    if (!db || typeof db.listUserNotes !== 'function') return;
+    const key = vaultSession.getMasterKey();
+    if (!key || !profilePassword) return;
+    const pid = profileSession.getActiveVaultId();
+    const filter = pid != null ? { profileId: pid } : {};
+    let rows = [];
+    try { rows = db.listUserNotes(filter); } catch { return; }
+    for (const row of rows) {
+        if (!row.is_encrypted || !row.body_encrypted) continue;
+        const buf = Buffer.isBuffer(row.body_encrypted)
+            ? row.body_encrypted
+            : Buffer.from(row.body_encrypted || []);
+        if (buf.subarray(0, 4).equals(Buffer.from([0x43, 0x4e, 0x30, 0x32]))) continue;
+        try {
+            const plain = decryptNotePayload(buf, profilePassword);
+            const migrated = encryptNotePayloadWithKey(plain, key);
+            db.saveUserNote({
+                id: row.id,
+                domain: row.domain,
+                url_match: row.url_match || '',
+                title: row.title || '',
+                tags: row.tags || '',
+                is_pinned: row.is_pinned,
+                body_encrypted: migrated,
+                is_encrypted: 1,
+            });
+        } catch { /* ignore */ }
+    }
+}
+
 function registerNotesIpc(ctx) {
     ctx.ipcMain.handle('notes-list', (_, filter) => {
         if (!ctx.db) return [];
         try {
-            const f = filter || {};
+            const f = _profileNoteFilter(filter || {});
             let rows = ctx.db.listUserNotes(f);
             if (f.refineByUrlMatch && f.pageUrl) {
                 const pu = String(f.pageUrl);
@@ -179,6 +238,20 @@ function registerNotesIpc(ctx) {
             return { ...base, title: row.title || '', body: bodyMd, bodyHtml: await mdToHtml(bodyMd), locked: false };
         }
         if (!password) {
+            try {
+                const txt = _decryptNoteBody(row, '');
+                const j = JSON.parse(txt);
+                let body = '';
+                if (j && typeof j.body === 'string') body = j.body;
+                const titlePlain = row.title || (j && typeof j.title === 'string' ? j.title : '') || '';
+                return {
+                    ...base,
+                    title: titlePlain,
+                    body,
+                    bodyHtml: await mdToHtml(body),
+                    locked: false,
+                };
+            } catch { /* fall through to locked */ }
             return {
                 ...base,
                 title: row.title || '',
@@ -225,8 +298,10 @@ function registerNotesIpc(ctx) {
 
         const bodyMd = p.bodyHtml != null ? htmlToMd(p.bodyHtml) : String(p.body || '');
 
+        const profileId = profileSession.getActiveVaultId() || 0;
+
         if (isEnc) {
-            const pw = String(p.password || '');
+            const pw = _resolveNotePassword(p.password);
             if (!pw) throw new Error('Encryption password is required');
             const buf = encryptNotePayload(JSON.stringify({ body: bodyMd }), pw);
             return ctx.db.saveUserNoteAsync({
@@ -239,6 +314,7 @@ function registerNotesIpc(ctx) {
                 body_encrypted: buf,
                 tags,
                 is_pinned: isPinned,
+                profile_id: profileId,
             });
         }
         return ctx.db.saveUserNoteAsync({
@@ -251,6 +327,7 @@ function registerNotesIpc(ctx) {
             is_encrypted: false,
             tags,
             is_pinned: isPinned,
+            profile_id: profileId,
         });
     });
 
@@ -283,7 +360,7 @@ function registerNotesIpc(ctx) {
         if (!row.is_encrypted) {
             bodyMd = row.body_plain || '';
         } else {
-            const pw = String(p.password || '');
+            const pw = _resolveNotePassword(p.password);
             if (!pw) throw new Error('Password required for encrypted note');
             try {
                 const buf = Buffer.isBuffer(row.body_encrypted)
@@ -336,4 +413,4 @@ function registerNotesIpc(ctx) {
     });
 }
 
-module.exports = { registerNotesIpc };
+module.exports = { registerNotesIpc, migrateNotesToMasterKey };

@@ -8,6 +8,10 @@ function registerMitmTlsResilienceIpc(ctx) {
     // ── MITM IPC handlers — registered immediately so they work even before proxy starts ──
     const EMPTY_STATS = { requests:0, errors:0, pending:0, avgMs:0, minMs:0, maxMs:0, reqPerSec:0, workerReady:false, browser:'chrome' };
     ctx.ipcMain.handle('mitm-get-stats',    ()         => ctx.mitmProxy ? ctx.mitmProxy.getStats() : EMPTY_STATS);
+    ctx.ipcMain.handle('mitm-restart', async () => {
+        if (typeof ctx.restartMitmProxy === 'function') return ctx.restartMitmProxy();
+        return { success: false, error: 'restart unavailable' };
+    });
     ctx.ipcMain.handle('stability-metrics-snapshot', () => ({
         counters: { ...ctx.stabilityMetrics.counters },
         gauges: { ...ctx.stabilityMetrics.gauges },
@@ -71,6 +75,8 @@ function registerMitmTlsResilienceIpc(ctx) {
             if (ctx.mitmProxy) {
                 ctx.mitmProxy.setUpstream(null);
                 ctx.mitmProxy._activeJa3 = null;
+                // Direct is an intentional user choice — lift any fail-closed egress block.
+                ctx.mitmProxy.setEgressBlocked?.(false);
             }
 
             const p = ['chrome','firefox','safari','ios','edge','opera'].includes(tlsProfile) ? tlsProfile : 'chrome';

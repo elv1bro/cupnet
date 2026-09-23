@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+    <title>CupNet — Sign in</title>
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --pg-bg: #0f1117;
+            --pg-surface: rgba(15, 23, 42, 0.72);
+            --pg-surface-hover: rgba(30, 41, 59, 0.85);
+            --pg-border: rgba(148, 163, 184, 0.14);
+            --pg-border-strong: rgba(148, 163, 184, 0.28);
+            --pg-text: #f1f5f9;
+            --pg-muted: #94a3b8;
+            --pg-dim: #64748b;
+            --pg-accent-a: #38bdf8;
+            --pg-accent-b: #6366f1;
+            --pg-accent-glow: rgba(56, 189, 248, 0.22);
+            --pg-success: #34d399;
+            --pg-warn: #fbbf24;
+            --pg-error: #f87171;
+            --pg-radius: 14px;
+            --pg-radius-sm: 10px;
+            --pg-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+
+        html, body {
+            height: 100%;
+            overflow: hidden;
+            background: transparent;
+            font-family: var(--pg-font);
+            color: var(--pg-text);
+            -webkit-font-smoothing: antialiased;
+            font-size: 14px;
+            line-height: 1.45;
+        }
+
+        .pg-shell {
+            height: 100%;
+            padding: 10px;
+            background: transparent;
+        }
+
+        .pg-frame {
+            height: 100%;
+            display: flex;
+            position: relative;
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid var(--pg-border);
+            background: var(--pg-bg);
+            box-shadow:
+                0 0 0 1px rgba(255, 255, 255, 0.03) inset,
+                0 32px 80px rgba(0, 0, 0, 0.55),
+                0 8px 24px rgba(0, 0, 0, 0.35);
+        }
+
+        .pg-frame::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 140px;
+            background: radial-gradient(ellipse 85% 100% at 50% 100%, rgba(255, 106, 26, 0.1) 0%, transparent 72%);
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* ── Ember / ash sparks (same as new-tab) ── */
+        #ash-canvas {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 2;
+            overflow: hidden;
+            contain: strict;
+        }
+
+        @keyframes rise {
+            0%   { transform: translate(var(--dx0), 0px) scale(1);    opacity: 0; }
+            8%   { opacity: var(--peak-a); }
+            80%  { opacity: var(--peak-a); }
+            100% { transform: translate(var(--dx1), var(--dist)) scale(0.5); opacity: 0; }
+        }
+
+        .particle {
+            position: absolute;
+            bottom: 0;
+            left: var(--x);
+            width: var(--sz);
+            height: var(--sz);
+            border-radius: 50%;
+            background: var(--color);
+            animation: rise var(--dur) var(--delay) infinite ease-in-out;
+        }
+
+        /* ── Brand panel ── */
+        .pg-brand {
+            width: 300px;
+            flex-shrink: 0;
+            position: relative;
+            z-index: 3;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 28px 26px 24px;
+            -webkit-app-region: drag;
+            overflow: hidden;
+            border-right: 1px solid var(--pg-border);
+            background:
+                radial-gradient(ellipse 120% 80% at 0% 0%, rgba(56, 189, 248, 0.14) 0%, transparent 55%),
+                radial-gradient(ellipse 90% 70% at 100% 100%, rgba(99, 102, 241, 0.12) 0%, transparent 50%),
+                linear-gradient(160deg, #0f1117 0%, #1a1d2e 60%, #0d1117 100%);
+        }
+
+        .pg-brand::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(148, 163, 184, 0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(148, 163, 184, 0.04) 1px, transparent 1px);
+            background-size: 24px 24px;
+            mask-image: linear-gradient(180deg, rgba(0,0,0,0.5) 0%, transparent 85%);
+            pointer-events: none;
+        }
+
+        .pg-brand-top { position: relative; z-index: 1; }
+
+        .pg-mark {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 28px;
+        }
+
+        .pg-mark-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 11px;
+            object-fit: contain;
+            flex-shrink: 0;
+            display: block;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+        }
+
+        .pg-mark-text {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .pg-mark-name {
+            font-size: 17px;
+            font-weight: 650;
+            letter-spacing: -0.03em;
+            color: var(--pg-text);
+        }
+
+        .pg-mark-edition {
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--pg-accent-a);
+        }
+
+        .pg-brand-headline {
+            font-size: 22px;
+            font-weight: 600;
+            letter-spacing: -0.03em;
+            line-height: 1.25;
+            margin-bottom: 10px;
+            color: var(--pg-text);
+        }
+
+        .pg-brand-desc {
+            font-size: 13px;
+            color: var(--pg-muted);
+            line-height: 1.55;
+            max-width: 230px;
+        }
+
+        .pg-brand-features {
+            position: relative;
+            z-index: 1;
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            margin-top: 36px;
+        }
+
+        .pg-brand-features li {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            font-size: 12px;
+            color: var(--pg-muted);
+        }
+
+        .pg-feature-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            margin-top: 5px;
+            flex-shrink: 0;
+            background: linear-gradient(135deg, var(--pg-accent-a), var(--pg-accent-b));
+            box-shadow: 0 0 8px var(--pg-accent-glow);
+        }
+
+        .pg-brand-foot {
+            position: relative;
+            z-index: 1;
+            font-size: 11px;
+            color: var(--pg-dim);
+            letter-spacing: 0.02em;
+        }
+
+        /* ── Main panel ── */
+        .pg-main {
+            flex: 1;
+            min-width: 0;
+            position: relative;
+            z-index: 3;
+            display: flex;
+            flex-direction: column;
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.35) 0%, rgba(7, 11, 18, 0.2) 100%);
+        }
+
+        .pg-main-watermark {
+            position: absolute;
+            bottom: 24px;
+            right: 28px;
+            width: 88px;
+            height: 88px;
+            opacity: 0.06;
+            pointer-events: none;
+            object-fit: contain;
+            border-radius: 18px;
+            filter: saturate(0.85);
+        }
+
+        .pg-main-bar {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding: 14px 18px 6px;
+            -webkit-app-region: drag;
+        }
+
+        .pg-close {
+            -webkit-app-region: no-drag;
+            width: 30px;
+            height: 30px;
+            border: 1px solid var(--pg-border);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--pg-muted);
+            font-size: 18px;
+            line-height: 1;
+            cursor: pointer;
+            transition: background 0.18s, color 0.18s, border-color 0.18s;
+        }
+        .pg-close:hover {
+            background: rgba(248, 113, 113, 0.12);
+            border-color: rgba(248, 113, 113, 0.35);
+            color: var(--pg-error);
+        }
+
+        .pg-screen {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 8px 44px 40px;
+            -webkit-app-region: no-drag;
+            animation: pg-enter 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+            overflow-y: auto;
+        }
+        .pg-screen.hidden { display: none !important; }
+
+        @keyframes pg-enter {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .pg-screen-head {
+            margin-bottom: 28px;
+        }
+
+        .pg-eyebrow {
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: var(--pg-accent-a);
+            margin-bottom: 8px;
+        }
+
+        .pg-title {
+            font-size: 26px;
+            font-weight: 600;
+            letter-spacing: -0.03em;
+            color: var(--pg-text);
+            margin-bottom: 6px;
+        }
+
+        .pg-subtitle {
+            font-size: 14px;
+            color: var(--pg-muted);
+            max-width: 440px;
+            line-height: 1.55;
+        }
+        .pg-subtitle.hidden { display: none; }
+
+        /* ── Profile grid ── */
+        .pg-profile-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+            gap: 14px;
+            max-width: 520px;
+        }
+
+        .pg-profile-card {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            padding: 20px 14px 16px;
+            border-radius: var(--pg-radius);
+            border: 1px solid var(--pg-border);
+            background: var(--pg-surface);
+            cursor: pointer;
+            color: inherit;
+            text-align: center;
+            transition: border-color 0.2s, background 0.2s, transform 0.2s, box-shadow 0.2s;
+        }
+        .pg-profile-card:hover {
+            border-color: var(--pg-border-strong);
+            background: var(--pg-surface-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+        }
+        .pg-profile-card:focus-visible {
+            outline: 2px solid var(--pg-accent-a);
+            outline-offset: 2px;
+        }
+
+        .pg-profile-card.add {
+            border-style: dashed;
+            border-color: rgba(148, 163, 184, 0.22);
+            background: transparent;
+        }
+        .pg-profile-card.add:hover {
+            border-color: var(--pg-accent-a);
+            background: rgba(56, 189, 248, 0.04);
+        }
+
+        .pg-avatar {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 17px;
+            font-weight: 650;
+            letter-spacing: 0.06em;
+            color: rgba(255, 255, 255, 0.96);
+            text-transform: uppercase;
+            position: relative;
+            box-shadow:
+                0 4px 16px rgba(0, 0, 0, 0.28),
+                inset 0 1px 0 rgba(255, 255, 255, 0.18);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .pg-avatar::after {
+            content: '';
+            position: absolute;
+            inset: -3px;
+            border-radius: 50%;
+            border: 2px solid transparent;
+            transition: border-color 0.2s;
+        }
+        .pg-profile-card:hover .pg-avatar::after {
+            border-color: rgba(255, 255, 255, 0.25);
+        }
+
+        .pg-avatar.add-icon {
+            background: rgba(148, 163, 184, 0.08) !important;
+            color: var(--pg-muted);
+            font-size: 28px;
+            font-weight: 300;
+            box-shadow: none;
+        }
+
+        .pg-profile-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--pg-text);
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .pg-profile-meta {
+            font-size: 11px;
+            color: var(--pg-dim);
+            margin-top: -6px;
+        }
+
+        .pg-profile-badge {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            padding: 3px 7px;
+            border-radius: 999px;
+            background: rgba(251, 191, 36, 0.15);
+            color: var(--pg-warn);
+            border: 1px solid rgba(251, 191, 36, 0.3);
+        }
+
+        /* ── Password screen ── */
+        .pg-auth-panel {
+            max-width: 380px;
+        }
+
+        .pg-profile-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 14px 10px 10px;
+            border-radius: 999px;
+            border: 1px solid var(--pg-border);
+            background: var(--pg-surface);
+            margin-bottom: 28px;
+        }
+
+        .pg-profile-chip .pg-avatar {
+            width: 36px;
+            height: 36px;
+            font-size: 12px;
+        }
+
+        .pg-chip-label {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--pg-text);
+        }
+
+        .pg-field {
+            margin-bottom: 18px;
+        }
+        .pg-field label {
+            display: block;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--pg-muted);
+            margin-bottom: 8px;
+        }
+        .pg-field input {
+            width: 100%;
+            padding: 13px 15px;
+            border-radius: var(--pg-radius-sm);
+            border: 1px solid var(--pg-border);
+            background: rgba(15, 23, 42, 0.6);
+            color: var(--pg-text);
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.18s, box-shadow 0.18s, background 0.18s;
+        }
+        .pg-field input::placeholder { color: var(--pg-dim); }
+        .pg-field input:focus {
+            border-color: rgba(56, 189, 248, 0.55);
+            box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
+            background: rgba(15, 23, 42, 0.85);
+        }
+
+        .pg-error {
+            min-height: 20px;
+            font-size: 13px;
+            color: var(--pg-error);
+            margin-bottom: 14px;
+        }
+
+        .pg-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 13px 22px;
+            border: none;
+            border-radius: var(--pg-radius-sm);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.18s, transform 0.12s, box-shadow 0.18s;
+        }
+        .pg-btn:active:not(:disabled) { transform: scale(0.98); }
+
+        .pg-btn-primary {
+            width: 100%;
+            color: #fff;
+            background: linear-gradient(135deg, var(--pg-accent-a), var(--pg-accent-b));
+            box-shadow: 0 4px 20px var(--pg-accent-glow);
+        }
+        .pg-btn-primary:hover:not(:disabled) {
+            box-shadow: 0 6px 28px rgba(56, 189, 248, 0.32);
+        }
+        .pg-btn-primary:disabled { opacity: 0.55; cursor: wait; }
+
+        .pg-btn-secondary {
+            background: transparent;
+            color: var(--pg-muted);
+            border: 1px solid var(--pg-border);
+            padding: 11px 18px;
+        }
+        .pg-btn-secondary:hover {
+            color: var(--pg-text);
+            border-color: var(--pg-border-strong);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .pg-link-back {
+            margin-top: 22px;
+            background: none;
+            border: none;
+            color: var(--pg-dim);
+            font-size: 13px;
+            cursor: pointer;
+            padding: 4px 0;
+            transition: color 0.15s;
+        }
+        .pg-link-back:hover { color: var(--pg-accent-a); }
+
+        /* ── Edit / setup ── */
+        .pg-edit-wrap {
+            display: grid;
+            grid-template-columns: 200px 1fr;
+            gap: 36px;
+            align-items: start;
+            max-width: 540px;
+        }
+
+        .pg-edit-preview-block {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 14px;
+            padding: 24px 16px;
+            border-radius: var(--pg-radius);
+            border: 1px solid var(--pg-border);
+            background: var(--pg-surface);
+        }
+
+        .pg-edit-preview-block .pg-avatar {
+            width: 80px;
+            height: 80px;
+            font-size: 26px;
+        }
+
+        .pg-preview-caption {
+            font-size: 11px;
+            color: var(--pg-dim);
+            text-align: center;
+        }
+
+        .pg-picker-label {
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--pg-dim);
+            margin-bottom: 8px;
+        }
+
+        .pg-picker-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 16px;
+        }
+
+        .pg-color-pick {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: 2px solid transparent;
+            cursor: pointer;
+            transition: transform 0.12s;
+        }
+        .pg-color-pick:hover { transform: scale(1.12); }
+        .pg-color-pick.selected {
+            border-color: #fff;
+            box-shadow: 0 0 0 2px var(--pg-bg);
+        }
+
+        .pg-edit-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 6px;
+        }
+        .pg-edit-actions .pg-btn-primary { flex: 1; width: auto; }
+    </style>
+</head>
+<body>
+    <div class="pg-shell">
+        <div class="pg-frame">
+            <div id="ash-canvas" aria-hidden="true"></div>
+            <aside class="pg-brand">
+                <div class="pg-brand-top">
+                    <div class="pg-mark">
+                        <img class="pg-mark-icon" src="img.png" alt="CupNet">
+                        <div class="pg-mark-text">
+                            <span class="pg-mark-name">[CupNet]</span>
+                            <span class="pg-mark-edition">Professional</span>
+                        </div>
+                    </div>
+                    <h2 class="pg-brand-headline">Your secure developer workspace</h2>
+                    <p class="pg-brand-desc">Each profile keeps its own credentials, settings, and traffic context isolated.</p>
+                    <ul class="pg-brand-features">
+                        <li><span class="pg-feature-dot"></span><span>End-to-end encrypted credential vault per profile</span></li>
+                        <li><span class="pg-feature-dot"></span><span>Isolated browser sessions and MITM traffic capture</span></li>
+                        <li><span class="pg-feature-dot"></span><span>Enterprise-grade proxy and TLS fingerprint control</span></li>
+                    </ul>
+                </div>
+                <p class="pg-brand-foot">[CupNet] · Developer traffic intelligence</p>
+            </aside>
+
+            <div class="pg-main">
+                <img class="pg-main-watermark" src="img.png" alt="" aria-hidden="true">
+                <header class="pg-main-bar">
+                    <button type="button" id="pg-close" class="pg-close" title="Quit" aria-label="Quit">×</button>
+                </header>
+
+                <section id="pg-screen-picker" class="pg-screen">
+                    <div class="pg-screen-head">
+                        <p class="pg-eyebrow">Workspace access</p>
+                        <h1 class="pg-title">Select your profile</h1>
+                        <p id="pg-picker-sub" class="pg-subtitle hidden"></p>
+                    </div>
+                    <div id="pg-profile-grid" class="pg-profile-grid"></div>
+                </section>
+
+                <section id="pg-screen-password" class="pg-screen hidden">
+                    <div class="pg-auth-panel">
+                        <div class="pg-screen-head">
+                            <p class="pg-eyebrow">Authentication</p>
+                            <h1 class="pg-title">Unlock profile</h1>
+                        </div>
+                        <div id="pg-profile-chip" class="pg-profile-chip">
+                            <div id="pg-password-avatar" class="pg-avatar"></div>
+                            <span id="pg-password-name" class="pg-chip-label">Profile</span>
+                        </div>
+                        <div class="pg-field">
+                            <label for="pg-password">Profile password</label>
+                            <input type="password" id="pg-password" autocomplete="current-password" placeholder="Enter your password">
+                        </div>
+                        <div id="pg-error" class="pg-error" role="alert"></div>
+                        <button type="button" id="pg-signin-btn" class="pg-btn pg-btn-primary">Unlock workspace</button>
+                        <button type="button" id="pg-back-from-password" class="pg-link-back">← Back to profiles</button>
+                    </div>
+                </section>
+
+                <section id="pg-screen-edit" class="pg-screen hidden">
+                    <div class="pg-screen-head">
+                        <p class="pg-eyebrow" id="pg-edit-eyebrow">Profile setup</p>
+                        <h1 id="pg-edit-title" class="pg-title">Create profile</h1>
+                    </div>
+                    <div class="pg-edit-wrap">
+                        <div class="pg-edit-preview-block">
+                            <div id="pg-edit-avatar" class="pg-avatar" style="background:#3b82f6">?</div>
+                            <p class="pg-preview-caption">Initials update as you type</p>
+                        </div>
+                        <div class="pg-edit-form">
+                            <div class="pg-field">
+                                <label for="pg-edit-name">Display name</label>
+                                <input type="text" id="pg-edit-name" autocomplete="off" placeholder="e.g. Alex · Work">
+                            </div>
+                            <p class="pg-picker-label">Accent color</p>
+                            <div id="pg-edit-colors" class="pg-picker-row"></div>
+                            <div class="pg-field">
+                                <label for="pg-edit-password">Password</label>
+                                <input type="password" id="pg-edit-password" autocomplete="new-password" placeholder="Minimum 8 characters">
+                            </div>
+                            <div class="pg-field">
+                                <label for="pg-edit-confirm">Confirm password</label>
+                                <input type="password" id="pg-edit-confirm" autocomplete="new-password">
+                            </div>
+                            <div id="pg-edit-error" class="pg-error" role="alert"></div>
+                            <div class="pg-edit-actions">
+                                <button type="button" id="pg-edit-save" class="pg-btn pg-btn-primary">Save profile</button>
+                                <button type="button" id="pg-edit-cancel" class="pg-btn pg-btn-secondary">Cancel</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+    <script src="profile-gate-renderer.js"></script>
+</body>
+</html>

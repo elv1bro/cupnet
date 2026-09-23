@@ -2315,7 +2315,7 @@ if (window.electronAPI) {
             refreshIpWidget();
             const _ipTimer = setInterval(() => {
                 if (!document.hidden) refreshIpWidget();
-            }, 30_000);
+            }, 120_000);
             window.addEventListener('beforeunload', () => {
                 clearInterval(_ipTimer);
                 clearInterval(_clockTimer);
@@ -2349,6 +2349,7 @@ if (window.electronAPI) {
     let _ntProxyProfiles = [];
     /** Смена вкладки / профиля прокси / CupNet / cookie group — нижний виджет и IP. */
     let _lastNtTabSig = '';
+    let _lastNtIpSig = '';
 
     function loadNtProxyProfiles() {
         return window.electronAPI.getProxyProfiles?.().then((profiles) => {
@@ -2424,12 +2425,16 @@ if (window.electronAPI) {
                 _lastProxyActive = !!info?.active;
                 setProxyWidgetStatus(info?.active, info?.displayProxyName || info?.proxyName, info);
                 applyGlow(_resolveGlowMode());
+                const ipSig = `${active?.proxyProfileId ?? 'global'}|${!!info?.active}`;
+                if (ipSig !== _lastNtIpSig) {
+                    _lastNtIpSig = ipSig;
+                    pwIp.textContent  = '…';
+                    pwGeo.textContent = 'Checking…';
+                    _ipRetryCount = 0;
+                    clearTimeout(_ipRetryTimer);
+                    setTimeout(refreshIpWidget, 300);
+                }
             }).catch(() => {});
-            pwIp.textContent  = '…';
-            pwGeo.textContent = 'Checking…';
-            _ipRetryCount = 0;
-            clearTimeout(_ipRetryTimer);
-            setTimeout(refreshIpWidget, 300);
         }
     }
 
@@ -2558,7 +2563,11 @@ if (window.electronAPI) {
             barLabel.textContent = 'Clearing…';
             barLabel.className   = 'cookie-bar-label';
             try {
-                await window.electronAPI.clearCookies(null, null);
+                const result = await window.electronAPI.clearCookies(null, null);
+                if (result?.remaining > 0) {
+                    barLabel.textContent = `${result.remaining} left`;
+                    barLabel.className   = 'cookie-bar-label has-cookies';
+                }
             } catch {}
             await refreshCookieBar();
         });

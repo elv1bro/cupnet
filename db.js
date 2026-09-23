@@ -5,6 +5,7 @@ const path = require('path');
 const { app } = require('electron');
 const { networkPolicy, computeBackoffMs } = require('./network-policy');
 const { safeCatch } = require('./sys-log');
+const { hardenExistingFile, hardenExistingDir } = require('./main-process/services/secure-fs.js');
 
 let db = null;
 let _writeQueueHigh = [];
@@ -127,6 +128,7 @@ function getDbPath() {
  */
 function initWithPath(dbPath) {
     if (db) return db;
+    ensureSecureDbDir(dbPath);
     db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
@@ -134,7 +136,16 @@ function initWithPath(dbPath) {
     createSchema();
     migrateSchema();
     _prepareStmts();
+    hardenExistingFile(dbPath);
+    hardenExistingFile(dbPath + '-wal');
+    hardenExistingFile(dbPath + '-shm');
     return db;
+}
+
+function ensureSecureDbDir(dbPath) {
+    try {
+        hardenExistingDir(path.dirname(dbPath));
+    } catch { /* ignore */ }
 }
 
 function init() {
@@ -172,6 +183,67 @@ function migrateInterceptRulesCommercialColumns() {
     if (!cols.includes('breakpoint_enabled')) add(`ALTER TABLE intercept_rules ADD COLUMN breakpoint_enabled INTEGER NOT NULL DEFAULT 0`);
 }
 
+/** Legacy DBs used a singleton credentials_vault (CHECK (id = 1)); allow multiple profiles. */
+function credentialsVaultHasSingletonIdConstraint() {
+    try {
+        const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='credentials_vault'`).get();
+        if (!row?.sql) return false;
+        const ddl = String(row.sql);
+        return /check\s*\(\s*id\s*=\s*1\s*\)/i.test(ddl)
+            || /check\s*\(\s*id\s+in\s*\(\s*1\s*\)\s*\)/i.test(ddl);
+    } catch {
+        return false;
+    }
+}
+
+function migrateCredentialsVaultMultiProfile() {
+    if (!credentialsVaultHasSingletonIdConstraint()) return;
+    const cols = db.pragma('table_info(credentials_vault)').map((c) => c.name);
+    if (!cols.length) return;
+
+    const pick = (name, fallbackSql) => (cols.includes(name) ? name : fallbackSql);
+    const selectSql = [
+        pick('id', 'NULL AS id'),
+        pick('name', `'Default' AS name`),
+        pick('verify_blob', 'verify_blob'),
+        pick('hint', `'' AS hint`),
+        pick('last_login_at', 'NULL AS last_login_at'),
+        pick('created_at', `strftime('%Y-%m-%dT%H:%M:%fZ','now') AS created_at`),
+        pick('avatar_icon', `'' AS avatar_icon`),
+        pick('avatar_color', `'#3b82f6' AS avatar_color`),
+    ].join(', ');
+
+    db.pragma('foreign_keys = OFF');
+    db.exec('BEGIN');
+    try {
+        db.exec(`
+            CREATE TABLE credentials_vault__cupnet_multi (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                name          TEXT    NOT NULL DEFAULT 'Default',
+                verify_blob   BLOB    NOT NULL,
+                hint          TEXT    NOT NULL DEFAULT '',
+                last_login_at TEXT,
+                created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                avatar_icon   TEXT    NOT NULL DEFAULT '',
+                avatar_color  TEXT    NOT NULL DEFAULT '#3b82f6'
+            )
+        `);
+        db.exec(`
+            INSERT INTO credentials_vault__cupnet_multi
+                (id, name, verify_blob, hint, last_login_at, created_at, avatar_icon, avatar_color)
+            SELECT ${selectSql} FROM credentials_vault
+        `);
+        db.exec(`DROP TABLE credentials_vault`);
+        db.exec(`ALTER TABLE credentials_vault__cupnet_multi RENAME TO credentials_vault`);
+        db.exec('COMMIT');
+    } catch (e) {
+        try { db.exec('ROLLBACK'); } catch { /* ignore */ }
+        throw e;
+    } finally {
+        db.pragma('foreign_keys = ON');
+    }
+}
+
 function migrateSchema() {
     // Add new columns to proxy_profiles if they don't exist (for existing DBs)
     let cols = db.pragma('table_info(proxy_profiles)').map(c => c.name);
@@ -190,6 +262,7 @@ function migrateSchema() {
     if (!cols.includes('tls_ja3_mode'))    db.exec(`ALTER TABLE proxy_profiles ADD COLUMN tls_ja3_mode TEXT DEFAULT 'template'`);
     if (!cols.includes('tls_ja3_custom'))  db.exec(`ALTER TABLE proxy_profiles ADD COLUMN tls_ja3_custom TEXT`);
     if (!cols.includes('traffic_mode'))    db.exec(`ALTER TABLE proxy_profiles ADD COLUMN traffic_mode TEXT NOT NULL DEFAULT 'mitm'`);
+    if (!cols.includes('force_http1'))     db.exec(`ALTER TABLE proxy_profiles ADD COLUMN force_http1 INTEGER NOT NULL DEFAULT 0`);
     db.exec(`UPDATE proxy_profiles SET traffic_mode='mitm' WHERE traffic_mode IS NULL OR traffic_mode='' OR traffic_mode='browser_proxy'`);
     // Legacy DBs: columns referenced by getProxyProfiles() but missing on very old installs
     cols = db.pragma('table_info(proxy_profiles)').map((c) => c.name);
@@ -213,6 +286,11 @@ function migrateSchema() {
     if (!reqCols.includes('note'))         db.exec(`ALTER TABLE requests ADD COLUMN note TEXT`);
     if (!reqCols.includes('has_note'))     db.exec(`ALTER TABLE requests ADD COLUMN has_note INTEGER NOT NULL DEFAULT 0`);
     if (!reqCols.includes('ws_message_count')) db.exec(`ALTER TABLE requests ADD COLUMN ws_message_count INTEGER NOT NULL DEFAULT 0`);
+    if (!reqCols.includes('request_body_enc')) db.exec(`ALTER TABLE requests ADD COLUMN request_body_enc BLOB`);
+    if (!reqCols.includes('response_body_enc')) db.exec(`ALTER TABLE requests ADD COLUMN response_body_enc BLOB`);
+    if (!reqCols.includes('request_headers_enc')) db.exec(`ALTER TABLE requests ADD COLUMN request_headers_enc BLOB`);
+    if (!reqCols.includes('response_headers_enc')) db.exec(`ALTER TABLE requests ADD COLUMN response_headers_enc BLOB`);
+    if (!reqCols.includes('log_encrypted')) db.exec(`ALTER TABLE requests ADD COLUMN log_encrypted INTEGER NOT NULL DEFAULT 0`);
     const dnsCols = db.pragma('table_info(dns_overrides)').map(c => c.name);
     if (!dnsCols.includes('mitm_inject_cors')) {
         db.exec(`ALTER TABLE dns_overrides ADD COLUMN mitm_inject_cors INTEGER NOT NULL DEFAULT 0`);
@@ -351,6 +429,11 @@ function migrateSchema() {
     if (noteCols.length && !noteCols.includes('tags')) {
         db.exec(`ALTER TABLE user_notes ADD COLUMN tags TEXT NOT NULL DEFAULT ''`);
     }
+    noteCols = db.pragma('table_info(user_notes)').map(c => c.name);
+    if (noteCols.length && !noteCols.includes('profile_id')) {
+        db.exec(`ALTER TABLE user_notes ADD COLUMN profile_id INTEGER NOT NULL DEFAULT 0`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_user_notes_profile ON user_notes(profile_id)`);
+    }
     const hasNoteReqLinks = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='note_request_links'`).get();
     if (!hasNoteReqLinks) {
         db.exec(`
@@ -455,8 +538,10 @@ function migrateSchema() {
     if (!credCols.includes('folder_id'))  db.exec(`ALTER TABLE credentials ADD COLUMN folder_id INTEGER REFERENCES credential_folders(id) ON DELETE SET NULL`);
     if (!credCols.includes('deleted_at')) db.exec(`ALTER TABLE credentials ADD COLUMN deleted_at TEXT`);
     if (!credCols.includes('vault_id'))   db.exec(`ALTER TABLE credentials ADD COLUMN vault_id INTEGER NOT NULL DEFAULT 1`);
+    if (!credCols.includes('login_encrypted')) db.exec(`ALTER TABLE credentials ADD COLUMN login_encrypted BLOB`);
+    if (!credCols.includes('notes_encrypted')) db.exec(`ALTER TABLE credentials ADD COLUMN notes_encrypted BLOB`);
     // Vault table: add name, last_login_at, hint if missing
-    const vaultCols = db.pragma('table_info(credentials_vault)').map(c => c.name);
+    let vaultCols = db.pragma('table_info(credentials_vault)').map(c => c.name);
     if (vaultCols.length && !vaultCols.includes('hint')) {
         db.exec(`ALTER TABLE credentials_vault ADD COLUMN hint TEXT NOT NULL DEFAULT ''`);
     }
@@ -466,6 +551,15 @@ function migrateSchema() {
     if (vaultCols.length && !vaultCols.includes('last_login_at')) {
         db.exec(`ALTER TABLE credentials_vault ADD COLUMN last_login_at TEXT`);
     }
+    vaultCols = db.pragma('table_info(credentials_vault)').map(c => c.name);
+    if (vaultCols.length && !vaultCols.includes('avatar_icon')) {
+        db.exec(`ALTER TABLE credentials_vault ADD COLUMN avatar_icon TEXT NOT NULL DEFAULT 'shield'`);
+    }
+    vaultCols = db.pragma('table_info(credentials_vault)').map(c => c.name);
+    if (vaultCols.length && !vaultCols.includes('avatar_color')) {
+        db.exec(`ALTER TABLE credentials_vault ADD COLUMN avatar_color TEXT NOT NULL DEFAULT '#3b82f6'`);
+    }
+    migrateCredentialsVaultMultiProfile();
     // Credential folders: add vault_id if missing
     const folderCols = db.pragma('table_info(credential_folders)').map(c => c.name);
     if (folderCols.length && !folderCols.includes('vault_id')) {
@@ -779,8 +873,9 @@ function _prepareStmts() {
     _stmtInsertRequest = db.prepare(`
         INSERT INTO requests
             (session_id, tab_id, request_id, url, method, status, type, duration_ms,
-             request_headers, response_headers, request_body, response_body, error, host, tag, note, has_note)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             request_headers, response_headers, request_body, response_body, error, host, tag, note, has_note,
+             request_headers_enc, response_headers_enc, request_body_enc, response_body_enc, log_encrypted)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id`);
     _stmtInsertWsEvent = db.prepare(`INSERT INTO ws_events (session_id, tab_id, url, direction, payload, connection_id) VALUES (?,?,?,?,?,?)`);
     _stmtInsertSS      = db.prepare(`INSERT INTO screenshots (session_id, tab_id, url, data_blob, screenshot_meta) VALUES (?,?,?,?,?) RETURNING id`);
@@ -836,10 +931,13 @@ function getSession(id) {
 }
 
 function deleteSession(id) {
-    // Cascade: remove related rows first, then the session itself
-    db.prepare(`DELETE FROM requests WHERE session_id = ?`).run(id);
-    db.prepare(`DELETE FROM browser_events WHERE session_id = ?`).run(id);
-    db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
+    // Cascade in a single transaction: all-or-nothing so a crash mid-delete can't leave
+    // orphaned requests/events pointing at a removed session (or FTS rows out of sync).
+    db.transaction(() => {
+        db.prepare(`DELETE FROM requests WHERE session_id = ?`).run(id);
+        db.prepare(`DELETE FROM browser_events WHERE session_id = ?`).run(id);
+        db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
+    })();
 }
 
 function listUnnamedSessionIds(keepSessionId) {
@@ -930,26 +1028,51 @@ function _extractHost(url) {
     }
 }
 
+function _prepareLogEntry(entry) {
+    try {
+        const { prepareRequestLogFields } = require('./main-process/services/traffic-log-crypto.js');
+        return { ...entry, ...prepareRequestLogFields(entry) };
+    } catch {
+        // Fail closed: if preparation (encryption/redaction) throws we must not persist
+        // request/response headers or bodies in plaintext. Keep metadata, drop sensitive fields.
+        return {
+            ...entry,
+            requestHeaders: null, responseHeaders: null, requestBody: null, responseBody: null,
+            request_headers: null, response_headers: null, request_body: null, response_body: null,
+            request_headers_enc: null, response_headers_enc: null,
+            request_body_enc: null, response_body_enc: null,
+            log_encrypted: 0,
+        };
+    }
+}
+
 function insertRequest(sessionId, tabId, entry) {
-    const host = entry.host || _extractHost(entry.url);
+    if (!_stmtInsertRequest) return null;
+    const e = _prepareLogEntry(entry || {});
+    const host = e.host || _extractHost(e.url);
     const row = _stmtInsertRequest.get(
         sessionId,
         tabId || null,
-        entry.requestId || null,
-        entry.url || '',
-        entry.method || 'GET',
-        entry.status || null,
-        entry.type || null,
-        entry.duration != null ? Math.round(entry.duration) : null,
-        entry.requestHeaders ? JSON.stringify(entry.requestHeaders) : null,
-        entry.responseHeaders ? JSON.stringify(entry.responseHeaders) : null,
-        _truncBody(entry.requestBody),
-        _truncBody(entry.responseBody),
-        entry.error || null,
+        e.requestId || null,
+        e.url || '',
+        e.method || 'GET',
+        e.status || null,
+        e.type || null,
+        e.duration != null ? Math.round(e.duration) : null,
+        e.request_headers ?? (e.requestHeaders ? JSON.stringify(e.requestHeaders) : null),
+        e.response_headers ?? (e.responseHeaders ? JSON.stringify(e.responseHeaders) : null),
+        _truncBody(e.request_body ?? e.requestBody),
+        _truncBody(e.response_body ?? e.responseBody),
+        e.error || null,
         host,
-        entry.tag || null,
-        entry.note || null,
-        entry.note ? 1 : 0
+        e.tag || null,
+        e.note || null,
+        e.note ? 1 : 0,
+        e.request_headers_enc ?? null,
+        e.response_headers_enc ?? null,
+        e.request_body_enc ?? null,
+        e.response_body_enc ?? null,
+        e.log_encrypted ? 1 : 0,
     );
     return row ? row.id : null;
 }
@@ -1013,7 +1136,14 @@ function countRequests(filters = {}) {
 }
 
 function getRequest(id) {
-    return db.prepare(`SELECT * FROM requests WHERE id = ?`).get(id);
+    const row = db.prepare(`SELECT * FROM requests WHERE id = ?`).get(id);
+    if (!row) return null;
+    try {
+        const { hydrateRequestLogRow } = require('./main-process/services/traffic-log-crypto.js');
+        return hydrateRequestLogRow(row);
+    } catch {
+        return row;
+    }
 }
 
 function queryRequestsFull(filters = {}, limit = 100, offset = 0) {
@@ -1026,7 +1156,13 @@ function queryRequestsFull(filters = {}, limit = 100, offset = 0) {
     if (filters.type)      { conditions.push('type = ?');        params.push(filters.type); }
     if (filters.url)       { conditions.push('url LIKE ?');      params.push(`%${filters.url}%`); }
     const sql = `SELECT * FROM requests WHERE ${conditions.join(' AND ')} ORDER BY id DESC LIMIT ? OFFSET ?`;
-    return db.prepare(sql).all(...params, limit, offset);
+    const rows = db.prepare(sql).all(...params, limit, offset);
+    try {
+        const { hydrateRequestLogRow } = require('./main-process/services/traffic-log-crypto.js');
+        return rows.map((row) => hydrateRequestLogRow(row));
+    } catch {
+        return rows;
+    }
 }
 
 function ftsSearch(query, sessionId, limit = 100, offset = 0) {
@@ -1295,13 +1431,16 @@ function getProxyProfiles() {
         SELECT id, name, url_display, country, is_template, variables, notes,
                last_tested_at, last_latency_ms, last_ip, last_geo, sort_order,
                user_agent, timezone, language,
-               tls_profile, tls_ja3_mode, tls_ja3_custom, traffic_mode,
-               created_at
+               tls_profile, tls_ja3_mode, tls_ja3_custom, traffic_mode, force_http1,
+               created_at,
+               CASE WHEN url_encrypted IS NULL AND url_display LIKE '%@%' THEN 1 ELSE 0 END AS needs_re_save
         FROM proxy_profiles ORDER BY sort_order ASC, name ASC LIMIT 1000
     `).all().map(r => ({
         ...r,
         traffic_mode: normalizeTrafficMode(r.traffic_mode),
         variables: parseProxyProfileVariablesCell(r.variables),
+        needsReSave: !!r.needs_re_save,
+        needs_re_save: undefined,
     }));
 }
 
@@ -1314,7 +1453,7 @@ function saveProxyProfile(name, urlEncrypted, urlDisplay, opts = {}) {
                         is_template=?, variables=?, notes=?, sort_order=?,
                         user_agent=?, timezone=?, language=?,
                         tls_profile=?, tls_ja3_mode=?, tls_ja3_custom=?,
-                        traffic_mode=?
+                        traffic_mode=?, force_http1=?
                     WHERE id=?`)
           .run(urlEncrypted, urlDisplay, opts.country || null,
                opts.isTemplate ? 1 : 0, vars, opts.notes || null,
@@ -1322,30 +1461,33 @@ function saveProxyProfile(name, urlEncrypted, urlDisplay, opts = {}) {
                opts.language || null,
                opts.tls_profile || 'chrome', opts.tls_ja3_mode || 'template', opts.tls_ja3_custom || null,
                normalizeTrafficMode(opts.traffic_mode),
+               opts.force_http1 ? 1 : 0,
                existing.id);
         return existing.id;
     }
     const row = db.prepare(`
         INSERT INTO proxy_profiles (name, url_encrypted, url_display, country, is_template, variables, notes, sort_order,
-                                    user_agent, timezone, language, tls_profile, tls_ja3_mode, tls_ja3_custom, traffic_mode)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id
+                                    user_agent, timezone, language, tls_profile, tls_ja3_mode, tls_ja3_custom, traffic_mode, force_http1)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id
     `).get(name, urlEncrypted, urlDisplay, opts.country || null,
            opts.isTemplate ? 1 : 0, vars, opts.notes || null, opts.sortOrder ?? 0,
            opts.user_agent || null, opts.timezone || null, opts.language || null,
            opts.tls_profile || 'chrome', opts.tls_ja3_mode || 'template', opts.tls_ja3_custom || null,
-           normalizeTrafficMode(opts.traffic_mode));
+           normalizeTrafficMode(opts.traffic_mode),
+           opts.force_http1 ? 1 : 0);
     return row ? row.id : null;
 }
 
 function updateProxyProfileById(id, fields) {
     const allowed = ['name','url_encrypted','url_display','country','is_template','variables','notes','sort_order',
-                     'user_agent','timezone','language','tls_profile','tls_ja3_mode','tls_ja3_custom','traffic_mode'];
+                     'user_agent','timezone','language','tls_profile','tls_ja3_mode','tls_ja3_custom','traffic_mode','force_http1'];
     const sets = [], vals = [];
     for (const [k, v] of Object.entries(fields)) {
         if (!allowed.includes(k)) continue;
         sets.push(`${k}=?`);
         if (k === 'variables' && typeof v === 'object') vals.push(JSON.stringify(v));
         else if (k === 'traffic_mode') vals.push(normalizeTrafficMode(v));
+        else if (k === 'force_http1') vals.push(v ? 1 : 0);
         else vals.push(v);
     }
     if (!sets.length) return;
@@ -1355,7 +1497,7 @@ function updateProxyProfileById(id, fields) {
 
 function getProxyProfileEncrypted(id) {
     const row = db.prepare(`SELECT name, url_encrypted, url_display, variables, user_agent, timezone, language,
-                                   tls_profile, tls_ja3_mode, tls_ja3_custom, traffic_mode
+                                   tls_profile, tls_ja3_mode, tls_ja3_custom, traffic_mode, force_http1
                             FROM proxy_profiles WHERE id = ?`).get(id);
     if (!row) return null;
     row.traffic_mode = normalizeTrafficMode(row.traffic_mode);
@@ -1773,6 +1915,11 @@ function listUserNotes(filter = {}) {
         FROM user_notes
         WHERE 1=1`;
     const params = [];
+    const profileId = filter.profileId != null ? Number(filter.profileId) : null;
+    if (Number.isFinite(profileId) && profileId > 0) {
+        sqlList += ` AND profile_id = ?`;
+        params.push(profileId);
+    }
     if (domain) {
         sqlList += ` AND domain = ?`;
         params.push(domain);
@@ -1802,6 +1949,7 @@ function saveUserNote(rec) {
     const title = String(rec.title ?? '');
     const tags = String(rec.tags ?? '');
     const isPinned = rec.is_pinned ? 1 : 0;
+    const profileId = rec.profile_id != null ? Number(rec.profile_id) : 0;
     if (rec.id) {
         const nid = Number(rec.id);
         if (isEnc) {
@@ -1825,15 +1973,15 @@ function saveUserNote(rec) {
     }
     if (isEnc) {
         const r = db.prepare(`
-            INSERT INTO user_notes (domain, url_match, page_url, title, body_plain, body_encrypted, is_encrypted, is_pinned, tags)
-            VALUES (?, ?, ?, ?, NULL, ?, 1, ?, ?)
-        `).run(domain, urlMatch, pageUrl, title, rec.body_encrypted, isPinned, tags);
+            INSERT INTO user_notes (domain, url_match, page_url, title, body_plain, body_encrypted, is_encrypted, is_pinned, tags, profile_id)
+            VALUES (?, ?, ?, ?, NULL, ?, 1, ?, ?, ?)
+        `).run(domain, urlMatch, pageUrl, title, rec.body_encrypted, isPinned, tags, profileId);
         return Number(r.lastInsertRowid);
     }
     const r = db.prepare(`
-        INSERT INTO user_notes (domain, url_match, page_url, title, body_plain, body_encrypted, is_encrypted, is_pinned, tags)
-        VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?)
-    `).run(domain, urlMatch, pageUrl, title, rec.body_plain ?? '', isPinned, tags);
+        INSERT INTO user_notes (domain, url_match, page_url, title, body_plain, body_encrypted, is_encrypted, is_pinned, tags, profile_id)
+        VALUES (?, ?, ?, ?, ?, NULL, 0, ?, ?, ?)
+    `).run(domain, urlMatch, pageUrl, title, rec.body_plain ?? '', isPinned, tags, profileId);
     return Number(r.lastInsertRowid);
 }
 
@@ -1884,6 +2032,26 @@ function unlinkNoteFromRequestAsync(noteId, requestId) {
     return enqueueWrite(() => unlinkNoteFromRequest(noteId, requestId), 'high');
 }
 
+function migrateNotesToProfile(profileId) {
+    const pid = Number(profileId);
+    if (!Number.isFinite(pid) || pid <= 0) return 0;
+    const r = db.prepare(`
+        UPDATE user_notes SET profile_id = ? WHERE profile_id = 0 OR profile_id IS NULL
+    `).run(pid);
+    return r.changes || 0;
+}
+
+function countUnassignedNotes() {
+    try {
+        const row = db.prepare(`
+            SELECT COUNT(*) AS n FROM user_notes WHERE profile_id = 0 OR profile_id IS NULL
+        `).get();
+        return Number(row?.n) || 0;
+    } catch {
+        return 0;
+    }
+}
+
 function deleteUserNote(id) {
     db.prepare(`DELETE FROM user_notes WHERE id = ?`).run(Number(id));
 }
@@ -1907,7 +2075,24 @@ function getCredentialsVaultMeta(vaultId) {
 }
 
 function listVaults() {
-    return db.prepare(`SELECT id, name, hint, last_login_at, created_at FROM credentials_vault ORDER BY id ASC`).all();
+    return db.prepare(`
+        SELECT id, name, hint, last_login_at, created_at, avatar_icon, avatar_color
+        FROM credentials_vault ORDER BY id ASC
+    `).all();
+}
+
+function countActiveCredentialsForVault(vaultId) {
+    const row = db.prepare(`
+        SELECT COUNT(*) AS n FROM credentials
+        WHERE vault_id = ? AND (deleted_at IS NULL OR deleted_at = '')
+    `).get(Number(vaultId));
+    return Number(row?.n) || 0;
+}
+
+function updateVaultAvatar(vaultId, avatarIcon, avatarColor) {
+    db.prepare(`
+        UPDATE credentials_vault SET avatar_icon = ?, avatar_color = ? WHERE id = ?
+    `).run(String(avatarIcon || 'shield'), String(avatarColor || '#3b82f6'), Number(vaultId));
 }
 
 function createVault(name, verifyBlob) {
@@ -2042,6 +2227,26 @@ function getAllCredentialCipherRows(vaultId) {
     return db.prepare(`SELECT id, password_encrypted, extra_encrypted FROM credentials`).all();
 }
 
+function updateCredentialSensitiveFields(patch) {
+    const id = Number(patch.id);
+    if (!id) return;
+    db.prepare(`
+        UPDATE credentials SET
+            login = COALESCE(?, login),
+            login_encrypted = COALESCE(?, login_encrypted),
+            notes = COALESCE(?, notes),
+            notes_encrypted = COALESCE(?, notes_encrypted),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        WHERE id = ?
+    `).run(
+        patch.login !== undefined ? patch.login : null,
+        patch.login_encrypted !== undefined ? patch.login_encrypted : null,
+        patch.notes !== undefined ? patch.notes : null,
+        patch.notes_encrypted !== undefined ? patch.notes_encrypted : null,
+        id,
+    );
+}
+
 function saveCredential(rec) {
     const itemType = ['login', 'card', 'identity', 'note'].includes(rec.item_type) ? rec.item_type : 'login';
     const domain = String(rec.domain || '').trim().toLowerCase() || '(no site)';
@@ -2059,23 +2264,29 @@ function saveCredential(rec) {
     const lastUsed = rec.last_used_at != null ? String(rec.last_used_at) : null;
     const folderId = rec.folder_id != null ? Number(rec.folder_id) : null;
     const vaultId = rec.vault_id != null ? Number(rec.vault_id) : 1;
+    const loginEnc = rec.login_encrypted ?? null;
+    const notesEnc = rec.notes_encrypted ?? null;
 
     if (rec.id) {
         const nid = Number(rec.id);
         db.prepare(`
             UPDATE credentials SET
                 item_type = ?, domain = ?, url_match = ?, label = ?, login = ?,
+                login_encrypted = COALESCE(?, login_encrypted),
                 password_encrypted = ?, extra_encrypted = ?,
-                notes = ?, last_ip = ?, last_proxy_profile_id = ?, last_proxy_profile_name = ?,
+                notes = ?, notes_encrypted = COALESCE(?, notes_encrypted),
+                last_ip = ?, last_proxy_profile_id = ?, last_proxy_profile_name = ?,
                 last_used_at = COALESCE(?, last_used_at),
                 tags = ?, is_favorite = ?, folder_id = ?, vault_id = ?,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
             WHERE id = ?
         `).run(
             itemType, domain, urlMatch, label, login,
+            loginEnc,
             rec.password_encrypted ?? null,
             rec.extra_encrypted ?? null,
-            notes, lastIp, lastPid, lastPname,
+            notes, notesEnc,
+            lastIp, lastPid, lastPname,
             lastUsed,
             tags, isFav, folderId, vaultId,
             nid,
@@ -2084,14 +2295,16 @@ function saveCredential(rec) {
     }
     const r = db.prepare(`
         INSERT INTO credentials (
-            vault_id, item_type, domain, url_match, label, login, password_encrypted, extra_encrypted,
-            notes, last_ip, last_proxy_profile_id, last_proxy_profile_name, last_used_at, tags, is_favorite, folder_id
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            vault_id, item_type, domain, url_match, label, login, login_encrypted,
+            password_encrypted, extra_encrypted,
+            notes, notes_encrypted, last_ip, last_proxy_profile_id, last_proxy_profile_name,
+            last_used_at, tags, is_favorite, folder_id
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
-        vaultId, itemType, domain, urlMatch, label, login,
+        vaultId, itemType, domain, urlMatch, label, login, loginEnc,
         rec.password_encrypted ?? null,
         rec.extra_encrypted ?? null,
-        notes, lastIp, lastPid, lastPname,
+        notes, notesEnc, lastIp, lastPid, lastPname,
         lastUsed,
         tags, isFav, folderId,
     );
@@ -2669,7 +2882,9 @@ function parseJsonFields(...fields) {
 }
 
 function close() {
-    const maxDrain = 5000;
+    // Drain queued writes so pending data is persisted on shutdown. Cap the work to avoid
+    // blocking quit indefinitely on a pathologically large backlog.
+    const maxDrain = 100000;
     let drained = 0;
     while (drained < maxDrain && (_writeQueueHigh.length > 0 || _writeQueueLow.length > 0)) {
         const task = _takeNextWriteTask();
@@ -2682,9 +2897,20 @@ function close() {
         }
         drained++;
     }
-    if (db) { db.close(); db = null; }
+    // Reject any leftover tasks so awaiting callers don't hang forever after shutdown.
+    const leftovers = [..._writeQueueHigh, ..._writeQueueLow];
     _writeQueueHigh = [];
     _writeQueueLow = [];
+    for (const task of leftovers) {
+        try { task.reject(new Error('Database closing: write not persisted')); } catch { /* ignore */ }
+    }
+    if (db) {
+        // Fold the WAL back into the main DB file before closing so recent commits aren't
+        // left only in the -wal file at abrupt process exit (synchronous=NORMAL).
+        try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch { /* ignore */ }
+        db.close();
+        db = null;
+    }
     _fairHighStreak = 0;
     _writeQueueProcessing = false;
     _writeQueueDroppedLow = 0;
@@ -2741,12 +2967,15 @@ module.exports = {
     getWriteQueueStats,
     // user notes
     listUserNotes, getUserNote, saveUserNote, deleteUserNote, saveUserNoteAsync, deleteUserNoteAsync,
+    migrateNotesToProfile,
+    countUnassignedNotes,
     setUserNotePinned, linkNoteToRequest, unlinkNoteFromRequest, listNoteRequestLinks, listLinkedNotesForRequest,
     setUserNotePinnedAsync, linkNoteToRequestAsync, unlinkNoteFromRequestAsync,
     // credentials vault
     getCredentialsVaultMeta, initCredentialsVault, updateCredentialsVaultVerifyBlob,
     listVaults, createVault, getVaultById, updateVaultLastLogin, renameVault, deleteVault,
-    listCredentials, getCredential, getAllCredentialCipherRows, saveCredential, deleteCredential,
+    countActiveCredentialsForVault, updateVaultAvatar,
+    listCredentials, getCredential, getAllCredentialCipherRows, saveCredential, updateCredentialSensitiveFields, deleteCredential,
     setCredentialFavorite, updateCredentialCipherFields, updateCredentialLastUsedMeta,
     // credentials: soft-delete / trash
     softDeleteCredential, restoreCredential, purgeTrash, countTrashItems,

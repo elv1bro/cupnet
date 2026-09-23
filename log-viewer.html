@@ -1341,6 +1341,53 @@ mark.lv-find-mark.lv-find-active {
     display: none;
     padding: 0 0 12px;
 }
+.resp-html-preview-bar {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text-dim);
+    background: var(--bg1);
+    flex-shrink: 0;
+}
+.resp-preview-badge {
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    border: 1px solid var(--border);
+    color: var(--text);
+}
+.resp-html-preview-wrap {
+    display: none;
+    flex-direction: column;
+    min-height: 280px;
+    height: min(52vh, 640px);
+    border-bottom: 1px solid var(--border);
+    background: #fff;
+}
+.resp-html-preview-wrap iframe {
+    flex: 1;
+    width: 100%;
+    min-height: 240px;
+    border: none;
+    background: #fff;
+}
+.resp-html-text-wrap {
+    display: none;
+}
+.resp-html-text-wrap .body-content {
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: min(52vh, 640px);
+    overflow: auto;
+}
+#tab-response.active {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
 .resp-forms-empty {
     padding: 14px;
     color: var(--text-dim);
@@ -2504,9 +2551,21 @@ mark.lv-find-mark.lv-find-active {
                     </div>
                     <div id="resp-html-subtabs" class="resp-html-subtabs">
                         <button type="button" class="resp-html-subtab active" data-resp-view="body">Body</button>
+                        <button type="button" class="resp-html-subtab" data-resp-view="preview">Preview</button>
+                        <button type="button" class="resp-html-subtab" data-resp-view="text">Only text</button>
                         <button type="button" class="resp-html-subtab" data-resp-view="forms">Forms <span id="resp-forms-count"></span></button>
                     </div>
+                    <div id="resp-html-preview-bar" class="resp-html-preview-bar">
+                        <span class="resp-preview-badge">Sandbox</span>
+                        <span>Scripts and network requests are blocked in this preview</span>
+                    </div>
                     <div id="response-body-wrap"></div>
+                    <div id="resp-html-preview-wrap" class="resp-html-preview-wrap">
+                        <iframe id="resp-html-preview-iframe" sandbox="allow-same-origin" title="HTML preview (sandboxed, no network)"></iframe>
+                    </div>
+                    <div id="resp-html-text-wrap" class="resp-html-text-wrap">
+                        <pre id="resp-html-text-pre" class="body-content"></pre>
+                    </div>
                     <div id="resp-html-forms-wrap" class="resp-html-forms-wrap"></div>
                     <div id="lv-replay-result">
                         <div class="replay-result-header">
@@ -2649,6 +2708,7 @@ mark.lv-find-mark.lv-find-active {
 
 <div id="wrt-ctx-menu" class="wrt-ctx-menu hidden" role="menu" aria-label="Web Request Tools"></div>
 
+<script src="html-response-preview.js"></script>
 <script src="log-viewer-renderer.js"></script>
 </body>
 </html>

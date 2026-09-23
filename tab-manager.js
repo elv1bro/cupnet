@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { WebContentsView, session } = require('electron');
+const { registerTabView } = require('./main-process/ipc/ipc-trusted-sender.js');
 const path = require('path');
 const { attachWindowSwitcherHotkeyToTabWebContents } = require('./main-process/services/window-switcher-hotkey.js');
 const { isDevtoolsHostileUrl } = require('./main-process/services/devtools-hostile-sites.js');
@@ -16,6 +17,8 @@ const {
     attachMainFrameStatusTracker,
     shouldShowHttpErrorPage,
     shouldSkipErrorPageForUrl,
+    reloadActiveTab,
+    notePendingGetNavigation,
 } = require('./main-process/services/tab-error-page.js');
 const { getPasteUnlockScript } = require('./main-process/services/paste-unlock.js');
 const db = require('./db');
@@ -477,6 +480,7 @@ function attachTabListeners(tab) {
     attachMainFrameStatusTracker(tab);
 
     view.webContents.on('page-title-updated', (_, title) => {
+        if (view.webContents.isDestroyed()) return;
         if (isTabErrorPageUrl(view.webContents.getURL())) {
             tab.title = 'Page unavailable';
         } else {
@@ -494,6 +498,7 @@ function attachTabListeners(tab) {
     // Fires when user clicks a link or JS sets window.location — before the page loads.
     // Use this to immediately update the address bar so typed-but-unsubmitted text is cleared.
     view.webContents.on('will-navigate', (_, url) => {
+        notePendingGetNavigation(tab, url);
         if (!isTabErrorPageUrl(url)) clearTabErrorPageState(tab);
         if (tabId === activeTabId && mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('tab-will-navigate', { tabId, url: getTabDisplayUrl({ ...tab, url }) });
@@ -817,6 +822,7 @@ async function createTab(opts = {}) {
     installMediaPermissionHandlers(tabSession, settingsStore.normalizeDevicePermissions(settingsStore.loadSettings().devicePermissions).cameraMode);
 
     const view = new WebContentsView({ webPreferences: buildTabViewWebPreferences(tabSession) });
+    if (view.webContents) registerTabView(view.webContents);
 
     let sessionId = existingSessionId || null;
     if (!sessionId) {
@@ -981,7 +987,10 @@ function switchTab(tabId) {
             resizeActiveView();
         }
         mainWindow.webContents.send('url-updated', getTabDisplayUrl(tab));
-        mainWindow.webContents.send('set-loading-state', tab.view.webContents.isLoading());
+        const isLoading = tab.view && !tab.view.webContents.isDestroyed()
+            ? tab.view.webContents.isLoading()
+            : false;
+        mainWindow.webContents.send('set-loading-state', isLoading);
     }
 
     broadcastTabList(true);
@@ -1182,17 +1191,19 @@ function setWindowSwitcherOverlayVisible(visible) {
 function resizeActiveView() {
     if (!mainWindow || mainWindow.isDestroyed() || !activeTabId) return;
     const tab = tabs.get(activeTabId);
-    if (!tab) return;
+    if (!tab || !tab.view || tab.view.webContents.isDestroyed()) return;
     const { width, height } = mainWindow.getContentBounds();
     const topY = TOOLBAR_HEIGHT + extraTopOffset;
     const bottomReserve = STATUS_BAR_HEIGHT + extraBottomOffset;
     const rightReserve = extraRightOffset;
-    tab.view.setBounds({
-        x: 0,
-        y: topY,
-        width: Math.max(0, width - rightReserve),
-        height: Math.max(0, height - topY - bottomReserve),
-    });
+    try {
+        tab.view.setBounds({
+            x: 0,
+            y: topY,
+            width: Math.max(0, width - rightReserve),
+            height: Math.max(0, height - topY - bottomReserve),
+        });
+    } catch (_) { /* view torn down mid-relayout */ }
     _layoutOmniboxOverlayBounds();
 }
 
@@ -1520,4 +1531,5 @@ module.exports = {
     applyDevicePermissions,
     buildCameraFilterScript,
     _getCameraFilterDataForPreload,
+    reloadActiveTab,
 };

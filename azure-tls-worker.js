@@ -252,6 +252,19 @@ function releaseClient(key, client) {
     }
 }
 
+/**
+ * Return an out-of-pool client (created during a conn-error fresh-client retry) to the pool.
+ * The original borrowed slot was already released (client closed + `inUse--`) before this
+ * replacement was created, so count it as checked-out first; otherwise `releaseClient`'s
+ * decrement (or waiter hand-off) makes `inUse` drift below the true count and the
+ * concurrency cap leaks, creating unbounded native clients under upstream flakiness.
+ */
+function reinsertFreshClient(key, client) {
+    const pool = pools.get(key);
+    if (pool) pool.inUse++;
+    releaseClient(key, client);
+}
+
 function closeAllPoolClients() {
     for (const pool of pools.values()) {
         for (const resolve of pool.waiters.splice(0)) {
@@ -299,13 +312,38 @@ function decHttpInflight() {
     }
 }
 
-async function gracefulWorkerExit() {
-    if (awaitClear) return;
+const PARENT_EXIT_GRACE_MS = (() => {
+    const raw = process.env.CUPNET_WORKER_PARENT_EXIT_GRACE_MS;
+    if (raw == null || raw === '') return 8000;
+    const n = Number.parseInt(raw, 10);
+    return Number.isFinite(n) && n >= 0 ? Math.min(n, 120_000) : 8000;
+})();
+
+let workerExitScheduled = false;
+
+function forceWorkerExit(code, reason) {
+    if (reason) {
+        process.stderr.write(`[azure-worker] forcing exit: ${reason} (inflight=${httpInflight})\n`);
+    }
+    try { closeAllPoolClients(); } catch (_) {}
+    process.exit(code);
+}
+
+async function gracefulWorkerExit(reason = 'shutdown') {
+    if (workerExitScheduled) return;
+    workerExitScheduled = true;
     awaitClear = true;
+
+    const forceTimer = setTimeout(() => {
+        forceWorkerExit(1, `${reason}: grace period ${PARENT_EXIT_GRACE_MS}ms expired`);
+    }, PARENT_EXIT_GRACE_MS);
+    if (forceTimer.unref) forceTimer.unref();
+
     try {
         await waitZeroInflight();
     } catch (_) { /* ignore */ }
-    closeAllPoolClients();
+    clearTimeout(forceTimer);
+    try { closeAllPoolClients(); } catch (_) {}
     finishClearing();
     process.exit(0);
 }
@@ -314,19 +352,22 @@ async function gracefulWorkerExit() {
 function startParentWatchdog() {
     if (process.env.CUPNET_WORKER_NO_WATCHDOG === '1') return;
     const parentPid = process.ppid;
-    if (!parentPid || parentPid <= 1) return;
+    if (!parentPid || parentPid <= 1) {
+        forceWorkerExit(1, 'orphaned at startup (ppid<=1)');
+        return;
+    }
 
     const tick = setInterval(() => {
         if (process.ppid === 1) {
             clearInterval(tick);
-            gracefulWorkerExit();
+            void gracefulWorkerExit('parent reaped (ppid=1)');
             return;
         }
         try {
             process.kill(parentPid, 0);
         } catch {
             clearInterval(tick);
-            gracefulWorkerExit();
+            void gracefulWorkerExit(`parent ${parentPid} gone`);
         }
     }, 5000);
     if (tick.unref) tick.unref();
@@ -471,7 +512,7 @@ async function handleLine(line) {
                         maxRedirects:     disableRedirects === true ? 0 : undefined,
                     });
                     send({ id, statusCode: freshRes.statusCode, bodyBase64: freshRes.bodyBase64 || '', headers: freshRes.headers, error: freshRes.error || null });
-                    releaseClient(poolKey, freshClient);
+                    reinsertFreshClient(poolKey, freshClient);
                     return;
                 } catch (retryErr) {
                     try { freshClient.close(); } catch (_) {}
@@ -533,7 +574,7 @@ async function handleLine(line) {
                         maxRedirects:     disableRedirects === true ? 0 : undefined,
                     });
                     send({ id, statusCode: freshRes.statusCode, bodyBase64: freshRes.bodyBase64 || '', headers: freshRes.headers, error: freshRes.error || null });
-                    releaseClient(poolKey, freshClient);
+                    reinsertFreshClient(poolKey, freshClient);
                     return;
                 } catch (retryErr) {
                     try { freshClient.close(); } catch (_) {}

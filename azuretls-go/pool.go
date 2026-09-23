@@ -222,6 +222,23 @@ func releaseSession(key string, sess *azuretls.Session) {
 	poolsMu.Unlock()
 }
 
+// reinsertFreshSession returns an out-of-pool session (created during a conn-error
+// fresh-session retry) to the pool. The original borrowed slot was already released
+// (session closed + inUse--) before this replacement was created, so account for it as
+// checked-out first; otherwise releaseSession's decrement (or waiter hand-off) makes
+// inUse drift below the true count, leaking the concurrency cap under upstream flakiness.
+func reinsertFreshSession(key string, sess *azuretls.Session) {
+	if sess == nil {
+		return
+	}
+	poolsMu.Lock()
+	if pool := pools[key]; pool != nil {
+		pool.inUse++
+	}
+	poolsMu.Unlock()
+	releaseSession(key, sess)
+}
+
 func closeAllPoolClients() {
 	poolsMu.Lock()
 	defer poolsMu.Unlock()

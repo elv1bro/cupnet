@@ -191,11 +191,6 @@ function iconInnerSvg(kind) {
 }
 
 function iconInner(it) {
-    if (it && it.faviconUrl) {
-        return '<img class="item-favicon" src="' + esc(it.faviconUrl) + '" alt="" '
-            + 'onerror="this.style.display=\'none\';var n=this.nextElementSibling;if(n)n.style.display=\'flex\'">'
-            + '<span class="item-icon-fallback" style="display:none">' + iconInnerSvg(it.icon) + '</span>';
-    }
     return iconInnerSvg(it && it.icon);
 }
 

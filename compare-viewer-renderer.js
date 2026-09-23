@@ -26,7 +26,16 @@ function methodCls(m) { return String(m || 'GET').toUpperCase(); }
 function statusCls(s) { const n = Number(s); if (n >= 200 && n < 300) return 's2'; if (n >= 300 && n < 400) return 's3'; if (n >= 400 && n < 500) return 's4'; if (n >= 500) return 's5'; return ''; }
 function truncPath(url, max = 72) { try { const u = new URL(String(url || '')); const p = u.pathname + (u.search ? u.search.slice(0, 30) : ''); return p.length > max ? p.slice(0, max) + '…' : p; } catch { const s = String(url || ''); return s.length > max ? s.slice(0, max) + '…' : s; } }
 function tryParseJson(text) { try { return JSON.parse(String(text || '')); } catch { return null; } }
-function isLikelyHtml(text) { const s = String(text || '').trim().toLowerCase(); return !!s && (s.startsWith('<!doctype html') || s.startsWith('<html') || s.includes('<body') || s.includes('</html>')); }
+const _hrp = typeof window !== 'undefined' ? window.HtmlResponsePreview : null;
+function isLikelyHtml(text) {
+    if (_hrp?.isLikelyHtmlContent) return _hrp.isLikelyHtmlContent(text);
+    const s = String(text || '').trim().toLowerCase();
+    return !!s && (s.startsWith('<!doctype html') || s.startsWith('<html') || s.includes('<body') || s.includes('</html>'));
+}
+function buildSandboxPreviewDoc(rawHtml) {
+    if (_hrp?.buildSandboxPreviewDoc) return _hrp.buildSandboxPreviewDoc(rawHtml);
+    return String(rawHtml || '');
+}
 function visibleDim(name) { const v = String(dimensionMode?.value || 'all'); return v === 'all' || v === name; }
 function statusClassNum(code) { const n = Number(code || 0); return n ? Math.floor(n / 100) : 0; }
 
@@ -91,33 +100,8 @@ function analyzeHtmlSnapshot(text) {
     } catch { return null; }
 }
 
-function buildSandboxPreviewDoc(rawHtml) {
-    const raw = String(rawHtml || '');
-    if (!raw.trim()) return '<!doctype html><html><body style="font-family:-apple-system,Segoe UI,sans-serif;background:#fff;color:#111;padding:12px">Empty preview</body></html>';
-    try {
-        const doc = new DOMParser().parseFromString(raw, 'text/html');
-        doc.querySelectorAll('meta[http-equiv]').forEach((m) => {
-            if (/refresh/i.test(String(m.getAttribute('http-equiv') || ''))) m.remove();
-        });
-        doc.querySelectorAll('iframe').forEach((el) => {
-            const p = doc.createElement('div');
-            p.textContent = '[iframe blocked in sandbox preview]';
-            p.style.cssText = 'padding:6px 8px;border:1px dashed #aaa;margin:6px 0;font:12px/1.4 monospace;color:#555;background:#fafafa;';
-            el.replaceWith(p);
-        });
-        doc.querySelectorAll('[src],[href],[srcset]').forEach((el) => {
-            if (el.hasAttribute('src')) { el.setAttribute('data-original-src', el.getAttribute('src') || ''); el.removeAttribute('src'); }
-            if (el.hasAttribute('href')) { el.setAttribute('data-original-href', el.getAttribute('href') || ''); el.removeAttribute('href'); }
-            if (el.hasAttribute('srcset')) { el.removeAttribute('srcset'); }
-        });
-        const html = doc.documentElement?.outerHTML || raw;
-        return `<!doctype html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data: blob:;"><style>html,body{margin:0;padding:0;background:#fff;color:#111}body{font:13px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}</style></head><body>${html}</body></html>`;
-    } catch {
-        return '<!doctype html><html><body style="font-family:-apple-system,Segoe UI,sans-serif;background:#fff;color:#111;padding:12px">Preview parse error</body></html>';
-    }
-}
-
 function tinyHash(text) {
+    if (_hrp?.previewDocHash) return _hrp.previewDocHash(text);
     const s = String(text || '');
     return `${s.length}:${s.slice(0, 64)}:${s.slice(-64)}`;
 }

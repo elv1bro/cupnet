@@ -294,5 +294,7 @@ module.exports = {
     BUNDLE_SCHEMA_VERSION,
     buildBundle,
     validateBundle,
+    redactHeaders,
+    redactBody,
 };
 

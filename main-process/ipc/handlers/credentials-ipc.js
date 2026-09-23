@@ -7,43 +7,60 @@ const {
     decryptCredentialField,
     createVaultVerifyBlob,
     verifyVaultPassword,
+    encryptFieldForStorage,
+    decryptFieldFromStorage,
+    encryptCredentialFieldWithKey,
+    deriveMasterKey,
 } = require('../../../credentials-crypto.js');
 const { getNoteDomainFromUrl, noteMatchesUrlMatch } = require('../../../note-domain-utils.js');
+const vaultCrypto = require('../../services/credentials-vault-crypto.js');
+const vaultSession = vaultCrypto.vaultSession;
+const { validatePassword } = require('../../services/password-policy.js');
+const settingsStore = require('../../services/settings-store.js');
+const profileSession = require('../../services/profile-session.js');
+const { writeFileSecureAsync } = require('../../services/secure-fs.js');
+const { guardIpcHandler } = require('../ipc-trusted-sender.js');
+const crypto = require('crypto');
 
-/** Map of vaultId -> masterPassword for unlocked vaults. */
-const _vaultPasswords = new Map();
-/** Currently active vault id. */
-let _activeVaultId = null;
 /** Pending credential capture (waiting for user confirm/dismiss). */
 let _pendingCapture = null;
 
 function clearCredentialsVaultSession() {
-    _vaultPasswords.clear();
-    _activeVaultId = null;
+    vaultSession.lockAll('credentials-clear');
     _pendingCapture = null;
 }
 
 function _isUnlocked() {
-    return _activeVaultId != null && _vaultPasswords.has(_activeVaultId);
-}
-
-function _getActiveVaultPassword() {
-    if (_activeVaultId == null) return null;
-    return _vaultPasswords.get(_activeVaultId) || null;
+    return vaultCrypto.isUnlocked();
 }
 
 function _requireMaster() {
-    const pw = _getActiveVaultPassword();
-    if (!pw) {
-        const err = new Error('Vault is locked');
-        err.code = 'CREDENTIALS_LOCKED';
-        throw err;
-    }
-    return pw;
+    vaultCrypto.requireUnlockedMasterKey();
 }
 
 function _anyVaultUnlocked() {
-    return _vaultPasswords.size > 0;
+    return vaultCrypto.isUnlocked();
+}
+
+function _activeVaultId() {
+    return vaultCrypto.activeVaultId();
+}
+
+function _resolveCaptureVaultId(ctx) {
+    const fromSession = _activeVaultId();
+    if (fromSession != null) return fromSession;
+    const fromProfile = settingsStore.getActiveProfileVaultId();
+    if (fromProfile != null) return fromProfile;
+    const vaults = ctx.db?.listVaults?.() || [];
+    return vaults[0]?.id ?? 1;
+}
+
+function _encField(plain) {
+    return vaultCrypto.enc(plain);
+}
+
+function _decField(buf, passwordFallback) {
+    return vaultCrypto.dec(buf, passwordFallback);
 }
 
 function _parseExtraJson(s) {
@@ -60,12 +77,11 @@ const BATCH_IMPORT_MAX = 5000;
 
 /**
  * @param {object} ctx
- * @param {string} master
  * @param {object} p
  * @param {{ last_ip?: string, last_proxy_profile_id?: number|null, last_proxy_profile_name?: string, pageUrl?: string }} grabMeta
  * @returns {number|null} new row id or null if row skipped
  */
-function _insertCredentialFromImport(ctx, master, p, grabMeta) {
+function _insertCredentialFromImport(ctx, p, grabMeta) {
     const login = String(p.login ?? '').trim();
     const passwordPlain = p.password != null ? String(p.password) : '';
     const itemType = p.item_type || 'login';
@@ -79,12 +95,12 @@ function _insertCredentialFromImport(ctx, master, p, grabMeta) {
 
     const extraObj = p.extra && typeof p.extra === 'object' && !Array.isArray(p.extra) ? p.extra : {};
     const extraJson = JSON.stringify(extraObj);
-    const passwordEnc = encryptCredentialField(passwordPlain, master);
-    const extraEnc = encryptCredentialField(extraJson, master);
+    const passwordEnc = _encField(passwordPlain);
+    const extraEnc = _encField(extraJson);
 
     const rec = {
         id: null,
-        vault_id: _activeVaultId || 1,
+        vault_id: _activeVaultId() || 1,
         item_type: itemType,
         domain,
         url_match: String(p.url_match ?? ''),
@@ -105,7 +121,41 @@ function _insertCredentialFromImport(ctx, master, p, grabMeta) {
     return ctx.db.saveCredential(rec);
 }
 
+function _plainLogin(row) {
+    if (row.login_encrypted && Buffer.isBuffer(row.login_encrypted)) {
+        try { return _decField(row.login_encrypted); } catch { return ''; }
+    }
+    return row.login || '';
+}
+
+function _plainNotes(row) {
+    if (row.notes_encrypted && Buffer.isBuffer(row.notes_encrypted)) {
+        try { return _decField(row.notes_encrypted); } catch { return ''; }
+    }
+    return row.notes || '';
+}
+
+function _buildEncryptedVaultExport(items, exportPassword) {
+    const salt = crypto.randomBytes(16);
+    const key = crypto.scryptSync(String(exportPassword), salt, 32);
+    const iv = crypto.randomBytes(12);
+    const payload = JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), items });
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const enc = Buffer.concat([cipher.update(payload, 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return JSON.stringify({
+        format: 'cupnet-vault-export',
+        version: 1,
+        salt: salt.toString('base64'),
+        iv: iv.toString('base64'),
+        tag: tag.toString('base64'),
+        data: enc.toString('base64'),
+    }, null, 2);
+}
+
 function registerCredentialsIpc(ctx) {
+    const handle = (channel, fn) => ctx.ipcMain.handle(channel, guardIpcHandler(channel, fn));
+
     function _toolbarRefresh() {
         try {
             if (ctx.mainWindow && !ctx.mainWindow.isDestroyed()) {
@@ -114,18 +164,37 @@ function registerCredentialsIpc(ctx) {
         } catch (_) { /* ignore */ }
     }
 
-    ctx.ipcMain.handle('credentials-vault-status', () => {
+    async function _unlockVaultRecord(meta, password) {
+        const unlock = await vaultSession.unlockVault({
+            vaultId: meta.id,
+            name: meta.name,
+            password,
+            verifyBlob: meta.verify_blob,
+        });
+        if (!unlock.success) return unlock;
+        if (unlock.upgradedVerifyBlob) {
+            ctx.db.updateCredentialsVaultVerifyBlob(meta.id, unlock.upgradedVerifyBlob);
+        }
+        ctx.db.updateVaultLastLogin(meta.id);
+        settingsStore.setActiveProfileVaultId(meta.id);
+        try { migratePlaintextCredentialFields(ctx.db, meta.id); } catch { /* ignore */ }
+        _toolbarRefresh();
+        return { success: true, vaultId: meta.id };
+    }
+
+    handle('credentials-vault-status', () => {
         try {
             if (!ctx.db) return { exists: false, unlocked: false };
             const vaults = ctx.db.listVaults();
             if (!vaults.length) return { exists: false, unlocked: false };
-            const activeVault = _activeVaultId != null
-                ? ctx.db.getCredentialsVaultMeta(_activeVaultId)
+            const aid = _activeVaultId();
+            const activeVault = aid != null
+                ? ctx.db.getCredentialsVaultMeta(aid)
                 : vaults[0];
             return {
                 exists: true,
                 unlocked: _isUnlocked(),
-                activeVaultId: _activeVaultId,
+                activeVaultId: aid,
                 activeVaultName: activeVault?.name || '',
                 createdAt: activeVault?.created_at || null,
                 hint: activeVault?.hint || '',
@@ -137,40 +206,39 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credentials-vault-list', () => {
+    handle('credentials-vault-list', () => {
         try {
             if (!ctx.db) return [];
+            const aid = _activeVaultId();
             return ctx.db.listVaults().map(v => ({
                 ...v,
-                unlocked: _vaultPasswords.has(v.id),
-                isActive: v.id === _activeVaultId,
+                unlocked: vaultSession.isVaultUnlocked(v.id),
+                isActive: v.id === aid,
             }));
         } catch { return []; }
     });
 
-    ctx.ipcMain.handle('credentials-vault-create', (_, payload) => {
+    handle('credentials-vault-create', async (_, payload) => {
         try {
             if (!ctx.db) return { success: false, error: 'Database unavailable' };
             const name = String(payload?.name || '').trim();
             if (!name) return { success: false, error: 'Vault name is required' };
             const pw = String(payload?.password || '');
             const confirm = String(payload?.confirm || '');
-            if (pw.length < 8) return { success: false, error: 'Master password must be at least 8 characters' };
+            const pwCheck = validatePassword(pw);
+            if (!pwCheck.ok) return { success: false, error: pwCheck.error };
             if (pw !== confirm) return { success: false, error: 'Passwords do not match' };
-            const blob = createVaultVerifyBlob(pw);
+            const blob = await createVaultVerifyBlob(pw);
             const id = ctx.db.createVault(name, blob);
-            _vaultPasswords.set(id, pw);
-            _activeVaultId = id;
-            ctx.db.updateVaultLastLogin(id);
-            _toolbarRefresh();
-            return { success: true, id };
+            const meta = ctx.db.getCredentialsVaultMeta(id);
+            return await _unlockVaultRecord(meta, pw);
         } catch (e) {
             ctx.sysLog?.('warn', 'credentials', String(e?.message || e));
             return { success: false, error: String(e?.message || e) };
         }
     });
 
-    ctx.ipcMain.handle('credentials-vault-setup', (_, payload) => {
+    handle('credentials-vault-setup', async (_, payload) => {
         try {
             if (!ctx.db) return { success: false, error: 'Database unavailable' };
             const vaults = ctx.db.listVaults();
@@ -179,22 +247,20 @@ function registerCredentialsIpc(ctx) {
             }
             const pw = String(payload?.password || '');
             const confirm = String(payload?.confirm || '');
-            if (pw.length < 8) return { success: false, error: 'Master password must be at least 8 characters' };
+            const pwCheck = validatePassword(pw);
+            if (!pwCheck.ok) return { success: false, error: pwCheck.error };
             if (pw !== confirm) return { success: false, error: 'Passwords do not match' };
-            const blob = createVaultVerifyBlob(pw);
+            const blob = await createVaultVerifyBlob(pw);
             const id = ctx.db.createVault(String(payload?.name || 'Default'), blob);
-            _vaultPasswords.set(id, pw);
-            _activeVaultId = id;
-            ctx.db.updateVaultLastLogin(id);
-            _toolbarRefresh();
-            return { success: true, id };
+            const meta = ctx.db.getCredentialsVaultMeta(id);
+            return await _unlockVaultRecord(meta, pw);
         } catch (e) {
             ctx.sysLog?.('warn', 'credentials', String(e?.message || e));
             return { success: false, error: String(e?.message || e) };
         }
     });
 
-    ctx.ipcMain.handle('credentials-unlock', (_, password, vaultId) => {
+    handle('credentials-unlock', async (_, password, vaultId) => {
         try {
             if (!ctx.db) return { success: false, error: 'Database unavailable' };
             const targetId = vaultId != null ? Number(vaultId) : null;
@@ -204,53 +270,38 @@ function registerCredentialsIpc(ctx) {
             } else {
                 const vaults = ctx.db.listVaults();
                 meta = vaults.length === 1 ? ctx.db.getCredentialsVaultMeta(vaults[0].id) : null;
-                if (!meta && _activeVaultId != null) meta = ctx.db.getCredentialsVaultMeta(_activeVaultId);
+                const aid = _activeVaultId();
+                if (!meta && aid != null) meta = ctx.db.getCredentialsVaultMeta(aid);
                 if (!meta && vaults.length > 0) meta = ctx.db.getCredentialsVaultMeta(vaults[0].id);
             }
             if (!meta) return { success: false, error: 'No vault — create one first' };
-            const pw = String(password || '');
-            if (!verifyVaultPassword(meta.verify_blob, pw)) {
-                return { success: false, error: 'Invalid master password' };
-            }
-            _vaultPasswords.set(meta.id, pw);
-            _activeVaultId = meta.id;
-            ctx.db.updateVaultLastLogin(meta.id);
-            _toolbarRefresh();
-            return { success: true, vaultId: meta.id };
+            return await _unlockVaultRecord(meta, String(password || ''));
         } catch (e) {
             ctx.sysLog?.('warn', 'credentials', String(e?.message || e));
             return { success: false, error: String(e?.message || e) };
         }
     });
 
-    ctx.ipcMain.handle('credentials-vault-switch', (_, vaultId, password) => {
+    handle('credentials-vault-switch', async (_, vaultId, password) => {
         try {
             if (!ctx.db) return { success: false, error: 'Database unavailable' };
             const vid = Number(vaultId);
             const meta = ctx.db.getCredentialsVaultMeta(vid);
             if (!meta) return { success: false, error: 'Vault not found' };
-            if (_vaultPasswords.has(vid)) {
-                _activeVaultId = vid;
+            if (vaultSession.isVaultUnlocked(vid) && _activeVaultId() === vid) {
                 _toolbarRefresh();
                 return { success: true };
             }
             const pw = String(password || '');
             if (!pw) return { success: false, error: 'Password required to unlock vault' };
-            if (!verifyVaultPassword(meta.verify_blob, pw)) {
-                return { success: false, error: 'Invalid master password' };
-            }
-            _vaultPasswords.set(vid, pw);
-            _activeVaultId = vid;
-            ctx.db.updateVaultLastLogin(vid);
-            _toolbarRefresh();
-            return { success: true };
+            return await _unlockVaultRecord(meta, pw);
         } catch (e) {
             ctx.sysLog?.('warn', 'credentials', String(e?.message || e));
             return { success: false, error: String(e?.message || e) };
         }
     });
 
-    ctx.ipcMain.handle('credentials-vault-delete', (_, vaultId, password) => {
+    handle('credentials-vault-delete', async (_, vaultId, password) => {
         try {
             if (!ctx.db) return { success: false, error: 'Database unavailable' };
             const vid = Number(vaultId);
@@ -263,18 +314,13 @@ function registerCredentialsIpc(ctx) {
             if (needsPassword) {
                 const pw = String(password || '');
                 if (!pw) return { success: false, error: 'Vault was used within last 30 days — password required to delete' };
-                if (!verifyVaultPassword(meta.verify_blob, pw)) {
+                if (!(await verifyVaultPassword(meta.verify_blob, pw))) {
                     return { success: false, error: 'Invalid password' };
                 }
             }
 
             ctx.db.deleteVault(vid);
-            _vaultPasswords.delete(vid);
-            if (_activeVaultId === vid) {
-                _activeVaultId = null;
-                const remaining = ctx.db.listVaults();
-                if (remaining.length > 0) _activeVaultId = remaining[0].id;
-            }
+            vaultSession.lockVault(vid);
             _toolbarRefresh();
             return { success: true };
         } catch (e) {
@@ -283,7 +329,7 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credentials-vault-rename', (_, vaultId, name) => {
+    handle('credentials-vault-rename', (_, vaultId, name) => {
         try {
             _requireMaster();
             ctx.db.renameVault(vaultId, name);
@@ -293,17 +339,15 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credentials-lock', () => {
-        _vaultPasswords.clear();
-        _activeVaultId = null;
-        _pendingCapture = null;
+    handle('credentials-lock', () => {
+        clearCredentialsVaultSession();
         _toolbarRefresh();
         return { success: true };
     });
 
-    ctx.ipcMain.handle('credentials-list', (_, filter) => {
+    handle('credentials-list', (_, filter) => {
         _requireMaster();
-        const f = { ...(filter || {}), vaultId: _activeVaultId };
+        const f = { ...(filter || {}), vaultId: _activeVaultId() };
         let rows = ctx.db.listCredentials(f);
         if (f.refineByUrlMatch && f.pageUrl) {
             const pu = String(f.pageUrl);
@@ -312,14 +356,14 @@ function registerCredentialsIpc(ctx) {
         return rows;
     });
 
-    ctx.ipcMain.handle('credentials-get', (_, id) => {
-        const master = _requireMaster();
+    handle('credentials-get', (_, id) => {
+        _requireMaster();
         const row = ctx.db.getCredential(id);
         if (!row) return null;
         let password = '';
         if (row.password_encrypted && Buffer.isBuffer(row.password_encrypted)) {
             try {
-                password = decryptCredentialField(row.password_encrypted, master);
+                password = _decField(row.password_encrypted);
             } catch (e) {
                 ctx.sysLog?.('warn', 'credentials', 'decrypt password: ' + String(e?.message || e));
                 password = '';
@@ -328,7 +372,7 @@ function registerCredentialsIpc(ctx) {
         let extra = {};
         if (row.extra_encrypted && Buffer.isBuffer(row.extra_encrypted)) {
             try {
-                const json = decryptCredentialField(row.extra_encrypted, master);
+                const json = _decField(row.extra_encrypted);
                 extra = _parseExtraJson(json);
             } catch (e) {
                 ctx.sysLog?.('warn', 'credentials', 'decrypt extra: ' + String(e?.message || e));
@@ -343,7 +387,7 @@ function registerCredentialsIpc(ctx) {
             customFields = rawFields.map((f) => {
                 let value = '';
                 if (f.value_encrypted && Buffer.isBuffer(f.value_encrypted)) {
-                    try { value = decryptCredentialField(f.value_encrypted, master); } catch { value = ''; }
+                    try { value = _decField(f.value_encrypted); } catch { value = ''; }
                 }
                 return { id: f.id, name: f.name, value, field_type: f.field_type, sort_order: f.sort_order };
             });
@@ -354,10 +398,10 @@ function registerCredentialsIpc(ctx) {
             domain: row.domain,
             url_match: row.url_match || '',
             label: row.label || '',
-            login: row.login || '',
+            login: _plainLogin(row),
             password,
             extra,
-            notes: row.notes || '',
+            notes: _plainNotes(row),
             last_ip: row.last_ip || '',
             last_proxy_profile_id: row.last_proxy_profile_id,
             last_proxy_profile_name: row.last_proxy_profile_name || '',
@@ -373,9 +417,9 @@ function registerCredentialsIpc(ctx) {
         };
     });
 
-    ctx.ipcMain.handle('credentials-save', (_, payload) => {
+    handle('credentials-save', (_, payload) => {
         try {
-            const master = _requireMaster();
+            _requireMaster();
             const p = payload || {};
             let domain = String(p.domain || '').trim().toLowerCase();
             const pageUrl = String(p.page_url || '');
@@ -385,20 +429,25 @@ function registerCredentialsIpc(ctx) {
             const passwordPlain = p.password != null ? String(p.password) : '';
             const extraObj = p.extra && typeof p.extra === 'object' && !Array.isArray(p.extra) ? p.extra : {};
             const extraJson = JSON.stringify(extraObj);
-            const passwordEnc = encryptCredentialField(passwordPlain, master);
-            const extraEnc = encryptCredentialField(extraJson, master);
+            const passwordEnc = _encField(passwordPlain);
+            const extraEnc = _encField(extraJson);
+            const loginPlain = String(p.login ?? '');
+            const notesPlain = String(p.notes ?? '');
+            const key = vaultCrypto.requireUnlockedMasterKey();
 
             const rec = {
                 id: p.id ? Number(p.id) : null,
-                vault_id: _activeVaultId || 1,
+                vault_id: _activeVaultId() || 1,
                 item_type: p.item_type || 'login',
                 domain,
                 url_match: String(p.url_match ?? ''),
                 label: String(p.label ?? ''),
-                login: String(p.login ?? ''),
+                login: '',
+                login_encrypted: loginPlain ? encryptCredentialFieldWithKey(loginPlain, key) : null,
                 password_encrypted: passwordEnc,
                 extra_encrypted: extraEnc,
-                notes: String(p.notes ?? ''),
+                notes: '',
+                notes_encrypted: notesPlain ? encryptCredentialFieldWithKey(notesPlain, key) : null,
                 last_ip: String(p.last_ip ?? ''),
                 last_proxy_profile_id: p.last_proxy_profile_id,
                 last_proxy_profile_name: String(p.last_proxy_profile_name ?? ''),
@@ -418,8 +467,8 @@ function registerCredentialsIpc(ctx) {
                     name: f.name,
                     field_type: f.field_type || 'text',
                     value_encrypted: f.field_type === 'checkbox'
-                        ? encryptCredentialField(f.value ? '1' : '0', master)
-                        : encryptCredentialField(String(f.value ?? ''), master),
+                        ? _encField(f.value ? '1' : '0')
+                        : _encField(String(f.value ?? '')),
                 }));
                 ctx.db.saveCredentialCustomFields(id, encrypted);
             }
@@ -432,9 +481,9 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credentials-import-batch', async (_, payload) => {
+    handle('credentials-import-batch', async (_, payload) => {
         try {
-            const master = _requireMaster();
+            _requireMaster();
             const items = payload?.items;
             if (!Array.isArray(items) || items.length === 0) {
                 return { success: false, error: 'No items to import' };
@@ -471,7 +520,7 @@ function registerCredentialsIpc(ctx) {
             }
 
             const sqlite = ctx.db.getDb && ctx.db.getDb();
-            const runInsert = (row) => _insertCredentialFromImport(ctx, master, row, grabMeta);
+            const runInsert = (row) => _insertCredentialFromImport(ctx, row, grabMeta);
 
             let imported = 0;
             let skipped = 0;
@@ -500,7 +549,7 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credentials-delete', (_, id, permanent) => {
+    handle('credentials-delete', (_, id, permanent) => {
         try {
             _requireMaster();
             if (permanent) {
@@ -516,7 +565,7 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credentials-restore', (_, id) => {
+    handle('credentials-restore', (_, id) => {
         try {
             _requireMaster();
             ctx.db.restoreCredential(id);
@@ -527,10 +576,10 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credentials-purge-trash', () => {
+    handle('credentials-purge-trash', () => {
         try {
             _requireMaster();
-            ctx.db.purgeTrash(_activeVaultId);
+            ctx.db.purgeTrash(_activeVaultId());
             return { success: true };
         } catch (e) {
             if (e?.code === 'CREDENTIALS_LOCKED') return { success: false, error: 'Vault is locked' };
@@ -538,21 +587,21 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credentials-count-trash', () => {
+    handle('credentials-count-trash', () => {
         try {
             _requireMaster();
-            return { count: ctx.db.countTrashItems(_activeVaultId) };
+            return { count: ctx.db.countTrashItems(_activeVaultId()) };
         } catch { return { count: 0 }; }
     });
 
-    ctx.ipcMain.handle('credentials-type-counts', () => {
+    handle('credentials-type-counts', () => {
         try {
             _requireMaster();
-            return ctx.db.countCredentialsByType(_activeVaultId);
+            return ctx.db.countCredentialsByType(_activeVaultId());
         } catch { return { login: 0, card: 0, identity: 0, note: 0, total: 0 }; }
     });
 
-    ctx.ipcMain.handle('credentials-favorite', (_, id, value) => {
+    handle('credentials-favorite', (_, id, value) => {
         try {
             _requireMaster();
             ctx.db.setCredentialFavorite(id, !!value);
@@ -565,24 +614,24 @@ function registerCredentialsIpc(ctx) {
     });
 
     // ── Folders ──────────────────────────────────────────────────────────────
-    ctx.ipcMain.handle('credentials-folders-list', () => {
+    handle('credentials-folders-list', () => {
         try {
             _requireMaster();
-            return ctx.db.listCredentialFolders(_activeVaultId);
+            return ctx.db.listCredentialFolders(_activeVaultId());
         } catch { return []; }
     });
 
-    ctx.ipcMain.handle('credentials-folder-create', (_, name, parentId) => {
+    handle('credentials-folder-create', (_, name, parentId) => {
         try {
             _requireMaster();
-            const id = ctx.db.createCredentialFolder(name, parentId, _activeVaultId);
+            const id = ctx.db.createCredentialFolder(name, parentId, _activeVaultId());
             return { success: true, id };
         } catch (e) {
             return { success: false, error: String(e?.message || e) };
         }
     });
 
-    ctx.ipcMain.handle('credentials-folder-rename', (_, id, name) => {
+    handle('credentials-folder-rename', (_, id, name) => {
         try {
             _requireMaster();
             ctx.db.renameCredentialFolder(id, name);
@@ -592,7 +641,7 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credentials-folder-delete', (_, id) => {
+    handle('credentials-folder-delete', (_, id) => {
         try {
             _requireMaster();
             ctx.db.deleteCredentialFolder(id);
@@ -602,7 +651,7 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credentials-move-to-folder', (_, credentialId, folderId) => {
+    handle('credentials-move-to-folder', (_, credentialId, folderId) => {
         try {
             _requireMaster();
             ctx.db.moveCredentialToFolder(credentialId, folderId);
@@ -613,14 +662,14 @@ function registerCredentialsIpc(ctx) {
     });
 
     // ── URIs ────────────────────────────────────────────────────────────────
-    ctx.ipcMain.handle('credentials-uris-get', (_, credentialId) => {
+    handle('credentials-uris-get', (_, credentialId) => {
         try {
             _requireMaster();
             return ctx.db.listCredentialUris(credentialId);
         } catch { return []; }
     });
 
-    ctx.ipcMain.handle('credentials-uris-save', (_, credentialId, uris) => {
+    handle('credentials-uris-save', (_, credentialId, uris) => {
         try {
             _requireMaster();
             ctx.db.saveCredentialUris(credentialId, uris);
@@ -631,31 +680,31 @@ function registerCredentialsIpc(ctx) {
     });
 
     // ── Custom fields ───────────────────────────────────────────────────────
-    ctx.ipcMain.handle('credentials-fields-get', (_, credentialId) => {
+    handle('credentials-fields-get', (_, credentialId) => {
         try {
-            const master = _requireMaster();
+            _requireMaster();
             const rows = ctx.db.listCredentialCustomFields(credentialId);
             return rows.map((r) => {
                 let value = '';
                 if (r.field_type === 'hidden' && r.value_encrypted && Buffer.isBuffer(r.value_encrypted)) {
-                    try { value = decryptCredentialField(r.value_encrypted, master); } catch { value = ''; }
+                    try { value = _decField(r.value_encrypted); } catch { value = ''; }
                 } else if (r.value_encrypted && Buffer.isBuffer(r.value_encrypted)) {
-                    try { value = decryptCredentialField(r.value_encrypted, master); } catch { value = ''; }
+                    try { value = _decField(r.value_encrypted); } catch { value = ''; }
                 }
                 return { id: r.id, name: r.name, value, field_type: r.field_type, sort_order: r.sort_order };
             });
         } catch { return []; }
     });
 
-    ctx.ipcMain.handle('credentials-fields-save', (_, credentialId, fields) => {
+    handle('credentials-fields-save', (_, credentialId, fields) => {
         try {
-            const master = _requireMaster();
+            _requireMaster();
             const encrypted = (fields || []).map((f) => ({
                 name: f.name,
                 field_type: f.field_type || 'text',
                 value_encrypted: f.field_type === 'checkbox'
-                    ? encryptCredentialField(f.value ? '1' : '0', master)
-                    : encryptCredentialField(String(f.value ?? ''), master),
+                    ? _encField(f.value ? '1' : '0')
+                    : _encField(String(f.value ?? '')),
             }));
             ctx.db.saveCredentialCustomFields(credentialId, encrypted);
             return { success: true };
@@ -665,17 +714,17 @@ function registerCredentialsIpc(ctx) {
     });
 
     // ── Vault hint ──────────────────────────────────────────────────────────
-    ctx.ipcMain.handle('credentials-vault-set-hint', (_, hint) => {
+    handle('credentials-vault-set-hint', (_, hint) => {
         try {
             _requireMaster();
-            ctx.db.setVaultHint(_activeVaultId, hint);
+            ctx.db.setVaultHint(_activeVaultId(), hint);
             return { success: true };
         } catch (e) {
             return { success: false, error: String(e?.message || e) };
         }
     });
 
-    ctx.ipcMain.handle('credentials-get-tab-proxy-ip', async () => {
+    handle('credentials-get-tab-proxy-ip', async () => {
         try {
             const tab = ctx.tabManager?.getActiveTab?.();
             const tabId = tab?.id || null;
@@ -702,7 +751,7 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credentials-site-matches', (_, payload) => {
+    handle('credentials-site-matches', (_, payload) => {
         try {
             const vaults = ctx.db?.listVaults?.() || [];
             if (!vaults.length) return { exists: false, unlocked: false, matches: [] };
@@ -711,7 +760,7 @@ function registerCredentialsIpc(ctx) {
             if (!/^https?:\/\//i.test(pageUrl)) return { exists: true, unlocked: true, matches: [] };
             const domain = String(payload?.domain || '').trim().toLowerCase() || getNoteDomainFromUrl(pageUrl);
             if (!domain) return { exists: true, unlocked: true, matches: [] };
-            let rows = ctx.db.listCredentials({ domain, limit: 2000, vaultId: _activeVaultId });
+            let rows = ctx.db.listCredentials({ domain, limit: 2000, vaultId: _activeVaultId() });
             rows = rows.filter((r) => noteMatchesUrlMatch(r.url_match || '', pageUrl));
             const matches = rows.map((r) => ({
                 id: r.id,
@@ -725,7 +774,7 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credentials-site-match-count', (_, payload) => {
+    handle('credentials-site-match-count', (_, payload) => {
         try {
             const vaults = ctx.db?.listVaults?.() || [];
             if (!vaults.length) return { exists: false, unlocked: false, count: 0 };
@@ -734,7 +783,7 @@ function registerCredentialsIpc(ctx) {
             if (!/^https?:\/\//i.test(pageUrl)) return { exists: true, unlocked, count: 0 };
             const domain = String(payload?.domain || '').trim().toLowerCase() || getNoteDomainFromUrl(pageUrl);
             if (!domain) return { exists: true, unlocked, count: 0 };
-            const vid = _activeVaultId != null ? _activeVaultId : vaults[0].id;
+            const vid = _activeVaultId() != null ? _activeVaultId() : vaults[0].id;
             let rows = ctx.db.listCredentials({ domain, limit: 2000, vaultId: vid });
             rows = rows.filter((r) => noteMatchesUrlMatch(r.url_match || '', pageUrl));
             return { exists: true, unlocked, count: rows.length };
@@ -745,7 +794,7 @@ function registerCredentialsIpc(ctx) {
     });
 
     /** Unlock vault and return site matches for pageUrl in one round-trip (toolbar popup). */
-    ctx.ipcMain.handle('credentials-unlock-and-get-matches', (_, payload) => {
+    handle('credentials-unlock-and-get-matches', async (_, payload) => {
         try {
             if (!ctx.db) return { success: false, error: 'Database unavailable' };
             const pageUrl = String(payload?.pageUrl || '');
@@ -757,24 +806,19 @@ function registerCredentialsIpc(ctx) {
             } else {
                 const vaults = ctx.db.listVaults();
                 meta = vaults.length === 1 ? ctx.db.getCredentialsVaultMeta(vaults[0].id) : null;
-                if (!meta && _activeVaultId != null) meta = ctx.db.getCredentialsVaultMeta(_activeVaultId);
+                if (!meta && _activeVaultId() != null) meta = ctx.db.getCredentialsVaultMeta(_activeVaultId());
                 if (!meta && vaults.length > 0) meta = ctx.db.getCredentialsVaultMeta(vaults[0].id);
             }
             if (!meta) return { success: false, error: 'No vault — create one first' };
-            if (!verifyVaultPassword(meta.verify_blob, pw)) {
-                return { success: false, error: 'Invalid master password' };
-            }
-            _vaultPasswords.set(meta.id, pw);
-            _activeVaultId = meta.id;
-            ctx.db.updateVaultLastLogin(meta.id);
-            _toolbarRefresh();
+            const unlock = await _unlockVaultRecord(meta, pw);
+            if (!unlock.success) return unlock;
 
             if (!/^https?:\/\//i.test(pageUrl)) {
                 return { success: true, vaultId: meta.id, matches: [] };
             }
             const domain = getNoteDomainFromUrl(pageUrl);
             if (!domain) return { success: true, vaultId: meta.id, matches: [] };
-            let rows = ctx.db.listCredentials({ domain, limit: 2000, vaultId: _activeVaultId });
+            let rows = ctx.db.listCredentials({ domain, limit: 2000, vaultId: _activeVaultId() });
             rows = rows.filter((r) => noteMatchesUrlMatch(r.url_match || '', pageUrl));
             const matches = rows.map((r) => ({
                 id: r.id,
@@ -828,9 +872,9 @@ function registerCredentialsIpc(ctx) {
         })();`;
     }
 
-    ctx.ipcMain.handle('credentials-fill-active-tab', async (_, payload) => {
+    handle('credentials-fill-active-tab', async (_, payload) => {
         try {
-            const master = _requireMaster();
+            _requireMaster();
             const tab = ctx.tabManager?.getActiveTab?.();
             if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) {
                 return { success: false, error: 'No active tab' };
@@ -843,7 +887,7 @@ function registerCredentialsIpc(ctx) {
             const domain = getNoteDomainFromUrl(pageUrl);
             if (!domain) return { success: false, error: 'Could not detect site' };
 
-            let rows = ctx.db.listCredentials({ domain, limit: 2000, vaultId: _activeVaultId });
+            let rows = ctx.db.listCredentials({ domain, limit: 2000, vaultId: _activeVaultId() });
             rows = rows.filter((r) => noteMatchesUrlMatch(r.url_match || '', pageUrl));
             if (!rows.length) return { success: false, error: 'No saved credentials for this site' };
 
@@ -859,7 +903,7 @@ function registerCredentialsIpc(ctx) {
             let password = '';
             if (row.password_encrypted && Buffer.isBuffer(row.password_encrypted)) {
                 try {
-                    password = decryptCredentialField(row.password_encrypted, master);
+                    password = _decField(row.password_encrypted);
                 } catch {
                     password = '';
                 }
@@ -899,7 +943,8 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    function _saveCapturedCredential(capture, master, vaultId) {
+    function _saveCapturedCredential(capture, vaultId) {
+        _requireMaster();
         const { login, password, domain, pageUrl, lastIp, proxyProfileId, proxyProfileName } = capture;
         let urlMatch = '';
         try {
@@ -912,8 +957,8 @@ function registerCredentialsIpc(ctx) {
             ? existing.find((r) => String(r.login || '').trim() === login)
             : null;
 
-        const passwordEnc = encryptCredentialField(password, master);
-        const extraEnc = encryptCredentialField('{}', master);
+        const passwordEnc = _encField(password);
+        const extraEnc = _encField('{}');
         const now = new Date().toISOString();
 
         if (sameLogin) {
@@ -998,7 +1043,10 @@ function registerCredentialsIpc(ctx) {
 
                 _pendingCapture = { login, password, domain, pageUrl, lastIp, proxyProfileId, proxyProfileName };
 
-                const needsUnlock = !_isUnlocked();
+                if (_isUnlocked()) vaultSession.bumpActivity();
+
+                const captureVaultId = _resolveCaptureVaultId(ctx);
+                const needsUnlock = !vaultSession.isVaultUnlocked(captureVaultId);
                 const shellWc = ctx.mainWindow && !ctx.mainWindow.isDestroyed()
                     ? ctx.mainWindow.webContents
                     : null;
@@ -1007,7 +1055,8 @@ function registerCredentialsIpc(ctx) {
                         login,
                         domain,
                         needsUnlock,
-                        vaultId: _activeVaultId,
+                        vaultId: captureVaultId,
+                        profileName: profileSession.getProfileName() || '',
                     });
                 }
             } catch (e) {
@@ -1016,11 +1065,11 @@ function registerCredentialsIpc(ctx) {
         })();
     });
 
-    ctx.ipcMain.handle('credential-capture-confirm', () => {
+    handle('credential-capture-confirm', () => {
         try {
             if (!_pendingCapture) return { success: false, error: 'No pending capture' };
-            const master = _requireMaster();
-            _saveCapturedCredential(_pendingCapture, master, _activeVaultId || 1);
+            _requireMaster();
+            _saveCapturedCredential(_pendingCapture, _resolveCaptureVaultId(ctx));
             _pendingCapture = null;
             return { success: true };
         } catch (e) {
@@ -1030,12 +1079,12 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credential-capture-dismiss', () => {
+    handle('credential-capture-dismiss', () => {
         _pendingCapture = null;
         return { success: true };
     });
 
-    ctx.ipcMain.handle('credential-capture-unlock-and-save', (_, password) => {
+    handle('credential-capture-unlock-and-save', async (_, password) => {
         try {
             if (!_pendingCapture) return { success: false, error: 'No pending capture' };
             if (!ctx.db) return { success: false, error: 'Database unavailable' };
@@ -1043,22 +1092,15 @@ function registerCredentialsIpc(ctx) {
             const vaults = ctx.db.listVaults();
             if (!vaults.length) return { success: false, error: 'No vault exists' };
 
-            const targetVaultId = _activeVaultId || vaults[0].id;
+            const targetVaultId = _resolveCaptureVaultId(ctx);
             const meta = ctx.db.getCredentialsVaultMeta(targetVaultId);
             if (!meta) return { success: false, error: 'Vault not found' };
 
-            const pw = String(password || '');
-            if (!verifyVaultPassword(meta.verify_blob, pw)) {
-                return { success: false, error: 'Invalid master password' };
-            }
+            const unlock = await _unlockVaultRecord(meta, String(password || ''));
+            if (!unlock.success) return unlock;
 
-            _vaultPasswords.set(meta.id, pw);
-            _activeVaultId = meta.id;
-            ctx.db.updateVaultLastLogin(meta.id);
-
-            _saveCapturedCredential(_pendingCapture, pw, meta.id);
+            _saveCapturedCredential(_pendingCapture, meta.id);
             _pendingCapture = null;
-            _toolbarRefresh();
             return { success: true, vaultId: meta.id };
         } catch (e) {
             ctx.sysLog?.('warn', 'credentials', 'capture-unlock: ' + String(e?.message || e));
@@ -1066,86 +1108,120 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credentials-export', async (_, payload) => {
+    handle('credentials-export', async (_, payload) => {
         try {
-            const master = _requireMaster();
+            _requireMaster();
             if (!ctx.db) return { canceled: false, error: 'Database unavailable' };
-            const format = String(payload?.format || 'json').toLowerCase();
-            if (!['json', 'csv'].includes(format)) return { canceled: false, error: 'Invalid format' };
+            const format = String(payload?.format || 'vault').toLowerCase();
+            const settings = settingsStore.getCached() || settingsStore.loadSettings();
+            const allowPlain = !!settings.allowPlaintextExport;
 
-            const allRows = ctx.db.listCredentials({ vaultId: _activeVaultId, limit: 2000 });
-            const idRows = allRows.map(r => ({ id: r.id }));
+            if (['json', 'csv'].includes(format) && !allowPlain) {
+                return {
+                    canceled: false,
+                    error: 'Plaintext export is disabled. Use encrypted vault export or enable it in Settings → Security.',
+                };
+            }
+            if (['json', 'csv'].includes(format) && allowPlain) {
+                const win = ctx.credentialsWindow && !ctx.credentialsWindow.isDestroyed()
+                    ? ctx.credentialsWindow
+                    : (ctx.mainWindow && !ctx.mainWindow.isDestroyed() ? ctx.mainWindow : null);
+                const label = format.toUpperCase();
+                const choice = ctx.dialog.showMessageBoxSync(win || undefined, {
+                    type: 'warning',
+                    buttons: ['Cancel', `Export plaintext ${label}`],
+                    defaultId: 0,
+                    cancelId: 0,
+                    title: 'Export credentials as plaintext',
+                    message: `Save all vault passwords as readable ${label}?`,
+                    detail: 'The exported file will contain usernames and passwords in plaintext. '
+                        + 'Anyone with access to the file or backups can read them. '
+                        + 'Prefer encrypted .cupnet-vault-export when possible.',
+                    noLink: true,
+                });
+                if (choice !== 1) return { canceled: true };
+            }
+            if (!['json', 'csv', 'vault', 'cupnet-vault-export'].includes(format)) {
+                return { canceled: false, error: 'Invalid format' };
+            }
+
+            const allRows = ctx.db.listCredentials({ vaultId: _activeVaultId(), limit: 2000 });
             const items = [];
-            for (const { id } of idRows) {
-                const row = ctx.db.getCredential(id);
-                if (!row) continue;
+            for (const row of allRows) {
+                const full = ctx.db.getCredential(row.id);
+                if (!full) continue;
                 let password = '';
-                if (row.password_encrypted && Buffer.isBuffer(row.password_encrypted)) {
-                    try {
-                        password = decryptCredentialField(row.password_encrypted, master);
-                    } catch {
-                        password = '';
-                    }
+                if (full.password_encrypted && Buffer.isBuffer(full.password_encrypted)) {
+                    try { password = _decField(full.password_encrypted); } catch { password = ''; }
                 }
                 let extra = {};
-                if (row.extra_encrypted && Buffer.isBuffer(row.extra_encrypted)) {
-                    try {
-                        const json = decryptCredentialField(row.extra_encrypted, master);
-                        extra = _parseExtraJson(json);
-                    } catch {
-                        extra = {};
-                    }
+                if (full.extra_encrypted && Buffer.isBuffer(full.extra_encrypted)) {
+                    try { extra = _parseExtraJson(_decField(full.extra_encrypted)); } catch { extra = {}; }
                 }
                 items.push({
-                    id: row.id,
-                    domain: row.domain,
-                    url_match: row.url_match || '',
-                    label: row.label || '',
-                    login: row.login || '',
+                    id: full.id,
+                    domain: full.domain,
+                    url_match: full.url_match || '',
+                    label: full.label || '',
+                    login: _plainLogin(full),
                     password,
                     extra,
-                    notes: row.notes || '',
-                    tags: row.tags || '',
-                    last_ip: row.last_ip || '',
-                    last_proxy_profile_id: row.last_proxy_profile_id,
-                    last_proxy_profile_name: row.last_proxy_profile_name || '',
-                    last_used_at: row.last_used_at,
-                    is_favorite: !!row.is_favorite,
-                    created_at: row.created_at,
-                    updated_at: row.updated_at,
+                    notes: _plainNotes(full),
+                    tags: full.tags || '',
+                    last_ip: full.last_ip || '',
+                    last_proxy_profile_id: full.last_proxy_profile_id,
+                    last_proxy_profile_name: full.last_proxy_profile_name || '',
+                    last_used_at: full.last_used_at,
+                    is_favorite: !!full.is_favorite,
+                    created_at: full.created_at,
+                    updated_at: full.updated_at,
                 });
             }
 
             let content = '';
-            let ext = 'json';
-            const escapeCsv = (v) => {
-                const s = String(v ?? '');
-                if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-                return s;
-            };
-            if (format === 'json') {
-                content = JSON.stringify(items, null, 2);
-                ext = 'json';
+            let ext = 'cupnet-vault-export';
+            let filterName = 'CupNet Vault Export';
+
+            if (format === 'json' || format === 'csv') {
+                const escapeCsv = (v) => {
+                    const s = String(v ?? '');
+                    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+                    return s;
+                };
+                if (format === 'json') {
+                    content = JSON.stringify(items, null, 2);
+                    ext = 'json';
+                    filterName = 'JSON';
+                } else {
+                    const cols = ['id', 'domain', 'url_match', 'label', 'login', 'password', 'tags', 'notes',
+                        'last_ip', 'last_proxy_profile_name', 'last_used_at', 'is_favorite'];
+                    content = `${cols.map(escapeCsv).join(',')}\n${items.map((r) =>
+                        cols.map((c) => escapeCsv(r[c])).join(',')).join('\n')}`;
+                    ext = 'csv';
+                    filterName = 'CSV';
+                }
             } else {
-                const cols = ['id', 'domain', 'url_match', 'label', 'login', 'password', 'tags', 'notes',
-                    'last_ip', 'last_proxy_profile_name', 'last_used_at', 'is_favorite'];
-                content = `${cols.map(escapeCsv).join(',')}\n${items.map((r) =>
-                    cols.map((c) => escapeCsv(r[c])).join(',')).join('\n')}`;
-                ext = 'csv';
+                const exportPassword = String(payload?.exportPassword || '');
+                if (!exportPassword) return { canceled: false, error: 'Export password is required' };
+                const pwCheck = validatePassword(exportPassword);
+                if (!pwCheck.ok) return { canceled: false, error: pwCheck.error };
+                content = _buildEncryptedVaultExport(items, exportPassword);
             }
 
             const win = ctx.credentialsWindow && !ctx.credentialsWindow.isDestroyed()
                 ? ctx.credentialsWindow
                 : (ctx.mainWindow && !ctx.mainWindow.isDestroyed() ? ctx.mainWindow : null);
             const docDir = ctx.app?.getPath?.('documents') || '';
-            const defaultPath = docDir ? path.join(docDir, `credentials-export.${ext}`) : `credentials-export.${ext}`;
+            const defaultPath = docDir
+                ? path.join(docDir, `credentials-export.${ext}`)
+                : `credentials-export.${ext}`;
             const { canceled, filePath } = await ctx.dialog.showSaveDialog(win || undefined, {
                 defaultPath,
-                filters: [{ name: format === 'json' ? 'JSON' : 'CSV', extensions: [ext] }],
+                filters: [{ name: filterName, extensions: [ext] }],
             });
             if (canceled || !filePath) return { canceled: true };
 
-            await fs.writeFile(filePath, content, 'utf8');
+            await writeFileSecureAsync(filePath, content, 'utf8');
             return { canceled: false, filePath };
         } catch (e) {
             if (e?.code === 'CREDENTIALS_LOCKED') return { canceled: false, error: 'Vault is locked' };
@@ -1154,66 +1230,63 @@ function registerCredentialsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('credentials-change-master', (_, payload) => {
+    handle('credentials-change-master', async (_, payload) => {
         try {
             const oldPw = String(payload?.oldPassword || '');
             const newPw = String(payload?.newPassword || '');
             const confirm = String(payload?.confirm || '');
-            if (!_activeVaultId) return { success: false, error: 'No active vault' };
-            const meta = ctx.db.getCredentialsVaultMeta(_activeVaultId);
+            const vid = _activeVaultId();
+            if (!vid) return { success: false, error: 'No active vault' };
+            const meta = ctx.db.getCredentialsVaultMeta(vid);
             if (!meta) return { success: false, error: 'No vault' };
-            if (newPw.length < 8) return { success: false, error: 'New password must be at least 8 characters' };
+            const pwCheck = validatePassword(newPw);
+            if (!pwCheck.ok) return { success: false, error: pwCheck.error };
             if (newPw !== confirm) return { success: false, error: 'Confirmation does not match' };
-            if (!verifyVaultPassword(meta.verify_blob, oldPw)) {
+            if (!(await verifyVaultPassword(meta.verify_blob, oldPw))) {
                 return { success: false, error: 'Current password is wrong' };
             }
-            const currentPw = _vaultPasswords.get(_activeVaultId);
-            if (currentPw == null || oldPw !== currentPw) {
+            if (!vaultSession.isVaultUnlocked(vid)) {
                 return { success: false, error: 'Unlock the vault before changing master password' };
             }
 
-            const rows = ctx.db.getAllCredentialCipherRows(_activeVaultId);
+            const newBlob = await createVaultVerifyBlob(newPw);
+            const newKey = await deriveMasterKey(newPw, newBlob.subarray(5, 21));
+            const rows = ctx.db.getAllCredentialCipherRows(vid);
             for (const row of rows) {
                 let pwPlain = '';
                 if (row.password_encrypted && Buffer.isBuffer(row.password_encrypted)) {
-                    try {
-                        pwPlain = decryptCredentialField(row.password_encrypted, oldPw);
-                    } catch { /* keep empty */ }
+                    try { pwPlain = _decField(row.password_encrypted, oldPw); } catch { /* empty */ }
                 }
                 let extraJson = '{}';
                 if (row.extra_encrypted && Buffer.isBuffer(row.extra_encrypted)) {
-                    try {
-                        extraJson = decryptCredentialField(row.extra_encrypted, oldPw);
-                    } catch {
-                        extraJson = '{}';
-                    }
+                    try { extraJson = _decField(row.extra_encrypted, oldPw); } catch { extraJson = '{}'; }
                 }
-                const newPwEnc = encryptCredentialField(pwPlain, newPw);
-                const newExtraEnc = encryptCredentialField(extraJson, newPw);
-                ctx.db.updateCredentialCipherFields(row.id, newPwEnc, newExtraEnc);
-
+                ctx.db.updateCredentialCipherFields(
+                    row.id,
+                    encryptCredentialFieldWithKey(pwPlain, newKey),
+                    encryptCredentialFieldWithKey(extraJson, newKey),
+                );
                 try {
                     const fields = ctx.db.listCredentialCustomFields(row.id);
                     if (fields.length) {
                         const reEncrypted = fields.map((f) => {
                             let val = '';
                             if (f.value_encrypted && Buffer.isBuffer(f.value_encrypted)) {
-                                try { val = decryptCredentialField(f.value_encrypted, oldPw); } catch { val = ''; }
+                                try { val = _decField(f.value_encrypted, oldPw); } catch { val = ''; }
                             }
                             return {
                                 name: f.name,
                                 field_type: f.field_type,
-                                value_encrypted: encryptCredentialField(val, newPw),
+                                value_encrypted: encryptCredentialFieldWithKey(val, newKey),
                             };
                         });
                         ctx.db.saveCredentialCustomFields(row.id, reEncrypted);
                     }
-                } catch { /* ignore individual field errors */ }
+                } catch { /* ignore */ }
             }
 
-            const newBlob = createVaultVerifyBlob(newPw);
-            ctx.db.updateCredentialsVaultVerifyBlob(_activeVaultId, newBlob);
-            _vaultPasswords.set(_activeVaultId, newPw);
+            ctx.db.updateCredentialsVaultVerifyBlob(vid, newBlob);
+            await vaultSession.unlockVault({ vaultId: vid, name: meta.name, password: newPw, verifyBlob: newBlob });
             return { success: true };
         } catch (e) {
             ctx.sysLog?.('warn', 'credentials', String(e?.message || e));
@@ -1222,4 +1295,34 @@ function registerCredentialsIpc(ctx) {
     });
 }
 
-module.exports = { registerCredentialsIpc, clearCredentialsVaultSession };
+function migratePlaintextCredentialFields(db, vaultId) {
+    if (!db || typeof db.listCredentials !== 'function') return;
+    const key = vaultSession.getMasterKey();
+    if (!key) return;
+    const rows = db.listCredentials({ vaultId, limit: 10000 });
+    for (const row of rows) {
+        const full = db.getCredential(row.id);
+        if (!full) continue;
+        let changed = false;
+        const patch = { id: full.id };
+        if (full.login && String(full.login).trim() && !full.login_encrypted) {
+            patch.login_encrypted = encryptCredentialFieldWithKey(String(full.login), key);
+            patch.login = '';
+            changed = true;
+        }
+        if (full.notes && String(full.notes).trim() && !full.notes_encrypted) {
+            patch.notes_encrypted = encryptCredentialFieldWithKey(String(full.notes), key);
+            patch.notes = '';
+            changed = true;
+        }
+        if (changed && typeof db.updateCredentialSensitiveFields === 'function') {
+            db.updateCredentialSensitiveFields(patch);
+        }
+    }
+}
+
+module.exports = {
+    registerCredentialsIpc,
+    clearCredentialsVaultSession,
+    migratePlaintextCredentialFields,
+};

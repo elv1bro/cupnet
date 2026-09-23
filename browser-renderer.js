@@ -62,10 +62,29 @@ const settingsToggle = document.getElementById('settings-toggle-btn');
 
 const statusPage      = document.getElementById('status-page');
 const statusMitm      = document.getElementById('status-mitm');
+const statusMitmRestart = document.getElementById('status-mitm-restart');
 const statusProxy     = document.getElementById('status-proxy');
 const statusIp        = document.getElementById('status-ip');
 const statusRequests  = document.getElementById('status-requests');
 const statusErrors    = document.getElementById('status-errors');
+const statusProfile   = document.getElementById('status-profile');
+const statusProfileWrap = document.getElementById('status-profile-wrap');
+const statusProfileAvatar = document.getElementById('status-profile-avatar');
+const statusProfileLabel = document.getElementById('status-profile-label');
+const statusProfileDrawer = document.getElementById('status-profile-drawer');
+const statusProfileList = document.getElementById('status-profile-list');
+const statusProfileSwitchForm = document.getElementById('status-profile-switch-form');
+const statusProfileSwitchName = document.getElementById('status-profile-switch-name');
+const statusProfileSwitchPassword = document.getElementById('status-profile-switch-password');
+const statusProfileSwitchError = document.getElementById('status-profile-switch-error');
+const statusProfileSwitchCancel = document.getElementById('status-profile-switch-cancel');
+const statusProfileSwitchConfirm = document.getElementById('status-profile-switch-confirm');
+const statusProfileManage = document.getElementById('status-profile-manage');
+const statusResources = document.getElementById('status-resources');
+const statusResourcesMetrics = document.getElementById('status-resources-metrics');
+const statusResourcesWrap = document.getElementById('status-resources-wrap');
+const statusResourcesDrawer = document.getElementById('status-resources-drawer');
+const statusResourcesPopover = document.getElementById('status-resources-popover');
 
 const toastContainer  = document.getElementById('rule-toast-container');
 
@@ -88,14 +107,6 @@ function isOmniboxDropdownVisible() {
 urlInput.addEventListener('keydown', (e) => {
     const paletteOpen = isOmniboxDropdownVisible();
     const mod = e.metaKey || e.ctrlKey;
-    if (e.key === 'Tab' && urlInput.selectionStart != null && urlInput.selectionEnd != null
-        && urlInput.selectionEnd > urlInput.selectionStart
-        && urlInput.selectionEnd === String(urlInput.value || '').length) {
-        e.preventDefault();
-        const len = urlInput.value.length;
-        urlInput.setSelectionRange(len, len);
-        return;
-    }
     if (e.key === 'Enter' && (mod || e.altKey) && !paletteOpen) {
         e.preventDefault();
         const raw = urlInput.value.trim();
@@ -118,9 +129,17 @@ urlInput.addEventListener('keydown', (e) => {
 
 function _normalizeToolbarUrl(url) {
     if (url === 'about:blank') return '';
-    const u = String(url || '').trim().toLowerCase();
-    if (u === 'cupnet://new-tab' || u === 'cupnet://newtab' || u === 'cupnet:new-tab') return '';
-    return url || '';
+    const raw = String(url || '').trim();
+    if (!raw) return '';
+    const lower = raw.toLowerCase();
+    if (lower === 'cupnet://new-tab' || lower === 'cupnet://newtab' || lower === 'cupnet:new-tab') return '';
+    if (/^https?:\/\//i.test(raw)) {
+        try {
+            const u = new URL(raw);
+            if (u.protocol === 'http:' || u.protocol === 'https:') return u.href;
+        } catch { /* keep raw */ }
+    }
+    return raw;
 }
 
 const SEARCH_ENGINE_LABELS = {
@@ -166,28 +185,6 @@ function _looksLikeUrlOrHost(q) {
     return false;
 }
 
-/** Origin-only input — keep in sync with utils.shouldSkipOmniboxInlineGhost */
-function _shouldSkipInlineGhost(trimmed) {
-    const t = String(trimmed || '').trim();
-    if (!t) return true;
-    return /^https?:\/\/[^/?#]+\/?$/i.test(t);
-}
-
-function _hasInlineGhostSelection() {
-    if (!urlInput) return false;
-    const start = urlInput.selectionStart;
-    const end = urlInput.selectionEnd;
-    return start != null && end != null && end > start && end === String(urlInput.value || '').length;
-}
-
-function _clearInlineGhostSelection() {
-    if (!urlInput || !_hasInlineGhostSelection()) return false;
-    const pos = urlInput.selectionStart ?? 0;
-    urlInput.value = String(urlInput.value || '').slice(0, pos);
-    urlInput.setSelectionRange(pos, pos);
-    return true;
-}
-
 function _buildExactTypedUrlRow(q) {
     const trimmed = String(q || '').trim();
     if (!trimmed || !_looksLikeUrlOrHost(trimmed)) return null;
@@ -217,6 +214,18 @@ function _formatUrlForDisplay(raw) {
     if (!s) return { html: '', plain: '' };
     try {
         const u = new URL(s);
+        if (u.protocol === 'http:' || u.protocol === 'https:') {
+            const schemeKey = u.protocol === 'http:' ? 'http' : 'https';
+            const schemeText = `${schemeKey}://`;
+            let rest = (u.pathname || '') + (u.search || '') + (u.hash || '');
+            if (rest === '/') rest = '';
+            return {
+                html: `<span class="url-scheme url-scheme--${schemeKey}">${escapeAttr(schemeText)}</span>`
+                    + `<span class="url-host">${escapeAttr(u.host)}</span>`
+                    + `<span class="url-rest">${escapeAttr(rest)}</span>`,
+                plain: s,
+            };
+        }
         const host = u.hostname || '';
         if (!host) return { html: escapeAttr(s), plain: s };
         let rest = (u.pathname || '') + (u.search || '') + (u.hash || '');
@@ -255,7 +264,7 @@ function _updateUrlDisplayFromValue(raw) {
     urlDisplayEl.innerHTML = _formatUrlForDisplay(norm).html;
 }
 
-function _updateSiteInfoBtn(urlRaw, faviconHint) {
+function _updateSiteInfoBtn(urlRaw) {
     if (!siteInfoBtn) return;
     const u = String(urlRaw || '').trim().toLowerCase();
     siteInfoBtn.classList.remove('site-info-btn--insecure', 'site-info-btn--internal', 'site-info-btn--file');
@@ -267,47 +276,20 @@ function _updateSiteInfoBtn(urlRaw, faviconHint) {
         mode = 'internal';
         siteInfoBtn.classList.add('site-info-btn--internal');
     }
-    const fc = window.CupNetFaviconCache;
-    const fav = fc?.resolveSync(urlRaw, faviconHint) || null;
-    if (fav && mode !== 'internal' && mode !== 'file') {
-        siteInfoBtn.innerHTML = `<img class="site-info-favicon" src="${escapeAttr(fav)}" alt="" aria-hidden="true">`;
-        void fc?.load(urlRaw, faviconHint).then((loaded) => {
-            if (!loaded || loaded === fav) return;
-            if (String(_committedToolbarUrl || '').trim().toLowerCase() !== u) return;
-            const img = siteInfoBtn.querySelector('.site-info-favicon');
-            if (img) img.src = loaded;
-        });
-        return;
-    }
     const lock = '<svg class="site-info-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a3 3 0 00-3 3v2H4a1 1 0 00-1 1v6a1 1 0 001 1h8a1 1 0 001-1V7a1 1 0 00-1-1h-1V4a3 3 0 00-3-3zm-1 5V4a1 1 0 112 0v2H7z"/></svg>';
     const globe = '<svg class="site-info-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a7 7 0 100 14A7 7 0 008 1zm-.5 1a5.6 5.6 0 012.9 1.2c-.3.4-.6.9-.9 1.3H6.5c-.3-.4-.6-.9-.9-1.3A5.6 5.6 0 017.5 2zM4.3 3.4c.3.5.7 1 1 1.6h5.4c.3-.6.7-1.1 1-1.6a6 6 0 014.1 5.1h-2.1c-.1-1.2-.4-2.3-.8-3.3H5.1c-.4 1-.7 2.1-.8 3.3H2.2a6 6 0 014.1-5.1zM2.2 9.9h2.1c.1 1.2.4 2.3.8 3.3h5.8c.4-1 .7-2.1.8-3.3h2.1a6 6 0 01-11.6 0zm4.6 4.7c.3-.4.6-.9.9-1.3h2.9c.3.4.6.9.9 1.3a5.6 5.6 0 01-4.7 0z"/></svg>';
     const info = '<svg class="site-info-icon" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1a7 7 0 100 14A7 7 0 008 1zm.8 3.2v1.6H7.2V4.2h1.6zM7.2 7h1.6v5H7.2V7z"/></svg>';
     if (mode === 'insecure') siteInfoBtn.innerHTML = info;
     else if (mode === 'internal' || mode === 'file') siteInfoBtn.innerHTML = info;
     else siteInfoBtn.innerHTML = u.startsWith('https:') ? lock : globe;
-    if (fc && urlRaw && mode !== 'internal' && mode !== 'file') {
-        const key = fc.hostKey(urlRaw);
-        if (key && !fc.get(key)) {
-            void fc.load(urlRaw, faviconHint).then((loaded) => {
-                if (!loaded) return;
-                if (String(_committedToolbarUrl || '').trim().toLowerCase() !== u) return;
-                siteInfoBtn.innerHTML = `<img class="site-info-favicon" src="${escapeAttr(loaded)}" alt="" aria-hidden="true">`;
-            });
-        }
-    }
 }
 
 let _committedToolbarUrl = '';
 let _urlInputDirty = false;
 
-function _activeTabFavicon() {
-    const active = tabs.find((t) => t.isActive);
-    return active?.faviconUrl || null;
-}
-
 function _syncUrlDisplayAndSiteInfo(url) {
     _updateUrlDisplayFromValue(url);
-    _updateSiteInfoBtn(url, _activeTabFavicon());
+    _updateSiteInfoBtn(url);
 }
 
 function _setToolbarUrl(url, { forceInput = false, blur = false } = {}) {
@@ -344,6 +326,7 @@ api.onURLUpdate((url) => {
     hideCredPopup();
     scheduleCookiePageBadgeRefresh();
     scheduleCredentialsToolbarRefresh();
+    api.vaultSessionActivity?.();
 });
 
 // Navigation started by a link click or JS (will-navigate).
@@ -360,6 +343,7 @@ api.onTabWillNavigate?.((data) => {
         hideCredPopup();
         scheduleCookiePageBadgeRefresh();
         scheduleCredentialsToolbarRefresh();
+        api.vaultSessionActivity?.();
     }
 });
 
@@ -479,6 +463,8 @@ function _formatTabLoadError({ errorCode, errorDescription, url }) {
 api.onTabLoadError?.((data) => {
     const active = tabs.find(t => t.isActive);
     if (active && data?.tabId != null && data.tabId !== active.id) return;
+    const desc = String(data?.errorDescription || '');
+    if (/could not be parsed/i.test(desc)) return;
     _showPageError(_formatTabLoadError(data || {}));
 });
 
@@ -568,28 +554,13 @@ function makeTabEl(tab) {
     el.title = (tab.url || '') + (tab.isolated ? ' [Isolated cookies]' : '');
 
     const fallbackIcon = _tabFallbackIcon(tab);
-    const fc = window.CupNetFaviconCache;
-    const faviconUrl = tab.faviconUrl || fc?.resolveSync(tab.url, null) || null;
 
     const faviconWrapper = document.createElement('span');
     faviconWrapper.className = 'tab-favicon-wrapper';
-    if (faviconUrl) {
-        const img = document.createElement('img');
-        img.className = 'tab-favicon-img';
-        img.src = faviconUrl;
-        const fallback = document.createElement('span');
-        fallback.className = 'tab-favicon';
-        fallback.textContent = fallbackIcon;
-        fallback.style.display = 'none';
-        img.onerror = () => { img.style.display = 'none'; fallback.style.display = ''; };
-        faviconWrapper.appendChild(img);
-        faviconWrapper.appendChild(fallback);
-    } else {
-        const favicon = document.createElement('span');
-        favicon.className = 'tab-favicon';
-        favicon.textContent = fallbackIcon;
-        faviconWrapper.appendChild(favicon);
-    }
+    const favicon = document.createElement('span');
+    favicon.className = 'tab-favicon';
+    favicon.textContent = fallbackIcon;
+    faviconWrapper.appendChild(favicon);
 
     const title = document.createElement('span');
     title.className = 'tab-title';
@@ -683,9 +654,6 @@ function renderTabs(tabData) {
                 if (fallbackEl.textContent !== wantIcon) fallbackEl.textContent = wantIcon;
             }
 
-            const img = el.querySelector('.tab-favicon-img');
-            if (img && tab.faviconUrl && img.src !== tab.faviconUrl) img.src = tab.faviconUrl;
-
             // Ensure correct order
             if (el !== tabList.children[i]) tabList.insertBefore(el, insertBefore);
         }
@@ -712,7 +680,6 @@ function _scheduleTabUiUpdate(tabData) {
         _tabUiRaf = null;
         const payload = _tabUiPending || [];
         _tabUiPending = null;
-        window.CupNetFaviconCache?.ingestTabs(payload);
         renderTabs(payload);
         _onActiveTabChanged(payload);
         const active = payload.find(t => t.isActive);
@@ -1063,13 +1030,23 @@ async function handleCredentialsToolbarPrimaryClick(ev) {
         credLongPressFired = false;
         return;
     }
+    if (!api.openCredentialsWindow) return;
+
     const active = tabs.find(t => t.isActive);
     const url = active?.url || '';
+
+    // New tab / internal pages: open vault (no toast blocking the button).
     if (!active || ssIsHomePage(url) || !/^https?:\/\//i.test(url)) {
-        showCredToolbarToast('Open a website to use saved credentials.', 'error');
+        hideCredPopup();
+        api.openCredentialsWindow();
         return;
     }
-    if (!api.credentialsSiteMatchCount) return;
+
+    if (!api.credentialsSiteMatchCount) {
+        api.openCredentialsWindow();
+        return;
+    }
+
     let r;
     try {
         r = await api.credentialsSiteMatchCount({ pageUrl: url });
@@ -1081,23 +1058,24 @@ async function handleCredentialsToolbarPrimaryClick(ev) {
         api.openCredentialsWindow();
         return;
     }
-    const count = Number(r.count) || 0;
-    const unlocked = r.unlocked === true;
+    let count = Number(r.count) || 0;
+    let unlocked = r.unlocked === true;
 
-    // If the dropdown was left open (e.g. empty state, SPA nav), the first click used to
-    // only dismiss it — do nothing visible. For unlocked + exactly one match, dismiss then fill.
-    const popupVisible = credPopup && !credPopup.classList.contains('hidden');
-    if (popupVisible) {
-        hideCredPopup();
-        if (!(unlocked && count === 1)) {
-            return;
-        }
+    if (!unlocked) {
+        try {
+            const st = await api.credentialsVaultStatus?.();
+            unlocked = st?.unlocked === true;
+        } catch { /* ignore */ }
     }
 
     if (!unlocked) {
-        showCredPopupUnlock();
+        hideCredPopup();
+        api.openCredentialsWindow();
         return;
     }
+
+    const popupVisible = credPopup && !credPopup.classList.contains('hidden');
+    if (popupVisible) hideCredPopup();
 
     if (count === 0) {
         showCredPopupEmpty();
@@ -1248,6 +1226,13 @@ const credSaveDismiss = document.getElementById('cred-save-dismiss');
 
 /** Extra space above the tab WebContentsView when the credential save bar is visible. */
 const CRED_SAVE_BAR_RESERVE_PX = 36;
+/** Height reserved above the status bar when the resources drawer is open (must match CSS max-height). */
+const RESOURCES_DRAWER_HEIGHT_PX = 260;
+const PROFILE_DRAWER_HEIGHT_PX = 240;
+let _resourcesPopoverOpen = false;
+let _profileDrawerOpen = false;
+let _profileSwitchTargetId = null;
+let _activeProfileVaultId = null;
 const TOOLS_MINI_BAR_HEIGHT_PX = 34;
 const TOOLS_SIDE_WIDTH_PX = 58;
 const CHROME_TOP_BASE_PX = 95;
@@ -1270,6 +1255,14 @@ function getCredSaveBarReservePx() {
     return credSaveBar && !credSaveBar.classList.contains('hidden') ? CRED_SAVE_BAR_RESERVE_PX : 0;
 }
 
+function getResourcesDrawerReservePx() {
+    return _resourcesPopoverOpen ? RESOURCES_DRAWER_HEIGHT_PX : 0;
+}
+
+function getProfileDrawerReservePx() {
+    return _profileDrawerOpen ? PROFILE_DRAWER_HEIGHT_PX : 0;
+}
+
 function updateShellChromeCssVars() {
     const top = CHROME_TOP_BASE_PX + getCredSaveBarReservePx();
     document.documentElement.style.setProperty('--shell-chrome-top', `${top}px`);
@@ -1282,11 +1275,14 @@ async function applyChromeLayoutReserve() {
     updateShellChromeCssVars();
     const cred = getCredSaveBarReservePx();
     const subbar = _toolbarToolsPlacement === 'subbar' ? TOOLS_MINI_BAR_HEIGHT_PX : 0;
-    const bottom = _toolbarToolsPlacement === 'bottom' ? TOOLS_MINI_BAR_HEIGHT_PX : 0;
+    const toolsBottom = _toolbarToolsPlacement === 'bottom' ? TOOLS_MINI_BAR_HEIGHT_PX : 0;
+    const resourcesDrawer = getResourcesDrawerReservePx();
+    const profileDrawer = getProfileDrawerReservePx();
     const side = _toolbarToolsPlacement === 'separate' ? TOOLS_SIDE_WIDTH_PX : 0;
+    document.documentElement.style.setProperty('--shell-resources-tools-bottom', `${toolsBottom}px`);
     try {
         await api.setToolbarHeight(cred + subbar);
-        await api.setBottomChromeHeight?.(bottom);
+        await api.setBottomChromeHeight?.(toolsBottom + resourcesDrawer + profileDrawer);
         await api.setRightChromeWidth?.(side);
     } catch (_) { /* ignore */ }
     if (addressBarContainer?.classList.contains('omnibox-open')) {
@@ -1377,7 +1373,7 @@ if (api.onShowCredentialSaveBar) {
         if (credSaveLogin) credSaveLogin.textContent = data.login ? `(${data.login})` : '';
         if (data.needsUnlock) {
             if (credSaveUnlockRow) { credSaveUnlockRow.classList.remove('hidden'); credSaveUnlockRow.style.display = 'flex'; }
-            if (credSaveYes) credSaveYes.textContent = 'Unlock & Save';
+            if (credSaveYes) credSaveYes.textContent = 'Unlock profile & Save';
             setTimeout(() => credSavePw?.focus(), 60);
         } else {
             if (credSaveUnlockRow) { credSaveUnlockRow.classList.add('hidden'); credSaveUnlockRow.style.display = 'none'; }
@@ -1433,15 +1429,6 @@ if (credSavePw) {
     });
 }
 
-// ─── Favicon support ──────────────────────────────────────────────────────────
-function getFaviconHtml(tab) {
-    if (tab.faviconUrl) {
-        return `<img class="tab-favicon-img" src="${tab.faviconUrl}" onerror="this.style.display='none';this.nextElementSibling.style.display=''">` +
-               `<span class="tab-favicon" style="display:none">🌐</span>`;
-    }
-    return `<span class="tab-favicon">🌐</span>`;
-}
-
 // ─── Proxy pill + environment colors ──────────────────────────────────────────
 const pbDetail = document.getElementById('pb-detail');
 
@@ -1451,6 +1438,7 @@ let _directIpGeo       = null;
 let _isIsolatedTab     = false;
 let _isNewTabPage      = false;
 let _lastPillTabSig    = '';
+let _lastIpGeoSig      = '';
 
 const ENV_CLASSES = ['env-direct', 'env-proxy', 'env-isolated', 'env-newtab'];
 
@@ -1526,16 +1514,358 @@ function updateProxyStatus(info) {
     _renderPill();
 }
 
-function refreshBrowserStatusBar() {
+function _fmtResourceMb(bytes) {
+    const n = Number(bytes) || 0;
+    if (n <= 0) return '0 MB';
+    return `${(n / (1024 * 1024)).toFixed(n > 100 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+function _humanProcessLabel(m) {
+    if (m?.cupnet) return m.name || 'CupNet helper';
+    const t = String(m?.type || '');
+    const n = String(m?.name || '').trim();
+    if (t === 'Browser') return 'Main process';
+    if (t === 'GPU') return 'Graphics (GPU)';
+    if (t === 'Utility') return n ? `System helper (${n})` : 'System helper';
+    if (t === 'Tab') return n ? `Tab (${n})` : 'Tab renderer';
+    if (t === 'Renderer') return n ? `Renderer (${n})` : 'UI renderer';
+    if (t === 'Service' || t === 'ServiceWorker') return 'Background service';
+    if (t === 'Sandbox helper') return 'Sandbox';
+    if (t === 'CupNet') return m.name || 'CupNet helper';
+    return t + (n ? ` (${n})` : '');
+}
+
+function _renderResourcesPopover(metrics, totalCpu, totalMem) {
+    if (!statusResourcesPopover) return;
+    if (!Array.isArray(metrics) || !metrics.length) {
+        statusResourcesPopover.innerHTML = '<div style="color:var(--text-dim)">No process data yet</div>';
+        return;
+    }
+    const rows = metrics.map((m) => {
+        const cpu = Number(m.cpuPercent || 0);
+        const mem = _fmtResourceMb(m.memWorkingSet);
+        const cpuStyle = cpu > 30 ? ' style="color:#f87171;font-weight:600"' : '';
+        return `<tr><td>${escHtml(_humanProcessLabel(m))}</td><td class="num"${cpuStyle}>${cpu.toFixed(1)}%</td><td class="num">${mem}</td></tr>`;
+    }).join('');
+    statusResourcesPopover.innerHTML =
+        '<div class="browser-status-resources-popover-caption">Process breakdown</div>'
+        + `<div class="browser-status-resources-popover-total">${totalCpu.toFixed(1)}% CPU · ${_fmtResourceMb(totalMem)} RAM total</div>`
+        + `<table><thead><tr><th>Process</th><th class="num">CPU</th><th class="num">RAM</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function _updateResourcesButtonChrome() {
+    if (!statusResources) return;
+    if (_resourcesPopoverOpen) {
+        statusResources.title = 'Hide CPU and RAM breakdown';
+    } else {
+        statusResources.title = 'Show CPU and RAM breakdown';
+    }
+}
+
+function _setResourcesPopoverOpen(open) {
+    if (open) _setProfileDrawerOpen(false);
+    _resourcesPopoverOpen = !!open;
+    statusResourcesWrap?.classList.toggle('is-open', _resourcesPopoverOpen);
+    statusResources?.setAttribute('aria-expanded', _resourcesPopoverOpen ? 'true' : 'false');
+    statusResourcesDrawer?.classList.toggle('is-open', _resourcesPopoverOpen);
+    statusResourcesDrawer?.setAttribute('aria-hidden', _resourcesPopoverOpen ? 'false' : 'true');
+    _updateResourcesButtonChrome();
+    if (!_resourcesPopoverOpen) {
+        statusResources?.blur();
+    }
+    void applyChromeLayoutReserve();
+}
+
+function _toggleResourcesDrawer() {
+    if (_resourcesPopoverOpen) {
+        _setResourcesPopoverOpen(false);
+        return;
+    }
+    if (statusResourcesPopover && !statusResourcesPopover.innerHTML.trim()) {
+        statusResourcesPopover.innerHTML = '<div style="color:var(--text-dim)">Loading process metrics…</div>';
+    }
+    _setResourcesPopoverOpen(true);
+}
+
+function _profileInitials(name) {
+    const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return '?';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function applyProfileSessionUi(st) {
+    const active = !!(st?.active && st?.name);
+    const name = active ? String(st.name) : '';
+    const initials = st?.initials || _profileInitials(name) || '?';
+    const color = st?.avatarColor || '#3b82f6';
+    if (statusProfileAvatar) {
+        statusProfileAvatar.textContent = initials;
+        statusProfileAvatar.style.backgroundColor = color;
+    }
+    if (statusProfileLabel) {
+        statusProfileLabel.textContent = active ? name : 'Profile';
+    }
+    if (statusProfile) {
+        statusProfile.title = active
+            ? `Signed in as ${name} — click to switch`
+            : 'Switch profile';
+    }
+    _activeProfileVaultId = st?.vaultId ?? null;
+}
+
+async function refreshProfileStatusLabel() {
+    if (!statusProfile || typeof api.profileSessionStatus !== 'function') return;
+    try {
+        const st = await api.profileSessionStatus();
+        applyProfileSessionUi(st);
+    } catch {
+        applyProfileSessionUi(null);
+    }
+}
+
+function _hideProfileSwitchForm() {
+    _profileSwitchTargetId = null;
+    statusProfileSwitchForm?.classList.add('hidden');
+    if (statusProfileSwitchPassword) statusProfileSwitchPassword.value = '';
+    if (statusProfileSwitchError) statusProfileSwitchError.textContent = '';
+}
+
+function _renderProfileList(profiles) {
+    if (!statusProfileList) return;
+    statusProfileList.innerHTML = '';
+    const list = Array.isArray(profiles) ? profiles : [];
+    if (!list.length) {
+        statusProfileList.innerHTML = '<div style="color:var(--text-dim);font-size:12px;padding:4px 8px">No profiles</div>';
+        return;
+    }
+    for (const p of list) {
+        const isActive = _activeProfileVaultId != null && p.id === _activeProfileVaultId;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'browser-status-profile-row' + (isActive ? ' is-active' : '');
+        btn.disabled = isActive;
+        const avatar = document.createElement('span');
+        avatar.className = 'browser-status-profile-row-avatar';
+        avatar.textContent = p.avatarIcon || _profileInitials(p.name);
+        avatar.style.backgroundColor = p.avatarColor || '#3b82f6';
+        const nameEl = document.createElement('span');
+        nameEl.className = 'browser-status-profile-row-name';
+        nameEl.textContent = p.name || 'Profile';
+        btn.appendChild(avatar);
+        btn.appendChild(nameEl);
+        if (isActive) {
+            const badge = document.createElement('span');
+            badge.className = 'browser-status-profile-row-badge';
+            badge.textContent = 'Active';
+            btn.appendChild(badge);
+        } else {
+            btn.addEventListener('click', () => {
+                _profileSwitchTargetId = p.id;
+                statusProfileSwitchForm?.classList.remove('hidden');
+                if (statusProfileSwitchName) statusProfileSwitchName.textContent = p.name || 'profile';
+                if (statusProfileSwitchPassword) {
+                    statusProfileSwitchPassword.value = '';
+                    statusProfileSwitchPassword.focus();
+                }
+                if (statusProfileSwitchError) statusProfileSwitchError.textContent = '';
+            });
+        }
+        statusProfileList.appendChild(btn);
+    }
+}
+
+async function _loadProfileDrawerList() {
+    if (typeof api.profileSessionStatus === 'function') {
+        try {
+            const st = await api.profileSessionStatus();
+            applyProfileSessionUi(st);
+        } catch { /* ignore */ }
+    }
+    if (typeof api.profileList !== 'function') return;
+    try {
+        const profiles = await api.profileList();
+        _renderProfileList(profiles);
+    } catch {
+        if (statusProfileList) {
+            statusProfileList.innerHTML = '<div style="color:var(--text-dim);font-size:12px;padding:4px 8px">Could not load profiles</div>';
+        }
+    }
+}
+
+function _updateProfileButtonChrome() {
+    if (!statusProfile) return;
+    if (_profileDrawerOpen) {
+        statusProfile.title = 'Hide profile switcher';
+    }
+}
+
+function _setProfileDrawerOpen(open) {
+    if (open) _setResourcesPopoverOpen(false);
+    _profileDrawerOpen = !!open;
+    statusProfileWrap?.classList.toggle('is-open', _profileDrawerOpen);
+    statusProfile?.setAttribute('aria-expanded', _profileDrawerOpen ? 'true' : 'false');
+    statusProfileDrawer?.classList.toggle('is-open', _profileDrawerOpen);
+    statusProfileDrawer?.setAttribute('aria-hidden', _profileDrawerOpen ? 'false' : 'true');
+    _updateProfileButtonChrome();
+    if (!_profileDrawerOpen) {
+        _hideProfileSwitchForm();
+        statusProfile?.blur();
+    }
+    void applyChromeLayoutReserve();
+}
+
+function _toggleProfileDrawer() {
+    if (_profileDrawerOpen) {
+        _setProfileDrawerOpen(false);
+        return;
+    }
+    _hideProfileSwitchForm();
+    if (statusProfileList && !statusProfileList.children.length) {
+        statusProfileList.innerHTML = '<div style="color:var(--text-dim);font-size:12px;padding:4px 8px">Loading profiles…</div>';
+    }
+    _setProfileDrawerOpen(true);
+    void _loadProfileDrawerList();
+}
+
+async function _confirmProfileSwitch() {
+    if (_profileSwitchTargetId == null) return;
+    const password = String(statusProfileSwitchPassword?.value || '');
+    if (!password) {
+        if (statusProfileSwitchError) statusProfileSwitchError.textContent = 'Enter profile password.';
+        statusProfileSwitchPassword?.focus();
+        return;
+    }
+    if (statusProfileSwitchConfirm) statusProfileSwitchConfirm.disabled = true;
+    try {
+        const r = await api.profileLogin({ vaultId: _profileSwitchTargetId, password });
+        if (!r?.success) {
+            if (statusProfileSwitchError) statusProfileSwitchError.textContent = r?.error || 'Switch failed.';
+            return;
+        }
+        _setProfileDrawerOpen(false);
+        await refreshProfileStatusLabel();
+        scheduleCredentialsToolbarRefresh();
+        if (typeof showToast === 'function') {
+            showToast(`Switched to ${r.name || 'profile'}`, { type: 'success', duration: 2500 });
+        }
+    } catch (e) {
+        if (statusProfileSwitchError) statusProfileSwitchError.textContent = e?.message || 'Switch failed.';
+    } finally {
+        if (statusProfileSwitchConfirm) statusProfileSwitchConfirm.disabled = false;
+    }
+}
+
+function _bindProfileDrawer() {
+    if (!statusProfile) return;
+
+    const isInProfileUi = (node) => {
+        if (!node || !(node instanceof Node)) return false;
+        return statusProfile?.contains(node)
+            || statusProfileDrawer?.contains(node);
+    };
+
+    statusProfile.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _toggleProfileDrawer();
+    });
+
+    statusProfileSwitchCancel?.addEventListener('click', () => _hideProfileSwitchForm());
+    statusProfileSwitchConfirm?.addEventListener('click', () => { void _confirmProfileSwitch(); });
+    statusProfileSwitchPassword?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            void _confirmProfileSwitch();
+        }
+    });
+
+    statusProfileManage?.addEventListener('click', () => {
+        _setProfileDrawerOpen(false);
+        void api.profileOpenSwitchGate?.();
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!_profileDrawerOpen) return;
+        if (isInProfileUi(e.target)) return;
+        _setProfileDrawerOpen(false);
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape' || !_profileDrawerOpen) return;
+        if (_profileSwitchTargetId != null) {
+            _hideProfileSwitchForm();
+        } else {
+            _setProfileDrawerOpen(false);
+        }
+    });
+
+    _updateProfileButtonChrome();
+}
+
+function _bindResourcesPopover() {
+    if (!statusResources) return;
+
+    const isInResourcesUi = (node) => {
+        if (!node || !(node instanceof Node)) return false;
+        return statusResources?.contains(node)
+            || statusResourcesDrawer?.contains(node);
+    };
+
+    statusResources.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _toggleResourcesDrawer();
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!_resourcesPopoverOpen) return;
+        if (isInResourcesUi(e.target)) return;
+        _setResourcesPopoverOpen(false);
+    });
+
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _resourcesPopoverOpen) {
+            _setResourcesPopoverOpen(false);
+        }
+    });
+
+    _updateResourcesButtonChrome();
+}
+
+async function refreshResourceMetrics() {
+    const metricsEl = statusResourcesMetrics || statusResources;
+    if (!metricsEl || typeof api.getAppMetrics !== 'function') return;
+    try {
+        const metrics = await api.getAppMetrics();
+        if (!Array.isArray(metrics) || !metrics.length) {
+            metricsEl.textContent = 'CPU — · RAM —';
+            if (statusResourcesPopover) statusResourcesPopover.innerHTML = '';
+            return;
+        }
+        let totalCpu = 0;
+        let totalMem = 0;
+        for (const m of metrics) {
+            totalCpu += Number(m.cpuPercent) || 0;
+            totalMem += Number(m.memWorkingSet) || 0;
+        }
+        metricsEl.textContent = `CPU ${totalCpu.toFixed(1)}% · RAM ${_fmtResourceMb(totalMem)}`;
+        _renderResourcesPopover(metrics, totalCpu, totalMem);
+    } catch {
+        metricsEl.textContent = 'CPU — · RAM —';
+    }
+}
+
+async function refreshBrowserStatusBar() {
     if (!statusMitm && !statusProxy) return;
+
+    void refreshProfileStatusLabel();
+    void refreshResourceMetrics();
 
     if (typeof api.getMitmStats === 'function') {
         api.getMitmStats().then((st) => {
-            const ready = st && st.workerReady !== false;
-            if (statusMitm) statusMitm.textContent = `MITM: ${ready ? 'Active' : 'Starting'}`;
-            if (statusErrors) statusErrors.textContent = `Errors: ${st && st.errors != null ? st.errors : '—'}`;
+            _mitmStats = st || null;
+            applyMitmState({ state: _mitmUiState, error: _mitmUiError, ready: _mitmUiReady });
         }).catch(() => {
-            if (statusMitm) statusMitm.textContent = 'MITM: —';
+            applyMitmState({ state: _mitmUiState || 'failed', error: _mitmUiError || 'Unable to read MITM stats', ready: false });
         });
     }
 
@@ -1570,6 +1900,142 @@ function refreshBrowserStatusBar() {
         statusRequests.textContent = `Requests: ${isLogging ? _statusLogCount : 0}`;
     }
 }
+
+let _mitmUiState = 'starting';
+let _mitmUiError = '';
+let _mitmUiReady = false;
+let _mitmStats = null;
+let _mitmRestartInFlight = false;
+let _mitmFailureToastShown = false;
+
+function _mitmStateClass(state) {
+    if (state === 'ready') return 'browser-status-item--mitm-ready';
+    if (state === 'failed') return 'browser-status-item--mitm-failed';
+    return 'browser-status-item--mitm-starting';
+}
+
+function applyMitmState(info) {
+    if (!statusMitm) return;
+
+    const state = info?.state
+        || (info?.ready ? 'ready' : (_mitmStats && _mitmStats.workerReady === false ? 'starting' : _mitmUiState));
+    const ready = info?.ready != null ? !!info.ready : state === 'ready';
+    const error = String(info?.error || _mitmUiError || '').trim();
+
+    _mitmUiState = state;
+    _mitmUiReady = ready;
+    _mitmUiError = error;
+
+    let label = 'Starting…';
+    if (state === 'ready') label = 'Active';
+    else if (state === 'failed') label = 'Failed';
+
+    statusMitm.textContent = `MITM: ${label}`;
+    statusMitm.classList.remove(
+        'browser-status-item--mitm-ready',
+        'browser-status-item--mitm-starting',
+        'browser-status-item--mitm-failed',
+    );
+    statusMitm.classList.add(_mitmStateClass(state));
+
+    if (state === 'ready') {
+        statusMitm.title = 'MITM proxy is active — click to restart';
+    } else if (state === 'failed') {
+        statusMitm.title = error || 'MITM proxy failed — click to restart';
+    } else {
+        statusMitm.title = 'MITM proxy is starting…';
+    }
+
+    if (statusMitmRestart) {
+        const showRestart = state !== 'ready' || !!error;
+        statusMitmRestart.classList.toggle('hidden', !showRestart);
+        statusMitmRestart.disabled = _mitmRestartInFlight;
+    }
+
+    if (statusErrors) {
+        const errCount = _mitmStats && _mitmStats.errors != null ? _mitmStats.errors : '—';
+        statusErrors.textContent = `Errors: ${errCount}`;
+    }
+
+    if (state === 'failed' && error && !_mitmFailureToastShown) {
+        _mitmFailureToastShown = true;
+        const msg = `MITM failed: ${error}`;
+        if (typeof showToast === 'function') {
+            showToast(msg, { type: 'error', duration: 12000 });
+        }
+    } else if (state === 'ready') {
+        _mitmFailureToastShown = false;
+    }
+}
+
+async function _requestMitmRestart() {
+    if (_mitmRestartInFlight || typeof api.restartMitm !== 'function') return;
+    _mitmRestartInFlight = true;
+    applyMitmState({ state: 'starting', ready: false, error: '' });
+    if (statusMitmRestart) statusMitmRestart.disabled = true;
+    try {
+        const result = await api.restartMitm();
+        if (result?.success) {
+            _mitmFailureToastShown = false;
+            _clearPageError();
+            if (typeof showToast === 'function') {
+                showToast('MITM proxy restarted', { type: 'success', duration: 3500 });
+            }
+            applyMitmState({ state: 'ready', ready: true, error: '' });
+            refreshBrowserStatusBar();
+        } else {
+            const err = result?.error || 'MITM restart failed';
+            applyMitmState({ state: 'failed', ready: false, error: err });
+            if (typeof showToast === 'function') {
+                showToast(err, { type: 'error', duration: 10000 });
+            }
+        }
+    } catch (e) {
+        const err = e?.message || String(e);
+        applyMitmState({ state: 'failed', ready: false, error: err });
+        if (typeof showToast === 'function') {
+            showToast(err, { type: 'error', duration: 10000 });
+        }
+    } finally {
+        _mitmRestartInFlight = false;
+        if (statusMitmRestart) statusMitmRestart.disabled = false;
+    }
+}
+
+if (statusMitm) {
+    statusMitm.addEventListener('click', () => { void _requestMitmRestart(); });
+}
+if (statusMitmRestart) {
+    statusMitmRestart.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void _requestMitmRestart();
+    });
+}
+_bindResourcesPopover();
+_bindProfileDrawer();
+
+api.onProfileSessionChanged?.((st) => {
+    applyProfileSessionUi(st);
+    if (_profileDrawerOpen) void _loadProfileDrawerList();
+    scheduleCredentialsToolbarRefresh();
+});
+
+api.onCredentialsLocked?.(() => {
+    if (typeof showToast === 'function') {
+        showToast('Vault locked due to inactivity', { type: 'info', duration: 5000 });
+    }
+    scheduleCredentialsToolbarRefresh();
+});
+
+api.onMitmReadyChanged?.((info) => {
+    applyMitmState(info || {});
+    refreshBrowserStatusBar();
+});
+
+api.onMitmStatsUpdate?.((stats) => {
+    _mitmStats = stats || null;
+    applyMitmState({ state: _mitmUiState, error: _mitmUiError, ready: _mitmUiReady });
+});
 
 function _activeTabIdForIpGeo() {
     const a = tabs.find(t => t.isActive);
@@ -1615,6 +2081,10 @@ function _onActiveTabChanged(tabData) {
     const pillSig = `${active?.id || ''}|${active?.proxyProfileId ?? ''}`;
     if (pillSig !== _lastPillTabSig) {
         _lastPillTabSig = pillSig;
+    }
+    const ipSig = `${active?.proxyProfileId ?? 'global'}|${!!_lastProxyInfo?.active}`;
+    if (ipSig !== _lastIpGeoSig) {
+        _lastIpGeoSig = ipSig;
         _proxyIpGeo = null;
         _directIpGeo = null;
         api.getCurrentProxy().then((info) => {
@@ -1647,7 +2117,10 @@ api.getCurrentProxy().then((info) => {
 
 setInterval(() => {
     refreshBrowserStatusBar();
-}, 8000);
+}, 3000);
+
+applyMitmState({ state: 'starting', ready: false, error: '' });
+refreshBrowserStatusBar();
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 settingsToggle?.addEventListener('click', () => {
@@ -1788,6 +2261,7 @@ document.addEventListener('mousemove', () => {
     if (now - _lastMouseReportTs < 5000) return;
     _lastMouseReportTs = now;
     api.reportMouseActivity?.();
+    api.vaultSessionActivity?.();
 });
 
 // ─── Init: fetch current tabs ─────────────────────────────────────────────────
@@ -2402,56 +2876,9 @@ function getOmniboxHintText() {
 }
 
 let _omniboxOverlayReady = null;
-let _omniboxFaviconLoadGen = 0;
 let _omniboxSyncRaf = null;
 let _omniboxRenderTimer = null;
-let _omniboxFaviconTimer = null;
 let _omniboxRenderGen = 0;
-
-function _omniboxRowNeedsFavicon(row) {
-    if (!row || row.kind === 'cmd' || row._isSearchUrl || row.icon === 'search') return false;
-    return !!(row.url || row.urlPreview);
-}
-
-function attachOmniboxFaviconsSync(rows) {
-    const fc = window.CupNetFaviconCache;
-    if (!fc) return;
-    for (const row of rows) {
-        if (!_omniboxRowNeedsFavicon(row)) continue;
-        const url = row.url || row.urlPreview;
-        const tab = row.tabId != null ? tabs.find((t) => t.id === row.tabId) : null;
-        const fav = fc.resolveSync(url, tab?.faviconUrl || null);
-        if (fav) row.faviconUrl = fav;
-        else delete row.faviconUrl;
-    }
-}
-
-async function enrichOmniboxFaviconsAsync(expectedGen) {
-    const fc = window.CupNetFaviconCache;
-    if (!fc || !isOmniboxDropdownVisible() || expectedGen !== _omniboxFaviconLoadGen) return;
-    const rows = omniboxRows;
-    const entries = [];
-    for (const row of rows) {
-        if (!_omniboxRowNeedsFavicon(row) || row.faviconUrl) continue;
-        const url = row.url || row.urlPreview;
-        const tab = row.tabId != null ? tabs.find((t) => t.id === row.tabId) : null;
-        entries.push({ url, tabFaviconUrl: tab?.faviconUrl || null });
-    }
-    if (!entries.length) return;
-    await fc.loadMany(entries, 8, 3);
-    if (expectedGen !== _omniboxFaviconLoadGen || !isOmniboxDropdownVisible()) return;
-    attachOmniboxFaviconsSync(omniboxRows);
-    syncOmniboxOverlay();
-}
-
-function scheduleEnrichOmniboxFavicons() {
-    clearTimeout(_omniboxFaviconTimer);
-    const gen = _omniboxFaviconLoadGen;
-    _omniboxFaviconTimer = setTimeout(() => {
-        _omniboxFaviconTimer = null;
-        void enrichOmniboxFaviconsAsync(gen);
-    }, 150);
-}
 
 function resetOmniboxOverlayReady() {
     _omniboxOverlayReady = null;
@@ -2492,7 +2919,6 @@ function buildOmniboxOverlayPayload() {
             sub: row.kind === 'cmd' ? (row.category || '') : (row.sub || ''),
             shortcut: row.shortcut || '',
             urlPreview: row.urlPreview || '',
-            faviconUrl: row.faviconUrl || '',
         })),
     };
 }
@@ -2511,22 +2937,6 @@ function syncOmniboxOverlay() {
 
 function syncOmniboxHighlightOnly() {
     syncOmniboxOverlay();
-}
-
-function _applyInlineAutocompleteGhost() {
-    if (!urlInput || isCommandMode()) return;
-    const q = String(urlInput.value || '');
-    const trimmed = q.trim();
-    if (!trimmed || _shouldSkipInlineGhost(trimmed)) return;
-    if (urlInput.selectionStart !== q.length) return;
-    const top = omniboxRows.find((r) => r && r.kind === 'url' && r.url && !r._isSearchUrl && !r._isExactTyped && r.sub === 'History');
-    if (!top || !top.url) return;
-    const low = trimmed.toLowerCase();
-    const ulow = String(top.url).toLowerCase();
-    if (!ulow.startsWith(low) || top.url.length <= trimmed.length) return;
-    const full = top.url;
-    urlInput.value = full;
-    urlInput.setSelectionRange(trimmed.length, full.length);
 }
 
 async function renderOmniboxList() {
@@ -2621,12 +3031,9 @@ async function renderOmniboxList() {
         commandPaletteActiveIdx = Math.min(commandPaletteActiveIdx, Math.max(0, omniboxRows.length - 1));
     }
     if (renderGen !== _omniboxRenderGen) return;
-    attachOmniboxFaviconsSync(omniboxRows);
     await ensureOmniboxOverlay();
     if (renderGen !== _omniboxRenderGen) return;
     paintInlineOmniboxList();
-    if (!isCommandMode()) _applyInlineAutocompleteGhost();
-    scheduleEnrichOmniboxFavicons();
 }
 
 function scheduleRenderOmniboxList(immediate = false) {
@@ -2711,12 +3118,9 @@ async function onUrlInputOmnibox() {
 
 function hideCommandPalette() {
     resetOmniboxOverlayReady();
-    _omniboxFaviconLoadGen++;
     _omniboxRenderGen++;
     clearTimeout(_omniboxRenderTimer);
-    clearTimeout(_omniboxFaviconTimer);
     _omniboxRenderTimer = null;
-    _omniboxFaviconTimer = null;
     if (_omniboxSyncRaf) {
         cancelAnimationFrame(_omniboxSyncRaf);
         _omniboxSyncRaf = null;
@@ -2939,13 +3343,6 @@ document.addEventListener('keydown', (e) => {
         return;
     }
     if (e.key === 'Escape' && isOmniboxDropdownVisible()) {
-        if (_clearInlineGhostSelection()) {
-            e.preventDefault();
-            _omniboxHighlightMoved = false;
-            commandPaletteActiveIdx = 0;
-            void onUrlInputOmnibox();
-            return;
-        }
         e.preventDefault();
         hideCommandPalette();
         return;
