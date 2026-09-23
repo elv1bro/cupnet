@@ -358,59 +358,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onProfileSessionChanged:   (cb)      => sub('profile-session-changed', cb),
     onCredentialsLocked:       (cb)      => sub('credentials-locked', cb),
 
-    // ── Credentials vault ─────────────────────────────────────────────────────
-    openCredentialsWindow:   ()        => ipcRenderer.invoke('open-credentials-window'),
-    credentialsVaultStatus:  ()        => ipcRenderer.invoke('credentials-vault-status'),
-    credentialsVaultSetup:   (p)       => ipcRenderer.invoke('credentials-vault-setup', p),
-    credentialsUnlock:       (pw, vid) => ipcRenderer.invoke('credentials-unlock', pw, vid),
-    credentialsLock:         ()        => ipcRenderer.invoke('credentials-lock'),
-    credentialsList:         (f)       => ipcRenderer.invoke('credentials-list', f),
-    credentialsGet:          (id)      => ipcRenderer.invoke('credentials-get', id),
-    credentialsSave:         (p)       => ipcRenderer.invoke('credentials-save', p),
-    credentialsDelete:       (id, perm) => ipcRenderer.invoke('credentials-delete', id, perm),
-    credentialsFavorite:     (id, v)   => ipcRenderer.invoke('credentials-favorite', id, v),
-    credentialsGetTabProxyIp: ()       => ipcRenderer.invoke('credentials-get-tab-proxy-ip'),
-    credentialsChangeMaster: (p)       => ipcRenderer.invoke('credentials-change-master', p),
-    credentialsImportBatch:  (p)       => ipcRenderer.invoke('credentials-import-batch', p),
-    credentialsExport:       (p)       => ipcRenderer.invoke('credentials-export', p),
-    credentialsSiteMatchCount: (p)     => ipcRenderer.invoke('credentials-site-match-count', p),
-    credentialsSiteMatches:  (p)       => ipcRenderer.invoke('credentials-site-matches', p),
-    credentialsUnlockAndGetMatches: (p) => ipcRenderer.invoke('credentials-unlock-and-get-matches', p || {}),
-    credentialsFillActiveTab: (payload) => ipcRenderer.invoke('credentials-fill-active-tab', payload || {}),
-    // multi-vault management
-    credentialsVaultList:    ()        => ipcRenderer.invoke('credentials-vault-list'),
-    credentialsVaultCreate:  (p)       => ipcRenderer.invoke('credentials-vault-create', p),
-    credentialsVaultSwitch:  (id, pw)  => ipcRenderer.invoke('credentials-vault-switch', id, pw),
-    credentialsVaultDelete:  (id, pw)  => ipcRenderer.invoke('credentials-vault-delete', id, pw),
-    credentialsVaultRename:  (id, n)   => ipcRenderer.invoke('credentials-vault-rename', id, n),
-    // trash
-    credentialsRestore:      (id)      => ipcRenderer.invoke('credentials-restore', id),
-    credentialsPurgeTrash:   ()        => ipcRenderer.invoke('credentials-purge-trash'),
-    credentialsCountTrash:   ()        => ipcRenderer.invoke('credentials-count-trash'),
-    credentialsTypeCounts:   ()        => ipcRenderer.invoke('credentials-type-counts'),
-    // folders
-    credentialsFoldersList:  ()        => ipcRenderer.invoke('credentials-folders-list'),
-    credentialsFolderCreate: (n, pid)  => ipcRenderer.invoke('credentials-folder-create', n, pid),
-    credentialsFolderRename: (id, n)   => ipcRenderer.invoke('credentials-folder-rename', id, n),
-    credentialsFolderDelete: (id)      => ipcRenderer.invoke('credentials-folder-delete', id),
-    credentialsMoveToFolder: (cid, fid) => ipcRenderer.invoke('credentials-move-to-folder', cid, fid),
-    // URIs + custom fields
-    credentialsUrisGet:      (id)      => ipcRenderer.invoke('credentials-uris-get', id),
-    credentialsUrisSave:     (id, u)   => ipcRenderer.invoke('credentials-uris-save', id, u),
-    credentialsFieldsGet:    (id)      => ipcRenderer.invoke('credentials-fields-get', id),
-    credentialsFieldsSave:   (id, f)   => ipcRenderer.invoke('credentials-fields-save', id, f),
-    // vault hint
-    credentialsVaultSetHint: (h)       => ipcRenderer.invoke('credentials-vault-set-hint', h),
-    // capture prompt
-    credentialCaptureConfirm:      ()     => ipcRenderer.invoke('credential-capture-confirm'),
-    credentialCaptureDismiss:       ()     => ipcRenderer.invoke('credential-capture-dismiss'),
-    credentialCaptureUnlockAndSave: (pw)  => ipcRenderer.invoke('credential-capture-unlock-and-save', pw),
-    onShowCredentialSaveBar: (cb)         => sub('show-credential-save-bar', cb),
-    // events
-    onCredentialsInit:       (cb)      => sub('credentials-init', cb),
-    onCredentialsContextUpdate: (cb)   => sub('credentials-context-update', cb),
-    onCredentialsToolbarRefresh: (cb)  => sub('credentials-toolbar-refresh', cb),
-
     // ── API Scout ─────────────────────────────────────────────────────────────
     openIvacScout:           ()        => ipcRenderer.invoke('open-ivac-scout'),
     getIvacScoutContext:     ()        => ipcRenderer.invoke('get-ivac-scout-context'),
