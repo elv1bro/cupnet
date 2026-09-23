@@ -223,6 +223,9 @@ function updateBadges() {
 // ── Render forms ──
 function renderForms(forms, tabId) {
     formsList.innerHTML = '';
+    // Every inline editor was just removed from the DOM, so reset the counter that
+    // gates auto-refresh; otherwise it can stick > 0 and disable refresh forever. (A-346)
+    _inlineEditCount = 0;
     formsEmpty.style.display = forms.length ? 'none' : '';
 
     for (const form of forms) {
@@ -662,7 +665,7 @@ function _storagePathJson(storeKind, storageKey, pathSegs) {
 
 function normalizeStorageEntries(obj) {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
-        throw new Error('Нужен JSON-объект вида { "ключ": "значение", ... }');
+        throw new Error('Expected a JSON object like { "key": "value", ... }');
     }
     const out = {};
     for (const [k, v] of Object.entries(obj)) {
@@ -837,11 +840,11 @@ function bindStorageTreeToggle(host) {
 async function applyStorageToPage(storeKind, entries) {
     const tabId = getSelectedTabId();
     if (!tabId) {
-        statusEl.textContent = 'Нет выбранной вкладки';
+        statusEl.textContent = 'No tab selected';
         return;
     }
     if (typeof api.applyPageStorage !== 'function') {
-        statusEl.textContent = 'applyPageStorage недоступен (обновите preload)';
+        statusEl.textContent = 'applyPageStorage unavailable (update preload)';
         return;
     }
     _storageApplyLoading = storeKind;
@@ -854,19 +857,19 @@ async function applyStorageToPage(storeKind, entries) {
     try {
         const res = await api.applyPageStorage(tabId, { target: storeKind, entries });
         if (!res?.ok) {
-            errMsg = 'Запись не удалась: ' + (res?.error || '?');
+            errMsg = 'Write failed: ' + (res?.error || '?');
         } else {
             const snap = await api.analyzePageStorage(tabId);
             _lastStorage = snap || { sessionStorage: {}, localStorage: {} };
         }
     } catch (err) {
-        errMsg = 'Ошибка: ' + (err.message || err);
+        errMsg = 'Error: ' + (err.message || err);
     } finally {
         _storageApplyLoading = null;
         renderMeta(_lastMeta);
         renderStorage();
         updateBadges();
-        statusEl.textContent = errMsg || 'Данные с вкладки подгружены в форму';
+        statusEl.textContent = errMsg || 'Tab data loaded into form';
         setTimeout(() => { statusEl.textContent = 'Ready'; }, 2200);
     }
 }
@@ -887,7 +890,7 @@ function appendStorageInspector(storageSec, ss, ls) {
         const n = Object.keys(rec).length;
         const sum = document.createElement('summary');
         sum.className = 'st-store-summary';
-        sum.textContent = `${storeKind === 'session' ? 'sessionStorage' : 'localStorage'} · ${n} ключ(ей)`;
+        sum.textContent = `${storeKind === 'session' ? 'sessionStorage' : 'localStorage'} · ${n} key(s)`;
 
         const body = document.createElement('div');
         body.className = 'st-store-body';
@@ -898,21 +901,21 @@ function appendStorageInspector(storageSec, ss, ls) {
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';
         copyBtn.className = 'btn btn-sm btn-primary';
-        copyBtn.textContent = '⎘ Копировать JSON';
+        copyBtn.textContent = '⎘ Copy JSON';
         const applyBtn = document.createElement('button');
         applyBtn.type = 'button';
         applyBtn.className = 'btn btn-sm';
-        applyBtn.textContent = 'Записать на страницу';
+        applyBtn.textContent = 'Write to page';
         const resetBtn = document.createElement('button');
         resetBtn.type = 'button';
         resetBtn.className = 'btn btn-sm';
-        resetBtn.textContent = 'Сбросить';
+        resetBtn.textContent = 'Reset';
 
         const ta = document.createElement('textarea');
         ta.className = 'st-store-json-edit';
         ta.spellcheck = false;
         ta.value = JSON.stringify(rec, null, 2);
-        ta.title = 'Объект { ключ: строка }; вложенные значения будут сохранены как JSON-строка';
+        ta.title = 'Object { key: string }; nested values are stored as a JSON string';
 
         const treeHost = document.createElement('div');
         treeHost.className = 'st-tree';
@@ -921,11 +924,11 @@ function appendStorageInspector(storageSec, ss, ls) {
 
         const treeCaption = document.createElement('div');
         treeCaption.className = 'st-tree-caption';
-        treeCaption.textContent = 'Дерево (только просмотр)';
+        treeCaption.textContent = 'Tree (read-only)';
 
         copyBtn.addEventListener('click', () => {
             navigator.clipboard.writeText(ta.value).then(() => {
-                statusEl.textContent = '✓ JSON в буфере';
+                statusEl.textContent = '✓ JSON copied';
                 setTimeout(() => { statusEl.textContent = 'Ready'; }, 1600);
             }).catch(() => {});
         });
@@ -939,7 +942,7 @@ function appendStorageInspector(storageSec, ss, ls) {
         });
         resetBtn.addEventListener('click', () => {
             ta.value = JSON.stringify(rec, null, 2);
-            statusEl.textContent = 'Сброшено к снимку';
+            statusEl.textContent = 'Reset to snapshot';
             setTimeout(() => { statusEl.textContent = 'Ready'; }, 1400);
         });
 
@@ -961,7 +964,7 @@ function appendStorageInspector(storageSec, ss, ls) {
             spin.className = 'st-store-loading-spin';
             const tx = document.createElement('span');
             tx.className = 'st-store-loading-text';
-            tx.textContent = 'Запись и загрузка с вкладки…';
+            tx.textContent = 'Writing and reloading from tab…';
             ov.appendChild(spin);
             ov.appendChild(tx);
             body.appendChild(ov);
