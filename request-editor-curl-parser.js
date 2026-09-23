@@ -2,6 +2,10 @@
 
 /**
  * Parse a cURL command into { method, url, headers, body }.
+ *
+ * curl distinguishes flags by CASE (e.g. -X = method, -x = proxy; -A = user-agent),
+ * so flags are matched case-sensitively. Chrome's "Copy as cURL" emits ANSI-C quoted
+ * bodies ($'...'), which the tokenizer decodes. (A-174)
  */
 function parseCurlCommand(text) {
     const raw = String(text || '').trim();
@@ -14,21 +18,31 @@ function parseCurlCommand(text) {
 
     const headers = {};
     let method = 'GET';
+    let explicitMethod = false;
     let url = '';
-    let body = '';
+    const dataParts = [];
+    let isForm = false;
+
     const tokens = tokenizeCurl(s);
     let i = 0;
     if (tokens[0] && /^curl$/i.test(tokens[0])) i = 1;
 
+    // Flags that take an argument we don't use — skip the flag AND its value.
+    const skipWithArg = new Set([
+        '-x', '--proxy', '-o', '--output', '--connect-timeout', '--max-time', '-m',
+        '--retry', '--limit-rate', '-w', '--write-out', '--cacert', '--cert', '--key',
+        '--resolve', '--interface', '-Y', '--speed-limit', '-y', '--speed-time',
+    ]);
+
     while (i < tokens.length) {
         const t = tokens[i];
-        const low = t.toLowerCase();
-        if (low === '-x' || low === '--request') {
+        if (t === '-X' || t === '--request') {
             method = String(tokens[i + 1] || 'GET').toUpperCase();
+            explicitMethod = true;
             i += 2;
             continue;
         }
-        if (low === '-h' || low === '--header') {
+        if (t === '-H' || t === '--header') {
             const hv = String(tokens[i + 1] || '');
             const colon = hv.indexOf(':');
             if (colon > 0) {
@@ -39,43 +53,57 @@ function parseCurlCommand(text) {
             i += 2;
             continue;
         }
-        if (low === '-d' || low === '--data' || low === '--data-raw' || low === '--data-binary') {
-            body = String(tokens[i + 1] || '');
+        if (t === '-d' || t === '--data' || t === '--data-raw' || t === '--data-binary' || t === '--data-ascii') {
+            dataParts.push(String(tokens[i + 1] || ''));
             i += 2;
             continue;
         }
-        if (low === '-b' || low === '--cookie') {
-            headers['Cookie'] = String(tokens[i + 1] || '');
+        if (t === '--data-urlencode') {
+            const v = String(tokens[i + 1] || '');
+            const eq = v.indexOf('=');
+            if (eq > 0) dataParts.push(encodeURIComponent(v.slice(0, eq)) + '=' + encodeURIComponent(v.slice(eq + 1)));
+            else dataParts.push(encodeURIComponent(v.replace(/^=/, '')));
             i += 2;
             continue;
         }
-        if (low === '-u' || low === '--user') {
+        if (t === '-F' || t === '--form') {
+            // Multipart is not fully modeled here; at least force POST.
+            isForm = true;
+            i += 2;
+            continue;
+        }
+        if (t === '-b' || t === '--cookie') { headers['Cookie'] = String(tokens[i + 1] || ''); i += 2; continue; }
+        if (t === '-e' || t === '--referer') { headers['Referer'] = String(tokens[i + 1] || ''); i += 2; continue; }
+        if (t === '-A' || t === '--user-agent') { headers['User-Agent'] = String(tokens[i + 1] || ''); i += 2; continue; }
+        if (t === '-u' || t === '--user') {
             const u = String(tokens[i + 1] || '');
             try {
-                headers['Authorization'] = 'Basic ' + btoa(unescape(encodeURIComponent(u)));
+                headers['Authorization'] = 'Basic ' + b64(u);
             } catch {
                 headers['Authorization'] = 'Basic ' + u;
             }
             i += 2;
             continue;
         }
-        if (t.startsWith('http://') || t.startsWith('https://') || t.startsWith("'http") || t.startsWith('"http')) {
-            url = stripQuotes(t);
-            i++;
-            continue;
-        }
-        if (t.startsWith('-')) {
-            i++;
-            continue;
-        }
-        if (!url && (t.includes('://') || /^['"]?https?:/.test(t))) {
-            url = stripQuotes(t);
-        }
+        if (t === '--url') { if (!url) url = stripQuotes(String(tokens[i + 1] || '')); i += 2; continue; }
+        if (skipWithArg.has(t)) { i += 2; continue; }
+        if (t.startsWith('-')) { i++; continue; } // other boolean flags
+        // First positional token is the URL (curl semantics); ignore later ones.
+        if (!url) url = stripQuotes(t);
         i++;
     }
 
+    if (!explicitMethod && (dataParts.length || isForm)) method = 'POST';
+    const body = dataParts.join('&');
+
     if (!url) return null;
     return { method, url, headers, body };
+}
+
+function b64(str) {
+    if (typeof btoa === 'function') return btoa(unescape(encodeURIComponent(str)));
+    // Node fallback
+    return Buffer.from(str, 'utf8').toString('base64');
 }
 
 function stripQuotes(x) {
@@ -89,21 +117,45 @@ function stripQuotes(x) {
 function tokenizeCurl(line) {
     const out = [];
     let cur = '';
-    let q = null;
+    let q = null; // "'", '"', or 'ansi' ($'...')
     for (let i = 0; i < line.length; i++) {
         const c = line[i];
-        if (q) {
-            if (c === '\\' && q !== "'" && i + 1 < line.length) {
-                cur += line[++i];
+        if (q === 'ansi') {
+            if (c === '\\' && i + 1 < line.length) {
+                const n = line[++i];
+                if (n === 'n') cur += '\n';
+                else if (n === 't') cur += '\t';
+                else if (n === 'r') cur += '\r';
+                else if (n === "'") cur += "'";
+                else if (n === '"') cur += '"';
+                else if (n === '\\') cur += '\\';
+                else if (n === 'x') {
+                    const hex = line.slice(i + 1, i + 3);
+                    if (/^[0-9a-f]{2}$/i.test(hex)) { cur += String.fromCharCode(parseInt(hex, 16)); i += 2; }
+                    else cur += 'x';
+                } else if (n === 'u') {
+                    const hex = line.slice(i + 1, i + 5);
+                    if (/^[0-9a-f]{4}$/i.test(hex)) { cur += String.fromCharCode(parseInt(hex, 16)); i += 4; }
+                    else cur += 'u';
+                } else cur += n;
                 continue;
             }
-            if (c === q) {
-                q = null;
-                out.push(cur);
-                cur = '';
-                continue;
-            }
+            if (c === "'") { q = null; out.push(cur); cur = ''; continue; }
             cur += c;
+            continue;
+        }
+        if (q) {
+            if (c === '\\' && q !== "'" && i + 1 < line.length) { cur += line[++i]; continue; }
+            if (c === q) { q = null; out.push(cur); cur = ''; continue; }
+            cur += c;
+            continue;
+        }
+        // ANSI-C quoting: $'...'
+        if (c === '$' && line[i + 1] === "'") {
+            if (cur.trim()) out.push(cur.trim());
+            cur = '';
+            q = 'ansi';
+            i++; // skip the opening '
             continue;
         }
         if (c === '"' || c === "'") {
@@ -186,5 +238,10 @@ function parsePostmanCollectionV21(json) {
     return walkItems(json.item);
 }
 
-window.CupNetParseCurl = parseCurlCommand;
-window.CupNetParsePostman = parsePostmanCollectionV21;
+if (typeof window !== 'undefined') {
+    window.CupNetParseCurl = parseCurlCommand;
+    window.CupNetParsePostman = parsePostmanCollectionV21;
+}
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { parseCurlCommand, parsePostmanCollectionV21, tokenizeCurl };
+}
