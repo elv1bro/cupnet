@@ -176,11 +176,16 @@ function registerRulesIpc(ctx) {
         const list = Array.isArray(data.rules) ? data.rules : Array.isArray(data) ? data : null;
         if (!list || !list.length) return { ok: false, error: 'No rules in file' };
         let imported = 0;
+        let scriptRulesDisabled = 0;
         for (const r of list) {
             if (!r || !r.name || !r.url_pattern || !r.type) continue;
+            // 'script' rules run arbitrary code (node:vm) on the MITM path. An imported file
+            // is untrusted, so force script rules OFF; the user must review and enable them. (A-050)
+            const forceDisabled = r.type === 'script';
+            if (forceDisabled && r.enabled !== false) scriptRulesDisabled++;
             const rule = {
                 name: String(r.name),
-                enabled: r.enabled !== false,
+                enabled: forceDisabled ? false : (r.enabled !== false),
                 url_pattern: String(r.url_pattern),
                 type: r.type,
                 params: r.params || {},
@@ -201,7 +206,7 @@ function registerRulesIpc(ctx) {
             ctx.interceptor.invalidateRulesCache();
             ctx.reattachInterceptorToAllTabs();
         }
-        return { ok: true, imported };
+        return { ok: true, imported, scriptRulesDisabled };
     });
 
     ctx.ipcMain.handle('reorder-intercept-rules', async (_, pairs) => {

@@ -1353,7 +1353,12 @@ function wireEvents() {
     onClick('btn-import-rules', async () => {
         const r = await api.importInterceptRules();
         if (r && r.ok) {
-            showMsg(`Imported ${r.imported || 0} rule(s)`);
+            if (r.scriptRulesDisabled > 0) {
+                // Script rules run code; imported ones are left disabled until reviewed. (A-050)
+                showMsg(`Imported ${r.imported || 0} rule(s). ${r.scriptRulesDisabled} script rule(s) left disabled — review before enabling.`, true);
+            } else {
+                showMsg(`Imported ${r.imported || 0} rule(s)`);
+            }
             await loadRules();
         } else if (r && r.error) showMsg(r.error, true);
     });
