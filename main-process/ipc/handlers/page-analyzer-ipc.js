@@ -3,6 +3,13 @@
 const { buildEndpointReport } = require('../../services/page-analyzer-endpoint-scan');
 
 const FETCH_SCRIPT_MS = 25000;
+// Run passive page analysis in an isolated world: it shares the DOM/storage but not the
+// page's JS prototypes, so anti-bot hooks on querySelectorAll/getComputedStyle/etc. do not
+// see these probes. (A-116)
+const ANALYZER_WORLD_ID = 999;
+function runInAnalyzerWorld(wc, code) {
+    return wc.executeJavaScriptInIsolatedWorld(ANALYZER_WORLD_ID, [{ code }]);
+}
 
 /**
  * Page analysis, Turnstile token injection.
@@ -13,7 +20,7 @@ function registerPageAnalyzerIpc(ctx) {
         const tab = ctx.tabManager.getTab(tabId);
         if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return [];
         try {
-            return await tab.view.webContents.executeJavaScript(`(${ctx._analyzeFormsScript})()`);
+            return await runInAnalyzerWorld(tab.view.webContents, `(${ctx._analyzeFormsScript})()`);
         } catch { return []; }
     });
 
@@ -21,7 +28,7 @@ function registerPageAnalyzerIpc(ctx) {
         const tab = ctx.tabManager.getTab(tabId);
         if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return {};
         try {
-            return await tab.view.webContents.executeJavaScript(`(${ctx._analyzeCaptchaScript})()`);
+            return await runInAnalyzerWorld(tab.view.webContents, `(${ctx._analyzeCaptchaScript})()`);
         } catch { return {}; }
     });
 
@@ -206,7 +213,7 @@ function registerPageAnalyzerIpc(ctx) {
         const tab = ctx.tabManager.getTab(tabId);
         if (!tab?.view?.webContents || tab.view.webContents.isDestroyed()) return {};
         try {
-            return await tab.view.webContents.executeJavaScript(`(${ctx._analyzeMetaScript})()`);
+            return await runInAnalyzerWorld(tab.view.webContents, `(${ctx._analyzeMetaScript})()`);
         } catch { return {}; }
     });
 
@@ -231,7 +238,7 @@ function registerPageAnalyzerIpc(ctx) {
             return { sessionStorage: {}, localStorage: {} };
         }
         try {
-            return await tab.view.webContents.executeJavaScript(_dumpWebStorageScript + '()');
+            return await runInAnalyzerWorld(tab.view.webContents, _dumpWebStorageScript + '()');
         } catch {
             return { sessionStorage: {}, localStorage: {} };
         }
