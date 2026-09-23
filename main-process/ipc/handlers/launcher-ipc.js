@@ -77,7 +77,6 @@ function registerLauncherIpc(ctx) {
     // ── Page Analyzer ────────────────────────────────────────────────────────
     ctx.ipcMain.handle('open-page-analyzer', async () => { ctx.createPageAnalyzerWindow(); return true; });
     ctx.ipcMain.handle('open-notes-window', async () => { ctx.createNotesWindow(); return true; });
-    ctx.ipcMain.handle('open-credentials-window', async () => { ctx.createCredentialsWindow(); return true; });
 
     ctx.ipcMain.handle('notes-embed-request', async (_, blockData) => {
         ctx.createNotesWindow();

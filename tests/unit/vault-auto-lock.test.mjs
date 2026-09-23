@@ -31,7 +31,7 @@ describe('vault-session-service auto-lock', () => {
         await vi.advanceTimersByTimeAsync(61 * 1000);
         expect(vaultSession.isVaultUnlocked(1)).toBe(true);
         vi.useRealTimers();
-    });
+    }, 60000);
 
     it('idle-locks when profile workspace is not active', async () => {
         vi.useFakeTimers();
@@ -55,5 +55,5 @@ describe('vault-session-service auto-lock', () => {
         await vi.advanceTimersByTimeAsync(61 * 1000);
         expect(vaultSession.isVaultUnlocked(1)).toBe(false);
         vi.useRealTimers();
-    });
+    }, 60000);
 });

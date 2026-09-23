@@ -3,7 +3,6 @@
 const { screen } = require('electron');
 const { registerTrustedShell } = require('../ipc/ipc-trusted-sender.js');
 const { getNoteDomainFromUrl } = require('../../note-domain-utils.js');
-const { clearCredentialsVaultSession } = require('../ipc/handlers/credentials-ipc.js');
 const profileSession = require('./profile-session.js');
 const windowStateStore = require('./window-state-store');
 
@@ -378,61 +377,6 @@ function createSubWindowsApi(d) {
         } catch { /* ignore */ }
         try {
             d.notesWindow.webContents.send('notes-context-update', { pageUrl, domain });
-        } catch { /* ignore */ }
-    }
-
-    function createCredentialsWindow() {
-        let pageUrl = '';
-        let domain = '';
-        try {
-            const active = d.tabManager?.getActiveTab?.();
-            const u = active?.url && /^https?:\/\//i.test(String(active.url)) ? String(active.url) : '';
-            pageUrl = u;
-            domain = u ? getNoteDomainFromUrl(u) : '';
-        } catch { /* ignore */ }
-        if (d.credentialsWindow && !d.credentialsWindow.isDestroyed()) {
-            d.credentialsWindow.focus();
-            try {
-                d.credentialsWindow.webContents.send('credentials-context-update', { pageUrl, domain });
-            } catch { /* ignore */ }
-            return;
-        }
-        d.credentialsWindow = _spawnTrustedToolWindow({
-            width: 960, height: 640, minWidth: 720, minHeight: 480,
-            title: 'Credentials', icon: d.iconPath,
-            webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false },
-        });
-        d.credentialsWindow.loadFile(d.getAssetPath('credentials.html'));
-        d.credentialsWindow.webContents.once('did-finish-load', () => {
-            try {
-                d.credentialsWindow.webContents.send('credentials-init', { pageUrl, domain });
-            } catch { /* ignore */ }
-        });
-        d.credentialsWindow.on('closed', () => {
-            if (!profileSession.isProfileActive()) {
-                clearCredentialsVaultSession();
-            }
-            d.credentialsWindow = null;
-            try {
-                if (d.mainWindow && !d.mainWindow.isDestroyed()) {
-                    d.mainWindow.webContents.send('credentials-toolbar-refresh');
-                }
-            } catch (_) { /* ignore */ }
-        });
-    }
-
-    function broadcastCredentialsWindowContext() {
-        if (!d.credentialsWindow || d.credentialsWindow.isDestroyed()) return;
-        let pageUrl = '';
-        let domain = '';
-        try {
-            const active = d.tabManager?.getActiveTab?.();
-            const u = active?.url && /^https?:\/\//i.test(String(active.url)) ? String(active.url) : '';
-            pageUrl = u;
-            domain = u ? getNoteDomainFromUrl(u) : '';
-        } catch { /* ignore */ }
-        try {
-            d.credentialsWindow.webContents.send('credentials-context-update', { pageUrl, domain });
         } catch { /* ignore */ }
     }
 
@@ -1010,8 +954,6 @@ function createSubWindowsApi(d) {
         createPageAnalyzerWindow,
         createNotesWindow,
         broadcastNotesWindowContext,
-        createCredentialsWindow,
-        broadcastCredentialsWindowContext,
         createIvacScoutWindow,
         sendIvacScoutLog,
         getIvacScoutContext,

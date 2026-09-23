@@ -24,7 +24,6 @@ const { registerMitmTlsResilienceIpc } = require('./handlers/mitm-tls-resilience
 const { registerExtProxyIpc } = require('./handlers/ext-proxy-ipc');
 const { registerToolbarActivityBadgeIpc } = require('./handlers/toolbar-activity-badge-ipc');
 const { registerNotesIpc } = require('./handlers/notes-ipc');
-const { registerCredentialsIpc } = require('./handlers/credentials-ipc');
 const { registerRequestEditorIpc } = require('./handlers/request-editor-ipc');
 const { registerSessionProfileIpc } = require('./handlers/session-profile-ipc');
 const { registerPageHttpLabIpc } = require('./handlers/page-http-lab-ipc');
@@ -51,7 +50,6 @@ function registerMainProcessIpc(ctx) {
     registerMitmTlsResilienceIpc(ctx);
     registerExtProxyIpc(ctx);
     registerNotesIpc(ctx);
-    registerCredentialsIpc(ctx);
     registerRequestEditorIpc(ctx);
     registerSessionProfileIpc(ctx);
     registerPageHttpLabIpc(ctx);

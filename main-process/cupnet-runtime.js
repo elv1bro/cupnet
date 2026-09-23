@@ -119,7 +119,6 @@ let compareViewerWindow        = null;
 let consoleViewerWindow        = null;
 let pageAnalyzerWindow         = null;
 let notesWindow                = null;
-let credentialsWindow          = null;
 let onboardingWindow           = null;
 let ivacScoutWindow            = null;
 const comparePair              = { left: null, right: null };
@@ -214,7 +213,6 @@ function syncAppContextSnapshot() {
     appCtx.windows.consoleViewer = consoleViewerWindow;
     appCtx.windows.pageAnalyzer = pageAnalyzerWindow;
     appCtx.windows.notes = notesWindow;
-    appCtx.windows.credentials = credentialsWindow;
     appCtx.windows.ivacScout = ivacScoutWindow;
 
     appCtx.proxy.actProxy = actProxy;
@@ -664,7 +662,6 @@ Object.defineProperties(dSub, {
     consoleViewerWindow: rwWin(() => consoleViewerWindow, (v) => { consoleViewerWindow = v; }),
     pageAnalyzerWindow: rwWin(() => pageAnalyzerWindow, (v) => { pageAnalyzerWindow = v; }),
     notesWindow: rwWin(() => notesWindow, (v) => { notesWindow = v; }),
-    credentialsWindow: rwWin(() => credentialsWindow, (v) => { credentialsWindow = v; }),
     ivacScoutWindow: rwWin(() => ivacScoutWindow, (v) => { ivacScoutWindow = v; }),
     loggingModalWindow: rwWin(() => loggingModalWindow, (v) => { loggingModalWindow = v; }),
     sessionProfileModalWindow: rwWin(() => sessionProfileModalWindow, (v) => { sessionProfileModalWindow = v; }),
@@ -748,8 +745,6 @@ const {
     createConsoleViewerWindow,
     createPageAnalyzerWindow,
     createNotesWindow,
-    createCredentialsWindow,
-    broadcastCredentialsWindowContext,
     createIvacScoutWindow,
     sendIvacScoutLog,
     getIvacScoutContext,
@@ -1238,8 +1233,6 @@ app.whenReady().then(async () => {
             case 'createSiteInfoPopoverWindow': return createSiteInfoPopoverWindow;
             case 'createOnboardingWindow': return createOnboardingWindow;
             case 'createNotesWindow': return createNotesWindow;
-            case 'createCredentialsWindow': return createCredentialsWindow;
-            case 'broadcastCredentialsWindowContext': return broadcastCredentialsWindowContext;
             case 'createPageAnalyzerWindow': return createPageAnalyzerWindow;
             case 'createProxyManagerWindow': return createProxyManagerWindow;
             case 'createRequestEditorWindow': return createRequestEditorWindow;
@@ -1298,7 +1291,6 @@ app.whenReady().then(async () => {
             case 'notifyProxyProfilesList': return notifyProxyProfilesList;
             case 'notifyProxyStatus': return notifyProxyStatus;
             case 'notesWindow': return notesWindow;
-            case 'credentialsWindow': return credentialsWindow;
             case 'pageAnalyzerWindow': return pageAnalyzerWindow;
             case 'parseFallbackProxyList': return parseFallbackProxyList;
             case 'parseProxyTemplate': return parseProxyTemplate;

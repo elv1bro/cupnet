@@ -30,7 +30,6 @@ function ipcScopeGet(k) {
         case 'applyTrafficFilters': return applyTrafficFilters;
         case 'broadcastInterceptRuleMatched': return broadcastInterceptRuleMatched;
         case 'broadcastTlsProfileChanged': return broadcastTlsProfileChanged;
-        case 'broadcastCredentialsWindowContext': return broadcastCredentialsWindowContext;
         case 'buildMenu': return buildMenu;
         case 'bundleUtils': return bundleUtils;
         case 'checkCurrentIpGeo': return checkCurrentIpGeo;
@@ -39,7 +38,6 @@ function ipcScopeGet(k) {
         case 'compareResult': return compareResult;
         case 'compareViewerWindow': return compareViewerWindow;
         case 'cookieManagerWindow': return cookieManagerWindow;
-        case 'credentialsWindow': return credentialsWindow;
         case 'connectProxyWithFailover': return connectProxyWithFailover;
         case 'connectedProfileId': return connectedProfileId;
         case 'connectedProfileName': return connectedProfileName;
@@ -55,7 +53,6 @@ function ipcScopeGet(k) {
         case 'createLoggingModalWindow': return createLoggingModalWindow;
         case 'createOnboardingWindow': return createOnboardingWindow;
         case 'createNotesWindow': return createNotesWindow;
-        case 'createCredentialsWindow': return createCredentialsWindow;
         case 'createPageAnalyzerWindow': return createPageAnalyzerWindow;
         case 'createProxyManagerWindow': return createProxyManagerWindow;
         case 'createRequestEditorWindow': return createRequestEditorWindow;

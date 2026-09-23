@@ -7,11 +7,13 @@ const uiPrefsStore = require('../../services/ui-prefs-store.js');
 const vaultSession = require('../../services/vault-session-service.js');
 const { validatePassword } = require('../../services/password-policy.js');
 const { createVaultVerifyBlob, verifyVaultPassword } = require('../../../credentials-crypto.js');
-const {
-    clearCredentialsVaultSession,
-    migratePlaintextCredentialFields,
-} = require('./credentials-ipc.js');
 const { migrateNotesToMasterKey } = require('./notes-ipc.js');
+
+// The password manager was removed; locking the session key (which still protects
+// encrypted notes) is a direct vaultSession.lockAll call.
+function clearCredentialsVaultSession() {
+    vaultSession.lockAll('profile-session-clear');
+}
 const {
     initNewProfileDataFiles,
     needsProfileSetup,
@@ -70,7 +72,6 @@ async function finishProfileLogin(ctx, { vaultId, name, password }) {
     ctx.db.updateVaultLastLogin(vaultId);
     applyProfileScopedStores(vaultId);
     try {
-        migratePlaintextCredentialFields(ctx.db, vaultId);
         migrateNotesToMasterKey(ctx.db, password);
     } catch { /* ignore */ }
     broadcastProfileSessionChanged(ctx);
