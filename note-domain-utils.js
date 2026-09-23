@@ -34,7 +34,7 @@ function matchGlobPattern(pattern, url) {
     if (pattern === '<all_urls>' || pattern === '*') return true;
     try {
         const regexStr = '^' + pattern
-            .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+            .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
             .replace(/\*/g, '.*') + '$';
         return new RegExp(regexStr, 'i').test(url);
     } catch {
@@ -54,12 +54,32 @@ function noteMatchesUrlMatch(pattern, pageUrl) {
         const u = new URL(/^https?:\/\//i.test(pageUrl) ? pageUrl : `https://${pageUrl}`);
         const full = u.href;
         const host = u.hostname.toLowerCase();
-        if (p.includes('*') || /^https?:\/\//i.test(p)) {
+        // A pattern with an explicit scheme globs against the whole URL.
+        if (/^https?:\/\//i.test(p)) {
             return matchGlobPattern(p, full);
         }
-        const ph = p.split('/')[0].toLowerCase();
-        if (!ph) return false;
-        return host === ph || host.endsWith('.' + ph);
+        // Scheme-less: split into a host part and an optional path part, and match them
+        // separately — otherwise "*.example.com" (globbed against the full URL) never
+        // matches because of the trailing path, and "example.com/admin" ignores its path
+        // and matches every page on the host. (A-162)
+        const slash = p.indexOf('/');
+        const hostPart = (slash === -1 ? p : p.slice(0, slash)).toLowerCase();
+        const pathPart = slash === -1 ? '' : p.slice(slash); // keeps the leading '/'
+        if (!hostPart) return false;
+        let hostOk;
+        if (hostPart.startsWith('*.')) {
+            const base = hostPart.slice(2);
+            hostOk = host === base || host.endsWith('.' + base);
+        } else if (hostPart.includes('*')) {
+            hostOk = matchGlobPattern(hostPart, host);
+        } else {
+            hostOk = host === hostPart || host.endsWith('.' + hostPart);
+        }
+        if (!hostOk) return false;
+        if (pathPart && pathPart !== '/') {
+            return matchGlobPattern(pathPart, u.pathname + u.search);
+        }
+        return true;
     } catch {
         return false;
     }

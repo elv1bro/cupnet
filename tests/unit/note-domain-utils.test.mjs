@@ -59,6 +59,20 @@ describe('note-domain-utils', () => {
         it('uses glob when pattern contains * or scheme', () => {
             expect(noteMatchesUrlMatch('https://*.example.com/*', 'https://api.example.com/v1')).toBe(true);
         });
+
+        it('matches a scheme-less *.host pattern against a URL with a path (A-162)', () => {
+            expect(noteMatchesUrlMatch('*.example.com', 'https://a.example.com/some/path')).toBe(true);
+            expect(noteMatchesUrlMatch('*.example.com', 'https://example.com/x')).toBe(true);
+            expect(noteMatchesUrlMatch('*.example.com', 'https://other.com/a.example.com')).toBe(false);
+        });
+
+        it('honors a path part in a scheme-less pattern (A-162)', () => {
+            // Path matching is glob-anchored (like intercept rules): "/admin" matches the
+            // exact path; use a trailing * to include subpaths.
+            expect(noteMatchesUrlMatch('example.com/admin', 'https://example.com/admin')).toBe(true);
+            expect(noteMatchesUrlMatch('example.com/admin*', 'https://example.com/admin/users')).toBe(true);
+            expect(noteMatchesUrlMatch('example.com/admin', 'https://example.com/public')).toBe(false);
+        });
     });
 
     describe('getNoteIndexDomainFromMatch', () => {
