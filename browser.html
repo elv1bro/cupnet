@@ -204,35 +204,6 @@
             <span class="tool-label">Notes</span>
         </button>
 
-        <!-- Credentials: unified fill + vault (long-press / right-click opens full vault) -->
-        <div class="cred-unified-wrap" id="cred-unified-wrap">
-            <button type="button" id="credentials-btn" class="tool-btn" style="position:relative" title="Credentials · Click to fill · Long-press or right-click for full vault · Ctrl+Alt+L">
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M8 1.5a4 4 0 0 0-4 4v2H3a1 1 0 0 0-1 1v5a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1h-1v-2a4 4 0 0 0-4-4z"/>
-                    <circle cx="8" cy="6.5" r="1.3" fill="currentColor" stroke="none"/>
-                </svg>
-                <span class="tool-label">Creds</span>
-                <span id="credentials-site-badge" class="rules-hit-badge cred-site-badge" aria-hidden="true"></span>
-            </button>
-            <div id="cred-popup" class="cred-popup hidden" role="dialog" aria-label="Credentials for this site">
-                <div id="cred-popup-unlock" class="cred-popup-section hidden">
-                    <label class="cred-popup-label" for="cred-popup-pw">Profile password</label>
-                    <div class="cred-popup-unlock-row">
-                        <input type="password" id="cred-popup-pw" class="cred-popup-input" placeholder="Profile password" autocomplete="current-password" spellcheck="false">
-                        <button type="button" id="cred-popup-unlock-btn" class="cred-popup-primary-btn">Unlock</button>
-                    </div>
-                    <p id="cred-popup-unlock-err" class="cred-popup-err hidden" role="alert"></p>
-                </div>
-                <div id="cred-popup-list" class="cred-popup-section cred-popup-list hidden" role="menu"></div>
-                <div id="cred-popup-empty" class="cred-popup-section cred-popup-empty hidden">
-                    <p class="cred-popup-empty-text">No saved credentials for this page.</p>
-                </div>
-                <div class="cred-popup-footer">
-                    <button type="button" id="cred-popup-open-vault" class="cred-popup-link-btn">Open Vault…</button>
-                </div>
-            </div>
-        </div>
-
         <!-- System Console -->
         <button id="console-btn" class="tool-btn" title="System Console · Ctrl+Shift+K">
             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -261,23 +232,6 @@
 <!-- Compact tool row under the address bar (optional placement) -->
 <div id="browser-tools-subbar" class="browser-tools-bar" data-mini-align="right" hidden aria-hidden="true">
     <div id="tool-dock-mount-subbar" class="tool-dock-mount"></div>
-</div>
-
-<!-- Credential save bar (auto-capture prompt) -->
-<div id="credential-save-bar" class="cred-save-bar hidden">
-    <div class="cred-save-inner">
-        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="width:16px;height:16px;flex-shrink:0"><path d="M8 1l5.5 3v4c0 3.6-2.4 7-5.5 8-3.1-1-5.5-4.4-5.5-8V4L8 1z"/></svg>
-        <span id="cred-save-text">Save password for <b id="cred-save-domain"></b>?</span>
-        <span id="cred-save-login" style="color:var(--text-muted);font-size:12px;margin-left:4px"></span>
-        <div id="cred-save-unlock-row" class="hidden" style="display:flex;align-items:center;gap:6px;margin-left:8px">
-            <input type="password" id="cred-save-pw" placeholder="Profile password" style="font-size:12px;padding:3px 8px;width:160px;background:var(--bg-secondary);color:var(--text);border:1px solid var(--border);border-radius:4px;">
-        </div>
-        <div style="display:flex;gap:6px;margin-left:auto">
-            <button type="button" id="cred-save-yes" class="cred-save-btn cred-save-btn-primary">Save</button>
-            <button type="button" id="cred-save-never" class="cred-save-btn">Never</button>
-            <button type="button" id="cred-save-dismiss" class="cred-save-btn cred-save-btn-dismiss" title="Dismiss">&times;</button>
-        </div>
-    </div>
 </div>
 
 <!-- Rule notification toasts -->

@@ -37,21 +37,6 @@ const consoleBtn     = document.getElementById('console-btn');
 const analyzerBtn    = document.getElementById('analyzer-btn');
 const httpLabBtn     = document.getElementById('http-lab-btn');
 const notesBtn       = document.getElementById('notes-btn');
-const credUnifiedWrap = document.getElementById('cred-unified-wrap');
-const credentialsBtn = document.getElementById('credentials-btn');
-const credentialsSiteBadge = document.getElementById('credentials-site-badge');
-const credPopup = document.getElementById('cred-popup');
-const credPopupUnlock = document.getElementById('cred-popup-unlock');
-const credPopupPw = document.getElementById('cred-popup-pw');
-const credPopupUnlockBtn = document.getElementById('cred-popup-unlock-btn');
-const credPopupUnlockErr = document.getElementById('cred-popup-unlock-err');
-const credPopupList = document.getElementById('cred-popup-list');
-const credPopupEmpty = document.getElementById('cred-popup-empty');
-const credPopupOpenVault = document.getElementById('cred-popup-open-vault');
-/** @type {Array<{ id: number, login: string, label: string }>} */
-let credFillMatchesCache = [];
-let credLongPressTimer = null;
-let credLongPressFired = false;
 
 // ─── Proxy pill refs ──────────────────────────────────────────────────────────
 const pbStatusBtn    = document.getElementById('pb-status-btn');
@@ -325,7 +310,6 @@ api.onURLUpdate((url) => {
     ssHandleUrlChange(normalized);
     hideCredPopup();
     scheduleCookiePageBadgeRefresh();
-    scheduleCredentialsToolbarRefresh();
     api.vaultSessionActivity?.();
 });
 
@@ -342,7 +326,6 @@ api.onTabWillNavigate?.((data) => {
         ssHandleUrlChange(normalized);
         hideCredPopup();
         scheduleCookiePageBadgeRefresh();
-        scheduleCredentialsToolbarRefresh();
         api.vaultSessionActivity?.();
     }
 });
@@ -690,7 +673,6 @@ function _scheduleTabUiUpdate(tabData) {
             ssHandleUrlChange(normalized);
         }
         scheduleCookiePageBadgeRefresh();
-        scheduleCredentialsToolbarRefresh();
     });
 }
 
@@ -706,7 +688,6 @@ api.onTabUrlChanged((data) => {
         ssHandleUrlChange(normalized);
         hideCredPopup();
         scheduleCookiePageBadgeRefresh();
-        scheduleCredentialsToolbarRefresh();
     }
 });
 
@@ -795,156 +776,6 @@ async function refreshCookiePageBadge() {
     }
 }
 
-// ─── Credentials toolbar: badge (matches for current site) + Fill button ───
-let _credToolbarTimer = null;
-function scheduleCredentialsToolbarRefresh() {
-    clearTimeout(_credToolbarTimer);
-    _credToolbarTimer = setTimeout(() => { void refreshCredentialsToolbarBadges(); }, 400);
-}
-
-function showCredToolbarToast(message, type) {
-    if (!message) return;
-    if (typeof showToast === 'function') {
-        const t = type || (/could not|error|fail/i.test(String(message)) ? 'error' : 'success');
-        showToast(String(message), { type: t, duration: 3200 });
-        return;
-    }
-    if (!toastContainer) return;
-    const el = document.createElement('div');
-    el.className = 'rule-toast';
-    el.style.whiteSpace = 'pre-wrap';
-    el.textContent = message;
-    toastContainer.appendChild(el);
-    setTimeout(() => {
-        el.classList.add('fade-out');
-        setTimeout(() => el.remove(), 320);
-    }, 3200);
-}
-
-function hideCredPopup() {
-    if (!credPopup) return;
-    credPopup.classList.add('hidden');
-    if (credPopupUnlockErr) {
-        credPopupUnlockErr.textContent = '';
-        credPopupUnlockErr.classList.add('hidden');
-    }
-    if (credPopupPw) credPopupPw.value = '';
-}
-
-function showCredPopupUnlock() {
-    if (!credPopup || !credPopupUnlock) return;
-    credPopup.classList.remove('hidden');
-    credPopupUnlock.classList.remove('hidden');
-    if (credPopupList) credPopupList.classList.add('hidden');
-    if (credPopupEmpty) credPopupEmpty.classList.add('hidden');
-    setTimeout(() => {
-        try {
-            credPopupPw?.focus({ preventScroll: true });
-        } catch {
-            credPopupPw?.focus();
-        }
-    }, 30);
-}
-
-function showCredPopupList(matches) {
-    if (!credPopup || !credPopupList) return;
-    credPopup.classList.remove('hidden');
-    if (credPopupUnlock) credPopupUnlock.classList.add('hidden');
-    if (credPopupEmpty) credPopupEmpty.classList.add('hidden');
-    credPopupList.classList.remove('hidden');
-    credPopupList.innerHTML = (matches || []).map((row) => {
-        const title = row.label || row.login || `Account ${row.id}`;
-        const line2 = row.label && row.login ? row.login : '';
-        return `<button type="button" class="cred-fill-menu-item" role="menuitem" data-cred-id="${row.id}">` +
-            `<span class="cred-fill-menu-title">${escapeHtmlCred(title)}</span>` +
-            (line2 ? `<span class="cred-fill-menu-sub">${escapeHtmlCred(line2)}</span>` : '') +
-            '</button>';
-    }).join('');
-    credPopupList.querySelectorAll('.cred-fill-menu-item').forEach((btn) => {
-        btn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            const id = Number(btn.getAttribute('data-cred-id'));
-            hideCredPopup();
-            try {
-                const res = await api.credentialsFillActiveTab({ credentialId: id });
-                if (res?.success) {
-                    showCredToolbarToast('Filled login and password from vault.', 'success');
-                } else {
-                    showCredToolbarToast(res?.error || 'Could not fill this page.', 'error');
-                }
-            } catch (err) {
-                showCredToolbarToast(String(err?.message || err), 'error');
-            }
-        });
-    });
-}
-
-function showCredPopupEmpty() {
-    if (!credPopup) return;
-    credPopup.classList.remove('hidden');
-    if (credPopupUnlock) credPopupUnlock.classList.add('hidden');
-    if (credPopupList) {
-        credPopupList.classList.add('hidden');
-        credPopupList.innerHTML = '';
-    }
-    if (credPopupEmpty) credPopupEmpty.classList.remove('hidden');
-}
-
-function escapeHtmlCred(s) {
-    return String(s ?? '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/"/g, '&quot;');
-}
-
-async function refreshCredentialsToolbarBadges() {
-    if (!credentialsSiteBadge || !credUnifiedWrap) return;
-    credFillMatchesCache = [];
-    const active = tabs.find(t => t.isActive);
-    const url = active?.url || '';
-    if (!active || ssIsHomePage(url) || !/^https?:\/\//i.test(url)) {
-        credentialsSiteBadge.style.display = 'none';
-        credentialsSiteBadge.textContent = '';
-        credentialsSiteBadge.classList.remove('cred-badge-locked', 'cred-badge-unlocked');
-        return;
-    }
-    if (!api.credentialsSiteMatchCount) {
-        credentialsSiteBadge.style.display = 'none';
-        credentialsSiteBadge.classList.remove('cred-badge-locked', 'cred-badge-unlocked');
-        return;
-    }
-    try {
-        const r = await api.credentialsSiteMatchCount({ pageUrl: url });
-        if (!r || !r.exists) {
-            credentialsSiteBadge.style.display = 'none';
-            credentialsSiteBadge.textContent = '';
-            credentialsSiteBadge.classList.remove('cred-badge-locked', 'cred-badge-unlocked');
-            return;
-        }
-        const n = Number(r.count) || 0;
-        const unlocked = r.unlocked === true;
-        if (n > 0) {
-            credentialsSiteBadge.textContent = n > 99 ? '99+' : String(n);
-            credentialsSiteBadge.style.display = 'inline-flex';
-            credentialsSiteBadge.classList.toggle('cred-badge-unlocked', unlocked);
-            credentialsSiteBadge.classList.toggle('cred-badge-locked', !unlocked);
-            if (unlocked && api.credentialsSiteMatches) {
-                try {
-                    const m = await api.credentialsSiteMatches({ pageUrl: url });
-                    if (Array.isArray(m?.matches)) credFillMatchesCache = m.matches;
-                } catch { /* ignore */ }
-            }
-        } else {
-            credentialsSiteBadge.style.display = 'none';
-            credentialsSiteBadge.textContent = '';
-            credentialsSiteBadge.classList.remove('cred-badge-locked', 'cred-badge-unlocked');
-        }
-    } catch {
-        credentialsSiteBadge.style.display = 'none';
-        credentialsSiteBadge.classList.remove('cred-badge-locked', 'cred-badge-unlocked');
-    }
-}
-
 // Main process took a scheduled screenshot → play flash + reset countdown
 api.onScreenshotTaken(() => {
     ssFlash();
@@ -1023,209 +854,6 @@ if (notesBtn) {
         api.openNotesWindow();
     });
 }
-
-async function handleCredentialsToolbarPrimaryClick(ev) {
-    ev.stopPropagation();
-    if (credLongPressFired) {
-        credLongPressFired = false;
-        return;
-    }
-    if (!api.openCredentialsWindow) return;
-
-    const active = tabs.find(t => t.isActive);
-    const url = active?.url || '';
-
-    // New tab / internal pages: open vault (no toast blocking the button).
-    if (!active || ssIsHomePage(url) || !/^https?:\/\//i.test(url)) {
-        hideCredPopup();
-        api.openCredentialsWindow();
-        return;
-    }
-
-    if (!api.credentialsSiteMatchCount) {
-        api.openCredentialsWindow();
-        return;
-    }
-
-    let r;
-    try {
-        r = await api.credentialsSiteMatchCount({ pageUrl: url });
-    } catch (e) {
-        showCredToolbarToast(String(e?.message || e), 'error');
-        return;
-    }
-    if (!r?.exists) {
-        api.openCredentialsWindow();
-        return;
-    }
-    let count = Number(r.count) || 0;
-    let unlocked = r.unlocked === true;
-
-    if (!unlocked) {
-        try {
-            const st = await api.credentialsVaultStatus?.();
-            unlocked = st?.unlocked === true;
-        } catch { /* ignore */ }
-    }
-
-    if (!unlocked) {
-        hideCredPopup();
-        api.openCredentialsWindow();
-        return;
-    }
-
-    const popupVisible = credPopup && !credPopup.classList.contains('hidden');
-    if (popupVisible) hideCredPopup();
-
-    if (count === 0) {
-        showCredPopupEmpty();
-        return;
-    }
-    if (count === 1) {
-        try {
-            const res = await api.credentialsFillActiveTab({});
-            if (res?.success) {
-                showCredToolbarToast('Filled login and password from vault.', 'success');
-            } else {
-                showCredToolbarToast(res?.error || 'Could not fill this page.', 'error');
-            }
-        } catch (e) {
-            showCredToolbarToast(String(e?.message || e), 'error');
-        }
-        return;
-    }
-    let matches = credFillMatchesCache;
-    if (matches.length !== count && api.credentialsSiteMatches) {
-        try {
-            const m = await api.credentialsSiteMatches({ pageUrl: url });
-            if (Array.isArray(m?.matches)) matches = m.matches;
-        } catch { /* use cache */ }
-    }
-    showCredPopupList(matches);
-}
-
-async function submitCredPopupUnlock() {
-    const active = tabs.find(t => t.isActive);
-    const url = active?.url || '';
-    if (!credPopupPw || !api.credentialsUnlockAndGetMatches) return;
-    const pw = credPopupPw.value;
-    if (credPopupUnlockErr) {
-        credPopupUnlockErr.textContent = '';
-        credPopupUnlockErr.classList.add('hidden');
-    }
-    try {
-        const r = await api.credentialsUnlockAndGetMatches({ password: pw, pageUrl: url });
-        if (!r?.success) {
-            if (credPopupUnlockErr) {
-                credPopupUnlockErr.textContent = r?.error || 'Unlock failed';
-                credPopupUnlockErr.classList.remove('hidden');
-            }
-            return;
-        }
-        credPopupPw.value = '';
-        void scheduleCredentialsToolbarRefresh();
-        const matches = Array.isArray(r.matches) ? r.matches : [];
-        if (matches.length === 0) {
-            showCredPopupEmpty();
-            return;
-        }
-        if (matches.length === 1) {
-            hideCredPopup();
-            try {
-                const res = await api.credentialsFillActiveTab({ credentialId: matches[0].id });
-                if (res?.success) {
-                    showCredToolbarToast('Filled login and password from vault.', 'success');
-                } else {
-                    showCredToolbarToast(res?.error || 'Could not fill this page.', 'error');
-                }
-            } catch (e) {
-                showCredToolbarToast(String(e?.message || e), 'error');
-            }
-            return;
-        }
-        showCredPopupList(matches);
-    } catch (e) {
-        if (credPopupUnlockErr) {
-            credPopupUnlockErr.textContent = String(e?.message || e);
-            credPopupUnlockErr.classList.remove('hidden');
-        }
-    }
-}
-
-if (credentialsBtn) {
-    credentialsBtn.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0) return;
-        credLongPressFired = false;
-        clearTimeout(credLongPressTimer);
-        credLongPressTimer = setTimeout(() => {
-            credLongPressTimer = null;
-            credLongPressFired = true;
-            hideCredPopup();
-            api.openCredentialsWindow();
-        }, 500);
-    });
-    credentialsBtn.addEventListener('pointerup', () => {
-        clearTimeout(credLongPressTimer);
-        credLongPressTimer = null;
-    });
-    credentialsBtn.addEventListener('pointerleave', () => {
-        clearTimeout(credLongPressTimer);
-        credLongPressTimer = null;
-    });
-    credentialsBtn.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        hideCredPopup();
-        api.openCredentialsWindow();
-    });
-    credentialsBtn.addEventListener('click', (ev) => void handleCredentialsToolbarPrimaryClick(ev));
-}
-
-if (credPopupUnlockBtn) {
-    credPopupUnlockBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        void submitCredPopupUnlock();
-    });
-}
-if (credPopupPw) {
-    credPopupPw.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            void submitCredPopupUnlock();
-        }
-    });
-    credPopupPw.addEventListener('click', (e) => e.stopPropagation());
-}
-if (credPopupOpenVault) {
-    credPopupOpenVault.addEventListener('click', (e) => {
-        e.stopPropagation();
-        hideCredPopup();
-        api.openCredentialsWindow();
-    });
-}
-if (credPopup) {
-    credPopup.addEventListener('click', (e) => e.stopPropagation());
-}
-document.addEventListener('click', (e) => {
-    if (credUnifiedWrap && credUnifiedWrap.contains(e.target)) return;
-    hideCredPopup();
-});
-
-if (api.onCredentialsToolbarRefresh) {
-    api.onCredentialsToolbarRefresh(() => scheduleCredentialsToolbarRefresh());
-}
-
-// ─── Credential save bar (auto-capture prompt) ───────────────────────────────
-const credSaveBar     = document.getElementById('credential-save-bar');
-const credSaveDomain  = document.getElementById('cred-save-domain');
-const credSaveLogin   = document.getElementById('cred-save-login');
-const credSaveUnlockRow = document.getElementById('cred-save-unlock-row');
-const credSavePw      = document.getElementById('cred-save-pw');
-const credSaveYes     = document.getElementById('cred-save-yes');
-const credSaveNever   = document.getElementById('cred-save-never');
-const credSaveDismiss = document.getElementById('cred-save-dismiss');
-
-/** Extra space above the tab WebContentsView when the credential save bar is visible. */
-const CRED_SAVE_BAR_RESERVE_PX = 36;
 /** Height reserved above the status bar when the resources drawer is open (must match CSS max-height). */
 const RESOURCES_DRAWER_HEIGHT_PX = 260;
 const PROFILE_DRAWER_HEIGHT_PX = 240;
@@ -1252,7 +880,8 @@ let _toolbarToolsPlacement = 'subbar';
 let _toolbarToolsMiniAlign = 'right';
 
 function getCredSaveBarReservePx() {
-    return credSaveBar && !credSaveBar.classList.contains('hidden') ? CRED_SAVE_BAR_RESERVE_PX : 0;
+    // Credential save bar removed with the password manager; no chrome is reserved for it.
+    return 0;
 }
 
 function getResourcesDrawerReservePx() {
@@ -1358,76 +987,6 @@ api.onBrowserSettingsUpdated?.((data) => {
 });
 
 void initToolbarToolsPlacement();
-
-function hideCredSaveBar() {
-    if (credSaveBar) credSaveBar.classList.add('hidden');
-    if (credSavePw) credSavePw.value = '';
-    void applyChromeLayoutReserve();
-}
-
-if (api.onShowCredentialSaveBar) {
-    api.onShowCredentialSaveBar((data) => {
-        if (!credSaveBar) return;
-        credSaveBar.classList.remove('hidden');
-        if (credSaveDomain) credSaveDomain.textContent = data.domain || '';
-        if (credSaveLogin) credSaveLogin.textContent = data.login ? `(${data.login})` : '';
-        if (data.needsUnlock) {
-            if (credSaveUnlockRow) { credSaveUnlockRow.classList.remove('hidden'); credSaveUnlockRow.style.display = 'flex'; }
-            if (credSaveYes) credSaveYes.textContent = 'Unlock profile & Save';
-            setTimeout(() => credSavePw?.focus(), 60);
-        } else {
-            if (credSaveUnlockRow) { credSaveUnlockRow.classList.add('hidden'); credSaveUnlockRow.style.display = 'none'; }
-            if (credSaveYes) credSaveYes.textContent = 'Save';
-        }
-        void applyChromeLayoutReserve();
-    });
-}
-
-if (credSaveYes) {
-    credSaveYes.addEventListener('click', async () => {
-        const needsUnlock = credSaveUnlockRow && !credSaveUnlockRow.classList.contains('hidden');
-        if (needsUnlock) {
-            const pw = credSavePw?.value || '';
-            if (!pw) { credSavePw?.focus(); return; }
-            const res = await api.credentialCaptureUnlockAndSave(pw);
-            if (res.success) {
-                hideCredSaveBar();
-                if (typeof showToast === 'function') showToast('Password saved to vault', { type: 'success' });
-            } else {
-                if (typeof showToast === 'function') showToast(res.error || 'Failed', { type: 'error' });
-            }
-        } else {
-            const res = await api.credentialCaptureConfirm();
-            if (res.success) {
-                hideCredSaveBar();
-                if (typeof showToast === 'function') showToast('Password saved to vault', { type: 'success' });
-            } else {
-                if (typeof showToast === 'function') showToast(res.error || 'Failed', { type: 'error' });
-            }
-        }
-    });
-}
-
-if (credSaveNever) {
-    credSaveNever.addEventListener('click', async () => {
-        await api.credentialCaptureDismiss();
-        hideCredSaveBar();
-    });
-}
-
-if (credSaveDismiss) {
-    credSaveDismiss.addEventListener('click', async () => {
-        await api.credentialCaptureDismiss();
-        hideCredSaveBar();
-    });
-}
-
-if (credSavePw) {
-    credSavePw.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') credSaveYes?.click();
-        if (e.key === 'Escape') { hideCredSaveBar(); api.credentialCaptureDismiss(); }
-    });
-}
 
 // ─── Proxy pill + environment colors ──────────────────────────────────────────
 const pbDetail = document.getElementById('pb-detail');
@@ -1745,7 +1304,6 @@ async function _confirmProfileSwitch() {
         }
         _setProfileDrawerOpen(false);
         await refreshProfileStatusLabel();
-        scheduleCredentialsToolbarRefresh();
         if (typeof showToast === 'function') {
             showToast(`Switched to ${r.name || 'profile'}`, { type: 'success', duration: 2500 });
         }
@@ -2017,14 +1575,12 @@ _bindProfileDrawer();
 api.onProfileSessionChanged?.((st) => {
     applyProfileSessionUi(st);
     if (_profileDrawerOpen) void _loadProfileDrawerList();
-    scheduleCredentialsToolbarRefresh();
 });
 
 api.onCredentialsLocked?.(() => {
     if (typeof showToast === 'function') {
         showToast('Vault locked due to inactivity', { type: 'info', duration: 5000 });
     }
-    scheduleCredentialsToolbarRefresh();
 });
 
 api.onMitmReadyChanged?.((info) => {
@@ -2095,7 +1651,6 @@ function _onActiveTabChanged(tabData) {
     if (!_lastProxyInfo?.active) _fetchDirectIpGeo();
     hideCredPopup();
     scheduleCookiePageBadgeRefresh();
-    scheduleCredentialsToolbarRefresh();
 }
 
 // Click opens Proxy Manager
@@ -2265,7 +1820,7 @@ document.addEventListener('mousemove', () => {
 });
 
 // ─── Init: fetch current tabs ─────────────────────────────────────────────────
-api.getTabs().then(td => { renderTabs(td); _onActiveTabChanged(td); scheduleCookiePageBadgeRefresh(); scheduleCredentialsToolbarRefresh(); }).catch(() => {});
+api.getTabs().then(td => { renderTabs(td); _onActiveTabChanged(td); scheduleCookiePageBadgeRefresh(); }).catch(() => {});
 
 // ─── Window switcher overlay (Ctrl+` from main) ─────────────────────────────
 const winSwitcherOverlay = document.getElementById('win-switcher-overlay');
@@ -2847,8 +2402,6 @@ function getCommandPaletteCommands() {
         { label: 'Open System Console', category: 'Tools', keywords: 'stdout stderr debug', shortcut: '', run: () => api.openConsoleViewer() },
         { label: 'Open Page Analyzer', category: 'Tools', keywords: 'forms captcha meta', shortcut: '', run: () => api.openPageAnalyzer() },
         { label: 'Open Notes', category: 'Tools', keywords: 'scratchpad quill', shortcut: '', run: () => api.openNotesWindow() },
-        { label: 'Open Credentials vault', category: 'Tools', keywords: 'passwords secrets vault', shortcut: 'Ctrl+Alt+L', run: () => api.openCredentialsWindow() },
-        { label: 'Autofill credentials (active tab)', category: 'Tools', keywords: 'fill login password', shortcut: '', run: () => { void api.credentialsFillActiveTab?.({}).catch(() => {}); } },
         { label: 'Open Compare viewer', category: 'Tools', keywords: 'diff two requests', shortcut: '', run: () => api.openCompareViewer() },
         { label: 'Open DevTools (active tab)', category: 'Tools', keywords: 'inspector chromium', shortcut: '', run: () => api.openDevTools() },
         { label: 'Open API Scout', category: 'Tools', keywords: 'ivac har dump', shortcut: '', run: () => api.openIvacScout() },

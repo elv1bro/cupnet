@@ -237,7 +237,6 @@ function createMainWindowApi(d) {
             }
             if (event === 'tab-url-changed' || event === 'tab-switched') {
                 sub.broadcastNotesWindowContext?.();
-                sub.broadcastCredentialsWindowContext?.();
             }
         });
 
@@ -308,7 +307,6 @@ function createMainWindowApi(d) {
                         void injectPageHttpLab(tab?.view?.webContents, { importForms: true }, tabId);
                     }},
                     { label: 'Notes', accelerator: 'CmdOrCtrl+Shift+N', click: () => sub.createNotesWindow() },
-                    { label: 'Credentials', accelerator: 'CmdOrCtrl+Alt+L', click: () => sub.createCredentialsWindow() },
                     { label: 'API Scout', click: () => sub.createIvacScoutWindow() },
                     { type: 'separator' },
                     { label: 'Enable Logging', type: 'checkbox', checked: d.isLoggingEnabled,
