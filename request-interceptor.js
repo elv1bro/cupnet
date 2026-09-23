@@ -683,6 +683,7 @@ async function planMitmIntercept(opts, planOptions) {
         }
 
         if (rule.type === 'mock') {
+            _bumpRuleHit(rule);
             const mimeType = rule.params.mimeType || 'text/plain';
             const statusCode = rule.params.status || 200;
             let bodyBase64;
@@ -957,7 +958,7 @@ function matchesPattern(pattern, url) {
     if (pattern === '<all_urls>' || pattern === '*') return true;
     try {
         const regexStr = '^' + pattern
-            .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+            .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
             .replace(/\*/g, '.*') + '$';
         return new RegExp(regexStr, 'i').test(url);
     } catch {

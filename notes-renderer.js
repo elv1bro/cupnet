@@ -399,18 +399,24 @@ function clearAutosaveTimer() {
     }
 }
 
+// An encrypted -> plaintext transition (was encrypted, Encrypt now unchecked) must never
+// be auto-saved: that would silently decrypt the note to plaintext on disk. (A-166)
+function isEncToPlainTransition() {
+    return !!(baseline && baseline.enc && !el.chkEnc.checked);
+}
+
 function scheduleAutosave() {
     clearAutosaveTimer();
-    if (_loading || pendingLocked || el.chkEnc.checked) return;
+    if (_loading || pendingLocked || el.chkEnc.checked || isEncToPlainTransition()) return;
     autosaveTimer = setTimeout(() => {
         autosaveTimer = null;
-        if (!isDirtyNow() || _loading || pendingLocked || el.chkEnc.checked) return;
+        if (!isDirtyNow() || _loading || pendingLocked || el.chkEnc.checked || isEncToPlainTransition()) return;
         void doAutosave();
     }, AUTOSAVE_MS);
 }
 
 async function doAutosave() {
-    if (_loading || pendingLocked || el.chkEnc.checked) return;
+    if (_loading || pendingLocked || el.chkEnc.checked || isEncToPlainTransition()) return;
     if (!isDirtyNow()) return;
     setSaveStatus('saving');
     setErr('');
@@ -795,9 +801,11 @@ async function saveNoteInternal() {
     const is_pinned = currentId ? pinnedState : pendingPinned;
 
     if (isEnc) {
-        const p1 = el.pw1.value.trim();
+        // Do NOT trim here: the unlock path (tryUnlock) uses the raw value, so trimming
+        // on save made passwords with leading/trailing spaces impossible to unlock. (A-340)
+        const p1 = el.pw1.value;
         let password;
-        if (p1) {
+        if (p1 && p1.trim()) {
             password = p1;
         } else if (currentId && pwdCache.get(currentId)) {
             password = pwdCache.get(currentId);
@@ -818,6 +826,12 @@ async function saveNoteInternal() {
         await loadList();
         await selectNoteSkipDirtyCheck(id);
         return;
+    }
+
+    // Manual save of a previously-encrypted note with Encrypt now off: confirm before
+    // writing it as plaintext (autosave is already blocked for this transition). (A-166)
+    if (baseline && baseline.enc && !confirm('Remove encryption from this note? It will be stored as plain text.')) {
+        throw new Error('Save cancelled');
     }
 
     const id = await api.notesSave({
@@ -949,6 +963,12 @@ async function duplicateNote() {
     clearAutosaveTimer();
     setErr('');
     try {
+        // Flush unsaved edits first, otherwise the duplicate is made from the stale
+        // stored row (encrypted notes never autosave). (A-164)
+        if (isDirtyNow()) {
+            try { await saveNoteInternal(); }
+            catch (e) { setErr(formatNotesIpcError(e)); return; }
+        }
         const row = await notesGetForSelect(currentId);
         if (!row || row.locked) {
             setErr('Cannot duplicate a locked note');
