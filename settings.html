@@ -489,11 +489,11 @@
                 <!-- Security -->
                 <section id="sp-tab-security" class="sp-tab-body">
                     <div class="sp-tab-stack">
-                        <p class="sp-tab-intro"><strong>Security</strong> Vault auto-lock, traffic log protection, and credential export policy.</p>
+                        <p class="sp-tab-intro"><strong>Security</strong> Profile unlock and auto-lock. The unlock password protects encrypted notes and stored proxy credentials.</p>
                         <div class="grid-2">
-                            <div class="card" data-sp-search="vault auto lock idle timeout profile credentials">
-                                <h3 class="card-title">Vault auto-lock</h3>
-                                <p class="card-title-desc">Lock profile and vault after idle time (also on screen lock / sleep)</p>
+                            <div class="card" data-sp-search="vault auto lock idle timeout profile">
+                                <h3 class="card-title">Profile auto-lock</h3>
+                                <p class="card-title-desc">Lock the profile after idle time (also on screen lock / sleep)</p>
                                 <label class="sp-field-label" for="sp-vault-autolock">Auto-lock after idle</label>
                                 <select id="sp-vault-autolock" class="sp-input">
                                     <option value="0">Never</option>
@@ -503,31 +503,6 @@
                                     <option value="60">60 minutes</option>
                                 </select>
                                 <p class="hint" style="margin-top:10px">Mouse activity in the main window resets the timer. Changes save automatically.</p>
-                            </div>
-                            <div class="card" data-sp-search="traffic log encrypt redact capture sensitive headers cookies">
-                                <h3 class="card-title">Traffic log at rest</h3>
-                                <p class="card-title-desc">How request/response bodies and headers are stored in the database</p>
-                                <label class="sp-field-label" for="sp-traffic-log-encryption">Storage mode</label>
-                                <select id="sp-traffic-log-encryption" class="sp-input">
-                                    <option value="encrypt">Encrypt (when vault unlocked)</option>
-                                    <option value="redact">Redact sensitive fields</option>
-                                    <option value="off">Plaintext (not recommended)</option>
-                                </select>
-                                <label class="sp-toggle" for="sp-traffic-log-raw" style="margin-top:14px">
-                                    <input type="checkbox" id="sp-traffic-log-raw" class="sp-toggle-input">
-                                    <span class="sp-toggle-track" aria-hidden="true"></span>
-                                    <span class="sp-toggle-label">Raw capture (disable redaction/encryption for debugging)</span>
-                                </label>
-                            </div>
-                            <div class="card" data-sp-search="export credentials plaintext vault json csv">
-                                <h3 class="card-title">Credential export</h3>
-                                <p class="card-title-desc">Default export is encrypted <code>.cupnet-vault-export</code></p>
-                                <label class="sp-toggle" for="sp-allow-plaintext-export">
-                                    <input type="checkbox" id="sp-allow-plaintext-export" class="sp-toggle-input">
-                                    <span class="sp-toggle-track" aria-hidden="true"></span>
-                                    <span class="sp-toggle-label">Allow plaintext JSON/CSV export (advanced)</span>
-                                </label>
-                                <p class="hint" style="margin-top:10px">When enabled, JSON/CSV export still requires a confirmation dialog before writing plaintext passwords.</p>
                             </div>
                         </div>
                     </div>

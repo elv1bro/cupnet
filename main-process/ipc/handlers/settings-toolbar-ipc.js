@@ -107,9 +107,6 @@ function registerSettingsToolbarIpc(ctx) {
             toolbarToolsPlacement: ctx.settingsStore.normalizeToolbarToolsPlacement(s),
             toolbarToolsMiniAlign: ctx.settingsStore.normalizeToolbarToolsMiniAlign(s),
             vaultAutoLockMinutes: ctx.settingsStore.normalizeVaultAutoLockMinutes(s),
-            trafficLogEncryption: ctx.settingsStore.normalizeTrafficLogEncryption(s),
-            trafficLogRawMode: s.trafficLogRawMode === true,
-            allowPlaintextExport: s.allowPlaintextExport === true,
         };
     });
 
@@ -121,13 +118,6 @@ function registerSettingsToolbarIpc(ctx) {
                 vaultAutoLockMinutes: o.vaultAutoLockMinutes,
             });
         }
-        if (o.trafficLogEncryption != null) {
-            s.trafficLogEncryption = ctx.settingsStore.normalizeTrafficLogEncryption({
-                trafficLogEncryption: o.trafficLogEncryption,
-            });
-        }
-        if (o.trafficLogRawMode != null) s.trafficLogRawMode = !!o.trafficLogRawMode;
-        if (o.allowPlaintextExport != null) s.allowPlaintextExport = !!o.allowPlaintextExport;
         ctx.saveSettings(s);
         try {
             const vaultSession = require('../../services/vault-session-service.js');
@@ -137,9 +127,6 @@ function registerSettingsToolbarIpc(ctx) {
         return {
             success: true,
             vaultAutoLockMinutes: s.vaultAutoLockMinutes,
-            trafficLogEncryption: s.trafficLogEncryption,
-            trafficLogRawMode: s.trafficLogRawMode,
-            allowPlaintextExport: s.allowPlaintextExport,
         };
     });
 

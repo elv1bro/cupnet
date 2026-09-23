@@ -66,9 +66,6 @@ const spToolbarToolsPlacement = document.getElementById('sp-toolbar-tools-placem
 const spToolbarToolsMiniAlign = document.getElementById('sp-toolbar-tools-mini-align');
 const spToolbarMiniAlignWrap = document.getElementById('sp-toolbar-mini-align-wrap');
 const spVaultAutolock = document.getElementById('sp-vault-autolock');
-const spTrafficLogEncryption = document.getElementById('sp-traffic-log-encryption');
-const spTrafficLogRaw = document.getElementById('sp-traffic-log-raw');
-const spAllowPlaintextExport = document.getElementById('sp-allow-plaintext-export');
 
 let activeTab = 'general';
 let perfTimer = null;
@@ -848,9 +845,6 @@ function scheduleSecuritySave() {
         try {
             await api.saveSecuritySettings({
                 vaultAutoLockMinutes: Number(spVaultAutolock?.value ?? 15),
-                trafficLogEncryption: spTrafficLogEncryption?.value || 'encrypt',
-                trafficLogRawMode: !!spTrafficLogRaw?.checked,
-                allowPlaintextExport: !!spAllowPlaintextExport?.checked,
             });
             endSave(true);
         } catch (e) {
@@ -862,9 +856,6 @@ function scheduleSecuritySave() {
 }
 
 spVaultAutolock?.addEventListener('change', scheduleSecuritySave);
-spTrafficLogEncryption?.addEventListener('change', scheduleSecuritySave);
-spTrafficLogRaw?.addEventListener('change', scheduleSecuritySave);
-spAllowPlaintextExport?.addEventListener('change', scheduleSecuritySave);
 
 spCamModeGroup?.addEventListener('change', (e) => {
     const t = e.target;
@@ -1092,11 +1083,6 @@ async function init() {
             const mins = Number(data?.vaultAutoLockMinutes ?? 15);
             spVaultAutolock.value = String(Number.isFinite(mins) ? mins : 15);
         }
-        if (spTrafficLogEncryption) {
-            spTrafficLogEncryption.value = data?.trafficLogEncryption || 'encrypt';
-        }
-        if (spTrafficLogRaw) spTrafficLogRaw.checked = data?.trafficLogRawMode === true;
-        if (spAllowPlaintextExport) spAllowPlaintextExport.checked = data?.allowPlaintextExport === true;
         switchTab('general');
         if (activeTab === 'devices') refreshCameraDevices();
         applySettingsHubFilter();

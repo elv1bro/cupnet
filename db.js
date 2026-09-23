@@ -1029,21 +1029,10 @@ function _extractHost(url) {
 }
 
 function _prepareLogEntry(entry) {
-    try {
-        const { prepareRequestLogFields } = require('./main-process/services/traffic-log-crypto.js');
-        return { ...entry, ...prepareRequestLogFields(entry) };
-    } catch {
-        // Fail closed: if preparation (encryption/redaction) throws we must not persist
-        // request/response headers or bodies in plaintext. Keep metadata, drop sensitive fields.
-        return {
-            ...entry,
-            requestHeaders: null, responseHeaders: null, requestBody: null, responseBody: null,
-            request_headers: null, response_headers: null, request_body: null, response_body: null,
-            request_headers_enc: null, response_headers_enc: null,
-            request_body_enc: null, response_body_enc: null,
-            log_encrypted: 0,
-        };
-    }
+    // Traffic-log at-rest encryption/redaction was removed: request/response headers and
+    // bodies are persisted as plaintext. insertRequest writes null to the legacy *_enc
+    // columns and 0 to log_encrypted.
+    return entry || {};
 }
 
 function insertRequest(sessionId, tabId, entry) {
@@ -1138,12 +1127,7 @@ function countRequests(filters = {}) {
 function getRequest(id) {
     const row = db.prepare(`SELECT * FROM requests WHERE id = ?`).get(id);
     if (!row) return null;
-    try {
-        const { hydrateRequestLogRow } = require('./main-process/services/traffic-log-crypto.js');
-        return hydrateRequestLogRow(row);
-    } catch {
-        return row;
-    }
+    return row;
 }
 
 function queryRequestsFull(filters = {}, limit = 100, offset = 0) {
@@ -1157,12 +1141,7 @@ function queryRequestsFull(filters = {}, limit = 100, offset = 0) {
     if (filters.url)       { conditions.push('url LIKE ?');      params.push(`%${filters.url}%`); }
     const sql = `SELECT * FROM requests WHERE ${conditions.join(' AND ')} ORDER BY id DESC LIMIT ? OFFSET ?`;
     const rows = db.prepare(sql).all(...params, limit, offset);
-    try {
-        const { hydrateRequestLogRow } = require('./main-process/services/traffic-log-crypto.js');
-        return rows.map((row) => hydrateRequestLogRow(row));
-    } catch {
-        return rows;
-    }
+    return rows;
 }
 
 function ftsSearch(query, sessionId, limit = 100, offset = 0) {

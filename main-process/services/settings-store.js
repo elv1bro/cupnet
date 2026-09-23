@@ -79,10 +79,6 @@ const SETTINGS_DEFAULTS = {
     toolbarToolsMiniAlign: 'right',
     /** Auto-lock vault/profile after N minutes idle (0 = disabled). */
     vaultAutoLockMinutes: 15,
-    /** Traffic log at rest: off | redact | encrypt */
-    trafficLogEncryption: 'encrypt',
-    /** When true, store full request/response bodies without redaction/encryption. */
-    trafficLogRawMode: false,
     /** Allow exporting credentials vault as plaintext JSON/CSV. */
     allowPlaintextExport: false,
 };
@@ -278,8 +274,6 @@ function materializeSettingsFromRaw(raw) {
     delete merged.capmonster;
     delete merged.currentProxy;
     merged.vaultAutoLockMinutes = normalizeVaultAutoLockMinutes(merged);
-    merged.trafficLogEncryption = normalizeTrafficLogEncryption(merged);
-    merged.trafficLogRawMode = merged.trafficLogRawMode === true;
     merged.allowPlaintextExport = merged.allowPlaintextExport === true;
     return merged;
 }
@@ -288,12 +282,6 @@ function normalizeVaultAutoLockMinutes(raw) {
     const n = Number(raw?.vaultAutoLockMinutes ?? SETTINGS_DEFAULTS.vaultAutoLockMinutes);
     if (!Number.isFinite(n) || n < 0) return SETTINGS_DEFAULTS.vaultAutoLockMinutes;
     return Math.min(480, Math.floor(n));
-}
-
-function normalizeTrafficLogEncryption(raw) {
-    const mode = String(raw?.trafficLogEncryption || SETTINGS_DEFAULTS.trafficLogEncryption).toLowerCase();
-    if (mode === 'off' || mode === 'redact' || mode === 'encrypt') return mode;
-    return SETTINGS_DEFAULTS.trafficLogEncryption;
 }
 
 /**
@@ -432,7 +420,6 @@ module.exports = {
     normalizeToolbarToolsPlacement,
     normalizeToolbarToolsMiniAlign,
     normalizeVaultAutoLockMinutes,
-    normalizeTrafficLogEncryption,
     buildFactoryResetSettings,
     exportSettingsSafe,
     mergeImportedSettings,
