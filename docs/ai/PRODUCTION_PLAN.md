@@ -20,6 +20,14 @@ Baseline: HEAD `48e1d46`; the working tree has large uncommitted security-harden
 
 ## Phase 0 — Stabilize the WIP (do first; unblocks everything)
 
+> **Owner decision 2026-09-23 (scope of the WIP):**
+> - **Remove the in-app password manager / credentials vault** (credentials.html, credentials-renderer.js, credentials-crypto.js, credentials-vault-crypto.js, credentials-ipc.js, autofill, `credentials`/`credentials_fts` usage). Instead, point users at an **encrypted note** for storing secrets (notes CN02 encryption stays).
+> - **Keep the Profile Gate login screen, simplified to a single profile** with a password prompt (profile-gate.html/renderer, profile-gate-window, profile-session, vault-session-service kept but reduced to one profile; drop multi-profile switching UI).
+> - **Remove traffic-log encryption** (traffic-log-crypto.js and the `*_enc`/`log_encrypted` write/read paths). This also deletes the whole "encrypted rows lose headers on export" bug class (A-023 and the HAR/bundle/editor/session-copy data-loss findings become moot).
+> - Dead-code cleanup (electron-app/app.js, legacy ffi-napi worker, repo junk): **deferred** for now.
+>
+> This is a large, WIP-entangled refactor; do it as its own focused effort (separate commits), not mixed with the non-WIP bug fixes. When it lands, the password prompt still protects note decryption and proxy-secret access; the single gate replaces per-profile vaults.
+
 The uncommitted refactor left the app in a broken intermediate state. These are correctness/security regressions, not new features.
 
 1. **Restore the in-tab pages the preload split broke.** Settings (and any other internal page loaded as a tab) lost its APIs when they were removed from `preload-view.js`. Either (a) route internal pages (`settings.html`, `new-tab.html`, etc.) through a dedicated internal preload that keeps the needed APIs and is gated to `file:` internal URLs, or (b) open Settings as a shell `BrowserWindow` with `preload.js` instead of as a tab. See AUDIT `settings`/`ipc-contract` findings.
@@ -102,4 +110,5 @@ Also: the Go worker always calls `ApplyHTTP2` with the repo string, overriding a
 - 2026-09-23: **CI unblocked** — swapped `node:test`→`vitest` in 6 unit files (A-058/A-388); `vitest run` now collects them (32 files / 179 tests green, was 25/140 with 7 failing files). +39 previously-dead tests now run.
 - 2026-09-23: Fixed A-039 (API Scout `_cupnetRoot` ReferenceError) and A-051 (editing a disabled intercept rule silently re-enabled it). Full unit + integration + Go suites green.
 - 2026-09-23: Fixed 4 self-contained non-WIP bugs — A-049 (Request Editor dropped a typed query on Enter), A-046 (Page Analyzer form.method XSS), A-059 (setUserAgent cleared Accept-Language), A-043 (notes autosave re-bound to old note on fast switch). Committed on branch audit/2026-09-fixes. WIP-entangled findings (preload-view leak, vault migration, encrypted-row exports, cert model) held pending the WIP/modules discussion.
+- 2026-09-23: More non-WIP fixes committed on audit/2026-09-fixes — request-editor (A-353 history alias, A-355 multipart Content-Type, A-356 import format), console-viewer (A-219 wrap tail, A-222 DB-session latest), rules (A-181 arrow keys, A-182 slow-network template, A-183 modifyHeaders preserve). Full suite green (vitest 32/179, go ok, integration 13/13). ~17 findings fixed so far.
 - **Next up (needs owner direction — see the report):** Phase 0 WIP stabilization and the security cluster touch the uncommitted refactor; the Electron 34→44 upgrade is large. Confirm scope before those.
