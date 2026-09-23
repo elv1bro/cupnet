@@ -866,9 +866,16 @@ function initSortable() {
         animation: 150,
         ghostClass: 'sortable-ghost',
         onEnd: async () => {
+            // Reordering only sees visible rows, so a filtered list would renumber a subset
+            // and collide with hidden rules' priorities. Require an unfiltered list. (A-180)
+            if (getFilteredRules().length !== allRules.length) {
+                showMsg('Clear filters to reorder', true);
+                await loadRules();
+                return;
+            }
             let currentGroup = 'Default';
             const orderedIds = [];
-            const groupUpdates = [];
+            const groupMoves = [];
             for (const el of [...list.children]) {
                 if (el.classList.contains('rule-group-head')) {
                     currentGroup = el.dataset.group || 'Default';
@@ -881,18 +888,21 @@ function initSortable() {
                     if (rule) {
                         const prevG = (rule.group_name || '').trim() || 'Default';
                         if (prevG !== currentGroup) {
-                            const gNorm = currentGroup === 'Default' ? null : currentGroup;
-                            groupUpdates.push({ ...rule, group_name: gNorm });
+                            groupMoves.push({ rid, gNorm: currentGroup === 'Default' ? null : currentGroup });
                         }
                     }
                 }
             }
             const n = orderedIds.length;
             const pairs = orderedIds.map((id, i) => ({ id, priority: (n - i) * 100 }));
+            const prioMap = new Map(pairs.map((p) => [p.id, p.priority]));
             try {
                 await api.reorderInterceptRules(pairs);
-                for (const gr of groupUpdates) {
-                    const res = await api.saveInterceptRule(gr);
+                for (const mv of groupMoves) {
+                    const rule = allRules.find((r) => r.id === mv.rid);
+                    if (!rule) continue;
+                    // Include the NEW priority, otherwise saving the group move reverts it. (A-180)
+                    const res = await api.saveInterceptRule({ ...rule, group_name: mv.gNorm, priority: prioMap.get(mv.rid) });
                     if (res && res.error) showMsg(res.error, true);
                 }
                 await loadRules();
