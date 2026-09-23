@@ -37,10 +37,28 @@ function truncateExportText(text) {
     return s.slice(0, max) + '\n… [truncated by CupNet HAR export max chars]';
 }
 
-/** Strip `__b64__:` prefix and return pure base64 string, or null if body is plain text. */
+/**
+ * Parse a stored binary-body marker into { b64, mime }, or null for a plain-text body.
+ *   MITM: `__b64__:DATA`            -> { b64: DATA, mime: null }
+ *   CDP:  `<base64|mime|TYPE|DATA>` -> { b64: DATA, mime: TYPE }
+ * (Same format the log viewer / diff-utils decode; previously only __b64__ was handled,
+ *  so CDP bodies were exported as garbage text. A-079)
+ */
 function _parseB64Prefix(body) {
     if (!body || typeof body !== 'string') return null;
-    if (body.startsWith('__b64__:')) return body.slice(8);
+    if (body.startsWith('__b64__:')) return { b64: body.slice(8), mime: null };
+    if (body.startsWith('<base64|')) {
+        const inner = body.slice(8, body.endsWith('>') ? body.length - 1 : body.length);
+        const sep = inner.indexOf('|');
+        if (sep === -1) return null;
+        const qualifier = inner.slice(0, sep);
+        const rest = inner.slice(sep + 1);
+        if (qualifier === 'mime') {
+            const sep2 = rest.indexOf('|');
+            if (sep2 === -1) return null;
+            return { b64: rest.slice(sep2 + 1), mime: rest.slice(0, sep2) };
+        }
+    }
     return null;
 }
 
@@ -92,10 +110,12 @@ function buildHarEntryFromRow(full, wsLimit) {
     const respBodyRaw = full.response_body || null;
     const reqB64 = _parseB64Prefix(reqBodyRaw);
     const respB64 = _parseB64Prefix(respBodyRaw);
-    const reqBodyText = reqB64 ? truncateExportText(reqB64) : (reqBodyRaw ? truncateExportText(reqBodyRaw) : null);
-    const respBodyText = respB64 ? truncateExportText(respB64) : (respBodyRaw ? truncateExportText(respBodyRaw) : '');
-    const reqBodySize = reqB64 ? Math.ceil(reqB64.length * 3 / 4) : (reqBodyRaw ? reqBodyRaw.length : -1);
-    const respBodySize = respB64 ? Math.ceil(respB64.length * 3 / 4) : (respBodyRaw ? respBodyRaw.length : -1);
+    // Base64 bodies are passed through untruncated (truncateExportText would append text or
+    // cut mid-quad and corrupt the base64). (A-079)
+    const reqBodyText = reqB64 ? reqB64.b64 : (reqBodyRaw ? truncateExportText(reqBodyRaw) : null);
+    const respBodyText = respB64 ? respB64.b64 : (respBodyRaw ? truncateExportText(respBodyRaw) : '');
+    const reqBodySize = reqB64 ? Math.ceil(reqB64.b64.length * 3 / 4) : (reqBodyRaw ? reqBodyRaw.length : -1);
+    const respBodySize = respB64 ? Math.ceil(respB64.b64.length * 3 / 4) : (respBodyRaw ? respBodyRaw.length : -1);
     const entry = {
         startedDateTime,
         time: full.duration_ms || -1,
@@ -109,7 +129,7 @@ function buildHarEntryFromRow(full, wsLimit) {
             headersSize: -1,
             bodySize: reqBodySize,
             postData: reqBodyRaw
-                ? { mimeType: getContentType(reqHeaders), text: reqBodyText, ...(reqB64 ? { encoding: 'base64' } : {}) }
+                ? { mimeType: getContentType(reqHeaders) || reqB64?.mime || 'application/octet-stream', text: reqBodyText, ...(reqB64 ? { encoding: 'base64' } : {}) }
                 : undefined
         },
         response: {
@@ -120,7 +140,7 @@ function buildHarEntryFromRow(full, wsLimit) {
             cookies: [],
             content: {
                 size: respBodySize,
-                mimeType: getContentType(respHeaders) || 'application/octet-stream',
+                mimeType: getContentType(respHeaders) || respB64?.mime || 'application/octet-stream',
                 text: respBodyText,
                 ...(respB64 ? { encoding: 'base64' } : {}),
             },
