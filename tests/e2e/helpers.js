@@ -381,6 +381,10 @@ async function closeAllExcept(electronApp, keepPage) {
             `closeAllExcept: could not find main shell (browser.html) among ${pages.length} window(s)`
         );
     }
+    // Close one at a time with a small settle between each. Slamming many
+    // BrowserWindows closed within the same tick can momentarily race the
+    // main-process `window-all-closed` handler (observed under Electron 44),
+    // so we pace the closes and never touch `keep`.
     for (const p of pages) {
         if (p === keep) continue;
         try {
@@ -388,6 +392,7 @@ async function closeAllExcept(electronApp, keepPage) {
         } catch {
             /* ignore */
         }
+        await new Promise((r) => setTimeout(r, 60));
     }
 }
 

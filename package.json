@@ -47,10 +47,10 @@
     "npm": ">=10"
   },
   "devDependencies": {
-    "@electron/rebuild": "^3.6.0",
+    "@electron/rebuild": "^4.2.0",
     "@playwright/test": "^1.63.0",
     "cross-env": "^7.0.3",
-    "electron": "^34.0.0",
+    "electron": "^44.4.5",
     "electron-builder": "^24.13.0",
     "icon-gen": "^5.0.0",
     "node-addon-api": "^8.3.0",
@@ -71,7 +71,7 @@
     "@codemirror/view": "^6.43.13",
     "archiver": "^7.0.1",
     "argon2": "^0.41.1",
-    "better-sqlite3": "^12.8.0",
+    "better-sqlite3": "^13.0.3",
     "codemirror": "^6.0.2",
     "form-data": "^4.0.6",
     "jsondiffpatch": "^0.7.6",
