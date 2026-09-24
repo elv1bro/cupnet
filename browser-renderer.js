@@ -308,7 +308,6 @@ api.onURLUpdate((url) => {
     const normalized = _normalizeToolbarUrl(url);
     _setToolbarUrlIfChanged(normalized, { respectFocus: true });
     ssHandleUrlChange(normalized);
-    hideCredPopup();
     scheduleCookiePageBadgeRefresh();
     api.vaultSessionActivity?.();
 });
@@ -324,7 +323,6 @@ api.onTabWillNavigate?.((data) => {
         _urlInputDirty = false;
         _setToolbarUrl(normalized, { forceInput: true, blur: true });
         ssHandleUrlChange(normalized);
-        hideCredPopup();
         scheduleCookiePageBadgeRefresh();
         api.vaultSessionActivity?.();
     }
@@ -686,7 +684,6 @@ api.onTabUrlChanged((data) => {
         const normalized = _normalizeToolbarUrl(data.url);
         _setToolbarUrlIfChanged(normalized, { respectFocus: true });
         ssHandleUrlChange(normalized);
-        hideCredPopup();
         scheduleCookiePageBadgeRefresh();
     }
 });
@@ -1650,7 +1647,6 @@ function _onActiveTabChanged(tabData) {
         }).catch(() => {});
     }
     if (!_lastProxyInfo?.active) _fetchDirectIpGeo();
-    hideCredPopup();
     scheduleCookiePageBadgeRefresh();
 }
 
