@@ -4,10 +4,15 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 
 const ERROR_PAGE_PATH = path.join(__dirname, '../../error-page.html');
+const ERROR_PAGE_HREF = pathToFileURL(ERROR_PAGE_PATH).href;
 
+// A-318: match only our own error-page file URL (optionally with a query/hash),
+// not any remote URL that merely contains the substring 'error-page.html'.
+// Case-insensitive so it still matches when the caller lower-cases the URL first.
 function isTabErrorPageUrl(url) {
     const u = String(url || '');
-    return u.includes('error-page.html');
+    if (!/^file:/i.test(u)) return false;
+    return u.split(/[?#]/)[0].toLowerCase() === ERROR_PAGE_HREF.toLowerCase();
 }
 
 function shouldSkipErrorPageForUrl(url) {
