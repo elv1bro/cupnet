@@ -198,6 +198,11 @@ function openPasswordScreen(p) {
     if (passwordName) {
         passwordName.textContent = displayName(p);
     }
+    // Single-profile gate: there is no picker to go back to, so hide the link.
+    if (backFromPassword) {
+        const multi = (gateState?.profiles?.length || 0) > 1;
+        backFromPassword.classList.toggle('hidden', !multi);
+    }
     showScreen('password');
     setTimeout(() => passwordInput?.focus(), 80);
 }
@@ -278,6 +283,16 @@ async function initGate() {
     })) || { mode: 'setup', profiles: [] };
 
     legacyVaultId = gateState.legacyVaultId ?? null;
+
+    // Single-profile gate: when exactly one ready profile exists, skip the
+    // "Select your profile" grid and take the user straight to the unlock
+    // screen for that profile.
+    const profiles = gateState.profiles || [];
+    if (gateState.mode === 'signin' && profiles.length === 1 && !profileNeedsSetup(profiles[0])) {
+        openPasswordScreen(profiles[0]);
+        return;
+    }
+
     showScreen('picker');
     renderPicker();
     maybeAutoOpenSetup();
