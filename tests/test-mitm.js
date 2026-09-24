@@ -214,7 +214,7 @@ test('generateCAAsync: each call generates fresh keys', async () => {
 // ─── MitmProxy instantiation (no network) ────────────────────────────────────
 // Helper: create proxy and immediately terminate the worker process so tests don't hang
 function mkProxy(opts) {
-    const p = new MitmProxy({ ...opts, workerPath: path.join(__dirname, '../azure-tls-worker.js') });
+    const p = new MitmProxy({ ...opts });
     clearInterval(p._statTimer); // stop stats timer
     if (p.worker?.proc) {
         p.worker.proc.stdout.destroy();

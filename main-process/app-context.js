@@ -24,7 +24,6 @@ function createAppContext() {
             consoleViewer: null,
             pageAnalyzer: null,
             notes: null,
-            ivacScout: null,
         },
         proxy: {
             actProxy: '',

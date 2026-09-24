@@ -54,16 +54,6 @@ jobs:
             npm i --foreground-scripts
           fi
 
-      - name: AzureTLS native rebuild + smoke (if azuretls installed)
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          if [ -d azuretls/node_modules/@2060.io/ref-napi ]; then
-            npm run check:native
-          else
-            echo 'skip check:native: no azuretls/node_modules/@2060.io/ref-napi (install azuretls deps locally or in a prior step)'
-          fi
-
       - name: Install deps (Windows)
         if: runner.os == 'Windows'
         shell: powershell
@@ -104,7 +94,6 @@ jobs:
         if: runner.os == 'macOS'
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          CUPNET_SKIP_AFTERPACK_AZURETLS_NATIVE: '1'
         run: npm run dist:mac:local
 
       - name: Build Windows
@@ -112,14 +101,12 @@ jobs:
         shell: powershell
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          CUPNET_SKIP_AFTERPACK_AZURETLS_NATIVE: '1'
         run: npm run dist:win:local
 
       - name: Build Linux
         if: runner.os == 'Linux'
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-          CUPNET_SKIP_AFTERPACK_AZURETLS_NATIVE: '1'
         run: npm run dist:linux:local
 
       - name: Upload artifacts

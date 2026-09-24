@@ -1895,7 +1895,6 @@ const WIN_SWITCHER_KIND_LABELS = {
     notes: 'Notes',
     'request-editor': 'Request editor',
     'compare-viewer': 'Compare viewer',
-    'ivac-scout': 'IVAC scout',
     'logging-modal': 'Logging',
     unknown: 'Window',
 };
@@ -1964,7 +1963,6 @@ const WIN_SWITCHER_ICONS = {
     notes: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h8a1 1 0 0 1 1 1v10l-2.5-2H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z"/><path d="M5 6h6M5 9h4"/></svg>',
     'request-editor': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h12"/><path d="M2 8h7"/><path d="M2 12h5"/><path d="M11 10l3 2-3 2"/></svg>',
     'compare-viewer': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="3" width="5" height="10" rx="1"/><rect x="9" y="3" width="5" height="10" rx="1"/></svg>',
-    'ivac-scout': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="5" cy="8" r="2.5"/><circle cx="11" cy="8" r="2.5"/><path d="M7.5 8h1"/></svg>',
     'logging-modal': '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.5"/><path d="M8 4.5v4"/><path d="M8 11v.5"/></svg>',
     unknown: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="2" y="3" width="12" height="10" rx="1"/><path d="M2 5.5h12"/></svg>',
 };
@@ -2405,7 +2403,6 @@ function getCommandPaletteCommands() {
         { label: 'Open Notes', category: 'Tools', keywords: 'scratchpad quill', shortcut: '', run: () => api.openNotesWindow() },
         { label: 'Open Compare viewer', category: 'Tools', keywords: 'diff two requests', shortcut: '', run: () => api.openCompareViewer() },
         { label: 'Open DevTools (active tab)', category: 'Tools', keywords: 'inspector chromium', shortcut: '', run: () => api.openDevTools() },
-        { label: 'Open API Scout', category: 'Tools', keywords: 'ivac har dump', shortcut: '', run: () => api.openIvacScout() },
         { label: 'Toggle session recording', category: 'Logging', keywords: 'logging pause resume', shortcut: '', run: () => logToggleBtn?.click() },
         { label: 'Show my public IP', category: 'Proxy', keywords: 'wan address geoip', shortcut: '', run: async () => {
             try {

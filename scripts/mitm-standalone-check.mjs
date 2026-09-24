@@ -84,7 +84,6 @@ async function startProxy() {
     const mitm = new MitmProxy({
         port: PORT,
         browser: 'chrome_120',
-        workerPath: path.join(root, 'azure-tls-worker.js'),
     });
     await mitm.start();
     return mitm;

@@ -29,7 +29,6 @@ function mkProxy() {
     const p = new MitmProxy({
         port: 19977,
         browser: 'chrome_120',
-        workerPath: path.join(__dirname, '../azure-tls-worker.js'),
     });
     clearInterval(p._statTimer);
     if (p.worker?.proc) {

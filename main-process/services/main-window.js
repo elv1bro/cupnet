@@ -294,6 +294,7 @@ function createMainWindowApi(d) {
                     { label: 'Launch Profile…', click: () => sub.createSessionProfileModalWindow?.() },
                     { type: 'separator' },
                     { label: 'Proxy Manager', accelerator: 'CmdOrCtrl+P', click: () => sub.createProxyManagerWindow() },
+                    { label: 'Browser Identity…', accelerator: 'CmdOrCtrl+Alt+I', click: () => sub.createIdentityManagerWindow?.() },
                     { label: 'Network Activity', accelerator: 'CmdOrCtrl+Shift+L', click: () => sub.createLogViewerWindow() },
                     { label: 'Cookie Manager', accelerator: 'CmdOrCtrl+Alt+C', click: () => sub.createCookieManagerWindow(d.tabManager?.getActiveTabId()) },
                     { label: 'DNS Manager', accelerator: 'CmdOrCtrl+Shift+M', click: () => sub.createDnsManagerWindow() },
@@ -307,7 +308,6 @@ function createMainWindowApi(d) {
                         void injectPageHttpLab(tab?.view?.webContents, { importForms: true }, tabId);
                     }},
                     { label: 'Notes', accelerator: 'CmdOrCtrl+Shift+N', click: () => sub.createNotesWindow() },
-                    { label: 'API Scout', click: () => sub.createIvacScoutWindow() },
                     { type: 'separator' },
                     { label: 'Enable Logging', type: 'checkbox', checked: d.isLoggingEnabled,
                       click: (item) => {

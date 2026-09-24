@@ -125,7 +125,6 @@ function createProxyMitmService(d) {
         const mitm = new d.MitmProxy({
             port: networkPolicy.mitmPort,
             browser: 'chrome_120',
-            workerPath: d.pathModule.join(d.cupnetRoot, 'azure-tls-worker.js'),
             onGatewayError: (info) => {
                 const mw = d.getMainWindow?.();
                 if (!mw || mw.isDestroyed()) return;

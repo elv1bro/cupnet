@@ -358,16 +358,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onProfileSessionChanged:   (cb)      => sub('profile-session-changed', cb),
     onCredentialsLocked:       (cb)      => sub('credentials-locked', cb),
 
-    // ── API Scout ─────────────────────────────────────────────────────────────
-    openIvacScout:           ()        => ipcRenderer.invoke('open-ivac-scout'),
-    getIvacScoutContext:     ()        => ipcRenderer.invoke('get-ivac-scout-context'),
-    runIvacScout:            (opts)    => ipcRenderer.invoke('run-ivac-scout', opts),
-    stopIvacScout:           ()        => ipcRenderer.invoke('stop-ivac-scout'),
-    openIvacDumpFolder:      ()        => ipcRenderer.invoke('open-ivac-dump-folder'),
-    onIvacScoutLog:          (cb)      => sub('ivac-scout-log', cb),
-    onIvacScoutDone:         (cb)      => sub('ivac-scout-done', cb),
-    onIvacScoutState:        (cb)      => sub('ivac-scout-state', cb),
-
     // ── External Proxy Ports ────────────────────────────────────────────────────
     extProxyList:            ()        => ipcRenderer.invoke('ext-proxy:list'),
     extProxyCreate:          (opts)    => ipcRenderer.invoke('ext-proxy:create', opts),
@@ -390,6 +380,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deleteProxyProfileById:  (id)      => ipcRenderer.invoke('delete-proxy-profile', id),
     onProxyProfilesList:     (cb)      => sub('proxy-profiles-list', cb),
     onProxyStatusChanged:    (cb)      => sub('proxy-status-changed', cb),
+
+    // ── Browser Identity (UA / client hints / TLS / timezone / language) ───────
+    openIdentityManager:     ()        => ipcRenderer.invoke('open-identity-manager'),
+    getIdentity:             ()        => ipcRenderer.invoke('identity:get'),
+    setIdentity:             (patch)   => ipcRenderer.invoke('identity:set', patch),
+    previewIdentity:         (s)       => ipcRenderer.invoke('identity:preview', s),
+    onIdentityChanged:       (cb)      => sub('identity-changed', cb),
 
     // ── Session profile / launch profile ─────────────────────────────────────
     openSessionProfileModal:  ()        => ipcRenderer.invoke('open-session-profile-modal'),

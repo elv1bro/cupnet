@@ -307,7 +307,6 @@ function registerMiscIpc(ctx) {
         if (ctx.compareViewerWindow && !ctx.compareViewerWindow.isDestroyed() && win.id === ctx.compareViewerWindow.id) return 'compare-viewer';
         if (ctx.pageAnalyzerWindow && !ctx.pageAnalyzerWindow.isDestroyed() && win.id === ctx.pageAnalyzerWindow.id) return 'page-analyzer';
         if (ctx.notesWindow && !ctx.notesWindow.isDestroyed() && win.id === ctx.notesWindow.id) return 'notes';
-        if (ctx.ivacScoutWindow && !ctx.ivacScoutWindow.isDestroyed() && win.id === ctx.ivacScoutWindow.id) return 'ivac-scout';
         if (ctx.siteInfoPopoverWindow && !ctx.siteInfoPopoverWindow.isDestroyed() && win.id === ctx.siteInfoPopoverWindow.id) {
             return 'site-info-popover';
         }

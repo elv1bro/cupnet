@@ -12,15 +12,6 @@
     "postinstall": "node scripts/rebuild-electron-native.js",
     "install:from-lock": "npm install --ignore-scripts && npm run rebuild",
     "rebuild:arm64": "electron-rebuild -f -o better-sqlite3 --arch arm64",
-    "rebuild:azuretls": "node scripts/azuretls-electron-rebuild.js",
-    "rebuild:azuretls:arm64": "CUPNET_ELECTRON_REBUILD_ARCH=arm64 node scripts/azuretls-electron-rebuild.js",
-    "rebuild:azuretls:x64": "CUPNET_ELECTRON_REBUILD_ARCH=x64 node scripts/azuretls-electron-rebuild.js",
-    "rebuild:azuretls:universal": "node scripts/azuretls-lipo-universal.js",
-    "rebuild:azuretls:node": "node scripts/azuretls-node-rebuild.js",
-    "smoke:azuretls-native": "node scripts/smoke-azuretls-native.js",
-    "check:native": "npm run rebuild:azuretls && npm run smoke:azuretls-native",
-    "check:native:universal": "npm run rebuild:azuretls:universal && CUPNET_SMOKE_REQUIRE_UNIVERSAL=1 npm run smoke:azuretls-native",
-    "setup:ffi": "cd ../greengo22 && npm install",
     "test": "bash tests/run-all.sh",
     "test:unit": "vitest run",
     "test:go": "cd azuretls-go && GO111MODULE=on GOTOOLCHAIN=auto go test -count=1 ./...",
@@ -39,13 +30,13 @@
     "test:db": "ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/Electron.app/Contents/MacOS/Electron tests/test-db.js",
     "chaos:proxy-sim": "node scripts/chaos-proxy-sim.js",
     "pack": "cross-env USE_HARD_LINKS=false electron-builder --dir",
-    "dist": "node scripts/ensure-cupnet-node.mjs && cross-env USE_HARD_LINKS=false electron-builder",
-    "dist:mac": "node scripts/ensure-cupnet-node.mjs && cross-env USE_HARD_LINKS=false electron-builder --mac dmg",
-    "dist:mac:local": "node scripts/ensure-cupnet-node.mjs && cross-env USE_HARD_LINKS=false electron-builder --mac dmg --publish never",
-    "dist:win": "node scripts/ensure-cupnet-node.mjs && cross-env USE_HARD_LINKS=false electron-builder --win nsis",
-    "dist:win:local": "node scripts/ensure-cupnet-node.mjs && cross-env USE_HARD_LINKS=false electron-builder --win nsis --publish never",
-    "dist:linux": "node scripts/ensure-cupnet-node.mjs && cross-env USE_HARD_LINKS=false electron-builder --linux AppImage",
-    "dist:linux:local": "node scripts/ensure-cupnet-node.mjs && cross-env USE_HARD_LINKS=false electron-builder --linux AppImage --publish never",
+    "dist": "cross-env USE_HARD_LINKS=false electron-builder",
+    "dist:mac": "cross-env USE_HARD_LINKS=false electron-builder --mac dmg",
+    "dist:mac:local": "cross-env USE_HARD_LINKS=false electron-builder --mac dmg --publish never",
+    "dist:win": "cross-env USE_HARD_LINKS=false electron-builder --win nsis",
+    "dist:win:local": "cross-env USE_HARD_LINKS=false electron-builder --win nsis --publish never",
+    "dist:linux": "cross-env USE_HARD_LINKS=false electron-builder --linux AppImage",
+    "dist:linux:local": "cross-env USE_HARD_LINKS=false electron-builder --linux AppImage --publish never",
     "icons:build": "icon-gen -i img.png -o icons --ico --ico-name icon --icns --icns-name icon -r && node -e \"require('fs').copyFileSync('img.png','icons/icon.png')\""
   },
   "author": "Elvi",
@@ -92,23 +83,13 @@
     "tldts": "^7.4.14",
     "turndown": "^7.2.4"
   },
-  "optionalDependencies": {
-    "@2060.io/ffi-napi": "4.0.9",
-    "@2060.io/ref-napi": "3.0.6",
-    "ref-struct-di": "^1.1.1"
-  },
   "build": {
-    "afterPack": "./scripts/after-pack-azuretls-worker-native.cjs",
     "appId": "com.cup.net",
     "publish": [
       "github"
     ],
     "asar": true,
     "asarUnpack": [
-      "azure-tls-worker.js",
-      "network-policy.js",
-      "sys-log.js",
-      "azuretls/**",
       "node_modules/**"
     ],
     "files": [
@@ -118,13 +99,6 @@
       "!azuretls/node_modules/.cache"
     ],
     "extraResources": [
-      {
-        "from": "resources/cupnet-node",
-        "to": "cupnet-node",
-        "filter": [
-          "**/*"
-        ]
-      },
       {
         "from": "azuretls-go/bin",
         "to": "azuretls-go/bin",

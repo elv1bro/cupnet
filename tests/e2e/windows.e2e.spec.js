@@ -105,11 +105,6 @@ test('w8) Page Analyzer — новое окно, закрытие', async () => 
     if (extra) await extra.close().catch(() => {});
 });
 
-test('w9) API Scout (IVAC) — новое окно, закрытие', async () => {
-    const extra = await openSubWindowExpectNew(electronApp, mainWindow, 'openIvacScout');
-    if (extra) await extra.close().catch(() => {});
-});
-
 test('w11) Compare Viewer — новое окно, закрытие', async () => {
     const extra = await openSubWindowExpectNew(electronApp, mainWindow, 'openCompareViewer');
     if (extra) await extra.close().catch(() => {});

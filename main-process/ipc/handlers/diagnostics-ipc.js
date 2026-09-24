@@ -31,25 +31,6 @@ function collectCupNetChildProcessMetrics(ctx) {
             });
         }
     } catch { /* ignore */ }
-    try {
-        const ivp = ctx.ivacScoutProcess;
-        if (ivp && ivp.pid && !ivp.killed) {
-            const pid = ivp.pid;
-            const st = getPidMetrics(pid);
-            rows.push({
-                pid,
-                type: 'CupNet',
-                name: 'IVAC Scout helper',
-                cpuPercent: st?.cpuPercent ?? 0,
-                cpuMs: 0,
-                memWorkingSet: st?.memWorkingSetBytes ?? 0,
-                memPrivate: st?.memPrivateBytes ?? 0,
-                memShared: 0,
-                sandboxed: false,
-                cupnet: true,
-            });
-        }
-    } catch { /* ignore */ }
     return rows;
 }
 

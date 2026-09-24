@@ -6,8 +6,7 @@
  * Architecture:
  *   Chromium (--proxy-server=127.0.0.1:PORT)
  *     ↓  HTTP/HTTPS upstream → AzureTLS via Go worker binary (azuretls-go/bin/azuretls-worker-*).
- *        Electron: child-process Go worker only; Node azure-tls-worker.js (FFI) is disabled unless
- *        CUPNET_ALLOW_LEGACY_NODE_WORKER=1. Plain Node tests may use in-process (CUPNET_AZURETLS_IN_PROCESS).
+ *        Upstream TLS always goes through the Go worker binary (the legacy Node/FFI worker was removed).
  *     ↓  HTTPS CONNECT → MITM:
  *         1. Accept CONNECT, reply 200
  *         2. Terminate Chromium's TLS with fake domain cert (Electron trusts it)
@@ -17,8 +16,9 @@
  * All outbound requests go through AzureTLS (TLS fingerprint = Chrome/Firefox profile).
  * Supports upstream proxy chaining.
  *
- * Outbound User-Agent: CupNet/Electron tokens stripped in _doRequest (see user-agent-utils
- * applyOutboundUserAgentToMitmHeaders) before the worker — not via Chromium session.
+ * Outbound User-Agent / client hints: rewritten in _doRequest from the active browser identity
+ * (identity-headers.js applyIdentityToOutboundHeaders; engine mode = sanitize only via
+ * user-agent-utils) before the worker — not via Chromium session.
  */
 
 const net              = require('net');
@@ -84,7 +84,7 @@ function _nativeHttpsFallback(url, method, headers, orderedHeaders, body, bodyBa
         req.end();
     });
 }
-const { applyOutboundUserAgentToMitmHeaders } = require('./user-agent-utils');
+const { applyIdentityToOutboundHeaders } = require('./identity-headers');
 const {
     generateCA,
     generateCAAsync,
@@ -131,46 +131,12 @@ const fs = require('fs');
 const path = require('path');
 
 /**
- * Дочерний worker: в Electron 21+ V8 memory cage не даёт загрузить ffi-napi/ref-napi
- * (в т.ч. под ELECTRON_RUN_AS_NODE) — нужен отдельный процесс на обычном Node и
- * аддоны, собранные под его ABI: npm run rebuild:azuretls:node
- *
- * Явно in-process: CUPNET_AZURETLS_IN_PROCESS=1 (только если рантайм без cage / эксперимент).
+ * Апстрим TLS обслуживает единственный бэкенд — вынесенный Go worker-процесс
+ * (azuretls-go/bin/azuretls-worker-*), общающийся по NDJSON через stdio.
+ * Legacy Node/ffi worker удалён.
  */
-function mitmUseChildAzureTlsWorker() {
-    if (process.env.CUPNET_AZURETLS_CHILD_PROCESS === '1') return true;
-    if (process.env.CUPNET_AZURETLS_IN_PROCESS === '1') return false;
-    if (process.versions?.electron) return true;
-    return false;
-}
-
-function createMitmAzureBackend(workerPath) {
-    if (mitmUseChildAzureTlsWorker()) return new AzureTLSWorker(workerPath);
-    try {
-        const { AzureTLSInProcess } = require('./azure-tls-inprocess');
-        return new AzureTLSInProcess();
-    } catch (err) {
-        const msg = err?.message || String(err);
-        const archHint = /incompatible architecture|wrong ELF class|invalid ELF header/i.test(msg);
-        const cageHint = /External buffers are not allowed/i.test(msg);
-        console.error(
-            '[mitm] AzureTLS in-process: не удалось загрузить нативный модуль (ref-napi / ffi-napi).\n' +
-            (cageHint
-                ? '  Electron 21+ (V8 memory cage): ffi-napi в процессе Electron не поддерживается.\n' +
-                  '  Уберите CUPNET_AZURETLS_IN_PROCESS — по умолчанию используется worker на системном Node;\n' +
-                  '  затем: npm run rebuild:azuretls:node (аддоны под тот node, что в PATH у воркера).\n'
-                : '  Для worker на системном Node аддоны должны быть собраны под ABI этого Node:\n' +
-                  '    npm run rebuild:azuretls:node\n') +
-            (archHint
-                ? '  Скорее всего *.node собран под другую архитектуру (например x86_64, а нужен arm64 для Apple Silicon).\n' +
-                  '  Из корня репозитория: npm run rebuild:azuretls (на darwin+AS по умолчанию --arch arm64).\n' +
-                  '  Явно: npm run rebuild:azuretls:arm64 или rebuild:azuretls:x64\n'
-                : '') +
-            '  Детали:',
-            msg
-        );
-        throw err;
-    }
+function createMitmAzureBackend() {
+    return new AzureTLSWorker();
 }
 
 function _parseDebugMitm() {
@@ -228,37 +194,9 @@ function _fmtBody(body, bodyBase64, label, maxLen = 4096) {
     return `  [${label}]\n${text}\n`;
 }
 
-/** Node из extraResources (релиз) или `resources/cupnet-node` в корне репозитория (dev после ensure). */
-function _resolveCupnetBundledNodeBinary() {
-    const name = process.platform === 'win32' ? 'node.exe' : 'node';
-    if (process.resourcesPath) {
-        const packaged = path.join(process.resourcesPath, 'cupnet-node', name);
-        if (fs.existsSync(packaged)) return packaged;
-    }
-    const dev = path.join(__dirname, 'resources', 'cupnet-node', name);
-    if (fs.existsSync(dev)) return dev;
-    return null;
-}
 
 /**
- * Обычный Node (cupnet-node / PATH) не умеет require из `app.asar` — только из `app.asar.unpacked`.
- * Electron с ELECTRON_RUN_AS_NODE по-прежнему может грузить скрипт из asar.
- */
-function _resolveAzureTlsWorkerScriptForExternalNode(scriptPath) {
-    if (!scriptPath || typeof scriptPath !== 'string') return scriptPath;
-    const norm = path.normalize(scriptPath);
-    const asarInfix = `${path.sep}app.asar${path.sep}`;
-    const i = norm.indexOf(asarInfix);
-    if (i < 0) return scriptPath;
-    const unpacked = norm.slice(0, i) + `${path.sep}app.asar.unpacked${path.sep}` + norm.slice(i + asarInfix.length);
-    try {
-        if (fs.existsSync(unpacked)) return unpacked;
-    } catch { /* ignore */ }
-    return scriptPath;
-}
-
-/**
- * Native Go upstream worker (azuretls-go): no ffi-napi; same NDJSON protocol as azure-tls-worker.js.
+ * Native Go upstream worker (azuretls-go): NDJSON protocol over stdio.
  * Built with `npm run build:go`. Packaged under `resources/azuretls-go/bin/` (see package.json extraResources).
  */
 function _goWorkerBinaryName() {
@@ -292,20 +230,14 @@ function _resolveGoWorkerBinary() {
     return null;
 }
 
-/**
- * True when the Go worker binary should be used: file exists and env does not force Node.
- * CUPNET_USE_GO_WORKER=0 / CUPNET_USE_NODE_WORKER=1 skip Go (then Node FFI path runs only if CUPNET_ALLOW_LEGACY_NODE_WORKER=1).
- */
+/** True when the Go worker binary is available (the only supported upstream worker). */
 function mitmPreferGoWorkerBinary() {
-    if (process.env.CUPNET_USE_GO_WORKER === '0') return false;
-    if (process.env.CUPNET_USE_NODE_WORKER === '1') return false;
     return _resolveGoWorkerBinary() != null;
 }
 
 class AzureTLSWorker extends EventEmitter {
-    constructor(workerPath) {
+    constructor() {
         super();
-        this.workerPath = workerPath;
         this.pending    = new Map();
         this.ready      = false;
         this._stopped   = false;
@@ -321,89 +253,40 @@ class AzureTLSWorker extends EventEmitter {
     }
 
     _start() {
-        // Воркер грузит ffi-napi: в Electron 21+ тот же бинарник с ELECTRON_RUN_AS_NODE
-        // всё равно под memory cage → «External buffers are not allowed».
-        // Нужен обычный Node (PATH или CUPNET_AZURETLS_NODE / resources/cupnet-node/node).
-        const isPackaged = process.defaultApp === false && !process.env.ELECTRON_IS_DEV;
-        const isElectron = !!(process.versions && process.versions.electron);
-        const baseEnv = {
+        const env = {
             ...process.env,
             UV_THREADPOOL_SIZE: '32',
             NODE_EXTRA_CA_CERTS: process.env.NODE_EXTRA_CA_CERTS || '',
         };
 
-        let nodeBin;
-        let env = baseEnv;
-
-        if (process.env.CUPNET_AZURETLS_NODE) {
-            nodeBin = process.env.CUPNET_AZURETLS_NODE;
-        } else if (isElectron) {
-            const bundledNode = _resolveCupnetBundledNodeBinary();
-            if (bundledNode) {
-                nodeBin = bundledNode;
-            } else if (isPackaged) {
-                console.warn(
-                    '[azure-worker] нет вложенного Node (resources/cupnet-node); fallback ELECTRON_RUN_AS_NODE — ' +
-                        'ffi может не загрузиться. Добавьте Node в extraResources или CUPNET_AZURETLS_NODE.'
+        const goBin = _resolveGoWorkerBinary();
+        this._workerType = 'go';
+        if (!goBin) {
+            const expected = _goWorkerBinaryName() || '<platform-binary>';
+            const msg =
+                '[azure-worker] Upstream TLS requires the Go worker binary.\n' +
+                '  Build: npm run build:go or npm run build:go:local\n' +
+                `  Expected: azuretls-go/bin/${expected}`;
+            console.error(msg);
+            this._stopped = true;
+            const err = new Error('AzureTLS: Go worker binary not found');
+            this._fatalWorkerConfigError = err;
+            process.nextTick(() => {
+                try { this.emit('error', err); } catch (_) { /* ignore */ }
+            });
+            try {
+                safeCatch(
+                    { module: 'mitm-proxy', eventCode: 'azure.worker.go.missing', context: { expected } },
+                    err,
+                    'error',
                 );
-                nodeBin = process.execPath;
-                env = { ...baseEnv, ELECTRON_RUN_AS_NODE: '1' };
-            } else {
-                nodeBin = process.platform === 'win32' ? 'node.exe' : 'node';
-            }
-        } else {
-            const bundledNode = _resolveCupnetBundledNodeBinary();
-            nodeBin = bundledNode || (process.platform === 'win32' ? 'node.exe' : 'node');
+            } catch (_) { /* ignore */ }
+            return;
         }
-
-        if (nodeBin !== process.execPath) {
-            delete env.ELECTRON_RUN_AS_NODE;
-        }
-
-        const goBin = mitmPreferGoWorkerBinary() ? _resolveGoWorkerBinary() : null;
-        let scriptPath;
-        let spawnExe;
-        let spawnArgs;
-        this._workerType = goBin ? 'go' : 'node';
-        if (goBin) {
-            spawnExe = goBin;
-            spawnArgs = [];
-            // Informational: upstream TLS uses the Go binary (not Node+FFI).
-            if (debugMitmLevel) {
-                console.error(`[azure-worker] using Go upstream worker: ${goBin}`);
-            }
-        } else {
-            const allowLegacy = process.env.CUPNET_ALLOW_LEGACY_NODE_WORKER === '1';
-            if (!allowLegacy) {
-                const expected = _goWorkerBinaryName() || '<platform-binary>';
-                const msg =
-                    '[azure-worker] Upstream TLS requires the Go worker binary. The Node.js FFI worker is not supported in this build.\n' +
-                    '  Build: npm run build:go or npm run build:go:local\n' +
-                    `  Expected: azuretls-go/bin/${expected}\n` +
-                    '  (Tests only: set CUPNET_ALLOW_LEGACY_NODE_WORKER=1 to allow the legacy Node worker.)';
-                console.error(msg);
-                this._stopped = true;
-                const err = new Error('AzureTLS: Go worker required; Node FFI worker disabled');
-                this._fatalWorkerConfigError = err;
-                process.nextTick(() => {
-                    try {
-                        this.emit('error', err);
-                    } catch (_) { /* ignore */ }
-                });
-                try {
-                    safeCatch(
-                        { module: 'mitm-proxy', eventCode: 'azure.worker.ffi.disabled', context: { expected } },
-                        err,
-                        'error',
-                    );
-                } catch (_) { /* ignore */ }
-                return;
-            }
-            scriptPath = nodeBin === process.execPath
-                ? this.workerPath
-                : _resolveAzureTlsWorkerScriptForExternalNode(this.workerPath);
-            spawnExe = nodeBin;
-            spawnArgs = [scriptPath];
+        const spawnExe = goBin;
+        const spawnArgs = [];
+        if (debugMitmLevel) {
+            console.error(`[azure-worker] using Go upstream worker: ${goBin}`);
         }
 
         this.proc = spawn(spawnExe, spawnArgs, {
@@ -415,9 +298,7 @@ class AzureTLSWorker extends EventEmitter {
 
         this.proc.on('error', (err) => {
             const hint = err && err.code === 'ENOENT'
-                ? (goBin
-                    ? ' No Go worker binary: run `npm run build:go` or add azuretls-go/bin to extraResources.'
-                    : ' Нет бинарника: выполните `node scripts/ensure-cupnet-node.mjs`, задайте CUPNET_AZURETLS_NODE или установите Node в PATH.')
+                ? ' No Go worker binary: run `npm run build:go` or add azuretls-go/bin to extraResources.'
                 : '';
             console.error(`[azure-worker] spawn failed (${spawnExe}): ${err.message || err}.${hint}`);
             try {
@@ -425,7 +306,7 @@ class AzureTLSWorker extends EventEmitter {
                     {
                         module: 'mitm-proxy',
                         eventCode: 'worker.spawn.failed',
-                        context: { spawnExe, workerKind: goBin ? 'go' : 'node' },
+                        context: { spawnExe, workerKind: 'go' },
                     },
                     err,
                     'error',
@@ -644,9 +525,9 @@ class AzureTLSWorker extends EventEmitter {
                 this.off('error', onErr);
                 reject(new Error(
                     `AzureTLS worker did not become ready within ${timeoutMs}ms. `
-                    + 'If this is a packaged app, ensure `electron-builder` bundles Node into '
-                    + '`resources/cupnet-node` (run `node scripts/ensure-cupnet-node.mjs` before build). '
-                    + 'Or set env `CUPNET_AZURETLS_NODE` to a full Node binary path.',
+                    + 'Ensure the Go worker binary exists (azuretls-go/bin/azuretls-worker-*): '
+                    + 'run `npm run build:go` (or `build:go:local`), and that electron-builder '
+                    + 'bundles `azuretls-go/bin` into extraResources.',
                 ));
             }, timeoutMs);
             this.once('ready', onReady);
@@ -793,12 +674,17 @@ class MitmProxy {
          */
         this._egressBlocked = false;
         this._egressBlockReason = '';
-        this.workerPath = opts.workerPath;
         this.onRequestLogged = opts.onRequestLogged || null;
         this.onGatewayError = opts.onGatewayError || null;
-        this.worker = createMitmAzureBackend(this.workerPath);
+        this.worker = createMitmAzureBackend();
         this._server    = null;
         this._activeJa3 = null;
+        /**
+         * Active browser identity for the wire (User-Agent, client hints, Accept-Language).
+         * Resolved by browser-identity-catalog.resolveIdentity(); null = engine mode (sanitize only).
+         * @type {import('./browser-identity-catalog').ResolvedIdentity|null}
+         */
+        this._identity = null;
         /** Global outbound HTTP version when connected profile sets force HTTP/1.1 */
         this.forceHttp1 = false;
         this._dnsOverrides = new Map();
@@ -861,18 +747,53 @@ class MitmProxy {
     }
 
     /**
+     * Set the global wire identity (User-Agent + client hints + Accept-Language).
+     * Pass null (or an engine-mode identity) to fall back to sanitize-only behaviour.
+     * @param {import('./browser-identity-catalog').ResolvedIdentity|null} identity
+     */
+    setIdentity(identity) {
+        this._identity = identity && identity.mode !== 'engine' && identity.userAgent ? identity : null;
+    }
+
+    getIdentity() {
+        return this._identity;
+    }
+
+    /** Global custom JA3 (null = template ClientHello of the current browser profile). */
+    setActiveJa3(ja3) {
+        this._activeJa3 = ja3 ? String(ja3) : null;
+    }
+
+    /**
      * Set per-tab upstream proxy override.
      * @param {string} tabId
-     * @param {{ upstream: string|null, browser?: string, ja3?: string, forceHttp1?: boolean|null }} config
+     * @param {{ upstream: string|null, browser?: string, ja3?: string, forceHttp1?: boolean|null, identity?: object|null }} config
      */
     setTabUpstream(tabId, config) {
         if (!tabId) return;
+        const prev = this._tabProxyMap.get(tabId);
+        const identity = config.identity !== undefined
+            ? (config.identity && config.identity.mode !== 'engine' && config.identity.userAgent ? config.identity : null)
+            : (prev ? prev.identity : null);
         this._tabProxyMap.set(tabId, {
             upstream: config.upstream || null,
             browser:  config.browser  || null,
             ja3:      config.ja3      || null,
             forceHttp1: config.forceHttp1 != null ? !!config.forceHttp1 : null,
+            identity,
         });
+    }
+
+    /** Per-tab identity override without touching the tab's upstream proxy. */
+    setTabIdentity(tabId, identity) {
+        if (!tabId) return;
+        const prev = this._tabProxyMap.get(tabId) || { upstream: null, browser: null, ja3: null, forceHttp1: null, identity: null };
+        const next = identity && identity.mode !== 'engine' && identity.userAgent ? identity : null;
+        if (!next && !prev.upstream && !prev.browser && !prev.ja3 && prev.forceHttp1 == null) {
+            this._tabProxyMap.delete(tabId);
+            return;
+        }
+        this._tabProxyMap.set(tabId, { ...prev, identity: next });
     }
 
     removeTabUpstream(tabId) {
@@ -880,15 +801,17 @@ class MitmProxy {
     }
 
     _resolveUpstreamForTab(tabId) {
-        if (!tabId) return { proxy: this.upstream, browser: this.browser, ja3: this._activeJa3, forceHttp1: !!this.forceHttp1 };
+        const base = { proxy: this.upstream, browser: this.browser, ja3: this._activeJa3, forceHttp1: !!this.forceHttp1, identity: this._identity };
+        if (!tabId) return base;
         const override = this._tabProxyMap.get(tabId);
-        if (!override) return { proxy: this.upstream, browser: this.browser, ja3: this._activeJa3, forceHttp1: !!this.forceHttp1 };
+        if (!override) return base;
         const forceHttp1 = override.forceHttp1 != null ? !!override.forceHttp1 : !!this.forceHttp1;
         return {
             proxy:   override.upstream ?? this.upstream,
             browser: override.browser  || this.browser,
             ja3:     override.ja3      || this._activeJa3,
             forceHttp1,
+            identity: override.identity || this._identity,
         };
     }
 
@@ -1152,7 +1075,7 @@ class MitmProxy {
                         const reqBodyForLog = _reqBodyForLog(req);
                         const dnsCorsMatch = !res.dnsOverride ? this._mitmCorsMatchDetail(url) : null;
                         const requestHeadersForLog = { ...headers };
-                        applyOutboundUserAgentToMitmHeaders(requestHeadersForLog, null);
+                        applyIdentityToOutboundHeaders(requestHeadersForLog, null, this._resolveUpstreamForTab(tabId).identity, { url });
                         this.onRequestLogged({
                             url, method: req.method, tabId, sessionId, requestId,
                             cupnetRid: cupnetRid || null,
@@ -1425,7 +1348,7 @@ class MitmProxy {
 
             const up = plan.opts;
             if (!up.headers) up.headers = {};
-            applyOutboundUserAgentToMitmHeaders(up.headers, up.orderedHeaders);
+            applyIdentityToOutboundHeaders(up.headers, up.orderedHeaders, tabUpstream.identity, { url: up.url });
             const noBodyUp = /^(GET|HEAD)$/i.test(up.method || '');
             const retryCountUp = /^(GET|HEAD|OPTIONS)$/i.test(up.method || '')
                 ? networkPolicy.retry.maxRetries
@@ -1751,7 +1674,8 @@ class MitmProxy {
         const { plan, mitmOpts, url, headers, req, clientTls, tabId, hsTimer, orderedHeaders, clientRemainder } = ctx;
         const up = plan.opts;
         if (!up.headers) up.headers = {};
-        applyOutboundUserAgentToMitmHeaders(up.headers, up.orderedHeaders);
+        const tabUpstream = this._resolveUpstreamForTab(tabId);
+        applyIdentityToOutboundHeaders(up.headers, up.orderedHeaders, tabUpstream.identity, { url: up.url });
         const wire = _buildWireHttpRequest(up);
         const t0 = Date.now();
         const requestId = `mitm_ws_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1759,7 +1683,6 @@ class MitmProxy {
         const logicalHost = uObj.hostname;
         const targetPort = uObj.port ? parseInt(uObj.port, 10) : 443;
         const connectHost = up.dnsOverride?.ip || logicalHost;
-        const tabUpstream = this._resolveUpstreamForTab(tabId);
         const proxyUrl = tabUpstream.proxy || this.upstream;
 
         const fail = (err) => {
@@ -2438,8 +2361,6 @@ module.exports = {
     isLikelyDocumentNavigation,
     summarizeMitmGatewayError,
     resolveMitmGatewayDnsContext,
-    /** @internal app.asar → app.asar.unpacked for child Node */
-    _resolveAzureTlsWorkerScriptForExternalNode,
     /** @internal used by tests/test-dns-mitm.js */
     _testApplyMitmCorsToResponse: applyMitmCorsToResponse,
     _testShouldSkipMitmCorsForUrl: shouldSkipMitmCorsForUrl,
@@ -2453,8 +2374,7 @@ if (require.main === module) {
     console.log('[mitm-proxy] CA cert generated');
 
     const proxy = new MitmProxy({
-        browser:    'chrome_120',
-        workerPath: path.join(__dirname, 'azure-tls-worker.js'),
+        browser:    'chrome',
     });
 
     proxy.start().then(() => {

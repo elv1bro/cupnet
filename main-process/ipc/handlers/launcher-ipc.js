@@ -3,7 +3,7 @@
 const { getDebugMitmLevel, setDebugMitmLevel } = require('../../../mitm-proxy.js');
 
 /**
- * Открытие вспомогательных окон (proxy manager, console, analyzer, IVAC).
+ * * Открытие вспомогательных окон (proxy manager, console, analyzer, notes).
  * @param {object} ctx
  */
 function registerLauncherIpc(ctx) {
@@ -91,16 +91,6 @@ function registerLauncherIpc(ctx) {
         } else {
             send();
         }
-        return true;
-    });
-    ctx.ipcMain.handle('open-ivac-scout', async () => { ctx.createIvacScoutWindow(); return true; });
-    ctx.ipcMain.handle('get-ivac-scout-context', async () => ctx.getIvacScoutContext());
-    ctx.ipcMain.handle('run-ivac-scout', async (_, opts) => ctx.runIvacScoutProcess(opts || {}));
-    ctx.ipcMain.handle('stop-ivac-scout', async () => ({ stopped: ctx.stopIvacScoutProcess() }));
-    ctx.ipcMain.handle('open-ivac-dump-folder', async () => {
-        const dumpDir = ctx.path.join(ctx._cupnetRoot, '_debug');
-        ctx.fs.mkdirSync(dumpDir, { recursive: true });
-        await ctx.shell.openPath(dumpDir);
         return true;
     });
 }

@@ -7,7 +7,7 @@ const profileSession = require('./profile-session.js');
 const windowStateStore = require('./window-state-store');
 
 /**
- * Secondary BrowserWindows, compare helpers, IVAC scout, DNS/cookie/modal/proxy/rules windows.
+ * * Secondary BrowserWindows, compare helpers, DNS/cookie/modal/proxy/rules windows.
  * @param {object} d — runtime handles (getters/setters + shared arrays/maps). Built in cupnet-runtime.js.
  */
 function createSubWindowsApi(d) {
@@ -380,143 +380,6 @@ function createSubWindowsApi(d) {
         } catch { /* ignore */ }
     }
 
-    function createIvacScoutWindow() {
-        if (d.ivacScoutWindow && !d.ivacScoutWindow.isDestroyed()) {
-            d.ivacScoutWindow.focus();
-            return;
-        }
-        d.ivacScoutWindow = _spawnTrustedToolWindow({
-            width: 980, height: 760, minWidth: 740, minHeight: 540,
-            title: 'API Scout', icon: d.iconPath,
-            webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false },
-        });
-        d.ivacScoutWindow.loadFile(d.getAssetPath('ivac-scout.html'));
-        d.ivacScoutWindow.webContents.once('did-finish-load', () => {
-            d.ivacScoutWindow.webContents.send('ivac-scout-state', { running: !!d.ivacScoutProcess });
-        });
-        d.ivacScoutWindow.on('closed', () => {
-            d.ivacScoutWindow = null;
-            // Don't orphan the scout child process when its window is closed mid-run.
-            try { stopIvacScoutProcess(); } catch (_) { /* ignore */ }
-        });
-    }
-
-    function sendIvacScoutLog(line) {
-        if (d.ivacScoutWindow && !d.ivacScoutWindow.isDestroyed()) {
-            d.ivacScoutWindow.webContents.send('ivac-scout-log', line);
-        }
-    }
-
-    function getIvacScoutContext() {
-        const active = d.tabManager?.getActiveTab?.();
-        const activeUrl = active?.url || '';
-        const url = /^https?:\/\//i.test(activeUrl) ? activeUrl : 'https://appointment.ivacbd.com/';
-
-        const tlsProfile = d.loadSettings().tlsProfile || 'chrome';
-        const proxyActive = !!d.persistentAnonymizedProxyUrl;
-        const proxyLabel = proxyActive ? (d.connectedProfileName || 'Proxy') : 'Direct';
-        const proxyUrl = proxyActive ? d.persistentAnonymizedProxyUrl : '';
-
-        return { url, tlsProfile, proxyActive, proxyLabel, proxyUrl };
-    }
-
-    function stopIvacScoutProcess() {
-        if (!d.ivacScoutProcess || d.ivacScoutProcess.killed) return false;
-        try { d.ivacScoutProcess.kill('SIGTERM'); } catch (err) {
-            d.safeCatch({ module: 'main', eventCode: 'process.kill.failed', context: { process: 'ivac-scout', signal: 'SIGTERM' } }, err);
-        }
-        return true;
-    }
-
-    function runIvacScoutProcess(opts = {}) {
-        return new Promise((resolve, reject) => {
-            if (d.ivacScoutProcess) {
-                reject(new Error('Scout already running'));
-                return;
-            }
-
-            const scriptPath = d.path.join(d.cupnetRoot, 'scripts', 'debug-ivac.js');
-            if (!d.fs.existsSync(scriptPath)) {
-                reject(new Error('Scout script not found: ' + scriptPath));
-                return;
-            }
-
-            const args = [scriptPath];
-            const ctx = getIvacScoutContext();
-            const runUrl = opts.url && /^https?:\/\//i.test(String(opts.url)) ? String(opts.url) : ctx.url;
-            args.push('--url', runUrl);
-            if (ctx.proxyUrl) args.push('--proxy', String(ctx.proxyUrl));
-            args.push('--browser', String(ctx.tlsProfile || 'chrome'));
-
-            // In packaged app run Electron binary as node; in dev use system node.
-            const isPackaged = process.defaultApp === false && !process.env.ELECTRON_IS_DEV;
-            const nodeBin = isPackaged ? process.execPath : (process.platform === 'win32' ? 'node.exe' : 'node');
-            const env = isPackaged
-                ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
-                : { ...process.env };
-
-            d.ivacScoutProcess = d.spawn(nodeBin, args, {
-                cwd: d.cupnetRoot,
-                env,
-                stdio: ['ignore', 'pipe', 'pipe'],
-            });
-
-            if (d.ivacScoutWindow && !d.ivacScoutWindow.isDestroyed()) {
-                d.ivacScoutWindow.webContents.send('ivac-scout-state', { running: true });
-            }
-
-            let settled = false;
-            const settle = (ok, payload) => {
-                if (settled) return;
-                settled = true;
-                resolve({ ok, ...payload });
-            };
-
-            d.ivacScoutProcess.stdout.setEncoding('utf8');
-            d.ivacScoutProcess.stderr.setEncoding('utf8');
-
-            d.ivacScoutProcess.stdout.on('data', (chunk) => {
-                for (const line of String(chunk).split(/\r?\n/)) {
-                    if (line.trim()) sendIvacScoutLog(line);
-                }
-            });
-            d.ivacScoutProcess.stderr.on('data', (chunk) => {
-                for (const line of String(chunk).split(/\r?\n/)) {
-                    if (line.trim()) sendIvacScoutLog('[stderr] ' + line);
-                }
-            });
-
-            d.ivacScoutProcess.on('error', (err) => {
-                sendIvacScoutLog('[main] spawn error: ' + err.message);
-                d.ivacScoutProcess = null;
-                if (d.ivacScoutWindow && !d.ivacScoutWindow.isDestroyed()) {
-                    d.ivacScoutWindow.webContents.send('ivac-scout-state', { running: false });
-                    d.ivacScoutWindow.webContents.send('ivac-scout-done', { ok: false, exitCode: -1, error: err.message });
-                }
-                settle(false, { exitCode: -1, error: err.message });
-            });
-
-            d.ivacScoutProcess.on('close', (code) => {
-                const exitCode = Number.isInteger(code) ? code : -1;
-                let summary = null;
-                try {
-                    const summaryPath = d.path.join(d.cupnetRoot, '_debug', 'summary.json');
-                    if (d.fs.existsSync(summaryPath)) {
-                        summary = JSON.parse(d.fs.readFileSync(summaryPath, 'utf8'));
-                    }
-                } catch (e) {
-                    sendIvacScoutLog('[main] summary parse error: ' + e.message);
-                }
-                d.ivacScoutProcess = null;
-                if (d.ivacScoutWindow && !d.ivacScoutWindow.isDestroyed()) {
-                    d.ivacScoutWindow.webContents.send('ivac-scout-state', { running: false });
-                    d.ivacScoutWindow.webContents.send('ivac-scout-done', { ok: exitCode === 0, exitCode, summary });
-                }
-                settle(exitCode === 0, { exitCode, summary });
-            });
-        });
-    }
-
     function _sendAnalyzerTabs() {
         if (!d.pageAnalyzerWindow || d.pageAnalyzerWindow.isDestroyed() || !d.tabManager) return;
         d.pageAnalyzerWindow.webContents.send('analyzer-tabs-list', d.tabManager.getTabList());
@@ -849,6 +712,25 @@ function createSubWindowsApi(d) {
         d.proxyManagerWindow.on('closed', () => { d.proxyManagerWindow = null; });
     }
 
+    /** Browser Identity window (UA / client hints / TLS / timezone / language). */
+    function createIdentityManagerWindow() {
+        if (d.identityManagerWindow && !d.identityManagerWindow.isDestroyed()) {
+            d.identityManagerWindow.focus(); return;
+        }
+        d.identityManagerWindow = _spawnTrustedToolWindow({
+            width: 760, height: 640, minWidth: 620, minHeight: 480,
+            title: 'Browser Identity', icon: d.iconPath,
+            webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false }
+        });
+        if (process.env.CUPNET_DEVTOOLS === '1' || String(process.env.CUPNET_DEVTOOLS || '').toLowerCase() === 'true') {
+            d.identityManagerWindow.webContents.once('did-finish-load', () => {
+                try { d.identityManagerWindow.webContents.openDevTools({ mode: 'detach' }); } catch (_) { /* ignore */ }
+            });
+        }
+        d.identityManagerWindow.loadFile(d.getAssetPath('identity-manager.html'));
+        d.identityManagerWindow.on('closed', () => { d.identityManagerWindow = null; });
+    }
+
     function createOnboardingWindow() {
         if (d.onboardingWindow && !d.onboardingWindow.isDestroyed()) {
             d.onboardingWindow.focus();
@@ -954,11 +836,6 @@ function createSubWindowsApi(d) {
         createPageAnalyzerWindow,
         createNotesWindow,
         broadcastNotesWindowContext,
-        createIvacScoutWindow,
-        sendIvacScoutLog,
-        getIvacScoutContext,
-        stopIvacScoutProcess,
-        runIvacScoutProcess,
         _sendAnalyzerTabs,
         notifyCookieManagerTabs,
         notifyCookieGroupsListsUpdated,
@@ -971,6 +848,7 @@ function createSubWindowsApi(d) {
         createSessionProfileModalWindow,
         createSiteInfoPopoverWindow,
         createProxyManagerWindow,
+        createIdentityManagerWindow,
         createRulesWindow,
         openBreakpointWindow,
         createOnboardingWindow,

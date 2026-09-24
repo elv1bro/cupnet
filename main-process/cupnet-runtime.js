@@ -69,7 +69,7 @@ const {
 } = require('./services/network-helpers');
 const { createProxyNotifyBroadcast } = require('./services/proxy-notify-broadcast');
 const { createCdpNetworkLogging } = require('./services/cdp-network-logging');
-const { createFingerprintService } = require('./services/fingerprint-service');
+const { createIdentityService } = require('./services/identity-service');
 const { createScreenshotService } = require('./services/screenshot-service');
 
 const {
@@ -115,12 +115,12 @@ let breakpointWindow           = null;
 let cookieManagerWindow        = null;
 let dnsManagerWindow           = null;
 let proxyManagerWindow         = null;
+let identityManagerWindow      = null;
 let compareViewerWindow        = null;
 let consoleViewerWindow        = null;
 let pageAnalyzerWindow         = null;
 let notesWindow                = null;
 let onboardingWindow           = null;
-let ivacScoutWindow            = null;
 const comparePair              = { left: null, right: null };
 let compareResult              = null;
 
@@ -157,7 +157,6 @@ let siteInfoPopoverWindow      = null;
 let requestEditorWindow        = null;
 /** Доп. окна Request Editor («+ New window»). */
 const requestEditorExtraWindows = [];
-let ivacScoutProcess           = null;
 let persistentAnonymizedProxyUrl = null;
 let connectedProfileId           = null;
 let connectedProfileName         = null;
@@ -213,7 +212,6 @@ function syncAppContextSnapshot() {
     appCtx.windows.consoleViewer = consoleViewerWindow;
     appCtx.windows.pageAnalyzer = pageAnalyzerWindow;
     appCtx.windows.notes = notesWindow;
-    appCtx.windows.ivacScout = ivacScoutWindow;
 
     appCtx.proxy.actProxy = actProxy;
     appCtx.proxy.anonymizedUrl = persistentAnonymizedProxyUrl;
@@ -437,13 +435,31 @@ function getTrackingSettings() {
     return s.tracking;
 }
 
-const fingerprintSvc = createFingerprintService({
+/**
+ * Browser identity (UA / client hints / TLS / timezone / language) — single writer for
+ * MITM wire identity, session UA, CDP emulation and the legacy `activeFingerprint` mirror.
+ */
+const identityService = createIdentityService({
+    loadSettings,
+    saveSettings,
+    getMitmProxy: () => mitmProxy,
+    getTabManager: () => tabManager,
+    setActiveFingerprint: (fp) => { activeFingerprint = fp; syncAppContextSnapshot(); },
+    broadcast: (channel, payload) => {
+        BrowserWindow.getAllWindows().forEach((w) => {
+            try { if (!w.isDestroyed()) w.webContents.send(channel, payload); } catch (_) { /* ignore */ }
+        });
+    },
+    broadcastTlsProfileChanged: (p) => broadcastTlsProfileChanged(p),
+    // Attach the tab debugger through the network-logging path so both features share one session.
+    ensureCdpAttached: async (wc, tabId) => {
+        if (typeof setupNetworkLogging !== 'function') return;
+        const tab = tabId ? tabManager?.getTab?.(tabId) : null;
+        await setupNetworkLogging(wc, tabId || tab?.id || null, tab?.sessionId ?? currentSessionId);
+    },
     sysLog,
     safeCatch,
-    getTabManager: () => tabManager,
-    getDb: () => db,
 });
-const { applyFingerprintToAllTabs, applyFingerprintFromProfile, applyFingerprintToWebContents, resetFingerprintOnWebContents } = fingerprintSvc;
 
 const screenshotSvc = createScreenshotService({
     path,
@@ -474,6 +490,7 @@ const _cdpNetworkLogging = createCdpNetworkLogging({
     wcIdToTabId: _wcIdToTabId,
     incrementLogEntryCount: () => { logEntryCount++; },
     getActiveFingerprint: () => activeFingerprint,
+    getIdentityService: () => identityService,
     getMainWindow: () => mainWindow,
     requestScreenshot,
 });
@@ -646,8 +663,6 @@ const dSub = {
     get connectedProfileName() { return connectedProfileName; },
     get compareResult() { return compareResult; },
     set compareResult(v) { compareResult = v; },
-    get ivacScoutProcess() { return ivacScoutProcess; },
-    set ivacScoutProcess(v) { ivacScoutProcess = v; },
     notifyTabsDebounce,
 };
 Object.defineProperties(dSub, {
@@ -658,11 +673,11 @@ Object.defineProperties(dSub, {
     cookieManagerWindow: rwWin(() => cookieManagerWindow, (v) => { cookieManagerWindow = v; }),
     dnsManagerWindow: rwWin(() => dnsManagerWindow, (v) => { dnsManagerWindow = v; }),
     proxyManagerWindow: rwWin(() => proxyManagerWindow, (v) => { proxyManagerWindow = v; }),
+    identityManagerWindow: rwWin(() => identityManagerWindow, (v) => { identityManagerWindow = v; }),
     compareViewerWindow: rwWin(() => compareViewerWindow, (v) => { compareViewerWindow = v; }),
     consoleViewerWindow: rwWin(() => consoleViewerWindow, (v) => { consoleViewerWindow = v; }),
     pageAnalyzerWindow: rwWin(() => pageAnalyzerWindow, (v) => { pageAnalyzerWindow = v; }),
     notesWindow: rwWin(() => notesWindow, (v) => { notesWindow = v; }),
-    ivacScoutWindow: rwWin(() => ivacScoutWindow, (v) => { ivacScoutWindow = v; }),
     loggingModalWindow: rwWin(() => loggingModalWindow, (v) => { loggingModalWindow = v; }),
     sessionProfileModalWindow: rwWin(() => sessionProfileModalWindow, (v) => { sessionProfileModalWindow = v; }),
     siteInfoPopoverWindow: rwWin(() => siteInfoPopoverWindow, (v) => { siteInfoPopoverWindow = v; }),
@@ -745,11 +760,6 @@ const {
     createConsoleViewerWindow,
     createPageAnalyzerWindow,
     createNotesWindow,
-    createIvacScoutWindow,
-    sendIvacScoutLog,
-    getIvacScoutContext,
-    stopIvacScoutProcess,
-    runIvacScoutProcess,
     _sendAnalyzerTabs,
     notifyCookieManagerTabs,
     notifyCookieGroupsListsUpdated,
@@ -762,6 +772,7 @@ const {
     createSessionProfileModalWindow,
     createSiteInfoPopoverWindow,
     createProxyManagerWindow,
+    createIdentityManagerWindow,
     createRulesWindow,
     openBreakpointWindow,
     reattachInterceptorToAllTabs,
@@ -837,6 +848,10 @@ app.whenReady().then(async () => {
     // Load only the critical modules synchronously
     db         = require('../db');
     tabManager = require('../tab-manager');
+    tabManager.setIdentityHooks({
+        getIdentityForNewTab: (tabId) => identityService.getIdentityForNewTab(tabId),
+        onTabCreated: (tab) => identityService.onTabCreated(tab),
+    });
     db.init();
     try {
         const { runProfileDataMigration, ensureProfileSetupFlag, readMigrationState } = require('./services/profile-data-migration.js');
@@ -949,6 +964,7 @@ app.whenReady().then(async () => {
             tabManager.setTrustMitmCA(trustMitmCA);
             tabManager.setMitmTabUpstreamCleanup((tid) => {
                 if (mitmProxy && typeof mitmProxy.removeTabUpstream === 'function') mitmProxy.removeTabUpstream(tid);
+                identityService.clearTabOverride(tid);
             });
             trustMitmCA(electronSession.fromPartition(tabManager.partitionForGroup(1)));
             trustMitmCA(electronSession.fromPartition('persist:cupnet-shared'));
@@ -965,8 +981,9 @@ app.whenReady().then(async () => {
             safeCatch({ module: 'main', eventCode: 'traffic.mode.apply.failed', context: { source: 'startup' } }, e);
         });
 
-        const startupProfile = loadSettings().tlsProfile || 'chrome';
-        proxy.setBrowser(startupProfile);
+        // Browser identity → MITM (TLS profile, JA3, forceHttp1, wire UA/hints) + open tabs.
+        await identityService.applyEffective({ reason: 'startup' });
+        const startupProfile = identityService.getEffective().tlsProfile;
         syncDnsOverridesToMitm();
         _syncDnsOverrideHostsSet();
         try {
@@ -1202,9 +1219,6 @@ app.whenReady().then(async () => {
             case 'activeFingerprint': return activeFingerprint;
             case 'app': return app;
             case 'applyEffectiveTrafficMode': return applyEffectiveTrafficMode;
-            case 'applyFingerprintToAllTabs': return applyFingerprintToAllTabs;
-            case 'applyFingerprintFromProfile': return applyFingerprintFromProfile;
-            case 'applyFingerprintToWebContents': return applyFingerprintToWebContents;
             case 'applyTrafficFilters': return applyTrafficFilters;
             case 'broadcastInterceptRuleMatched': return broadcastInterceptRuleMatched;
             case 'broadcastTlsProfileChanged': return broadcastTlsProfileChanged;
@@ -1226,7 +1240,6 @@ app.whenReady().then(async () => {
             case 'createConsoleViewerWindow': return createConsoleViewerWindow;
             case 'createCookieManagerWindow': return createCookieManagerWindow;
             case 'createDnsManagerWindow': return createDnsManagerWindow;
-            case 'createIvacScoutWindow': return createIvacScoutWindow;
             case 'createLogViewerWindow': return createLogViewerWindow;
             case 'createLoggingModalWindow': return createLoggingModalWindow;
             case 'createSessionProfileModalWindow': return createSessionProfileModalWindow;
@@ -1235,6 +1248,8 @@ app.whenReady().then(async () => {
             case 'createNotesWindow': return createNotesWindow;
             case 'createPageAnalyzerWindow': return createPageAnalyzerWindow;
             case 'createProxyManagerWindow': return createProxyManagerWindow;
+            case 'createIdentityManagerWindow': return createIdentityManagerWindow;
+            case 'identityService': return identityService;
             case 'createRequestEditorWindow': return createRequestEditorWindow;
             case 'openRequestEditorWindow': return openRequestEditorWindow;
             case 'openRequestEditorNewWindow': return openRequestEditorNewWindow;
@@ -1250,7 +1265,6 @@ app.whenReady().then(async () => {
             case 'generatePassword': return generatePassword;
             case 'getCurrentTrafficMode': return getCurrentTrafficMode;
             case 'getInternalPageUrl': return getInternalPageUrl;
-            case 'getIvacScoutContext': return getIvacScoutContext;
             case 'getLiveLogViewerWindow': return getLiveLogViewerWindow;
             case 'getLocalIp': return getLocalIp;
             case 'getNewTabUrl': return getNewTabUrl;
@@ -1263,8 +1277,6 @@ app.whenReady().then(async () => {
             case 'isLoggingEnabled': return isLoggingEnabled;
             case 'isValidDnsHost': return isValidDnsHost;
             case 'isValidIpv4': return isValidIpv4;
-            case 'ivacScoutWindow': return ivacScoutWindow;
-            case 'ivacScoutProcess': return ivacScoutProcess;
             case 'lastMouseMoveTime': return lastMouseMoveTime;
             case 'loadJsonDiffModules': return loadJsonDiffModules;
             case 'loadSettings': return loadSettings;
@@ -1302,14 +1314,12 @@ app.whenReady().then(async () => {
             case 'reattachInterceptorToAllTabs': return reattachInterceptorToAllTabs;
             case 'requestScreenshot': return requestScreenshot;
             case 'restartMitmProxy': return restartMitmProxy;
-            case 'resetFingerprintOnWebContents': return resetFingerprintOnWebContents;
             case 'resolveNavigationUrl': return resolveNavigationUrl;
             case 'resolveNavigationUrlWithBase': return resolveNavigationUrlWithBase;
             case 'resolveLoadUrlForWebContents': return resolveLoadUrlForWebContents;
             case 'requestEditorExtraWindows': return requestEditorExtraWindows;
             case 'requestEditorWindow': return requestEditorWindow;
             case 'rulesWindow': return rulesWindow;
-            case 'runIvacScoutProcess': return runIvacScoutProcess;
             case 'safeCatch': return safeCatch;
             case 'safeStorage': return safeStorage;
             case 'saveSettings': return saveSettings;
@@ -1320,7 +1330,6 @@ app.whenReady().then(async () => {
             case 'shell': return shell;
             case 'stabilityMetrics': return stabilityMetrics;
             case 'startupMetrics': return startupMetrics;
-            case 'stopIvacScoutProcess': return stopIvacScoutProcess;
             case 'syncDnsOverridesToMitm': return syncDnsOverridesToMitm;
             case 'sysLog': return sysLog;
             case 'tabManager': return tabManager;
@@ -1447,7 +1456,6 @@ app.on('before-quit', (e) => {
 });
 
 app.on('will-quit', () => {
-    stopIvacScoutProcess();
     ipcBatch.disposePendingBatches();
     if (logStatusInterval) clearInterval(logStatusInterval);
     settingsStore.cancelPendingSave();

@@ -44,7 +44,7 @@ const bi = new Set(`Object,Array,String,Number,Boolean,Date,Math,JSON,Promise,Ma
 
 let names = [...ipcNames].filter((n) => !KW.has(n) && !bi.has(n) && bound.has(n));
 
-const extra = `ipcMain,app,BrowserWindow,dialog,Menu,session,shell,clipboard,net,Notification,safeStorage,nativeImage,resolveNavigationUrl,parseProxyTemplate,extractTemplateVars,formatBytes,shouldFilterUrl,SEARCH_ENGINE,getAssetPath,emitStabilityEvent,emitSloWarnOnce,maybeLogMockToNetworkActivity,rulesEngine,withTimeout,sanitizeProxyUrl,generatePassword,getLocalIp,notifyMitmReady,cookieManagerWindow,dnsManagerWindow,proxyManagerWindow,compareViewerWindow,pageAnalyzerWindow,ivacScoutWindow,loggingModalWindow,spawn,MitmProxy`.split(',');
+const extra = `ipcMain,app,BrowserWindow,dialog,Menu,session,shell,clipboard,net,Notification,safeStorage,nativeImage,resolveNavigationUrl,parseProxyTemplate,extractTemplateVars,formatBytes,shouldFilterUrl,SEARCH_ENGINE,getAssetPath,emitStabilityEvent,emitSloWarnOnce,maybeLogMockToNetworkActivity,rulesEngine,withTimeout,sanitizeProxyUrl,generatePassword,getLocalIp,notifyMitmReady,cookieManagerWindow,dnsManagerWindow,proxyManagerWindow,compareViewerWindow,pageAnalyzerWindow,loggingModalWindow,spawn,MitmProxy`.split(',');
 // multi-line `const { app, ... } = require('electron')` не попадает в bound — добавляем явно
 extra.forEach((x) => names.push(x));
 
