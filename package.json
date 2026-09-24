@@ -54,7 +54,7 @@
     "electron-builder": "^26.15.3",
     "icon-gen": "^5.0.0",
     "node-addon-api": "^8.3.0",
-    "node-gyp": "^10.3.0",
+    "node-gyp": "^12.4.0",
     "vitest": "^2.1.9"
   },
   "overrides": {
