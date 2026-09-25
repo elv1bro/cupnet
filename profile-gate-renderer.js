@@ -29,8 +29,6 @@ const closeBtn = document.getElementById('pg-close');
 
 let gateState = null;
 let selectedProfile = null;
-/** @type {'create'|'setup'} */
-let editMode = 'create';
 let legacyVaultId = null;
 let autoSetupLaunched = false;
 
@@ -167,7 +165,7 @@ function renderPicker() {
             card.appendChild(badge);
         }
         card.addEventListener('click', () => {
-            if (needsSetup) openEditScreen('setup', p);
+            if (needsSetup) openEditScreen(p);
             else openPasswordScreen(p);
         });
         profileGrid.appendChild(card);
@@ -180,13 +178,13 @@ function maybeAutoOpenSetup() {
     const profiles = gateState?.profiles || [];
     if (profiles.length === 0) {
         autoSetupLaunched = true;
-        openEditScreen('setup', null);
+        openEditScreen(null);
         return;
     }
     const setupProfile = profiles.find((p) => profileNeedsSetup(p));
     if (setupProfile) {
         autoSetupLaunched = true;
-        openEditScreen('setup', setupProfile);
+        openEditScreen(setupProfile);
     }
 }
 
@@ -244,30 +242,20 @@ function updateEditPreview() {
     applyAvatarEl(editAvatar, name, editPick.color);
 }
 
-function openEditScreen(mode, profile) {
-    editMode = mode;
+function openEditScreen(profile) {
+    // Single-profile app: the only edit flow is first-run setup of the one profile.
     selectedProfile = profile;
     setError(editError, '');
     editPassword.value = '';
     editConfirm.value = '';
 
-    if (mode === 'setup') {
-        editEyebrow.textContent = 'First-time setup';
-        editTitle.textContent = profile ? 'Configure your workspace' : 'Create your workspace';
-        editSaveBtn.textContent = 'Complete setup';
-        legacyVaultId = profile?.id ?? gateState?.legacyVaultId ?? null;
-        editName.value = profile && profile.name !== 'Default' ? profile.name : (gateState?.suggestedName || '');
-        editPick.color = profile?.avatarColor || defaultColorForName(editName.value);
-        editPick.colorManual = !!profile?.avatarColor;
-    } else {
-        editEyebrow.textContent = 'New profile';
-        editTitle.textContent = 'Add workspace profile';
-        editSaveBtn.textContent = 'Create profile';
-        legacyVaultId = null;
-        editName.value = '';
-        editPick.color = defaultColorForName('');
-        editPick.colorManual = false;
-    }
+    editEyebrow.textContent = 'First-time setup';
+    editTitle.textContent = profile ? 'Configure your workspace' : 'Create your workspace';
+    editSaveBtn.textContent = 'Complete setup';
+    legacyVaultId = profile?.id ?? gateState?.legacyVaultId ?? null;
+    editName.value = profile && profile.name !== 'Default' ? profile.name : (gateState?.suggestedName || '');
+    editPick.color = profile?.avatarColor || defaultColorForName(editName.value);
+    editPick.colorManual = !!profile?.avatarColor;
 
     buildColorPicker();
     updateEditPreview();

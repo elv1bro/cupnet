@@ -58,12 +58,6 @@ const statusProfileAvatar = document.getElementById('status-profile-avatar');
 const statusProfileLabel = document.getElementById('status-profile-label');
 const statusProfileDrawer = document.getElementById('status-profile-drawer');
 const statusProfileList = document.getElementById('status-profile-list');
-const statusProfileSwitchForm = document.getElementById('status-profile-switch-form');
-const statusProfileSwitchName = document.getElementById('status-profile-switch-name');
-const statusProfileSwitchPassword = document.getElementById('status-profile-switch-password');
-const statusProfileSwitchError = document.getElementById('status-profile-switch-error');
-const statusProfileSwitchCancel = document.getElementById('status-profile-switch-cancel');
-const statusProfileSwitchConfirm = document.getElementById('status-profile-switch-confirm');
 const statusProfileManage = document.getElementById('status-profile-manage');
 const statusResources = document.getElementById('status-resources');
 const statusResourcesMetrics = document.getElementById('status-resources-metrics');
@@ -856,7 +850,6 @@ const RESOURCES_DRAWER_HEIGHT_PX = 260;
 const PROFILE_DRAWER_HEIGHT_PX = 240;
 let _resourcesPopoverOpen = false;
 let _profileDrawerOpen = false;
-let _profileSwitchTargetId = null;
 let _activeProfileVaultId = null;
 const TOOLS_MINI_BAR_HEIGHT_PX = 34;
 const TOOLS_SIDE_WIDTH_PX = 58;
@@ -1164,8 +1157,8 @@ function applyProfileSessionUi(st) {
     }
     if (statusProfile) {
         statusProfile.title = active
-            ? `Signed in as ${name} — click to switch`
-            : 'Switch profile';
+            ? `Signed in as ${name}`
+            : 'Profile';
     }
     _activeProfileVaultId = st?.vaultId ?? null;
 }
@@ -1178,13 +1171,6 @@ async function refreshProfileStatusLabel() {
     } catch {
         applyProfileSessionUi(null);
     }
-}
-
-function _hideProfileSwitchForm() {
-    _profileSwitchTargetId = null;
-    statusProfileSwitchForm?.classList.add('hidden');
-    if (statusProfileSwitchPassword) statusProfileSwitchPassword.value = '';
-    if (statusProfileSwitchError) statusProfileSwitchError.textContent = '';
 }
 
 function _renderProfileList(profiles) {
@@ -1200,7 +1186,8 @@ function _renderProfileList(profiles) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'browser-status-profile-row' + (isActive ? ' is-active' : '');
-        btn.disabled = isActive;
+        // Single-profile app: rows are display-only, there is nothing to switch to.
+        btn.disabled = true;
         const avatar = document.createElement('span');
         avatar.className = 'browser-status-profile-row-avatar';
         avatar.textContent = p.avatarIcon || _profileInitials(p.name);
@@ -1215,17 +1202,6 @@ function _renderProfileList(profiles) {
             badge.className = 'browser-status-profile-row-badge';
             badge.textContent = 'Active';
             btn.appendChild(badge);
-        } else {
-            btn.addEventListener('click', () => {
-                _profileSwitchTargetId = p.id;
-                statusProfileSwitchForm?.classList.remove('hidden');
-                if (statusProfileSwitchName) statusProfileSwitchName.textContent = p.name || 'profile';
-                if (statusProfileSwitchPassword) {
-                    statusProfileSwitchPassword.value = '';
-                    statusProfileSwitchPassword.focus();
-                }
-                if (statusProfileSwitchError) statusProfileSwitchError.textContent = '';
-            });
         }
         statusProfileList.appendChild(btn);
     }
@@ -1252,7 +1228,7 @@ async function _loadProfileDrawerList() {
 function _updateProfileButtonChrome() {
     if (!statusProfile) return;
     if (_profileDrawerOpen) {
-        statusProfile.title = 'Hide profile switcher';
+        statusProfile.title = 'Hide profile panel';
     }
 }
 
@@ -1265,7 +1241,6 @@ function _setProfileDrawerOpen(open) {
     statusProfileDrawer?.setAttribute('aria-hidden', _profileDrawerOpen ? 'false' : 'true');
     _updateProfileButtonChrome();
     if (!_profileDrawerOpen) {
-        _hideProfileSwitchForm();
         statusProfile?.blur();
     }
     void applyChromeLayoutReserve();
@@ -1276,39 +1251,11 @@ function _toggleProfileDrawer() {
         _setProfileDrawerOpen(false);
         return;
     }
-    _hideProfileSwitchForm();
     if (statusProfileList && !statusProfileList.children.length) {
         statusProfileList.innerHTML = '<div style="color:var(--text-dim);font-size:12px;padding:4px 8px">Loading profiles…</div>';
     }
     _setProfileDrawerOpen(true);
     void _loadProfileDrawerList();
-}
-
-async function _confirmProfileSwitch() {
-    if (_profileSwitchTargetId == null) return;
-    const password = String(statusProfileSwitchPassword?.value || '');
-    if (!password) {
-        if (statusProfileSwitchError) statusProfileSwitchError.textContent = 'Enter profile password.';
-        statusProfileSwitchPassword?.focus();
-        return;
-    }
-    if (statusProfileSwitchConfirm) statusProfileSwitchConfirm.disabled = true;
-    try {
-        const r = await api.profileLogin({ vaultId: _profileSwitchTargetId, password });
-        if (!r?.success) {
-            if (statusProfileSwitchError) statusProfileSwitchError.textContent = r?.error || 'Switch failed.';
-            return;
-        }
-        _setProfileDrawerOpen(false);
-        await refreshProfileStatusLabel();
-        if (typeof showToast === 'function') {
-            showToast(`Switched to ${r.name || 'profile'}`, { type: 'success', duration: 2500 });
-        }
-    } catch (e) {
-        if (statusProfileSwitchError) statusProfileSwitchError.textContent = e?.message || 'Switch failed.';
-    } finally {
-        if (statusProfileSwitchConfirm) statusProfileSwitchConfirm.disabled = false;
-    }
 }
 
 function _bindProfileDrawer() {
@@ -1325,16 +1272,7 @@ function _bindProfileDrawer() {
         _toggleProfileDrawer();
     });
 
-    statusProfileSwitchCancel?.addEventListener('click', () => _hideProfileSwitchForm());
-    statusProfileSwitchConfirm?.addEventListener('click', () => { void _confirmProfileSwitch(); });
-    statusProfileSwitchPassword?.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            void _confirmProfileSwitch();
-        }
-    });
-
-    // Single-profile gate: locks the session and re-shows the unlock gate (re-enter password).
+    // Single-profile app: locks the session and re-shows the unlock gate (re-enter password).
     statusProfileManage?.addEventListener('click', () => {
         _setProfileDrawerOpen(false);
         void api.profileOpenSwitchGate?.();
@@ -1348,11 +1286,7 @@ function _bindProfileDrawer() {
 
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape' || !_profileDrawerOpen) return;
-        if (_profileSwitchTargetId != null) {
-            _hideProfileSwitchForm();
-        } else {
-            _setProfileDrawerOpen(false);
-        }
+        _setProfileDrawerOpen(false);
     });
 
     _updateProfileButtonChrome();
