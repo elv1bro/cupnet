@@ -501,6 +501,7 @@ function getInternalPageUrl(pageName) {
     let file = 'new-tab.html';
     if (name === 'settings') file = 'settings.html';
     else if (name === 'guide') file = 'cupnet-guide.html';
+    else if (name === 'identity-check') file = 'identity-check.html';
     return `file://${path.join(_cupnetRoot, file)}`;
 }
 
@@ -1404,9 +1405,24 @@ app.whenReady().then(async () => {
         });
     }
 
+    // Quiet test mode (CUPNET_E2E): run as a macOS accessory app so tests never
+    // steal the user's focus or add a Dock icon while they work.
+    if (process.platform === 'darwin' && process.env.CUPNET_E2E === '1') {
+        try { app.setActivationPolicy('accessory'); } catch { /* ignore */ }
+        try { app.dock?.hide(); } catch { /* ignore */ }
+    }
+
     app.on('browser-window-created', (_, win) => {
         attachWindowSwitcherHotkey(win, () => mainWindow);
         attachRendererConsoleForward(win);
+        // Quiet test mode: keep every window invisible (opacity 0 — the
+        // webContents still loads and renders, so e2e is unaffected) so a test
+        // run doesn't spray windows across the user's desktop.
+        if (process.env.CUPNET_E2E === '1') {
+            const hide = () => { try { win.setOpacity(0); } catch { /* ignore */ } };
+            hide();
+            win.on('show', hide);
+        }
     });
 
     // Profile gate first (unless E2E / skip flag), then main browser window.
