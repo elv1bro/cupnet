@@ -33,7 +33,18 @@ function logCupnetBisectEnv() {
  */
 function applyCupnetEarlyChromiumFlags(app, _deps) {
     logCupnetBisectEnv();
+    // Quiet test mode: forbid activation as early as possible (before any window
+    // exists) so launching the app for e2e never steals the user's focus on macOS.
+    if (process.platform === 'darwin' && process.env.CUPNET_E2E === '1') {
+        try { app.setActivationPolicy('prohibited'); } catch { /* ignore */ }
+    }
     app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
+    // e2e only (not packaged): macOS Keychain prompts for a fresh/unsigned Electron binary block the
+    // main process inside safeStorage.encryptString (proxy profile saves). Chromium's mock keychain
+    // keeps safeStorage working without the system dialog.
+    if (process.env.CUPNET_E2E === '1' && !app.isPackaged) {
+        app.commandLine.appendSwitch('use-mock-keychain');
+    }
     if (STEALTH < 7) {
         // Only <local> kept: required by Chromium so loopback / link-local don't go through the MITM.
         app.commandLine.appendSwitch('proxy-bypass-list', '<local>');

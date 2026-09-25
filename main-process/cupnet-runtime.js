@@ -1405,23 +1405,34 @@ app.whenReady().then(async () => {
         });
     }
 
-    // Quiet test mode (CUPNET_E2E): run as a macOS accessory app so tests never
-    // steal the user's focus or add a Dock icon while they work.
+    // Quiet test mode (CUPNET_E2E): forbid the app from ever activating so a
+    // test run never pulls focus away from the user (also set earlier in
+    // runtime-early-flags; re-applied here in case the early call was too soon).
     if (process.platform === 'darwin' && process.env.CUPNET_E2E === '1') {
-        try { app.setActivationPolicy('accessory'); } catch { /* ignore */ }
+        try { app.setActivationPolicy('prohibited'); } catch { /* ignore */ }
         try { app.dock?.hide(); } catch { /* ignore */ }
     }
 
     app.on('browser-window-created', (_, win) => {
         attachWindowSwitcherHotkey(win, () => mainWindow);
         attachRendererConsoleForward(win);
-        // Quiet test mode: keep every window invisible (opacity 0 — the
-        // webContents still loads and renders, so e2e is unaffected) so a test
-        // run doesn't spray windows across the user's desktop.
+        // Quiet test mode: make every window invisible (opacity 0) AND
+        // click-through (setIgnoreMouseEvents), so a test run never covers the
+        // desktop or swallows the user's clicks. macOS clamps windows back
+        // on-screen so moving them away doesn't help — a transparent window at
+        // its normal position still eats clicks, which is why ignore-mouse is
+        // the real fix. Combined with the accessory policy above (app never
+        // becomes frontmost) the user keeps full control of their machine. The
+        // webContents still loads and renders, so e2e is unaffected.
         if (process.env.CUPNET_E2E === '1') {
-            const hide = () => { try { win.setOpacity(0); } catch { /* ignore */ } };
-            hide();
-            win.on('show', hide);
+            const stash = () => {
+                try {
+                    win.setIgnoreMouseEvents(true);
+                    win.setOpacity(0);
+                } catch { /* ignore */ }
+            };
+            stash();
+            win.on('show', stash);
         }
     });
 
