@@ -28,6 +28,15 @@ try {
     }
 } catch { /* ignore */ }
 
+// Browser identity: for non-Chromium identities (Firefox/Safari UA) hide navigator.userAgentData,
+// which Chromium keeps exposing even under a CDP UA override. Chromium identities need nothing here.
+try {
+    const idData = ipcRenderer.sendSync('get-identity-navigator-patch-sync');
+    if (idData && idData.script) {
+        webFrame.executeJavaScript(idData.script);
+    }
+} catch { /* ignore */ }
+
 // Listen for live settings changes — re-inject when user toggles cameras.
 ipcRenderer.on('camera-filter-update', (_, payload) => {
     try {
@@ -75,6 +84,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
     // Navigation from new-tab.html search bar — load URL in current tab
     navigateTo: (url) => ipcRenderer.send('navigate-to', url),
+    // Read-only: the configured omnibox search engine (new-tab.html search box follows Settings).
+    getSearchEngine: () => ipcRenderer.invoke('get-search-engine'),
     retryFailedNavigation: () => ipcRenderer.send('retry-failed-navigation'),
 
     reportHttpLabUiState: (state) => ipcRenderer.send('http-lab-ui-state', state),

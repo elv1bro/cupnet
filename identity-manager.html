@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+    <title>Browser ID</title>
+    <link rel="stylesheet" href="shared-dark-theme.css">
+    <style>
+        html, body { height: 100%; margin: 0; }
+        body {
+            font-family: var(--font-sans);
+            background: var(--bg0);
+            color: var(--text);
+            font-size: 13px;
+            line-height: 1.45;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .topbar {
+            display: flex; align-items: center; gap: 12px;
+            padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--bg1); flex-shrink: 0;
+        }
+        .topbar-title { font-size: 14px; font-weight: 600; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
+        .icon-svg { width: 16px; height: 16px; }
+        .spacer { flex: 1; }
+        .chip {
+            display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+            border: 1px solid var(--border-light); background: var(--bg2); font-size: 12px; color: var(--text-dim); max-width: 380px;
+            overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+        }
+        .chip b { color: var(--text); font-weight: 600; }
+        .chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
+        .chip.active .dot { background: var(--ok); }
+        .chip.override .dot { background: var(--warn); }
+        .body { flex: 1; overflow: auto; padding: 14px 16px 18px; }
+        .section { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg1); padding: 12px 14px; margin-bottom: 12px; }
+        .section-title { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-dim); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+        .section-title .hint { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-muted); }
+        .seg { display: inline-flex; border: 1px solid var(--border-light); border-radius: var(--radius-sm); overflow: hidden; }
+        .seg button {
+            background: var(--bg2); color: var(--text-dim); border: 0; padding: 6px 12px; font: inherit; cursor: pointer;
+            border-right: 1px solid var(--border-light);
+        }
+        .seg button:last-child { border-right: 0; }
+        .seg button.on { background: var(--accent-bg); color: var(--accent); }
+        .tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin-top: 10px; }
+        .tpl-card {
+            border: 1px solid var(--border-light); border-radius: var(--radius-sm); background: var(--bg2); padding: 8px 10px;
+            cursor: pointer; text-align: left; font: inherit; color: var(--text);
+        }
+        .tpl-card:hover { border-color: var(--border-focus); }
+        .tpl-card.on { border-color: var(--accent); background: var(--accent-bg); }
+        .tpl-card .lbl { font-weight: 600; font-size: 12.5px; }
+        .tpl-card .sub { color: var(--text-muted); font-size: 11px; margin-top: 2px; font-family: var(--font-mono); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+        .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .field { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+        .label { font-size: 11.5px; color: var(--text-dim); }
+        .input, select, textarea {
+            width: 100%; padding: 7px 9px; border-radius: var(--radius-sm); border: 1px solid var(--border-light);
+            background: var(--bg0); color: var(--text); font: inherit; font-size: 12px;
+        }
+        textarea { font-family: var(--font-mono); font-size: 11.5px; min-height: 56px; resize: vertical; }
+        .input:focus, select:focus, textarea:focus { outline: none; border-color: var(--border-focus); }
+        .muted { color: var(--text-muted); font-size: 11.5px; }
+        .check { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12.5px; }
+        details.adv summary { cursor: pointer; color: var(--text-dim); font-size: 12px; user-select: none; }
+        .preview { font-family: var(--font-mono); font-size: 11.5px; border-collapse: collapse; width: 100%; }
+        .preview td { padding: 4px 6px; border-top: 1px solid var(--border); vertical-align: top; word-break: break-all; }
+        .preview td:first-child { color: var(--text-dim); white-space: nowrap; width: 150px; }
+        .preview td.none { color: var(--text-muted); font-style: italic; }
+        .banner { border: 1px solid var(--accent-border); background: var(--accent-bg); border-radius: var(--radius-sm); padding: 8px 10px; font-size: 12px; margin-bottom: 12px; display: none; }
+        .banner.warn { border-color: rgba(210,153,34,.5); background: rgba(210,153,34,.08); }
+        .footer {
+            display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--border); background: var(--bg1); flex-shrink: 0;
+        }
+        .btn { padding: 7px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-light); background: var(--bg2); color: var(--text); font: inherit; cursor: pointer; }
+        .btn.primary { background: var(--accent); border-color: var(--accent); color: #0b1220; font-weight: 600; }
+        .btn:disabled { opacity: .5; cursor: default; }
+        .status { color: var(--text-muted); font-size: 12px; }
+        .status.ok { color: var(--ok); }
+        .status.err { color: var(--danger); }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+<div class="topbar">
+    <span class="topbar-title">
+        <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>
+        Browser ID
+    </span>
+    <div class="spacer"></div>
+    <span class="chip" id="chip-effective" title="Effective identity"><span class="dot"></span><span id="chip-text">…</span></span>
+</div>
+
+<div class="body">
+    <div class="banner warn" id="banner-override"></div>
+    <div class="banner" id="banner-cdp"></div>
+
+    <div class="section">
+        <p class="section-title">Identity <span class="hint">— User-Agent, client hints and navigator.* seen by sites</span></p>
+        <div class="seg" id="mode-seg" role="tablist">
+            <button type="button" data-mode="engine" title="No override: the engine's own Chromium UA (sanitized)">Engine default</button>
+            <button type="button" data-mode="template" title="A consistent browser profile: UA + client hints + TLS">Template</button>
+            <button type="button" data-mode="custom" title="Free-text User-Agent; hints and TLS are derived from it">Custom UA</button>
+        </div>
+        <div id="tpl-grid" class="tpl-grid"></div>
+        <div class="field" id="custom-ua-field">
+            <label class="label" for="f-ua">User-Agent</label>
+            <textarea id="f-ua" spellcheck="false" placeholder="Mozilla/5.0 (…) Chrome/154.0.0.0 Safari/537.36"></textarea>
+            <span class="muted">Chromium-family UAs get matching sec-ch-ua / navigator.userAgentData; Firefox / Safari UAs send no client hints.</span>
+        </div>
+        <p class="muted" id="engine-note">Engine default keeps the real Chromium User-Agent (CupNet/Electron tokens stripped). Timezone, language and TLS below still apply.</p>
+        <label class="check" id="engine-hints-row"><input type="checkbox" id="f-engine-hints"> Send the engine's client hints (sec-ch-ua) on the wire — Electron sends none, real Chromium always does</label>
+    </div>
+
+    <div class="section">
+        <p class="section-title">Locale <span class="hint">— Intl / Date timezone and Accept-Language</span></p>
+        <label class="check" style="margin:0 0 6px"><input type="checkbox" id="f-follow-geo"> Follow the connected proxy's country (timezone from the egress IP, matching Accept-Language)</label>
+        <p class="muted" id="geo-status"></p>
+        <div class="row">
+            <div class="field">
+                <label class="label" for="f-timezone">Timezone (IANA, empty = system)</label>
+                <input class="input" id="f-timezone" list="tz-list" placeholder="Europe/Berlin" spellcheck="false">
+                <datalist id="tz-list"></datalist>
+            </div>
+            <div class="field">
+                <label class="label" for="f-language">Accept-Language (empty = system)</label>
+                <input class="input" id="f-language" list="lang-list" placeholder="en-US,en;q=0.9" spellcheck="false">
+                <datalist id="lang-list"></datalist>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <details class="adv" id="adv-tls">
+            <summary>TLS / HTTP2 fingerprint (AzureTLS worker) — advanced</summary>
+            <div class="row">
+                <div class="field">
+                    <label class="label" for="f-tls">TLS profile</label>
+                    <select id="f-tls">
+                        <option value="">Follow identity</option>
+                        <option value="chrome">chrome</option>
+                        <option value="firefox">firefox</option>
+                        <option value="safari">safari</option>
+                        <option value="ios">ios</option>
+                        <option value="edge">edge</option>
+                        <option value="opera">opera</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label class="label" for="f-ja3-mode">ClientHello</label>
+                    <select id="f-ja3-mode">
+                        <option value="template">Profile template</option>
+                        <option value="custom">Custom JA3</option>
+                    </select>
+                </div>
+            </div>
+            <div class="field" id="ja3-field">
+                <label class="label" for="f-ja3">JA3 string</label>
+                <textarea id="f-ja3" spellcheck="false" placeholder="771,4865-4866-…,0-23-…,29-23-24,0"></textarea>
+            </div>
+            <label class="check"><input type="checkbox" id="f-http1"> Force HTTP/1.1 (changes JA4 ALPN; only for broken HTTP/2 origins)</label>
+        </details>
+    </div>
+
+    <div class="section">
+        <p class="section-title">Preview <span class="hint">— what the wire and JavaScript will show for this configuration</span></p>
+        <table class="preview" id="preview">
+            <tr><td>User-Agent</td><td id="pv-ua"></td></tr>
+            <tr><td>sec-ch-ua</td><td id="pv-ch"></td></tr>
+            <tr><td>sec-ch-ua-platform</td><td id="pv-plat"></td></tr>
+            <tr><td>sec-ch-ua-mobile</td><td id="pv-mobile"></td></tr>
+            <tr><td>Accept-Language</td><td id="pv-lang"></td></tr>
+            <tr><td>navigator.platform</td><td id="pv-navplat"></td></tr>
+            <tr><td>Timezone</td><td id="pv-tz"></td></tr>
+            <tr><td>TLS profile</td><td id="pv-tls"></td></tr>
+        </table>
+    </div>
+</div>
+
+<div class="footer">
+    <span class="status" id="status"></span>
+    <div class="spacer"></div>
+    <label class="check" id="auto-check-row" title="After Apply, open (or refresh) the identity check tab automatically" style="margin:0 8px 0 0"><input type="checkbox" id="f-auto-check" checked> Check after apply</label>
+    <button type="button" class="btn" id="btn-verify" title="Open cupnet://identity-check in a tab: compares what sites receive on the wire with what JavaScript reports">Verify in a tab</button>
+    <button type="button" class="btn" id="btn-revert">Revert</button>
+    <button type="button" class="btn primary" id="btn-apply">Apply</button>
+</div>
+
+<script src="browser-identity-catalog.js"></script>
+<script src="identity-manager-renderer.js"></script>
+</body>
+</html>

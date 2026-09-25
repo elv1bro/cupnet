@@ -712,14 +712,21 @@ function createSubWindowsApi(d) {
         d.proxyManagerWindow.on('closed', () => { d.proxyManagerWindow = null; });
     }
 
-    /** Browser Identity window (UA / client hints / TLS / timezone / language). */
-    function createIdentityManagerWindow() {
+    /**
+     * Browser ID window (UA / client hints / TLS / timezone / language).
+     * @param {{ mode?: 'engine'|'template'|'custom' }} [opts] - pre-switch the editor to a mode
+     */
+    function createIdentityManagerWindow(opts) {
+        const mode = opts && typeof opts === 'object' && typeof opts.mode === 'string' ? opts.mode : null;
         if (d.identityManagerWindow && !d.identityManagerWindow.isDestroyed()) {
-            d.identityManagerWindow.focus(); return;
+            d.identityManagerWindow.show();
+            d.identityManagerWindow.focus();
+            if (mode) { try { d.identityManagerWindow.webContents.send('identity-manager-command', { mode }); } catch (_) { /* ignore */ } }
+            return;
         }
         d.identityManagerWindow = _spawnTrustedToolWindow({
             width: 760, height: 640, minWidth: 620, minHeight: 480,
-            title: 'Browser Identity', icon: d.iconPath,
+            title: 'Browser ID', icon: d.iconPath,
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false }
         });
         if (process.env.CUPNET_DEVTOOLS === '1' || String(process.env.CUPNET_DEVTOOLS || '').toLowerCase() === 'true') {
@@ -727,8 +734,29 @@ function createSubWindowsApi(d) {
                 try { d.identityManagerWindow.webContents.openDevTools({ mode: 'detach' }); } catch (_) { /* ignore */ }
             });
         }
-        d.identityManagerWindow.loadFile(d.getAssetPath('identity-manager.html'));
+        d.identityManagerWindow.loadFile(d.getAssetPath('identity-manager.html'), mode ? { hash: `mode=${mode}` } : undefined);
         d.identityManagerWindow.on('closed', () => { d.identityManagerWindow = null; });
+    }
+
+    /** Browsing history tool window (History menu, Cmd/Ctrl+Y, omnibox `cupnet://history`). */
+    function createHistoryWindow(opts) {
+        const o = opts && typeof opts === 'object' ? opts : {};
+        const sendInit = (win) => {
+            try { win.webContents.send('history-window-init', { focusClear: !!o.focusClear }); } catch (_) { /* ignore */ }
+        };
+        if (d.historyWindow && !d.historyWindow.isDestroyed()) {
+            d.historyWindow.focus();
+            sendInit(d.historyWindow);
+            return;
+        }
+        d.historyWindow = _spawnTrustedToolWindow({
+            width: 980, height: 680, minWidth: 720, minHeight: 460,
+            title: 'History', icon: d.iconPath,
+            webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js'), contextIsolation: true, nodeIntegration: false }
+        });
+        d.historyWindow.loadFile(d.getAssetPath('history.html'));
+        d.historyWindow.webContents.once('did-finish-load', () => { if (d.historyWindow) sendInit(d.historyWindow); });
+        d.historyWindow.on('closed', () => { d.historyWindow = null; });
     }
 
     function createOnboardingWindow() {
@@ -849,6 +877,7 @@ function createSubWindowsApi(d) {
         createSiteInfoPopoverWindow,
         createProxyManagerWindow,
         createIdentityManagerWindow,
+        createHistoryWindow,
         createRulesWindow,
         openBreakpointWindow,
         createOnboardingWindow,

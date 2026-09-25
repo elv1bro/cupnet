@@ -34,6 +34,7 @@ export default function fr(kbdRow) {
     <a href="#fingerprint">4. Empreinte &amp; TLS</a>
     <a href="#toolbar">5. Barre d'outils</a>
     <a href="#omnibox">Barre d'adresse (omnibox)</a>
+    <a href="#history">Historique de navigation</a>
     <a href="#hotkeys">6. Raccourcis</a>
     <a href="#logs">7. Journaux · Comparer</a>
     <a href="#editor">8. Éditeur de requêtes</a>
@@ -135,15 +136,28 @@ export default function fr(kbdRow) {
 
 <div id="omnibox" class="g-card">
     <h2>Barre d'adresse (omnibox)</h2>
-    <p>Comportement proche de Chrome : <b>historique classé (frecency)</b>, <b>autocomplétion inline</b> sur le meilleur historique, suggestions par catégories (recherche, changer d'onglet, liens rapides, historique) et liste dans un overlay séparé.</p>
-    ${kbdRow('<kbd>Ctrl L</kbd> (⌘L)', "Focus + suggestions")}
-    ${kbdRow('<kbd>Ctrl K</kbd> (⌘K)', "Palette de commandes — préfixe <code>&gt;</code> pour les commandes intégrées")}
-    ${kbdRow('<kbd>Tab</kbd> (inline)', "Si la fin d'URL est sélectionnée en « fantôme », Tab place le curseur à la fin (accepter).")}
-    ${kbdRow('<kbd>Ctrl Entrée</kbd> / <kbd>⌘ Entrée</kbd> / <kbd>Alt Entrée</kbd>', 'Ouvrir la saisie dans un <b>nouvel onglet</b> (overlay ouvert ou non).')}
+    <p>Le champ d'adresse fonctionne comme l'omnibox de Chrome. Le texte saisi est classé une fois (URL, hôte de dev, page interne ou recherche), <b>la ligne 1 est toujours ce qu'ouvre <kbd>Entrée</kbd></b>, et l'historique est classé par <b>frecency</b> (visites + adresses saisies, dégressif sur deux semaines).</p>
+    ${kbdRow('Meilleure correspondance', 'Un site visité dont l\'hôte commence par la saisie devient la ligne 1 et est <b>complété dans le champ</b> — <kbd>Tab</kbd>, <kbd>→</kbd> ou <kbd>Fin</kbd> acceptent. Une suggestion choisie une fois devient un raccourci pour ce préfixe.')}
+    ${kbdRow('Lignes', 'Meilleure correspondance · Rechercher &lt;moteur&gt; … · Aller à l\'onglet · Historique · Pages CupNet (Settings, Guide, History, Identity check). Le focus sur un champ vide ou inchangé affiche <b>Récents</b> et <b>Sites fréquents</b>.')}
+    ${kbdRow('URL ou recherche ?', '<code>example.com</code> → https ; <code>localhost:3000</code>, <code>10.0.0.5</code>, <code>api:8080</code>, <code>intranet/path</code>, <code>*.local / .test / .lan</code> → http ; texte avec espaces → recherche. Préfixe <code>&gt;</code> = palette de commandes.')}
+    ${kbdRow('<kbd>Ctrl L</kbd> (⌘L)', 'Focus sur la barre, texte sélectionné. <kbd>Échap</kbd> rétablit l\'URL de la page ; un second <kbd>Échap</kbd> quitte la barre.')}
+    ${kbdRow('<kbd>Ctrl K</kbd> (⌘K)', 'Palette de commandes — la barre commence par <code>&gt;</code>.')}
+    ${kbdRow('<kbd>Ctrl Entrée</kbd> / <kbd>⌘ Entrée</kbd> / <kbd>Alt Entrée</kbd>', 'Ouvrir dans un <b>nouvel onglet</b>. <kbd>Maj Entrée</kbd> ouvre dans un nouvel onglet <b>isolé</b>.')}
+    ${kbdRow('<kbd>Maj Suppr</kbd>', 'Retirer la suggestion surlignée (URL et visites) de l\'historique. Les suggestions issues d\'onglets isolés portent le badge <i>isolated</i>.')}
+    ${kbdRow('Clic droit', 'Coller et accéder, copier, modifier. Clic droit sur <b>Précédent / Suivant</b> : liste de navigation de l\'onglet.')}
     ${kbdRow('Icône du site', 'Cadenas / globe ; clic : popover TLS / connexion, copier URL, effacer cookies du host, journal réseau. Glisser = URL.')}
-    ${kbdRow('× / Stop / Esc', "Vider le champ. Recharger devient Stop pendant le chargement ; Esc arrête si l'overlay est fermé.")}
-    ${kbdRow('Moteur de recherche', 'Paramètres → Search engine : DuckDuckGo, Google, Brave, Yandex ou URL perso avec <code>{q}</code>.')}
-    <div class="g-tip">La page interne <code>cupnet://newtab</code> affiche une adresse vide jusqu'à la saisie.</div>
+    ${kbdRow('Moteur de recherche', 'Paramètres → Search engine : DuckDuckGo, Google, Brave, Yandex, Bing ou URL perso avec <code>{q}</code>. Le champ de recherche de la page d\'accueil suit le même réglage.')}
+    <div class="g-tip">Les mises à jour de titre ou d\'onglet n\'écrasent jamais la saisie ; seul un changement d\'onglet ou un clic sur un lien remplace le brouillon, et passer à une autre application le conserve.</div>
+</div>
+
+<div id="history" class="g-card">
+    <h2>Historique de navigation</h2>
+    <p>Chaque navigation du cadre principal (y compris les routes SPA) est enregistrée avec titre, heure, onglet, groupe de cookies et session de journalisation. Ouvrir : <b>History → Show All History</b> (<kbd>Ctrl Y</kbd> / <kbd>⌘Y</kbd>), depuis l\'omnibox (<code>cupnet://history</code> ou le mot <i>history</i>) ou la palette de commandes.</p>
+    ${kbdRow('Fenêtre History', 'Recherche par titre ou URL, filtre par période, ouvrir (clic) ou dans un nouvel onglet (⌘/Ctrl-clic), copier, supprimer une visite ou toute l\'URL, effacer la dernière heure / 24 h / 7 jours / tout.')}
+    ${kbdRow('Récemment fermés', 'History → Recently Closed liste les 10 derniers onglets fermés ; <b>Reopen Closed Tab</b> (<kbd>Ctrl Alt T</kbd> / <kbd>⌘⌥T</kbd>) restaure le plus récent avec sa pile précédent/suivant et son groupe de cookies.')}
+    ${kbdRow('Conservation', 'Les visites plus anciennes que la durée de conservation (90 jours par défaut, réglable dans la fenêtre History) sont purgées au démarrage. Les visites des onglets isolés peuvent être exclues.')}
+    <div class="g-tip">L\'historique est stocké dans la base SQLite locale à côté du journal de trafic (<code>omnibox_history</code>, <code>history_visits</code>, <code>omnibox_shortcuts</code>). Pages internes, pages d\'erreur et URL non HTTP ne sont jamais enregistrées ; les fragments d\'URL sont retirés.</div>
+</div>
 </div>
 
 <div id="hotkeys" class="g-card">
@@ -152,6 +166,9 @@ export default function fr(kbdRow) {
     <h3>Onglets &amp; navigation</h3>
     ${kbdRow('<kbd>Ctrl T</kbd>', 'Nouvel onglet')}
     ${kbdRow('<kbd>Ctrl ⇧T</kbd>', 'Onglet isolé')}
+    ${kbdRow('<kbd>Ctrl Y</kbd>', 'Tout l\'historique')}
+    ${kbdRow('<kbd>Ctrl Alt T</kbd>', 'Rouvrir l\'onglet fermé')}
+    ${kbdRow('<kbd>Ctrl [</kbd> / <kbd>Ctrl ]</kbd>', 'Précédent / Suivant')}
     ${kbdRow('<kbd>Ctrl W</kbd>', 'Fermer')}
     ${kbdRow('<kbd>Ctrl Tab</kbd> / <kbd>Ctrl ⇧Tab</kbd>', 'Onglet suivant / précédent')}
     ${kbdRow('<kbd>Ctrl 1-9</kbd>', 'Focus onglet (9 = dernier)')}

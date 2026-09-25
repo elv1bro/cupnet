@@ -34,6 +34,7 @@ export default function en(kbdRow) {
     <a href="#fingerprint">4. Fingerprint &amp; TLS</a>
     <a href="#toolbar">5. Toolbar</a>
     <a href="#omnibox">Address bar (omnibox)</a>
+    <a href="#history">Browsing history</a>
     <a href="#hotkeys">6. Hotkeys</a>
     <a href="#logs">7. Network logs · Compare</a>
     <a href="#editor">8. Request Editor</a>
@@ -135,15 +136,28 @@ export default function en(kbdRow) {
 
 <div id="omnibox" class="g-card">
     <h2>Address bar (omnibox)</h2>
-    <p>The address field behaves like a Chrome omnibox: <b>frecency-ranked history</b> (visits + typed navigations), <b>inline autocomplete</b> for the best history match, categorized suggestions (search, switch tab, quick links, history), and a separate overlay for the list.</p>
-    ${kbdRow('<kbd>Ctrl L</kbd> (⌘L)', 'Focus the bar and open suggestions')}
-    ${kbdRow('<kbd>Ctrl K</kbd> (⌘K)', 'Command palette — bar starts with <code>&gt;</code> for built-in commands')}
-    ${kbdRow('<kbd>Tab</kbd> (inline)', 'When the rest of the URL is selected as a ghost, Tab moves the caret to the end (accept).')}
-    ${kbdRow('<kbd>Ctrl Enter</kbd> / <kbd>⌘ Enter</kbd> / <kbd>Alt Enter</kbd>', 'Open what you typed in a <b>new tab</b> (also when the overlay is open).')}
-    ${kbdRow('Site icon', 'Lock / globe by scheme; click for TLS / connection popover, copy URL, clear cookies for host, Network log. Drag the icon to drag the URL.')}
-    ${kbdRow('× / Stop / Esc', 'Clear the field. Reload becomes Stop while loading; Esc stops loading when the overlay is closed.')}
-    ${kbdRow('Search engine', 'Settings → Search engine: DuckDuckGo, Google, Brave, Yandex, or custom base URL with <code>{q}</code>.')}
-    <div class="g-tip">Internal <code>cupnet://newtab</code> shows an empty address display until you type.</div>
+    <p>The address field works like Chrome's omnibox. What you type is classified once (URL, dev host, internal page or search), <b>row 1 is always what <kbd>Enter</kbd> opens</b>, and history is ranked by <b>frecency</b> (visits + typed navigations, decaying over two weeks).</p>
+    ${kbdRow('Default match', 'A site you visited whose host starts with what you typed becomes row 1 and is <b>inline-completed</b> in the field — <kbd>Tab</kbd>, <kbd>→</kbd> or <kbd>End</kbd> accepts. Once you pick a suggestion, that typed prefix is remembered as a shortcut.')}
+    ${kbdRow('Rows', 'Default match · Search &lt;engine&gt; for … · Switch to tab · History · CupNet pages (Settings, Guide, History, Identity check). Focusing an empty or unchanged field shows <b>Recent</b> and <b>Top sites</b>.')}
+    ${kbdRow('URL or search?', '<code>example.com</code> → https; <code>localhost:3000</code>, <code>10.0.0.5</code>, <code>api:8080</code>, <code>intranet/path</code>, <code>*.local / .test / .lan</code> → http; text with spaces → search. Prefix <code>&gt;</code> = command palette.')}
+    ${kbdRow('<kbd>Ctrl L</kbd> (⌘L)', 'Focus the bar with the text selected. <kbd>Esc</kbd> reverts to the page URL; a second <kbd>Esc</kbd> leaves the bar.')}
+    ${kbdRow('<kbd>Ctrl K</kbd> (⌘K)', 'Command palette — the bar starts with <code>&gt;</code>.')}
+    ${kbdRow('<kbd>Ctrl Enter</kbd> / <kbd>⌘ Enter</kbd> / <kbd>Alt Enter</kbd>', 'Open in a <b>new tab</b>. <kbd>Shift Enter</kbd> opens in a new <b>isolated</b> tab.')}
+    ${kbdRow('<kbd>Shift Delete</kbd>', 'Remove the highlighted suggestion (its URL and visits) from history. Suggestions recorded in isolated tabs carry an <i>isolated</i> badge.')}
+    ${kbdRow('Right-click', 'Paste and go, copy, edit. Right-click <b>Back / Forward</b> for the tab\'s own navigation list.')}
+    ${kbdRow('Site icon', 'Lock / globe by scheme; click for the TLS / connection popover, copy URL, clear cookies for the host, Network log. Drag the icon to drag the URL.')}
+    ${kbdRow('Search engine', 'Settings → Search engine: DuckDuckGo, Google, Brave, Yandex, Bing or a custom URL with <code>{q}</code>. The start-page search box follows the same setting.')}
+    <div class="g-tip">Page-title or tab updates never overwrite what you are typing; only switching tabs or clicking a link replaces the draft, and switching to another app keeps it.</div>
+</div>
+
+<div id="history" class="g-card">
+    <h2>Browsing history</h2>
+    <p>Every main-frame navigation (including in-page SPA routes) is recorded with its title, time, tab, cookie group and logging session. Open it with <b>History → Show All History</b> (<kbd>Ctrl Y</kbd> / <kbd>⌘Y</kbd>), from the omnibox (<code>cupnet://history</code> or type <i>history</i>) or from the command palette.</p>
+    ${kbdRow('History window', 'Search by title or URL, filter by day range, open (click) or open in a new tab (⌘/Ctrl-click), copy, remove one visit or a whole URL, clear the last hour / 24 h / 7 days / everything.')}
+    ${kbdRow('Recently closed', 'History → Recently Closed lists the last 10 closed tabs; <b>Reopen Closed Tab</b> (<kbd>Ctrl Alt T</kbd> / <kbd>⌘⌥T</kbd>) restores the newest one with its back/forward stack and cookie group.')}
+    ${kbdRow('Retention', 'Visits older than the retention period (default 90 days, set in the History window) are purged at startup. Isolated-tab visits can be excluded from history.')}
+    <div class="g-tip">History is stored in the local SQLite database next to the traffic log (<code>omnibox_history</code>, <code>history_visits</code>, <code>omnibox_shortcuts</code>). Internal pages, error pages and non-HTTP URLs are never recorded; URL fragments are stripped.</div>
+</div>
 </div>
 
 <div id="hotkeys" class="g-card">
@@ -152,6 +166,9 @@ export default function en(kbdRow) {
     <h3>Tabs &amp; navigation</h3>
     ${kbdRow('<kbd>Ctrl T</kbd>', 'New tab')}
     ${kbdRow('<kbd>Ctrl ⇧T</kbd>', 'New isolated tab')}
+    ${kbdRow('<kbd>Ctrl Y</kbd>', 'Show All History')}
+    ${kbdRow('<kbd>Ctrl Alt T</kbd>', 'Reopen closed tab')}
+    ${kbdRow('<kbd>Ctrl [</kbd> / <kbd>Ctrl ]</kbd>', 'Back / Forward')}
     ${kbdRow('<kbd>Ctrl W</kbd>', 'Close active tab')}
     ${kbdRow('<kbd>Ctrl Tab</kbd> / <kbd>Ctrl ⇧Tab</kbd>', 'Next / previous tab')}
     ${kbdRow('<kbd>Ctrl 1-9</kbd>', 'Focus tab by index (9 = last)')}

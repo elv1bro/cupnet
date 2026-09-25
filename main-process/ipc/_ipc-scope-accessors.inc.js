@@ -1,5 +1,9 @@
 function ipcScopeGet(k) {
     switch (k) {
+        case 'BrowserWindow': return BrowserWindow;
+        case 'CaptchaSolverError': return CaptchaSolverError;
+        case 'ExternalProxyPort': return ExternalProxyPort;
+        case 'ProxyChain': return ProxyChain;
         case '_analyzeCaptchaScript': return _analyzeCaptchaScript;
         case '_analyzeEndpointsCollectScript': return _analyzeEndpointsCollectScript;
         case '_analyzeFormsScript': return _analyzeFormsScript;
@@ -11,31 +15,29 @@ function ipcScopeGet(k) {
         case '_cupnetRoot': return _cupnetRoot;
         case '_lastPointerByTabId': return _lastPointerByTabId;
         case '_pairScore': return _pairScore;
-        case '_requestsForSessionAsc': return _requestsForSessionAsc;
         case '_reqWithCompareOptions': return _reqWithCompareOptions;
+        case '_requestsForSessionAsc': return _requestsForSessionAsc;
         case '_serializeCompareRowRequest': return _serializeCompareRowRequest;
         case '_wcIdToTabId': return _wcIdToTabId;
+        case 'actProxy': return actProxy;
         case 'activeExtPorts': return activeExtPorts;
         case 'activeFingerprint': return activeFingerprint;
-        case 'actProxy': return actProxy;
         case 'app': return app;
         case 'applyEffectiveTrafficMode': return applyEffectiveTrafficMode;
         case 'applyTrafficFilters': return applyTrafficFilters;
         case 'broadcastInterceptRuleMatched': return broadcastInterceptRuleMatched;
         case 'broadcastTlsProfileChanged': return broadcastTlsProfileChanged;
-        case 'BrowserWindow': return BrowserWindow;
         case 'buildMenu': return buildMenu;
         case 'bundleUtils': return bundleUtils;
-        case 'CaptchaSolverError': return CaptchaSolverError;
         case 'checkCurrentIpGeo': return checkCurrentIpGeo;
         case 'clipboard': return clipboard;
         case 'comparePair': return comparePair;
         case 'compareResult': return compareResult;
         case 'compareViewerWindow': return compareViewerWindow;
+        case 'connectProxyWithFailover': return connectProxyWithFailover;
         case 'connectedProfileId': return connectedProfileId;
         case 'connectedProfileName': return connectedProfileName;
         case 'connectedResolvedVars': return connectedResolvedVars;
-        case 'connectProxyWithFailover': return connectProxyWithFailover;
         case 'consoleCaptureApi': return consoleCaptureApi;
         case 'consoleViewerWindow': return consoleViewerWindow;
         case 'cookieManagerWindow': return cookieManagerWindow;
@@ -43,9 +45,10 @@ function ipcScopeGet(k) {
         case 'createConsoleViewerWindow': return createConsoleViewerWindow;
         case 'createCookieManagerWindow': return createCookieManagerWindow;
         case 'createDnsManagerWindow': return createDnsManagerWindow;
+        case 'createHistoryWindow': return createHistoryWindow;
         case 'createIdentityManagerWindow': return createIdentityManagerWindow;
-        case 'createLoggingModalWindow': return createLoggingModalWindow;
         case 'createLogViewerWindow': return createLogViewerWindow;
+        case 'createLoggingModalWindow': return createLoggingModalWindow;
         case 'createNotesWindow': return createNotesWindow;
         case 'createOnboardingWindow': return createOnboardingWindow;
         case 'createPageAnalyzerWindow': return createPageAnalyzerWindow;
@@ -59,7 +62,6 @@ function ipcScopeGet(k) {
         case 'dialog': return dialog;
         case 'diffUtils': return diffUtils;
         case 'dnsManagerWindow': return dnsManagerWindow;
-        case 'ExternalProxyPort': return ExternalProxyPort;
         case 'extPortErrors': return extPortErrors;
         case 'extPortsStore': return extPortsStore;
         case 'fs': return fs;
@@ -73,6 +75,8 @@ function ipcScopeGet(k) {
         case 'getTrackingSettings': return getTrackingSettings;
         case 'hadLoggingBeenStopped': return hadLoggingBeenStopped;
         case 'harExporter': return harExporter;
+        case 'historyService': return historyService;
+        case 'historyWindow': return historyWindow;
         case 'identityService': return identityService;
         case 'interceptor': return interceptor;
         case 'ipcMain': return ipcMain;
@@ -83,10 +87,10 @@ function ipcScopeGet(k) {
         case 'loadJsonDiffModules': return loadJsonDiffModules;
         case 'loadSettings': return loadSettings;
         case 'logEntryCount': return logEntryCount;
-        case 'loggingModalWindow': return loggingModalWindow;
         case 'logViewerInitSessions': return logViewerInitSessions;
         case 'logViewerWindow': return logViewerWindow;
         case 'logViewerWindows': return logViewerWindows;
+        case 'loggingModalWindow': return loggingModalWindow;
         case 'mainWindow': return mainWindow;
         case 'maybeLogStartupMetrics': return maybeLogStartupMetrics;
         case 'mitmError': return mitmError;
@@ -110,7 +114,6 @@ function ipcScopeGet(k) {
         case 'parseProxyTemplate': return parseProxyTemplate;
         case 'path': return path;
         case 'persistentAnonymizedProxyUrl': return persistentAnonymizedProxyUrl;
-        case 'ProxyChain': return ProxyChain;
         case 'proxyManagerWindow': return proxyManagerWindow;
         case 'proxyResilience': return proxyResilience;
         case 'quickChangeProxy': return quickChangeProxy;
@@ -146,8 +149,8 @@ function ipcScopeGet(k) {
 }
 function ipcScopeSet(k, v) {
     switch (k) {
-        case 'activeFingerprint': activeFingerprint = v; return;
         case 'actProxy': actProxy = v; return;
+        case 'activeFingerprint': activeFingerprint = v; return;
         case 'compareResult': compareResult = v; return;
         case 'connectedProfileId': connectedProfileId = v; return;
         case 'connectedProfileName': connectedProfileName = v; return;

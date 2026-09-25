@@ -49,23 +49,23 @@ function registerCookiesDnsIpc(ctx) {
         if (!tab) return;
         if (!proxyProfileId || !ctx.mitmProxy) {
             if (ctx.mitmProxy) ctx.mitmProxy.removeTabUpstream(tid);
-            if (ctx.resetFingerprintOnWebContents && tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
-                await ctx.resetFingerprintOnWebContents(tab.view.webContents);
-            }
+            // Back to the effective global identity for this tab.
+            if (ctx.identityService) await ctx.identityService.setTabOverride(tid, null);
             return;
         }
         const profile = ctx.db.getProxyProfileEncrypted(proxyProfileId);
         if (!profile) return;
         const resolvedUrl = getResolvedProxyUpstreamFromProfile(profile, ephemeralVars);
+        const overrides = profile.identity_override;
+        // TLS / JA3 / forceHttp1 follow the tab profile only when it overrides the identity;
+        // otherwise the tab inherits the global effective identity (browser/ja3 null → global).
         ctx.mitmProxy.setTabUpstream(tid, {
             upstream: resolvedUrl,
-            browser:  profile.tls_profile || null,
-            ja3:      profile.tls_ja3_mode === 'custom' ? profile.tls_ja3_custom : null,
-            forceHttp1: !!profile.force_http1,
+            browser:  overrides ? (profile.tls_profile || null) : null,
+            ja3:      overrides && profile.tls_ja3_mode === 'custom' ? profile.tls_ja3_custom : null,
+            forceHttp1: overrides ? !!profile.force_http1 : null,
         });
-        if (ctx.applyFingerprintFromProfile && tab.view?.webContents && !tab.view.webContents.isDestroyed()) {
-            await ctx.applyFingerprintFromProfile(tab.view.webContents, proxyProfileId);
-        }
+        if (ctx.identityService) await ctx.identityService.setTabOverride(tid, overrides ? profile : null);
     }
     ctx.ipcMain.handle('get-cookies', async (event, tabId, filter) => {
         const tab = _cookieSessionTab(event, tabId);

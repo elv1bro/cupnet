@@ -16,5 +16,6 @@ contextBridge.exposeInMainWorld('omniboxOverlay', {
         if (_pendingData) { cb(_pendingData); _pendingData = null; }
     },
     selectItem: (idx) => ipcRenderer.send('omnibox-overlay-select', idx),
+    deleteItem: (idx) => ipcRenderer.send('omnibox-overlay-delete', idx),
     dismiss:    ()    => ipcRenderer.send('omnibox-overlay-dismiss'),
 });

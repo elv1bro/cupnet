@@ -121,7 +121,10 @@ function applyRendererUserAgentToSession(sess, rawUa, acceptLanguage) {
     try {
         // Passing an empty acceptLanguage clears the partition's Accept-Language.
         // Only override it when one is actually configured; otherwise keep the default.
-        if (acceptLanguage) sess.setUserAgent(ua, acceptLanguage);
+        // Electron expects language CODES here ("ru,en-US,en") and adds the q-values itself —
+        // a full header value would come out as "en-US;q=0.9;q=0.9" on the wire.
+        const codes = String(acceptLanguage || '').split(',').map((t) => t.split(';')[0].trim()).filter(Boolean);
+        if (codes.length) sess.setUserAgent(ua, codes.join(','));
         else sess.setUserAgent(ua);
     } catch { /* ignore */ }
 }

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https://identity-check.cupnet https://httpbin.org https://ipinfo.io https://tls.peet.ws">
+    <title>Identity check</title>
+    <link rel="stylesheet" href="shared-dark-theme.css">
+    <style>
+        body { margin: 0; background: var(--bg0); color: var(--text); font-family: var(--font-sans); font-size: 13px; line-height: 1.45; }
+        .wrap { max-width: 980px; margin: 0 auto; padding: 28px 24px 40px; }
+        h1 { font-size: 20px; margin: 0 0 4px; color: var(--text); }
+        .sub { color: var(--text-dim); margin: 0 0 18px; }
+        .verdict { border-radius: var(--radius); padding: 12px 14px; margin-bottom: 18px; border: 1px solid var(--border); background: var(--bg1); font-weight: 600; }
+        .verdict.ok { border-color: rgba(63,185,80,.5); color: var(--ok); }
+        .verdict.bad { border-color: rgba(248,81,73,.5); color: var(--danger); }
+        .verdict.busy { color: var(--text-dim); font-weight: 400; }
+        table { width: 100%; border-collapse: collapse; background: var(--bg1); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+        th, td { text-align: left; padding: 9px 12px; border-top: 1px solid var(--border); vertical-align: top; font-size: 12.5px; }
+        th { background: var(--bg2); color: var(--text-dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; border-top: 0; }
+        td.k { color: var(--text-dim); white-space: nowrap; width: 150px; }
+        td.v { font-family: var(--font-mono); font-size: 11.5px; word-break: break-all; }
+        td.s { width: 90px; white-space: nowrap; font-weight: 600; }
+        .ok { color: var(--ok); } .bad { color: var(--danger); } .na { color: var(--text-muted); }
+        .actions { display: flex; gap: 10px; align-items: center; margin: 16px 0 8px; }
+        button { padding: 7px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border-light); background: var(--bg2); color: var(--text); font: inherit; cursor: pointer; }
+        button:hover { border-color: var(--accent); }
+        .hint { color: var(--text-muted); font-size: 12px; }
+        pre { background: var(--bg1); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; font-size: 11px; overflow: auto; max-height: 260px; color: var(--text-dim); }
+        details summary { cursor: pointer; color: var(--text-dim); margin: 14px 0 6px; }
+    </style>
+</head>
+<body>
+<div class="wrap" id="root" data-state="loading">
+    <h1>Browser ID check</h1>
+    <p class="sub">Left: what JavaScript on this page sees. Right: what a website actually receives on the wire (captured by the local MITM after the identity rewrite — nothing leaves your machine).</p>
+
+    <div class="verdict busy" id="verdict">Checking…</div>
+
+    <table>
+        <thead><tr><th>Field</th><th>JavaScript (this tab)</th><th>Wire (what sites receive)</th><th>Match</th></tr></thead>
+        <tbody id="rows"></tbody>
+    </table>
+
+    <div class="actions">
+        <button type="button" id="btn-recheck">Re-check</button>
+        <span class="hint">Change the identity in <b>Tools → Browser ID…</b> (or the Browser ID button in the toolbar), then re-check. Open pages need a reload to pick up a new identity.</span>
+    </div>
+
+    <h1 style="font-size:16px;margin:26px 0 4px">Through the proxy (real external request)</h1>
+    <p class="sub">Makes a real request to a public echo <b>through the currently connected proxy</b> — this is what an actual website receives: the egress IP/country and the headers after the identity rewrite. The local check above never leaves your machine; this one does.</p>
+    <div class="actions">
+        <button type="button" id="btn-external">Check through the proxy</button>
+        <span class="hint" id="external-hint">Needs internet. Uses httpbin.org (headers + egress IP), ipinfo.io (country) and tls.peet.ws (TLS/JA3/JA4 + HTTP/2 fingerprint).</span>
+    </div>
+    <div class="verdict busy" id="external-verdict" style="display:none"></div>
+    <table id="external-table" style="display:none">
+        <thead><tr><th>Field</th><th>What the external site received</th><th>JavaScript (this tab)</th><th>Match</th></tr></thead>
+        <tbody id="external-rows"></tbody>
+    </table>
+
+    <details>
+        <summary>Raw report (JSON)</summary>
+        <pre id="json"></pre>
+    </details>
+</div>
+<script src="identity-check-renderer.js"></script>
+</body>
+</html>

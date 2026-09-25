@@ -46,10 +46,19 @@ function registerMitmTlsResilienceIpc(ctx) {
     ctx.ipcMain.handle('mitm-set-browser',  (_, prof)  => { ctx.mitmProxy?.setBrowser(prof); return { success: true }; });
     ctx.ipcMain.handle('mitm-set-upstream', (_, url)   => { ctx.mitmProxy?.setUpstream(url);  return { success: true }; });
 
-    ctx.ipcMain.handle('get-tls-profile', () => ctx.loadSettings().tlsProfile || 'chrome');
-    ctx.ipcMain.handle('set-tls-profile', (_, profile) => {
+    // TLS profile is part of the browser identity (identity-service); these channels stay for
+    // compatibility (settings page, e2e, older callers) and map onto the global identity.
+    ctx.ipcMain.handle('get-tls-profile', () => {
+        if (ctx.identityService) return ctx.identityService.getEffective().tlsProfile;
+        return ctx.loadSettings().tlsProfile || 'chrome';
+    });
+    ctx.ipcMain.handle('set-tls-profile', async (_, profile) => {
         const valid = ['chrome','firefox','safari','ios','edge','opera'];
         const p = valid.includes(profile) ? profile : 'chrome';
+        if (ctx.identityService) {
+            await ctx.identityService.setSettings({ tlsProfile: p }, { reason: 'set-tls-profile' });
+            return { success: true, profile: ctx.identityService.getEffective().tlsProfile };
+        }
         const s = ctx.loadSettings();
         s.tlsProfile = p;
         ctx.saveSettings(s);
@@ -74,16 +83,28 @@ function registerMitmTlsResilienceIpc(ctx) {
             ctx.connectedResolvedVars = {};
             if (ctx.mitmProxy) {
                 ctx.mitmProxy.setUpstream(null);
-                ctx.mitmProxy._activeJa3 = null;
+                ctx.mitmProxy.setForceHttp1?.(false);
                 // Direct is an intentional user choice — lift any fail-closed egress block.
                 ctx.mitmProxy.setEgressBlocked?.(false);
             }
 
-            const p = ['chrome','firefox','safari','ios','edge','opera'].includes(tlsProfile) ? tlsProfile : 'chrome';
-            ctx.mitmProxy?.setBrowser(p);
-            const settings = ctx.loadSettings();
-            settings.tlsProfile = p;
-            ctx.saveSettings(settings);
+            const valid = ['chrome','firefox','safari','ios','edge','opera'];
+            const p = valid.includes(tlsProfile) ? tlsProfile : null;
+            if (ctx.identityService) {
+                // Direct = no proxy profile → drop any profile identity override; an explicit TLS
+                // choice (legacy callers pass one) becomes the global identity's TLS profile.
+                if (p) await ctx.identityService.setSettings({ tlsProfile: p }, { reason: 'connect-direct', skipApply: true });
+                ctx.identityService.setGeoHint(null, { skipApply: true });
+                await ctx.identityService.setProxyOverride(null, { reason: 'connect-direct' });
+            } else {
+                const prof = p || 'chrome';
+                ctx.mitmProxy?.setBrowser(prof);
+                if (ctx.mitmProxy) ctx.mitmProxy._activeJa3 = null;
+                const settings = ctx.loadSettings();
+                settings.tlsProfile = prof;
+                ctx.saveSettings(settings);
+                ctx.broadcastTlsProfileChanged(prof);
+            }
 
             await ctx.applyEffectiveTrafficMode('mitm', null, {
                 source: 'connect-direct',
@@ -92,7 +113,6 @@ function registerMitmTlsResilienceIpc(ctx) {
 
             ctx.buildMenu();
             ctx.notifyProxyStatus();
-            ctx.broadcastTlsProfileChanged(p);
             return { success: true };
         } catch (e) {
             return { success: false, error: e.message };

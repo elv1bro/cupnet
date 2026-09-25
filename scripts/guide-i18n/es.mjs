@@ -34,6 +34,7 @@ export default function es(kbdRow) {
     <a href="#fingerprint">4. Huella digital y TLS</a>
     <a href="#toolbar">5. Barra de herramientas</a>
     <a href="#omnibox">Barra de direcciones (omnibox)</a>
+    <a href="#history">Historial de navegación</a>
     <a href="#hotkeys">6. Atajos</a>
     <a href="#logs">7. Registros · Comparar</a>
     <a href="#editor">8. Editor de peticiones</a>
@@ -135,15 +136,28 @@ export default function es(kbdRow) {
 
 <div id="omnibox" class="g-card">
     <h2>Barra de direcciones (omnibox)</h2>
-    <p>Similar a Chrome: <b>historial con frecency</b>, <b>autocompletado inline</b> del mejor match, sugerencias por categorías (búsqueda, cambiar pestaña, enlaces rápidos, historial) y lista en un overlay aparte.</p>
-    ${kbdRow('<kbd>Ctrl L</kbd> (⌘L)', 'Enfocar y abrir sugerencias')}
-    ${kbdRow('<kbd>Ctrl K</kbd> (⌘K)', 'Paleta de comandos — prefijo <code>&gt;</code> para comandos integrados')}
-    ${kbdRow('<kbd>Tab</kbd> (inline)', 'Si el resto de la URL está seleccionado como «fantasma», Tab mueve el cursor al final (aceptar).')}
-    ${kbdRow('<kbd>Ctrl Enter</kbd> / <kbd>⌘ Enter</kbd> / <kbd>Alt Enter</kbd>', 'Abrir lo escrito en una <b>nueva pestaña</b> (también con overlay abierto).')}
+    <p>El campo de dirección funciona como el omnibox de Chrome. Lo escrito se clasifica una vez (URL, host de desarrollo, página interna o búsqueda), <b>la fila 1 es siempre lo que abre <kbd>Enter</kbd></b> y el historial se ordena por <b>frecency</b> (visitas + direcciones escritas, decayendo en dos semanas).</p>
+    ${kbdRow('Mejor coincidencia', 'Un sitio visitado cuyo host empieza por lo escrito pasa a la fila 1 y se <b>autocompleta en el campo</b> — <kbd>Tab</kbd>, <kbd>→</kbd> o <kbd>Fin</kbd> aceptan. Una sugerencia elegida una vez se recuerda como atajo para ese prefijo.')}
+    ${kbdRow('Filas', 'Mejor coincidencia · Buscar en &lt;motor&gt; … · Cambiar a pestaña · Historial · Páginas de CupNet (Settings, Guide, History, Identity check). Enfocar un campo vacío o sin cambios muestra <b>Recientes</b> y <b>Sitios frecuentes</b>.')}
+    ${kbdRow('¿URL o búsqueda?', '<code>example.com</code> → https; <code>localhost:3000</code>, <code>10.0.0.5</code>, <code>api:8080</code>, <code>intranet/path</code>, <code>*.local / .test / .lan</code> → http; texto con espacios → búsqueda. Prefijo <code>&gt;</code> = paleta de comandos.')}
+    ${kbdRow('<kbd>Ctrl L</kbd> (⌘L)', 'Enfocar la barra con el texto seleccionado. <kbd>Esc</kbd> restaura la URL de la página; un segundo <kbd>Esc</kbd> sale de la barra.')}
+    ${kbdRow('<kbd>Ctrl K</kbd> (⌘K)', 'Paleta de comandos — la barra empieza con <code>&gt;</code>.')}
+    ${kbdRow('<kbd>Ctrl Enter</kbd> / <kbd>⌘ Enter</kbd> / <kbd>Alt Enter</kbd>', 'Abrir en una <b>nueva pestaña</b>. <kbd>Shift Enter</kbd> abre en una nueva pestaña <b>aislada</b>.')}
+    ${kbdRow('<kbd>Shift Supr</kbd>', 'Quitar la sugerencia resaltada (URL y visitas) del historial. Las sugerencias de pestañas aisladas llevan la etiqueta <i>isolated</i>.')}
+    ${kbdRow('Clic derecho', 'Pegar e ir, copiar, editar. Clic derecho en <b>Atrás / Adelante</b>: lista de navegación de la pestaña.')}
     ${kbdRow('Icono del sitio', 'Candado / globo; clic: TLS / conexión, copiar URL, borrar cookies del host, registro de red. Arrastrar = URL.')}
-    ${kbdRow('× / Stop / Esc', 'Vaciar campo. Recargar pasa a Stop mientras carga; Esc detiene si el overlay está cerrado.')}
-    ${kbdRow('Motor de búsqueda', 'Ajustes → Search engine: DuckDuckGo, Google, Brave, Yandex o URL propia con <code>{q}</code>.')}
-    <div class="g-tip">La página interna <code>cupnet://newtab</code> muestra la dirección vacía hasta que escribes.</div>
+    ${kbdRow('Motor de búsqueda', 'Ajustes → Search engine: DuckDuckGo, Google, Brave, Yandex, Bing o URL propia con <code>{q}</code>. El buscador de la página de inicio sigue el mismo ajuste.')}
+    <div class="g-tip">Las actualizaciones de título o pestaña nunca sobrescriben lo que escribes; solo cambiar de pestaña o hacer clic en un enlace reemplaza el borrador, y cambiar a otra aplicación lo conserva.</div>
+</div>
+
+<div id="history" class="g-card">
+    <h2>Historial de navegación</h2>
+    <p>Cada navegación del marco principal (incluidas rutas SPA en la página) se registra con título, hora, pestaña, grupo de cookies y sesión de registro. Ábrelo con <b>History → Show All History</b> (<kbd>Ctrl Y</kbd> / <kbd>⌘Y</kbd>), desde el omnibox (<code>cupnet://history</code> o la palabra <i>history</i>) o desde la paleta de comandos.</p>
+    ${kbdRow('Ventana History', 'Busca por título o URL, filtra por días, abre (clic) o en nueva pestaña (⌘/Ctrl-clic), copia, elimina una visita o toda la URL, borra la última hora / 24 h / 7 días / todo.')}
+    ${kbdRow('Cerradas recientemente', 'History → Recently Closed lista las últimas 10 pestañas cerradas; <b>Reopen Closed Tab</b> (<kbd>Ctrl Alt T</kbd> / <kbd>⌘⌥T</kbd>) restaura la más reciente con su pila atrás/adelante y su grupo de cookies.')}
+    ${kbdRow('Retención', 'Las visitas más antiguas que el periodo de retención (90 días por defecto, ajustable en la ventana History) se purgan al iniciar. Las visitas de pestañas aisladas pueden excluirse.')}
+    <div class="g-tip">El historial se guarda en la base SQLite local junto al registro de tráfico (<code>omnibox_history</code>, <code>history_visits</code>, <code>omnibox_shortcuts</code>). Páginas internas, de error y URL no HTTP nunca se registran; los fragmentos de URL se descartan.</div>
+</div>
 </div>
 
 <div id="hotkeys" class="g-card">
@@ -152,6 +166,9 @@ export default function es(kbdRow) {
     <h3>Pestañas y navegación</h3>
     ${kbdRow('<kbd>Ctrl T</kbd>', 'Nueva pestaña')}
     ${kbdRow('<kbd>Ctrl ⇧T</kbd>', 'Pestaña aislada')}
+    ${kbdRow('<kbd>Ctrl Y</kbd>', 'Todo el historial')}
+    ${kbdRow('<kbd>Ctrl Alt T</kbd>', 'Reabrir pestaña cerrada')}
+    ${kbdRow('<kbd>Ctrl [</kbd> / <kbd>Ctrl ]</kbd>', 'Atrás / Adelante')}
     ${kbdRow('<kbd>Ctrl W</kbd>', 'Cerrar')}
     ${kbdRow('<kbd>Ctrl Tab</kbd> / <kbd>Ctrl ⇧Tab</kbd>', 'Siguiente / anterior')}
     ${kbdRow('<kbd>Ctrl 1-9</kbd>', 'Enfocar pestaña (9 = última)')}

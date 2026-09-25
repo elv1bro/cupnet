@@ -62,6 +62,8 @@ async function upsertLastSessionProxyProfile(ctx, proxy, fingerprint) {
             tls_profile: tlsProfile,
             tls_ja3_mode: ja3 ? 'custom' : 'template',
             tls_ja3_custom: ja3,
+            // The session's inline fingerprint / TLS choice must win over the global identity.
+            identity_override: !!(fingerprint || proxy.tlsProfile || ja3),
         });
         ctx.notifyProxyProfilesList?.();
         return id ?? null;

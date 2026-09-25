@@ -4370,3 +4370,15 @@ a#copy-url:hover {
     color: var(--text-muted, #6e7681);
 }
 .cred-save-btn-dismiss:hover { color: var(--text); }
+
+
+/* ── Browser identity quick switch (toolbar) ── */
+.identity-dot {
+    position: absolute; top: 5px; right: 7px; width: 6px; height: 6px; border-radius: 50%;
+    background: #3fb950; display: none;
+}
+.tool-btn.identity-active .identity-dot { display: block; }
+.browser-status-item--identity { cursor: pointer; background: none; border: 0; font: inherit; color: inherit; padding: 0; }
+.browser-status-item--identity:hover { color: #e6edf3; text-decoration: underline; }
+.browser-status-item--identity-active { color: #79c0ff; }
+/* Browser ID menu is native (Menu.popup) — see browser-renderer.js */

@@ -64,6 +64,7 @@ async function loadSessionProfile(ctx, profile, opts = {}) {
     if (profile.proxy) {
         await ctx.tabManager.setTabProxy(tabId, null);
         if (ctx.mitmProxy) ctx.mitmProxy.removeTabUpstream(tabId);
+        ctx.identityService?.clearTabOverride(tabId);
     }
 
     if (profile.logging.recording != null) {
@@ -181,6 +182,7 @@ async function _prepareGlobalProxyForSession(ctx, profile) {
         if (!t?.id) continue;
         await ctx.tabManager.setTabProxy(t.id, null);
         ctx.mitmProxy?.removeTabUpstream(t.id);
+        ctx.identityService?.clearTabOverride(t.id);
     }
 
     const result = await connectGlobalProxyProfile(ctx, profileId, proxy.variables || {});
@@ -210,11 +212,17 @@ async function _attachTabServices(ctx, tab) {
 
 async function _applyFingerprint(ctx, tab, profile) {
     if (!profile.fingerprint || !tab?.view?.webContents || tab.view.webContents.isDestroyed()) return;
-    if (!ctx.applyFingerprintToWebContents) return;
-    await ctx.applyFingerprintToWebContents(tab.view.webContents, {
-        user_agent: profile.fingerprint.userAgent,
-        language: profile.fingerprint.language,
-        timezone: profile.fingerprint.timezone,
+    if (!ctx.identityService) return;
+    // Launch-profile fingerprint = per-tab identity override on top of the effective identity.
+    await ctx.identityService.setTabOverride(tab.id, {
+        identity_override: 1,
+        name: profile.name || 'launch profile',
+        user_agent: profile.fingerprint.userAgent || null,
+        language: profile.fingerprint.language || null,
+        timezone: profile.fingerprint.timezone || null,
+        tls_profile: profile.proxy?.tlsProfile || null,
+        tls_ja3_mode: profile.proxy?.ja3 ? 'custom' : 'template',
+        tls_ja3_custom: profile.proxy?.ja3 || null,
     });
 }
 

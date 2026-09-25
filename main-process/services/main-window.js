@@ -294,7 +294,7 @@ function createMainWindowApi(d) {
                     { label: 'Launch Profile…', click: () => sub.createSessionProfileModalWindow?.() },
                     { type: 'separator' },
                     { label: 'Proxy Manager', accelerator: 'CmdOrCtrl+P', click: () => sub.createProxyManagerWindow() },
-                    { label: 'Browser Identity…', accelerator: 'CmdOrCtrl+Alt+I', click: () => sub.createIdentityManagerWindow?.() },
+                    { label: 'Browser ID…', accelerator: 'CmdOrCtrl+Alt+I', click: () => sub.createIdentityManagerWindow?.() },
                     { label: 'Network Activity', accelerator: 'CmdOrCtrl+Shift+L', click: () => sub.createLogViewerWindow() },
                     { label: 'Cookie Manager', accelerator: 'CmdOrCtrl+Alt+C', click: () => sub.createCookieManagerWindow(d.tabManager?.getActiveTabId()) },
                     { label: 'DNS Manager', accelerator: 'CmdOrCtrl+Shift+M', click: () => sub.createDnsManagerWindow() },
@@ -357,8 +357,52 @@ function createMainWindowApi(d) {
                 { label: 'Next Tab', accelerator: 'Ctrl+Tab', click: () => { d.mainWindow?.webContents.send('switch-tab-rel', 1); }},
                 { label: 'Previous Tab', accelerator: 'Ctrl+Shift+Tab', click: () => { d.mainWindow?.webContents.send('switch-tab-rel', -1); }},
             ]},
+            { label: 'History', submenu: buildHistoryMenuTemplate() },
         ]);
         d.Menu.setApplicationMenu(menu);
+    }
+
+    function _activeTabWebContents() {
+        const tab = d.tabManager?.getActiveTab();
+        const wc = tab?.view?.webContents;
+        return wc && !wc.isDestroyed() ? wc : null;
+    }
+
+    /** History menu: navigation, the History window and the recently-closed ring (rebuilt on change). */
+    function buildHistoryMenuTemplate() {
+        const closed = (() => { try { return d.historyService?.getRecentlyClosed() || []; } catch { return []; } })();
+        const reopen = async (id) => {
+            if (!d.historyService) return;
+            if (!(await confirmOpenAnotherTab(d))) return;
+            try { await d.historyService.reopenClosedTab(id); } catch (e) {
+                d.safeCatch?.({ module: 'main', eventCode: 'history.reopen.failed' }, e, 'warn');
+            }
+        };
+        const recentlyClosedItems = closed.length
+            ? closed.map((e) => ({
+                label: `${(e.title || e.url).slice(0, 60)}${e.isolated ? '  [isolated]' : ''}`,
+                click: () => { void reopen(e.id); },
+            }))
+            : [{ label: 'No recently closed tabs', enabled: false }];
+        return [
+            { label: 'Back', accelerator: 'CmdOrCtrl+[', click: () => {
+                d.tabManager?.ensureActiveTabViewVisible?.();
+                const wc = _activeTabWebContents();
+                if (wc?.navigationHistory?.canGoBack()) wc.navigationHistory.goBack();
+            } },
+            { label: 'Forward', accelerator: 'CmdOrCtrl+]', click: () => {
+                d.tabManager?.ensureActiveTabViewVisible?.();
+                const wc = _activeTabWebContents();
+                if (wc?.navigationHistory?.canGoForward()) wc.navigationHistory.goForward();
+            } },
+            { label: 'Home', click: () => { d.tabManager?.navigate(d.getNewTabUrl()); } },
+            { type: 'separator' },
+            { label: 'Show All History', accelerator: 'CmdOrCtrl+Y', click: () => sub.createHistoryWindow?.() },
+            { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Alt+T', enabled: closed.length > 0, click: () => { void reopen(null); } },
+            { label: 'Recently Closed', submenu: recentlyClosedItems },
+            { type: 'separator' },
+            { label: 'Clear Browsing History…', click: () => sub.createHistoryWindow?.({ focusClear: true }) },
+        ];
     }
 
     return { confirmExitDialog, applyRuntimeAppIcon, createMainWindow, buildMenu };

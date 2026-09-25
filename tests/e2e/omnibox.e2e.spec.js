@@ -1,17 +1,19 @@
 'use strict';
 
 /**
- * E2E: Chrome-like omnibox (history suggestions, command palette, mod+Enter, site popover, search engine).
- * Requires network for httpbin.org (same as cupnet.e2e).
+ * E2E: Chrome-like omnibox (history suggestions, inline completion, command palette, mod+Enter,
+ * site popover, search engine, history window, recently closed). Requires network for httpbin.org.
  */
 
 const { test, expect } = require('@playwright/test');
 const {
     launchCupnet,
+    getMainWindow,
     waitForAppContext,
     waitMitmReady,
     navigateAndWait,
     getActiveTabUrl,
+    openSubWindowExpectNew,
 } = require('./helpers.js');
 
 const HTTPBIN_GET = 'https://httpbin.org/get';
@@ -27,7 +29,8 @@ let mainWindow;
 
 test.beforeAll(async () => {
     electronApp = await launchCupnet();
-    mainWindow = await electronApp.firstWindow({ timeout: 120_000 });
+    await electronApp.firstWindow({ timeout: 120_000 });
+    mainWindow = await getMainWindow(electronApp, 120_000);
     await mainWindow.waitForLoadState('domcontentloaded');
     await waitForAppContext(electronApp, 120_000);
     await waitMitmReady(electronApp, 180_000);
@@ -53,24 +56,76 @@ test('omni-1) history suggestions API returns visited URL', async () => {
     expect(rows.some((r) => String(r.url || '').includes('httpbin.org'))).toBe(true);
 });
 
-test('omni-2) typing does not auto-complete the address bar', async () => {
-    await navigateAndWait(electronApp, HTTPBIN_GET);
-    const typed = 'https://httpbin.org/ge';
-    const urlInput = mainWindow.locator('#url-input');
-    await urlInput.click();
-    await urlInput.fill(typed);
-    await mainWindow.waitForFunction(
+async function omniboxState(page) {
+    return page.evaluate(() => window.cupnetOmniboxDebug?.getState?.() || null);
+}
+
+async function waitForOmniboxOpen(page, timeout = 15_000) {
+    await page.waitForFunction(
         () => document.getElementById('address-bar-container')?.classList.contains('omnibox-open'),
         null,
-        { timeout: 15_000 }
+        { timeout }
     );
-    await new Promise((r) => setTimeout(r, 400));
+}
+
+test('omni-2) host-prefix history match becomes row 1 and inline-completes; Tab accepts', async () => {
+    await navigateAndWait(electronApp, HTTPBIN_GET);
+    const urlInput = mainWindow.locator('#url-input');
+    await urlInput.click();
+    // Type character by character so the completion logic sees real "append" input events.
+    await mainWindow.keyboard.type('httpb', { delay: 40 });
+    await waitForOmniboxOpen(mainWindow);
+    await expect
+        .poll(async () => (await omniboxState(mainWindow))?.completionShown, { timeout: 10_000 })
+        .toBe(true);
     const after = await mainWindow.evaluate(() => {
         const el = document.getElementById('url-input');
         return { value: el?.value || '', start: el?.selectionStart ?? 0, end: el?.selectionEnd ?? 0 };
     });
-    expect(after.value).toBe(typed);
-    expect(after.start).toBe(after.end);
+    expect(after.value.startsWith('httpbin.org')).toBe(true);
+    expect(after.start).toBe(5);
+    expect(after.end).toBe(after.value.length);
+    const st = await omniboxState(mainWindow);
+    expect(st.rows[0].kind).toBe('history');
+    expect(st.rows[0].isDefault).toBe(true);
+    expect(st.rows[1].kind).toBe('search');
+
+    await mainWindow.keyboard.press('Tab');
+    const accepted = await mainWindow.evaluate(() => {
+        const el = document.getElementById('url-input');
+        return { value: el?.value || '', start: el?.selectionStart ?? 0, end: el?.selectionEnd ?? 0 };
+    });
+    expect(accepted.start).toBe(accepted.end);
+    expect(accepted.value.startsWith('httpbin.org')).toBe(true);
+    await mainWindow.keyboard.press('Escape');
+    await mainWindow.keyboard.press('Escape');
+});
+
+test('omni-2b) typing while a background tab changes title does not clobber the draft', async () => {
+    const urlInput = mainWindow.locator('#url-input');
+    await urlInput.click();
+    await mainWindow.keyboard.type('draft-text', { delay: 20 });
+    // Simulate the tab-list churn that used to reset the field (A-017).
+    await electronApp.evaluate(() => {
+        const tm = globalThis.__cupnetAppContext?.modules?.tabManager;
+        tm?.broadcastTabList?.(true);
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    await expect(urlInput).toHaveValue('draft-text');
+    await mainWindow.keyboard.press('Escape');
+    await mainWindow.keyboard.press('Escape');
+});
+
+test('omni-2c) localhost:3000 is offered as an http URL, not a web search', async () => {
+    const urlInput = mainWindow.locator('#url-input');
+    await urlInput.click();
+    await urlInput.fill('localhost:3000');
+    await waitForOmniboxOpen(mainWindow);
+    await expect
+        .poll(async () => (await omniboxState(mainWindow))?.rows?.[0]?.url, { timeout: 10_000 })
+        .toBe('http://localhost:3000');
+    await mainWindow.keyboard.press('Escape');
+    await mainWindow.keyboard.press('Escape');
 });
 
 test('omni-3) Ctrl/Cmd+K opens command palette with >', async () => {
@@ -132,19 +187,69 @@ test('omni-7) switch to matching tab via suggestion row', async () => {
     const urlInput = mainWindow.locator('#url-input');
     await urlInput.click();
     await urlInput.fill('bytes/5');
-    await mainWindow.waitForFunction(
-        () => {
-            const el = document.getElementById('command-palette');
-            return el && !el.classList.contains('hidden');
-        },
-        null,
-        { timeout: 10_000 }
-    );
-    await new Promise((r) => setTimeout(r, 400));
-    await mainWindow.keyboard.press('ArrowDown');
+    await waitForOmniboxOpen(mainWindow);
+    await expect
+        .poll(async () => ((await omniboxState(mainWindow))?.rows || []).findIndex((r) => r.kind === 'tab'), { timeout: 10_000 })
+        .toBeGreaterThanOrEqual(0);
+    const tabIdx = ((await omniboxState(mainWindow)).rows).findIndex((r) => r.kind === 'tab');
+    for (let i = 0; i < tabIdx; i++) await mainWindow.keyboard.press('ArrowDown');
     await mainWindow.keyboard.press('Enter');
 
     await expect
         .poll(() => getActiveTabUrl(electronApp), { timeout: 20_000 })
         .toContain('bytes/5');
+});
+
+test('omni-8) Shift+Delete removes the highlighted suggestion from history', async () => {
+    await navigateAndWait(electronApp, HTTPBIN_BYTES);
+    const before = await mainWindow.evaluate(() => window.electronAPI.getOmniboxSuggestions('httpbin.org/bytes', 12));
+    expect(before.some((r) => String(r.url || '').includes('/bytes/5'))).toBe(true);
+    const urlInput = mainWindow.locator('#url-input');
+    await urlInput.click();
+    await urlInput.fill('httpbin.org/bytes');
+    await waitForOmniboxOpen(mainWindow);
+    await expect
+        .poll(async () => ((await omniboxState(mainWindow))?.rows || []).findIndex((r) => r.kind === 'history' && String(r.url).includes('/bytes/5')), { timeout: 10_000 })
+        .toBeGreaterThanOrEqual(0);
+    const idx = ((await omniboxState(mainWindow)).rows).findIndex((r) => r.kind === 'history' && String(r.url).includes('/bytes/5'));
+    for (let i = 0; i < idx; i++) await mainWindow.keyboard.press('ArrowDown');
+    await mainWindow.keyboard.press('Shift+Delete');
+    await expect
+        .poll(async () => {
+            const rows = await mainWindow.evaluate(() => window.electronAPI.getOmniboxSuggestions('httpbin.org/bytes', 12));
+            return rows.some((r) => String(r.url || '').includes('/bytes/5'));
+        }, { timeout: 10_000 })
+        .toBe(false);
+    await mainWindow.keyboard.press('Escape');
+    await mainWindow.keyboard.press('Escape');
+});
+
+test('omni-9) History window lists visits with real titles and supports search', async () => {
+    await navigateAndWait(electronApp, HTTPBIN_GET);
+    const win = await openSubWindowExpectNew(electronApp, mainWindow, 'openHistoryWindow', 30_000);
+    expect(win).toBeTruthy();
+    await win.waitForLoadState('domcontentloaded');
+    await expect.poll(() => win.locator('#history-tbody tr.visit').count(), { timeout: 15_000 }).toBeGreaterThan(0);
+    const rows = await win.evaluate(() => [...document.querySelectorAll('#history-tbody tr.visit')].map((tr) => tr.dataset.url));
+    expect(rows.some((u) => u.includes('httpbin.org/get'))).toBe(true);
+    await win.locator('#search').fill('nothing-matches-this-zz');
+    await expect.poll(() => win.locator('#history-tbody tr.visit').count(), { timeout: 10_000 }).toBe(0);
+    await win.close();
+});
+
+test('omni-10) closing a tab makes it reopenable with its cookie group', async () => {
+    const n0 = await mainWindow.evaluate(async () => (await window.electronAPI.getTabs()).length);
+    await mainWindow.evaluate(() => window.electronAPI.newTab(null));
+    await new Promise((r) => setTimeout(r, 400));
+    await navigateAndWait(electronApp, HTTPBIN_BYTES);
+    const activeId = await mainWindow.evaluate(async () => (await window.electronAPI.getTabs()).find((t) => t.isActive)?.id);
+    await mainWindow.evaluate((id) => window.electronAPI.closeTab(id), activeId);
+    await expect.poll(async () => (await mainWindow.evaluate(() => window.electronAPI.historyRecentlyClosed())).length, { timeout: 10_000 }).toBeGreaterThan(0);
+    const closed = await mainWindow.evaluate(() => window.electronAPI.historyRecentlyClosed());
+    expect(closed[0].url).toContain('httpbin.org/bytes');
+    const r = await mainWindow.evaluate(() => window.electronAPI.historyReopen(null));
+    expect(r?.tabId).toBeTruthy();
+    await expect.poll(() => getActiveTabUrl(electronApp), { timeout: 30_000 }).toContain('httpbin.org/bytes');
+    const n1 = await mainWindow.evaluate(async () => (await window.electronAPI.getTabs()).length);
+    expect(n1).toBe(n0 + 1);
 });

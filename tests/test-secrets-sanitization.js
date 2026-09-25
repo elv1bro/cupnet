@@ -9,7 +9,8 @@ const ROOT = path.join(__dirname, '..');
 const AZURE_TLS_FILE = path.join(ROOT, 'azuretls', 'azureTLS.js');
 const ENV_EXAMPLE = path.join(ROOT, '.env.example');
 
-test('azureTLS examples are sanitized from secret-like hardcoded values', () => {
+// The legacy Node/ffi AzureTLS binding was removed on 2026-09-24; keep the check only while the file exists.
+test('azureTLS examples are sanitized from secret-like hardcoded values', { skip: !fs.existsSync(AZURE_TLS_FILE) && 'legacy azuretls/azureTLS.js removed' }, () => {
     const src = fs.readFileSync(AZURE_TLS_FILE, 'utf8');
     assert.ok(!src.includes('Roxalana%4022'), 'Proxy credential sample must be removed');
     assert.ok(!src.includes('va22FBJqnag0w5vQf'), 'Proxy credential sample must be removed');

@@ -511,6 +511,13 @@ function registerMiscIpc(ctx) {
             }
         } catch (_) { /* ignore */ }
     });
+    ctx.ipcMain.on('omnibox-overlay-delete', (_, idx) => {
+        try {
+            if (ctx.mainWindow && !ctx.mainWindow.isDestroyed()) {
+                ctx.mainWindow.webContents.send('omnibox-overlay-delete', idx);
+            }
+        } catch (_) { /* ignore */ }
+    });
     ctx.ipcMain.on('omnibox-overlay-dismiss', () => {
         try {
             if (ctx.mainWindow && !ctx.mainWindow.isDestroyed()) {

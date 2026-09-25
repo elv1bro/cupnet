@@ -263,6 +263,19 @@ function migrateSchema() {
     if (!cols.includes('tls_ja3_custom'))  db.exec(`ALTER TABLE proxy_profiles ADD COLUMN tls_ja3_custom TEXT`);
     if (!cols.includes('traffic_mode'))    db.exec(`ALTER TABLE proxy_profiles ADD COLUMN traffic_mode TEXT NOT NULL DEFAULT 'mitm'`);
     if (!cols.includes('force_http1'))     db.exec(`ALTER TABLE proxy_profiles ADD COLUMN force_http1 INTEGER NOT NULL DEFAULT 0`);
+    if (!cols.includes('identity_override')) {
+        // Browser identity moved to a global setting (identity-service). A profile only overrides it
+        // when identity_override=1; existing rows that carry non-default identity fields keep their
+        // old behaviour by being marked as overrides.
+        db.exec(`ALTER TABLE proxy_profiles ADD COLUMN identity_override INTEGER NOT NULL DEFAULT 0`);
+        db.exec(`UPDATE proxy_profiles SET identity_override=1
+                 WHERE (user_agent IS NOT NULL AND user_agent<>'')
+                    OR (timezone IS NOT NULL AND timezone<>'')
+                    OR (language IS NOT NULL AND language<>'')
+                    OR (tls_profile IS NOT NULL AND tls_profile<>'' AND tls_profile<>'chrome')
+                    OR (tls_ja3_mode='custom' AND tls_ja3_custom IS NOT NULL AND tls_ja3_custom<>'')
+                    OR force_http1=1`);
+    }
     db.exec(`UPDATE proxy_profiles SET traffic_mode='mitm' WHERE traffic_mode IS NULL OR traffic_mode='' OR traffic_mode='browser_proxy'`);
     // Legacy DBs: columns referenced by getProxyProfiles() but missing on very old installs
     cols = db.pragma('table_info(proxy_profiles)').map((c) => c.name);
@@ -297,6 +310,11 @@ function migrateSchema() {
     }
     if (!dnsCols.includes('rewrite_host')) {
         db.exec(`ALTER TABLE dns_overrides ADD COLUMN rewrite_host TEXT`);
+    }
+    // Omnibox history: cookie group of the last visit (isolated-tab badge in suggestions).
+    const omniCols = db.pragma('table_info(omnibox_history)').map(c => c.name);
+    if (omniCols.length && !omniCols.includes('last_cookie_group_id')) {
+        db.exec(`ALTER TABLE omnibox_history ADD COLUMN last_cookie_group_id INTEGER`);
     }
     // ws_events.connection_id: must run AFTER createSchema; index only if column exists (new DB or post-ALTER).
     const wsCols = db.pragma('table_info(ws_events)').map(c => c.name);
@@ -853,6 +871,27 @@ function createSchema() {
         );
         CREATE INDEX IF NOT EXISTS idx_omnibox_host ON omnibox_history(host);
         CREATE INDEX IF NOT EXISTS idx_omnibox_last ON omnibox_history(last_visit_at);
+
+        -- Browsing history: one row per visit (omnibox_history stays the per-URL aggregate).
+        CREATE TABLE IF NOT EXISTS history_visits (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            url_id          INTEGER NOT NULL REFERENCES omnibox_history(id) ON DELETE CASCADE,
+            visited_at      TEXT    NOT NULL,
+            transition      TEXT    NOT NULL DEFAULT 'link',
+            tab_id          TEXT,
+            cookie_group_id INTEGER,
+            session_id      INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_hv_time ON history_visits(visited_at);
+        CREATE INDEX IF NOT EXISTS idx_hv_url  ON history_visits(url_id);
+
+        -- Learned omnibox shortcuts: what the user typed → where they went.
+        CREATE TABLE IF NOT EXISTS omnibox_shortcuts (
+            text            TEXT    PRIMARY KEY,
+            url             TEXT    NOT NULL,
+            hits            INTEGER NOT NULL DEFAULT 1,
+            last_used_at    TEXT    NOT NULL
+        );
     `);
 }
 
@@ -1410,7 +1449,7 @@ function getProxyProfiles() {
         SELECT id, name, url_display, country, is_template, variables, notes,
                last_tested_at, last_latency_ms, last_ip, last_geo, sort_order,
                user_agent, timezone, language,
-               tls_profile, tls_ja3_mode, tls_ja3_custom, traffic_mode, force_http1,
+               tls_profile, tls_ja3_mode, tls_ja3_custom, traffic_mode, force_http1, identity_override,
                created_at,
                CASE WHEN url_encrypted IS NULL AND url_display LIKE '%@%' THEN 1 ELSE 0 END AS needs_re_save
         FROM proxy_profiles ORDER BY sort_order ASC, name ASC LIMIT 1000
@@ -1432,7 +1471,7 @@ function saveProxyProfile(name, urlEncrypted, urlDisplay, opts = {}) {
                         is_template=?, variables=?, notes=?, sort_order=?,
                         user_agent=?, timezone=?, language=?,
                         tls_profile=?, tls_ja3_mode=?, tls_ja3_custom=?,
-                        traffic_mode=?, force_http1=?
+                        traffic_mode=?, force_http1=?, identity_override=?
                     WHERE id=?`)
           .run(urlEncrypted, urlDisplay, opts.country || null,
                opts.isTemplate ? 1 : 0, vars, opts.notes || null,
@@ -1441,32 +1480,36 @@ function saveProxyProfile(name, urlEncrypted, urlDisplay, opts = {}) {
                opts.tls_profile || 'chrome', opts.tls_ja3_mode || 'template', opts.tls_ja3_custom || null,
                normalizeTrafficMode(opts.traffic_mode),
                opts.force_http1 ? 1 : 0,
+               opts.identity_override ? 1 : 0,
                existing.id);
         return existing.id;
     }
     const row = db.prepare(`
         INSERT INTO proxy_profiles (name, url_encrypted, url_display, country, is_template, variables, notes, sort_order,
-                                    user_agent, timezone, language, tls_profile, tls_ja3_mode, tls_ja3_custom, traffic_mode, force_http1)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id
+                                    user_agent, timezone, language, tls_profile, tls_ja3_mode, tls_ja3_custom, traffic_mode, force_http1,
+                                    identity_override)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id
     `).get(name, urlEncrypted, urlDisplay, opts.country || null,
            opts.isTemplate ? 1 : 0, vars, opts.notes || null, opts.sortOrder ?? 0,
            opts.user_agent || null, opts.timezone || null, opts.language || null,
            opts.tls_profile || 'chrome', opts.tls_ja3_mode || 'template', opts.tls_ja3_custom || null,
            normalizeTrafficMode(opts.traffic_mode),
-           opts.force_http1 ? 1 : 0);
+           opts.force_http1 ? 1 : 0,
+           opts.identity_override ? 1 : 0);
     return row ? row.id : null;
 }
 
 function updateProxyProfileById(id, fields) {
     const allowed = ['name','url_encrypted','url_display','country','is_template','variables','notes','sort_order',
-                     'user_agent','timezone','language','tls_profile','tls_ja3_mode','tls_ja3_custom','traffic_mode','force_http1'];
+                     'user_agent','timezone','language','tls_profile','tls_ja3_mode','tls_ja3_custom','traffic_mode','force_http1',
+                     'identity_override'];
     const sets = [], vals = [];
     for (const [k, v] of Object.entries(fields)) {
         if (!allowed.includes(k)) continue;
         sets.push(`${k}=?`);
         if (k === 'variables' && typeof v === 'object') vals.push(JSON.stringify(v));
         else if (k === 'traffic_mode') vals.push(normalizeTrafficMode(v));
-        else if (k === 'force_http1') vals.push(v ? 1 : 0);
+        else if (k === 'force_http1' || k === 'identity_override') vals.push(v ? 1 : 0);
         else vals.push(v);
     }
     if (!sets.length) return;
@@ -1475,8 +1518,8 @@ function updateProxyProfileById(id, fields) {
 }
 
 function getProxyProfileEncrypted(id) {
-    const row = db.prepare(`SELECT name, url_encrypted, url_display, variables, user_agent, timezone, language,
-                                   tls_profile, tls_ja3_mode, tls_ja3_custom, traffic_mode, force_http1
+    const row = db.prepare(`SELECT id, name, url_encrypted, url_display, country, variables, user_agent, timezone, language,
+                                   tls_profile, tls_ja3_mode, tls_ja3_custom, traffic_mode, force_http1, identity_override
                             FROM proxy_profiles WHERE id = ?`).get(id);
     if (!row) return null;
     row.traffic_mode = normalizeTrafficMode(row.traffic_mode);
@@ -2240,7 +2283,10 @@ function deleteRequestEditorEnvironment(id) {
     db.prepare(`DELETE FROM request_editor_environments WHERE id = ?`).run(Number(id));
 }
 
-/** Top hosts by request count in the log DB (Chrome-like omnibox suggestions). */
+// ─── Omnibox history / browsing history ──────────────────────────────────────
+const omniboxModel = require('./omnibox-model');
+
+/** Top hosts by request count in the log DB (fallback when the omnibox history is empty). */
 function getOmniboxTopHosts(limit = 12) {
     if (!db) return [];
     const lim = Math.max(1, Math.min(40, Number(limit) || 12));
@@ -2266,120 +2312,429 @@ function _escapeOmniboxLike(s) {
     return String(s || '').replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
 }
 
-function _omniboxFrecency(row, nowMs) {
-    const last = Date.parse(row.last_visit_at);
-    const t = Number.isFinite(last) ? last : nowMs;
-    const ageDays = Math.max(0, (nowMs - t) / 86400000);
-    const base = Number(row.visit_count) + Number(row.typed_count) * 3;
-    return base * Math.exp(-ageDays / 14);
+/** Strip the fragment; only http(s) URLs are recorded. Returns '' when not recordable. */
+function normalizeHistoryUrl(url) {
+    const raw = typeof url === 'string' ? url.trim() : '';
+    if (!raw || !/^https?:\/\//i.test(raw)) return '';
+    const hash = raw.indexOf('#');
+    const noHash = hash >= 0 ? raw.slice(0, hash) : raw;
+    try { new URL(noHash); } catch { return ''; }
+    return noHash;
 }
 
 /**
- * Upsert a visit into omnibox history (main-frame navigations).
- * @param {{ url: string, title?: string|null, typed?: boolean }} payload
+ * Chromium reports the URL itself (no scheme, no `www.`, no trailing slash — e.g. `wikipedia.org`,
+ * `httpbin.org/html`) as the title until the real <title> arrives. Exact matches only, so a real
+ * title such as "Wikipedia" is never mistaken for the placeholder.
+ */
+function isPlaceholderTitle(title, url) {
+    const t = String(title || '').trim().toLowerCase();
+    if (!t) return true;
+    const u = String(url || '').toLowerCase();
+    const ns = u.replace(/^https?:\/\//, '');
+    const nsNoWww = ns.replace(/^www\./, '');
+    const candidates = [u, ns, ns.replace(/\/$/, ''), nsNoWww, nsNoWww.replace(/\/$/, '')];
+    return candidates.includes(t);
+}
+
+const OMNIBOX_HISTORY_COLS = 'id, url, host, title, visit_count, typed_count, last_visit_at, last_cookie_group_id';
+
+/**
+ * Record a main-frame visit: upsert the per-URL aggregate and append a history_visits row.
+ * @param {{ url: string, title?: string|null, typed?: boolean, transition?: string, tabId?: string|null,
+ *           cookieGroupId?: number|null, sessionId?: number|null, host?: string }} payload
+ * @returns {{ urlId: number }|null}
  */
 function recordOmniboxVisit(payload = {}) {
-    if (!db) return;
-    const url = typeof payload.url === 'string' ? payload.url.trim() : '';
-    if (!url || url === 'about:blank') return;
-    if (!/^https?:\/\//i.test(url)) return;
-    const low = url.toLowerCase();
-    if (low.startsWith('devtools:')) return;
+    if (!db) return null;
+    const url = normalizeHistoryUrl(payload.url);
+    if (!url) return null;
+    if (url.toLowerCase().startsWith('devtools:')) return null;
     let host = typeof payload.host === 'string' ? payload.host.trim() : '';
     if (!host) {
         try { host = new URL(url).hostname || ''; } catch { host = ''; }
     }
-    const title = payload.title != null ? String(payload.title).slice(0, 512) : '';
-    const typedInc = payload.typed ? 1 : 0;
+    const rawTitle = payload.title != null ? String(payload.title).slice(0, 512) : '';
+    const title = isPlaceholderTitle(rawTitle, url) ? '' : rawTitle;
+    const transition = String(payload.transition || (payload.typed ? 'typed' : 'link')).slice(0, 24);
+    const typedInc = transition === 'typed' ? 1 : 0;
     const now = new Date().toISOString();
+    const cgRaw = Number(payload.cookieGroupId);
+    const cookieGroupId = Number.isFinite(cgRaw) && cgRaw > 0 ? cgRaw : null;
+    const sessRaw = Number(payload.sessionId);
+    const sessionId = Number.isFinite(sessRaw) && sessRaw > 0 ? sessRaw : null;
+    const tabId = payload.tabId != null ? String(payload.tabId) : null;
     try {
-        db.prepare(`
-            INSERT INTO omnibox_history (url, host, title, visit_count, typed_count, last_visit_at)
-            VALUES (@url, @host, @title, 1, @typedInc, @now)
-            ON CONFLICT(url) DO UPDATE SET
-                visit_count = omnibox_history.visit_count + 1,
-                typed_count = omnibox_history.typed_count + excluded.typed_count,
-                title = CASE WHEN TRIM(COALESCE(excluded.title, '')) != ''
-                    THEN excluded.title ELSE omnibox_history.title END,
-                last_visit_at = excluded.last_visit_at,
-                host = CASE WHEN TRIM(COALESCE(excluded.host, '')) != ''
-                    THEN excluded.host ELSE omnibox_history.host END
-        `).run({ url, host, title, typedInc, now });
+        return db.transaction(() => {
+            if (transition === 'in_page') {
+                // SPA routers often push the same URL twice within a few ms.
+                const last = db.prepare(`
+                    SELECT v.visited_at FROM history_visits v
+                    JOIN omnibox_history h ON h.id = v.url_id
+                    WHERE h.url = ? ORDER BY v.id DESC LIMIT 1
+                `).get(url);
+                if (last && (Date.now() - Date.parse(last.visited_at)) < 1000) return null;
+            }
+            db.prepare(`
+                INSERT INTO omnibox_history (url, host, title, visit_count, typed_count, last_visit_at, last_cookie_group_id)
+                VALUES (@url, @host, @title, 1, @typedInc, @now, @cookieGroupId)
+                ON CONFLICT(url) DO UPDATE SET
+                    visit_count = omnibox_history.visit_count + 1,
+                    typed_count = omnibox_history.typed_count + excluded.typed_count,
+                    title = CASE WHEN TRIM(COALESCE(excluded.title, '')) != ''
+                        THEN excluded.title ELSE omnibox_history.title END,
+                    last_visit_at = excluded.last_visit_at,
+                    host = CASE WHEN TRIM(COALESCE(excluded.host, '')) != ''
+                        THEN excluded.host ELSE omnibox_history.host END,
+                    last_cookie_group_id = COALESCE(excluded.last_cookie_group_id, omnibox_history.last_cookie_group_id)
+            `).run({ url, host, title, typedInc, now, cookieGroupId });
+            const row = db.prepare(`SELECT id FROM omnibox_history WHERE url = ?`).get(url);
+            if (!row) return null;
+            db.prepare(`
+                INSERT INTO history_visits (url_id, visited_at, transition, tab_id, cookie_group_id, session_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `).run(row.id, now, transition, tabId, cookieGroupId, sessionId);
+            return { urlId: row.id };
+        })();
     } catch (e) {
         safeCatch({ module: 'db', eventCode: 'omnibox.visit.failed' }, e, 'warn');
+        return null;
+    }
+}
+
+/** Patch the title once the page reports the real one (page-title-updated). */
+function updateOmniboxTitle(url, title) {
+    if (!db) return false;
+    const u = normalizeHistoryUrl(url);
+    if (!u) return false;
+    const t = String(title || '').trim().slice(0, 512);
+    if (!t || isPlaceholderTitle(t, u)) return false;
+    try {
+        return db.prepare(`UPDATE omnibox_history SET title = ? WHERE url = ?`).run(t, u).changes > 0;
+    } catch (e) {
+        safeCatch({ module: 'db', eventCode: 'omnibox.title.failed' }, e, 'warn');
+        return false;
+    }
+}
+
+/** Candidate rows for a query, ordered by raw popularity (ranking happens in omnibox-model). */
+function getOmniboxCandidates(query, limit = 300) {
+    if (!db) return [];
+    const q = String(query || '').trim().toLowerCase().replace(/^https?:\/\//, '');
+    if (!q) return [];
+    const lim = Math.max(1, Math.min(1000, Number(limit) || 300));
+    const esc = _escapeOmniboxLike(q);
+    try {
+        return db.prepare(`
+            SELECT ${OMNIBOX_HISTORY_COLS}
+            FROM omnibox_history
+            WHERE LOWER(host) LIKE ? ESCAPE '\\'
+               OR LOWER(host) LIKE ? ESCAPE '\\'
+               OR LOWER(url) LIKE ? ESCAPE '\\'
+               OR LOWER(COALESCE(title, '')) LIKE ? ESCAPE '\\'
+            ORDER BY (visit_count + typed_count * 3) DESC, last_visit_at DESC
+            LIMIT ?
+        `).all(`${esc}%`, `%.${esc}%`, `%${esc}%`, `%${esc}%`, lim);
+    } catch (e) {
+        safeCatch({ module: 'db', eventCode: 'omnibox.candidates.failed' }, e, 'warn');
+        return [];
+    }
+}
+
+function getOmniboxRecent(limit = 8) {
+    if (!db) return [];
+    const lim = Math.max(1, Math.min(100, Number(limit) || 8));
+    try {
+        return db.prepare(`SELECT ${OMNIBOX_HISTORY_COLS} FROM omnibox_history ORDER BY last_visit_at DESC LIMIT ?`).all(lim);
+    } catch {
+        return [];
+    }
+}
+
+/** Most-used URL per host by frecency. */
+function getOmniboxTopSites(limit = 8) {
+    if (!db) return [];
+    const lim = Math.max(1, Math.min(40, Number(limit) || 8));
+    try {
+        const rows = db.prepare(`
+            SELECT ${OMNIBOX_HISTORY_COLS} FROM omnibox_history
+            ORDER BY (visit_count + typed_count * 3) DESC, last_visit_at DESC LIMIT 400
+        `).all();
+        const nowMs = Date.now();
+        const scored = rows.map((r) => ({ row: r, score: omniboxModel.frecency(r, nowMs) })).sort((a, b) => b.score - a.score);
+        const out = [];
+        const seenHosts = new Set();
+        for (const { row } of scored) {
+            const h = String(row.host || '').toLowerCase().replace(/^www\./, '');
+            if (!h || seenHosts.has(h)) continue;
+            seenHosts.add(h);
+            out.push(row);
+            if (out.length >= lim) break;
+        }
+        return out;
+    } catch {
+        return [];
     }
 }
 
 /**
- * Frecency-ranked omnibox suggestions; falls back to log top-hosts when history is empty.
- * @param {string} query
- * @param {number} limit
- * @returns {Array<{ url: string, host: string, title: string|null, score: number }>}
+ * Frecency-ranked omnibox suggestions (compat API; the omnibox uses history-service.suggest).
+ * Empty query → most recent rows. Falls back to log top-hosts when history has nothing.
+ * @returns {Array<{ url: string, host: string, title: string|null, score: number, matchKind: string }>}
  */
 function getOmniboxSuggestions(query, limit = 12) {
     if (!db) return [];
     const lim = Math.max(1, Math.min(40, Number(limit) || 12));
     const q = String(query || '').trim();
     const nowMs = Date.now();
-    let rows = [];
-    try {
-        if (!q) {
-            rows = db.prepare(`
-                SELECT url, host, title, visit_count, typed_count, last_visit_at
-                FROM omnibox_history
-                ORDER BY last_visit_at DESC
-                LIMIT ?
-            `).all(Math.min(120, lim * 6));
-        } else {
-            const likePat = `%${_escapeOmniboxLike(q)}%`;
-            rows = db.prepare(`
-                SELECT url, host, title, visit_count, typed_count, last_visit_at
-                FROM omnibox_history
-                WHERE LOWER(host) LIKE LOWER(?) ESCAPE '\\'
-                   OR LOWER(url) LIKE LOWER(?) ESCAPE '\\'
-                   OR LOWER(COALESCE(title, '')) LIKE LOWER(?) ESCAPE '\\'
-                ORDER BY last_visit_at DESC
-                LIMIT 80
-            `).all(likePat, likePat, likePat);
-        }
-    } catch (e) {
-        safeCatch({ module: 'db', eventCode: 'omnibox.suggestions.failed' }, e, 'warn');
-        rows = [];
-    }
-    const scored = rows.map((r) => ({
-        url: r.url,
-        host: r.host || '',
-        title: r.title || null,
-        score: _omniboxFrecency(r, nowMs),
-    }));
-    scored.sort((a, b) => b.score - a.score);
-    let out = scored.slice(0, lim);
-    if (!out.length) {
-        const hosts = getOmniboxTopHosts(lim);
-        out = hosts.map((h) => ({
-            url: `https://${h.host}`,
-            host: h.host,
-            title: null,
-            score: 0,
+    if (!q) {
+        return getOmniboxRecent(lim).map((r) => ({
+            url: r.url, host: r.host || '', title: r.title || null,
+            score: omniboxModel.frecency(r, nowMs), matchKind: 'recent',
+            cookieGroupId: r.last_cookie_group_id ?? null,
         }));
-        if (q) {
-            const ql = q.toLowerCase();
-            out = out.filter((x) => String(x.host).toLowerCase().includes(ql));
-        }
-    } else if (q && out.length < lim) {
+    }
+    let out = omniboxModel.rankSuggestions(getOmniboxCandidates(q, 300), q, { nowMs, limit: lim });
+    if (out.length < lim) {
         const have = new Set(out.map((x) => x.url));
-        const hosts = getOmniboxTopHosts(lim * 2);
         const ql = q.toLowerCase();
-        for (const h of hosts) {
+        for (const h of getOmniboxTopHosts(lim * 2)) {
             if (out.length >= lim) break;
             const u = `https://${h.host}`;
-            if (have.has(u)) continue;
-            if (!String(h.host).toLowerCase().includes(ql)) continue;
-            out.push({ url: u, host: h.host, title: null, score: 0.01 });
+            if (have.has(u) || !String(h.host).toLowerCase().includes(ql)) continue;
+            out.push({ url: u, host: h.host, title: null, score: 0.01, matchKind: 'log-host', cookieGroupId: null });
             have.add(u);
         }
     }
     return out;
+}
+
+function normalizeShortcutText(text) {
+    return String(text || '').trim().toLowerCase().replace(/^https?:\/\//, '').slice(0, 100);
+}
+
+/** Remember "typed this → went there". Same text with a different URL starts over at 1 hit. */
+function recordOmniboxShortcut(text, url) {
+    if (!db) return false;
+    const t = normalizeShortcutText(text);
+    const u = normalizeHistoryUrl(url);
+    if (!t || !u || t.length < 1) return false;
+    try {
+        db.prepare(`
+            INSERT INTO omnibox_shortcuts (text, url, hits, last_used_at) VALUES (?, ?, 1, ?)
+            ON CONFLICT(text) DO UPDATE SET
+                hits = CASE WHEN omnibox_shortcuts.url = excluded.url THEN omnibox_shortcuts.hits + 1 ELSE 1 END,
+                url = excluded.url,
+                last_used_at = excluded.last_used_at
+        `).run(t, u, new Date().toISOString());
+        return true;
+    } catch (e) {
+        safeCatch({ module: 'db', eventCode: 'omnibox.shortcut.failed' }, e, 'warn');
+        return false;
+    }
+}
+
+/** Best shortcut whose text starts with what was typed. */
+function getOmniboxShortcut(text) {
+    if (!db) return null;
+    const t = normalizeShortcutText(text);
+    if (!t) return null;
+    try {
+        const row = db.prepare(`
+            SELECT s.text, s.url, s.hits, h.title
+            FROM omnibox_shortcuts s
+            LEFT JOIN omnibox_history h ON h.url = s.url
+            WHERE s.text LIKE ? ESCAPE '\\'
+            ORDER BY (s.text = ?) DESC, s.hits DESC, s.last_used_at DESC
+            LIMIT 1
+        `).get(`${_escapeOmniboxLike(t)}%`, t);
+        return row ? { text: row.text, url: row.url, hits: row.hits, title: row.title || null } : null;
+    } catch {
+        return null;
+    }
+}
+
+function _recomputeHistoryAggregates(urlIds) {
+    const ids = [...new Set((urlIds || []).map(Number).filter((n) => Number.isFinite(n)))];
+    if (!ids.length) return;
+    const upd = db.prepare(`
+        UPDATE omnibox_history SET
+            visit_count = (SELECT COUNT(*) FROM history_visits WHERE url_id = @id),
+            typed_count = (SELECT COUNT(*) FROM history_visits WHERE url_id = @id AND transition = 'typed'),
+            last_visit_at = COALESCE((SELECT MAX(visited_at) FROM history_visits WHERE url_id = @id), last_visit_at)
+        WHERE id = @id
+    `);
+    const del = db.prepare(`DELETE FROM omnibox_history WHERE id = ? AND visit_count = 0`);
+    for (const id of ids) {
+        upd.run({ id });
+        del.run(id);
+    }
+    db.prepare(`DELETE FROM omnibox_shortcuts WHERE url NOT IN (SELECT url FROM omnibox_history)`).run();
+}
+
+/** Remove a URL from history and suggestions (Shift+Delete / History window). */
+function deleteHistoryUrl(url) {
+    if (!db) return false;
+    const u = normalizeHistoryUrl(url) || String(url || '').trim();
+    if (!u) return false;
+    try {
+        return db.transaction(() => {
+            const r = db.prepare(`DELETE FROM omnibox_history WHERE url = ?`).run(u);
+            db.prepare(`DELETE FROM omnibox_shortcuts WHERE url = ?`).run(u);
+            return r.changes > 0;
+        })();
+    } catch (e) {
+        safeCatch({ module: 'db', eventCode: 'history.delete.failed' }, e, 'warn');
+        return false;
+    }
+}
+
+function deleteHistoryVisit(visitId) {
+    if (!db) return false;
+    const id = Number(visitId);
+    if (!Number.isFinite(id)) return false;
+    try {
+        return db.transaction(() => {
+            const v = db.prepare(`SELECT url_id FROM history_visits WHERE id = ?`).get(id);
+            if (!v) return false;
+            db.prepare(`DELETE FROM history_visits WHERE id = ?`).run(id);
+            _recomputeHistoryAggregates([v.url_id]);
+            return true;
+        })();
+    } catch (e) {
+        safeCatch({ module: 'db', eventCode: 'history.delete.failed' }, e, 'warn');
+        return false;
+    }
+}
+
+function _historyFilterSql(opts, params) {
+    const where = [];
+    const q = String(opts?.query || '').trim().toLowerCase();
+    if (q) {
+        const like = `%${_escapeOmniboxLike(q)}%`;
+        where.push(`(LOWER(h.url) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(h.title, '')) LIKE ? ESCAPE '\\')`);
+        params.push(like, like);
+    }
+    if (Number.isFinite(Number(opts?.sinceMs)) && Number(opts.sinceMs) > 0) {
+        where.push(`v.visited_at >= ?`);
+        params.push(new Date(Number(opts.sinceMs)).toISOString());
+    }
+    if (Number.isFinite(Number(opts?.untilMs)) && Number(opts.untilMs) > 0) {
+        where.push(`v.visited_at < ?`);
+        params.push(new Date(Number(opts.untilMs)).toISOString());
+    }
+    if (Number.isFinite(Number(opts?.cookieGroupId)) && Number(opts.cookieGroupId) > 0) {
+        where.push(`v.cookie_group_id = ?`);
+        params.push(Number(opts.cookieGroupId));
+    }
+    return where.length ? `WHERE ${where.join(' AND ')}` : '';
+}
+
+/**
+ * Visits, newest first, joined with the URL aggregate.
+ * @param {{ query?: string, limit?: number, offset?: number, sinceMs?: number, untilMs?: number, cookieGroupId?: number }} [opts]
+ */
+function listHistoryVisits(opts = {}) {
+    if (!db) return [];
+    const lim = Math.max(1, Math.min(2000, Number(opts.limit) || 200));
+    const off = Math.max(0, Number(opts.offset) || 0);
+    const params = [];
+    const where = _historyFilterSql(opts, params);
+    try {
+        return db.prepare(`
+            SELECT v.id, v.visited_at, v.transition, v.tab_id, v.cookie_group_id, v.session_id,
+                   h.url, h.host, h.title, h.visit_count, h.typed_count
+            FROM history_visits v
+            JOIN omnibox_history h ON h.id = v.url_id
+            ${where}
+            ORDER BY v.visited_at DESC, v.id DESC
+            LIMIT ? OFFSET ?
+        `).all(...params, lim, off);
+    } catch (e) {
+        safeCatch({ module: 'db', eventCode: 'history.list.failed' }, e, 'warn');
+        return [];
+    }
+}
+
+function countHistoryVisits(opts = {}) {
+    if (!db) return 0;
+    const params = [];
+    const where = _historyFilterSql(opts, params);
+    try {
+        const r = db.prepare(`SELECT COUNT(*) AS n FROM history_visits v JOIN omnibox_history h ON h.id = v.url_id ${where}`).get(...params);
+        return r ? Number(r.n) : 0;
+    } catch {
+        return 0;
+    }
+}
+
+/**
+ * Clear browsing history. `sinceMs` limits the deletion to visits at/after that time
+ * (aggregates are recomputed); without it everything goes, including shortcuts.
+ */
+function clearHistory(opts = {}) {
+    if (!db) return { visits: 0, urls: 0 };
+    const since = Number(opts.sinceMs);
+    try {
+        return db.transaction(() => {
+            if (!Number.isFinite(since) || since <= 0) {
+                const visits = db.prepare(`DELETE FROM history_visits`).run().changes;
+                const urls = db.prepare(`DELETE FROM omnibox_history`).run().changes;
+                db.prepare(`DELETE FROM omnibox_shortcuts`).run();
+                return { visits, urls };
+            }
+            const iso = new Date(since).toISOString();
+            const ids = db.prepare(`SELECT DISTINCT url_id FROM history_visits WHERE visited_at >= ?`).all(iso).map((r) => r.url_id);
+            const visits = db.prepare(`DELETE FROM history_visits WHERE visited_at >= ?`).run(iso).changes;
+            const before = db.prepare(`SELECT COUNT(*) AS n FROM omnibox_history`).get().n;
+            _recomputeHistoryAggregates(ids);
+            const after = db.prepare(`SELECT COUNT(*) AS n FROM omnibox_history`).get().n;
+            return { visits, urls: before - after };
+        })();
+    } catch (e) {
+        safeCatch({ module: 'db', eventCode: 'history.clear.failed' }, e, 'warn');
+        return { visits: 0, urls: 0 };
+    }
+}
+
+/** Retention: drop visits older than N days; aggregates without remaining visits go too. */
+function purgeHistoryOlderThan(days) {
+    if (!db) return { visits: 0, urls: 0 };
+    const d = Number(days);
+    if (!Number.isFinite(d) || d <= 0) return { visits: 0, urls: 0 };
+    const iso = new Date(Date.now() - d * 86400000).toISOString();
+    try {
+        return db.transaction(() => {
+            const ids = db.prepare(`SELECT DISTINCT url_id FROM history_visits WHERE visited_at < ?`).all(iso).map((r) => r.url_id);
+            const visits = db.prepare(`DELETE FROM history_visits WHERE visited_at < ?`).run(iso).changes;
+            const before = db.prepare(`SELECT COUNT(*) AS n FROM omnibox_history`).get().n;
+            _recomputeHistoryAggregates(ids);
+            // Legacy aggregates (recorded before history_visits existed) age out by last_visit_at.
+            db.prepare(`
+                DELETE FROM omnibox_history
+                WHERE last_visit_at < ? AND id NOT IN (SELECT DISTINCT url_id FROM history_visits)
+            `).run(iso);
+            db.prepare(`DELETE FROM omnibox_shortcuts WHERE url NOT IN (SELECT url FROM omnibox_history)`).run();
+            const after = db.prepare(`SELECT COUNT(*) AS n FROM omnibox_history`).get().n;
+            return { visits, urls: before - after };
+        })();
+    } catch (e) {
+        safeCatch({ module: 'db', eventCode: 'history.purge.failed' }, e, 'warn');
+        return { visits: 0, urls: 0 };
+    }
+}
+
+function getHistoryStats() {
+    if (!db) return { urls: 0, visits: 0, shortcuts: 0, oldestVisitAt: null };
+    try {
+        const urls = db.prepare(`SELECT COUNT(*) AS n FROM omnibox_history`).get().n;
+        const visits = db.prepare(`SELECT COUNT(*) AS n FROM history_visits`).get().n;
+        const shortcuts = db.prepare(`SELECT COUNT(*) AS n FROM omnibox_shortcuts`).get().n;
+        const oldest = db.prepare(`SELECT MIN(visited_at) AS t FROM history_visits`).get();
+        return { urls, visits, shortcuts, oldestVisitAt: oldest?.t || null };
+    } catch {
+        return { urls: 0, visits: 0, shortcuts: 0, oldestVisitAt: null };
+    }
 }
 
 // ─── System Console logs (persisted from main-process capture) ──────────────
@@ -2584,6 +2939,10 @@ module.exports = {
     createSessionAsync, createExternalSessionAsync, endSessionAsync, renameSessionAsync, deleteSessionAsync, deleteUnnamedSessionsAsync, deleteEmptySessionsAsync, createSessionFromRequestIdsAsync,
     // requests
     insertRequest, updateRequest, setRequestAnnotation, queryRequests, queryRequestsFull, countRequests, getRequest, ftsSearch, getOmniboxTopHosts, recordOmniboxVisit, getOmniboxSuggestions,
+    // browsing history / omnibox
+    normalizeHistoryUrl, isPlaceholderTitle, updateOmniboxTitle, getOmniboxCandidates, getOmniboxRecent, getOmniboxTopSites,
+    recordOmniboxShortcut, getOmniboxShortcut, deleteHistoryUrl, deleteHistoryVisit,
+    listHistoryVisits, countHistoryVisits, clearHistory, purgeHistoryOlderThan, getHistoryStats,
     insertConsoleLogsBatch, insertConsoleLogsBatchAsync, queryConsoleLogs, getConsoleLogSessionsSummary, findRequestsNearTimestamp, purgeConsoleLogsOlderThanDays,
     insertRequestAsync, updateRequestAsync, setRequestAnnotationAsync,
     // ws

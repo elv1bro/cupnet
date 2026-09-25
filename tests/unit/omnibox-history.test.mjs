@@ -6,11 +6,18 @@ import fs from 'fs';
 
 const require = createRequire(import.meta.url);
 
+/**
+ * Probe better-sqlite3 in a CHILD process: a native module built for another ABI (e.g. rebuilt for
+ * Electron) aborts the whole process on load, which would kill the vitest worker instead of throwing.
+ */
 function canLoadBetterSqlite() {
     try {
-        const Database = require('better-sqlite3');
-        const d = new Database(':memory:');
-        d.close();
+        const { execFileSync } = require('child_process');
+        execFileSync(process.execPath, ['-e', "const D=require('better-sqlite3');new D(':memory:').close();"], {
+            stdio: 'ignore',
+            timeout: 15000,
+            cwd: path.join(path.dirname(new URL(import.meta.url).pathname), '..', '..'),
+        });
         return true;
     } catch {
         return false;

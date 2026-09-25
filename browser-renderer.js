@@ -14,11 +14,6 @@ const urlDisplayEl   = document.getElementById('url-display');
 const siteInfoBtn    = document.getElementById('site-info-btn');
 const urlClearBtn    = document.getElementById('url-clear-btn');
 const corsBtn        = document.getElementById('cors-btn');
-const urlOmniboxDropdown = document.getElementById('url-omnibox-dropdown');
-const omniboxListEl = document.getElementById('command-palette-list');
-const omniboxHintEl = document.getElementById('url-omnibox-hint');
-const URL_INPUT_PLACEHOLDER_DEFAULT = 'Type > for commands, or enter a URL…';
-const URL_INPUT_PLACEHOLDER_OMNIBOX = 'Commands: > filter · URL: type and Enter';
 const logSessionNum  = document.getElementById('log-session-num');
 const logEntryBadge  = document.getElementById('log-entry-badge');
 const logToggleBtn   = document.getElementById('log-toggle-btn');   // recording toggle
@@ -34,6 +29,7 @@ const dnsBtn         = document.getElementById('dns-btn');
 const reqEditorBtn   = document.getElementById('req-editor-btn');
 const rulesBtn       = document.getElementById('rules-btn');
 const consoleBtn     = document.getElementById('console-btn');
+const historyBtn     = document.getElementById('history-btn');
 const analyzerBtn    = document.getElementById('analyzer-btn');
 const httpLabBtn     = document.getElementById('http-lab-btn');
 const notesBtn       = document.getElementById('notes-btn');
@@ -79,32 +75,32 @@ reloadBtn.addEventListener('click', () => {
 });
 if (homeBtn) homeBtn.addEventListener('click', () => api.navHome());
 
-function isOmniboxDropdownVisible() {
-    return addressBarContainer?.classList.contains('omnibox-open') ?? false;
-}
+// Back / Forward: right-click shows the tab's navigation stack (native menu from main).
+backBtn.addEventListener('contextmenu', (e) => { e.preventDefault(); api.navHistoryMenu?.({ direction: 'back' }); });
+forwardBtn.addEventListener('contextmenu', (e) => { e.preventDefault(); api.navHistoryMenu?.({ direction: 'forward' }); });
 
-urlInput.addEventListener('keydown', (e) => {
-    const paletteOpen = isOmniboxDropdownVisible();
-    const mod = e.metaKey || e.ctrlKey;
-    if (e.key === 'Enter' && (mod || e.altKey) && !paletteOpen) {
-        e.preventDefault();
-        const raw = urlInput.value.trim();
-        if (!raw) return;
-        hideCommandPalette();
-        void (async () => {
-            await api.newTab();
-            api.navigateTo(raw);
-        })();
-        return;
-    }
-    if (!paletteOpen && e.key === 'Enter') {
-        const raw = urlInput.value.trim();
-        if (!raw) return;
-        hideCommandPalette();
-        _urlInputDirty = false;
-        api.navigateTo(raw);
-    }
+// ─── Omnibox controller (omnibox-controller.js): input state machine, suggestions, keyboard ──
+/** Settings → Omnibox: inline-complete the host of the best history match (Tab / → accepts). */
+let _omniboxInlineComplete = true;
+const omnibox = window.createOmniboxController({
+    api,
+    urlInput,
+    addressBarContainer,
+    urlInputStack,
+    urlClearBtn,
+    getTabs: () => tabs,
+    getCommands: () => getCommandPaletteCommands(),
+    normalizeUrl: (u) => _normalizeToolbarUrl(u),
+    renderCommitted: (u) => _syncUrlDisplayAndSiteInfo(u),
+    onLayoutChanged: () => { void applyChromeLayoutReserve(); },
+    // Overlay WebContentsView starts below tab bar + toolbar (CHROME_TOP_BASE_PX / tab-manager TOOLBAR_HEIGHT).
+    overlayTopPx: 95,
+    getSearchEngineLabel: () => _searchEngineDisplayName(),
+    isInlineEnabled: () => _omniboxInlineComplete,
+    showToast: (msg, opts) => { if (typeof showToast === 'function') showToast(msg, opts); },
 });
+/** Read-only state for e2e / debugging (rows, completion, mode). */
+window.cupnetOmniboxDebug = { getState: () => omnibox.getState() };
 
 function _normalizeToolbarUrl(url) {
     if (url === 'about:blank') return '';
@@ -126,6 +122,7 @@ const SEARCH_ENGINE_LABELS = {
     google: 'Google',
     brave: 'Brave',
     yandex: 'Yandex',
+    bing: 'Bing',
     custom: 'Custom',
 };
 let _cupnetSearchEngineKey = 'duckduckgo';
@@ -140,6 +137,7 @@ function _applyCorsToolbarVisual(on) {
 
 api.onInitSettings?.((s) => {
     if (s && s.searchEngine) _cupnetSearchEngineKey = String(s.searchEngine);
+    if (s && typeof s.omniboxInlineComplete === 'boolean') _omniboxInlineComplete = s.omniboxInlineComplete;
     if (s && typeof s.corsBypassEnabled === 'boolean') _applyCorsToolbarVisual(s.corsBypassEnabled);
 });
 
@@ -154,39 +152,6 @@ function _searchEngineDisplayName() {
 }
 
 let _toolbarLoading = false;
-
-function _looksLikeUrlOrHost(q) {
-    const s = String(q || '').trim();
-    if (!s) return false;
-    if (/^[a-z][a-z\d+\-.]*:\/\//i.test(s)) return true;
-    if (/^[^\s]+\.[^\s]{2,}$/.test(s) && !s.includes(' ')) return true;
-    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(s)) return true;
-    return false;
-}
-
-function _buildExactTypedUrlRow(q) {
-    const trimmed = String(q || '').trim();
-    if (!trimmed || !_looksLikeUrlOrHost(trimmed)) return null;
-    return {
-        kind: 'url',
-        icon: 'url',
-        label: `Open ${trimmed}`,
-        sub: 'Typed URL',
-        url: trimmed,
-        _isExactTyped: true,
-        match: null,
-        urlPreview: trimmed,
-    };
-}
-
-function _computeMatchRange(hay, needle) {
-    const h = String(hay || '').toLowerCase();
-    const n = String(needle || '').toLowerCase().trim();
-    if (!n || !h) return null;
-    const i = h.indexOf(n);
-    if (i < 0) return null;
-    return [i, i + n.length];
-}
 
 function _formatUrlForDisplay(raw) {
     const s = String(raw || '').trim();
@@ -263,59 +228,28 @@ function _updateSiteInfoBtn(urlRaw) {
     else siteInfoBtn.innerHTML = u.startsWith('https:') ? lock : globe;
 }
 
-let _committedToolbarUrl = '';
-let _urlInputDirty = false;
-
 function _syncUrlDisplayAndSiteInfo(url) {
     _updateUrlDisplayFromValue(url);
     _updateSiteInfoBtn(url);
 }
 
-function _setToolbarUrl(url, { forceInput = false, blur = false } = {}) {
-    const normalized = _normalizeToolbarUrl(url);
-    _committedToolbarUrl = normalized;
-    _syncUrlDisplayAndSiteInfo(normalized);
-
-    const inputFocused = document.activeElement === urlInput;
-    const shouldUpdateInput = forceInput || !inputFocused || !_urlInputDirty;
-    if (shouldUpdateInput && urlInput.value !== normalized) {
-        urlInput.value = normalized;
-        _urlInputDirty = false;
-    }
-    if (blur) urlInput.blur();
-    if (urlClearBtn) {
-        const show = !!(String(normalized || '').trim() && inputFocused);
-        urlClearBtn.hidden = !show;
-    }
-}
-
-function _setToolbarUrlIfChanged(url, { respectFocus = true, blur = false, forceInput = false } = {}) {
-    if (respectFocus && !forceInput && document.activeElement === urlInput && _urlInputDirty) {
-        _syncUrlDisplayAndSiteInfo(_normalizeToolbarUrl(url));
-        return false;
-    }
-    _setToolbarUrl(url, { forceInput: forceInput || !respectFocus, blur });
-    return true;
-}
-
 api.onURLUpdate((url) => {
     const normalized = _normalizeToolbarUrl(url);
-    _setToolbarUrlIfChanged(normalized, { respectFocus: true });
+    // Committed URL changed; the omnibox keeps a user draft untouched (A-017 / A-206).
+    omnibox.setCommitted(normalized);
     ssHandleUrlChange(normalized);
     scheduleCookiePageBadgeRefresh();
     api.vaultSessionActivity?.();
 });
 
-// Navigation started by a link click or JS (will-navigate).
-// Force-update the address bar even if urlInput currently has focus
-// (Tab WebContentsView clicks don't transfer focus to the chrome renderer).
+// Navigation started by a link click or JS (will-navigate): the user abandoned any draft,
+// so the field is forced even while focused (tab view clicks do not move focus to the shell).
 api.onTabWillNavigate?.((data) => {
     const active = tabs.find(t => t.isActive);
     if (active && active.id === data.tabId) {
         _clearPageError();
         const normalized = _normalizeToolbarUrl(data.url);
-        _urlInputDirty = false;
-        _setToolbarUrl(normalized, { forceInput: true, blur: true });
+        omnibox.setCommitted(normalized, { force: true, blur: true });
         ssHandleUrlChange(normalized);
         scheduleCookiePageBadgeRefresh();
         api.vaultSessionActivity?.();
@@ -659,10 +593,9 @@ function _scheduleTabUiUpdate(tabData) {
         _onActiveTabChanged(payload);
         const active = payload.find(t => t.isActive);
         if (active) {
-            const normalized = _normalizeToolbarUrl(active.url);
-            _urlInputDirty = false;
-            _setToolbarUrl(normalized, { forceInput: true });
-            ssHandleUrlChange(normalized);
+            // Only a real tab switch may overwrite what the user is typing (A-017).
+            omnibox.onTabListUpdate(active);
+            ssHandleUrlChange(_normalizeToolbarUrl(active.url));
         }
         scheduleCookiePageBadgeRefresh();
     });
@@ -676,7 +609,7 @@ api.onTabUrlChanged((data) => {
     const active = tabs.find(t => t.isActive);
     if (active && active.id === data.tabId) {
         const normalized = _normalizeToolbarUrl(data.url);
-        _setToolbarUrlIfChanged(normalized, { respectFocus: true });
+        omnibox.setCommitted(normalized);
         ssHandleUrlChange(normalized);
         scheduleCookiePageBadgeRefresh();
     }
@@ -824,6 +757,11 @@ if (consoleBtn) {
         api.openConsoleViewer();
     });
 }
+if (historyBtn) {
+    historyBtn.addEventListener('click', () => {
+        void api.openHistoryWindow?.().catch(() => {});
+    });
+}
 
 if (analyzerBtn) {
     analyzerBtn.addEventListener('click', () => {
@@ -854,8 +792,6 @@ let _activeProfileVaultId = null;
 const TOOLS_MINI_BAR_HEIGHT_PX = 34;
 const TOOLS_SIDE_WIDTH_PX = 58;
 const CHROME_TOP_BASE_PX = 95;
-/** Overlay WebContentsView starts here (below tab bar + toolbar); matches tab-manager TOOLBAR_HEIGHT. */
-const OMNIBOX_OVERLAY_TOP_PX = CHROME_TOP_BASE_PX;
 
 const toolDockEl = document.querySelector('.tool-dock');
 const toolDockMountInline = document.getElementById('tool-dock-mount-inline');
@@ -904,9 +840,7 @@ async function applyChromeLayoutReserve() {
         await api.setBottomChromeHeight?.(toolsBottom + resourcesDrawer + profileDrawer);
         await api.setRightChromeWidth?.(side);
     } catch (_) { /* ignore */ }
-    if (addressBarContainer?.classList.contains('omnibox-open')) {
-        syncOmniboxOverlay();
-    }
+    if (omnibox.isOpen()) omnibox.sync();
 }
 
 function applyToolbarToolsMiniAlign(align) {
@@ -961,6 +895,8 @@ async function initToolbarToolsPlacement() {
         const data = await api.getSettingsAll?.();
         applyToolbarToolsPlacement(data?.toolbarToolsPlacement || 'subbar');
         applyToolbarToolsMiniAlign(data?.toolbarToolsMiniAlign || 'right');
+        if (data?.searchEngine) _cupnetSearchEngineKey = String(data.searchEngine);
+        if (typeof data?.omniboxInlineComplete === 'boolean') _omniboxInlineComplete = data.omniboxInlineComplete;
     } catch {
         applyToolbarToolsPlacement('subbar');
         applyToolbarToolsMiniAlign('right');
@@ -974,6 +910,10 @@ api.onBrowserSettingsUpdated?.((data) => {
     if (data?.toolbarToolsMiniAlign != null) {
         applyToolbarToolsMiniAlign(data.toolbarToolsMiniAlign);
     }
+    // Search engine / inline completion changed in Settings (A-208).
+    if (data?.searchEngine) _cupnetSearchEngineKey = String(data.searchEngine);
+    if (typeof data?.omniboxInlineComplete === 'boolean') _omniboxInlineComplete = data.omniboxInlineComplete;
+    omnibox.rerender();
 });
 
 void initToolbarToolsPlacement();
@@ -1706,12 +1646,8 @@ api.onToolbarActivityBadgeReset?.((tool) => {
 
 
 // ─── Hotkey-driven IPC from main process ──────────────────────────────────────
-/** Set from omnibox block: open suggestions when main focuses the address bar (Ctrl+L). */
-let _focusUrlBarOmniboxExtra = null;
 api.onFocusUrlBar?.(() => {
-    urlInput.focus();
-    urlInput.select();
-    if (typeof _focusUrlBarOmniboxExtra === 'function') _focusUrlBarOmniboxExtra();
+    omnibox.focusFromHotkey();
 });
 
 api.onSwitchTabRel?.((delta) => {
@@ -2258,44 +2194,7 @@ document.getElementById('win-switcher-toolbar-btn')?.addEventListener('click', (
     }
 });
 
-// ─── Omnibox: `>` = commands; otherwise URL + history / tabs / search ──
-const commandPaletteEl = document.getElementById('command-palette');
-const commandPaletteBackdrop = document.getElementById('command-palette-backdrop');
-let commandPaletteActiveIdx = 0;
-/** @type {Array<any>} */
-let omniboxRows = [];
-/** True after ArrowUp/Down changed the highlighted suggestion (Enter then picks it). */
-let _omniboxHighlightMoved = false;
-
-const OMNIBOX_QUICK_LINKS = [
-    { label: 'CupNet start page', keywords: 'home new tab dashboard', url: 'cupnet://newtab' },
-    { label: 'Settings', keywords: 'preferences options', url: 'cupnet://settings' },
-    { label: 'User guide', keywords: 'help documentation manual', url: 'cupnet://guide' },
-];
-
-function isCommandMode() {
-    return String(urlInput?.value || '').trimStart().startsWith('>');
-}
-
-function getCommandFilterQuery() {
-    const v = String(urlInput?.value || '');
-    const i = v.indexOf('>');
-    if (i < 0) return '';
-    return v.slice(i + 1).trim();
-}
-
-function _cupnetFuzzyMatch(query, text) {
-    const q = String(query || '').toLowerCase().trim();
-    const t = String(text || '').toLowerCase();
-    if (!q) return true;
-    if (t.includes(q)) return true;
-    let qi = 0;
-    for (let i = 0; i < t.length && qi < q.length; i++) {
-        if (t[i] === q[qi]) qi++;
-    }
-    return qi === q.length;
-}
-
+// ─── Command palette entries (`>` in the omnibox; rows built by omnibox-controller.js) ──
 function getCommandPaletteCommands() {
     const active = tabs.find((x) => x.isActive);
     const activeTabId = active?.id;
@@ -2310,7 +2209,10 @@ function getCommandPaletteCommands() {
         { label: 'Close active tab', category: 'Navigation', keywords: '', shortcut: '', run: () => {
             if (activeTabId != null) void api.closeTab?.(activeTabId);
         } },
-        { label: 'Focus address bar', category: 'Navigation', keywords: 'url omnibox location', shortcut: 'Ctrl+L', run: () => { urlInput.focus(); urlInput.select(); } },
+        { label: 'Focus address bar', category: 'Navigation', keywords: 'url omnibox location', shortcut: 'Ctrl+L', run: () => omnibox.focusFromHotkey() },
+        { label: 'Open History', category: 'Navigation', keywords: 'visited recent browsing', shortcut: 'Ctrl+Y', run: () => { void api.openHistoryWindow?.(); } },
+        { label: 'Reopen closed tab', category: 'Navigation', keywords: 'restore undo close', shortcut: 'Ctrl+Alt+T', run: () => { void api.historyReopen?.(null).catch(() => {}); } },
+        { label: 'Clear browsing history…', category: 'App', keywords: 'privacy delete visits', shortcut: '', run: () => { void api.openHistoryWindow?.(); } },
         { label: 'Open Settings', category: 'Navigation', keywords: 'preferences options', shortcut: 'Ctrl+,', run: () => api.openSettingsTab?.() },
         { label: 'Open CupNet Guide', category: 'Navigation', keywords: 'help documentation manual', shortcut: '', run: () => api.navigateTo?.('cupnet://guide') },
         { label: 'Open start page', category: 'Navigation', keywords: 'new tab dashboard', shortcut: '', run: () => api.navigateTo?.('cupnet://newtab') },
@@ -2349,472 +2251,6 @@ function getCommandPaletteCommands() {
     ];
 }
 
-function getOmniboxHintText() {
-    if (isCommandMode()) {
-        return '↑↓ select · Enter run · Esc close · Shift+Enter as URL';
-    }
-    return '↑↓ select · Enter open · Tab complete · Esc close · Type > for commands';
-}
-
-let _omniboxOverlayReady = null;
-let _omniboxSyncRaf = null;
-let _omniboxRenderTimer = null;
-let _omniboxRenderGen = 0;
-
-function resetOmniboxOverlayReady() {
-    _omniboxOverlayReady = null;
-}
-
-async function ensureOmniboxOverlay() {
-    if (!isOmniboxDropdownVisible()) return false;
-    if (!_omniboxOverlayReady) {
-        _omniboxOverlayReady = api.showOmniboxOverlay?.().catch(() => false);
-    }
-    return !!(await _omniboxOverlayReady);
-}
-
-function paintInlineOmniboxList() {
-    syncOmniboxOverlay();
-}
-
-function buildOmniboxOverlayPayload() {
-    const anchor = addressBarContainer?.getBoundingClientRect();
-    const left = anchor ? Math.round(anchor.left) : 0;
-    const width = anchor ? Math.max(120, Math.round(anchor.width)) : undefined;
-    const topGap = anchor
-        ? Math.max(2, Math.round(anchor.bottom - OMNIBOX_OVERLAY_TOP_PX + 2))
-        : 4;
-    return {
-        backdrop: false,
-        attached: true,
-        left,
-        width,
-        topGap,
-        hint: getOmniboxHintText(),
-        emptyText: isCommandMode() ? 'No commands match' : 'No suggestions yet',
-        items: omniboxRows.map((row, i) => ({
-            active: i === commandPaletteActiveIdx,
-            icon: row.icon || row.kind || 'url',
-            label: row.label,
-            match: row.match,
-            sub: row.kind === 'cmd' ? (row.category || '') : (row.sub || ''),
-            shortcut: row.shortcut || '',
-            urlPreview: row.urlPreview || '',
-        })),
-    };
-}
-
-function syncOmniboxOverlay() {
-    if (!isOmniboxDropdownVisible()) return;
-    if (_omniboxSyncRaf) return;
-    _omniboxSyncRaf = requestAnimationFrame(() => {
-        _omniboxSyncRaf = null;
-        if (!isOmniboxDropdownVisible()) return;
-        try {
-            void api.updateOmniboxOverlay?.(buildOmniboxOverlayPayload());
-        } catch (_) { /* ignore */ }
-    });
-}
-
-function syncOmniboxHighlightOnly() {
-    syncOmniboxOverlay();
-}
-
-async function renderOmniboxList() {
-    const renderGen = ++_omniboxRenderGen;
-    if (isCommandMode()) {
-        const q = getCommandFilterQuery();
-        const all = getCommandPaletteCommands();
-        const cmds = all.filter((c) => _cupnetFuzzyMatch(q, `${c.label} ${c.category} ${c.keywords || ''}`));
-        omniboxRows = cmds.map((c) => ({
-            kind: 'cmd',
-            icon: 'cmd',
-            label: c.label,
-            category: c.category,
-            shortcut: c.shortcut,
-            run: c.run,
-            match: _computeMatchRange(c.label, q),
-        }));
-        commandPaletteActiveIdx = Math.min(commandPaletteActiveIdx, Math.max(0, omniboxRows.length - 1));
-    } else {
-        const q = (urlInput?.value || '').trim();
-        const ql = q.toLowerCase();
-        let suggestions = [];
-        try {
-            suggestions = await api.getOmniboxSuggestions?.(q, 24);
-        } catch {
-            suggestions = [];
-        }
-        const quick = OMNIBOX_QUICK_LINKS.filter((x) => _cupnetFuzzyMatch(ql, `${x.label} ${x.keywords}`))
-            .map((x) => ({
-                kind: 'url',
-                icon: 'quick',
-                label: x.label,
-                sub: 'Quick link',
-                url: x.url,
-                match: _computeMatchRange(x.label, q),
-                urlPreview: x.url,
-            }));
-        const tabRows = [];
-        const active = tabs.find((t) => t.isActive);
-        const activeId = active?.id;
-        if (ql) {
-            for (const t of tabs) {
-                if (t.id === activeId) continue;
-                const tu = String(t.url || '');
-                const tt = String(t.title || '');
-                if (!tu.toLowerCase().includes(ql) && !tt.toLowerCase().includes(ql)) continue;
-                const label = tt || tu || 'Tab';
-                tabRows.push({
-                    kind: 'tab',
-                    icon: 'tab',
-                    label,
-                    sub: 'Switch to tab',
-                    tabId: t.id,
-                    url: tu,
-                    match: _computeMatchRange(label, q) || _computeMatchRange(tu, q),
-                    urlPreview: tu,
-                });
-                if (tabRows.length >= 4) break;
-            }
-        }
-        const hist = (Array.isArray(suggestions) ? suggestions : []).map((row) => {
-            const label = row.title ? String(row.title) : (row.host || row.url || '');
-            const urlPreview = row.url || '';
-            return {
-                kind: 'url',
-                icon: 'history',
-                label,
-                sub: 'History',
-                url: row.url,
-                match: _computeMatchRange(label, q) || _computeMatchRange(row.host || '', q) || _computeMatchRange(row.url || '', q),
-                urlPreview,
-            };
-        });
-        const searchRow = [];
-        if (ql && !_looksLikeUrlOrHost(q)) {
-            const seLabel = _searchEngineDisplayName();
-            const line = `Search ${seLabel} for "${q}"`;
-            searchRow.push({
-                kind: 'url',
-                icon: 'search',
-                label: line,
-                sub: 'Search',
-                url: q,
-                _isSearchUrl: true,
-                match: _computeMatchRange(line, q),
-                urlPreview: '',
-            });
-        }
-        const exactRow = _buildExactTypedUrlRow(q);
-        const typedRows = exactRow ? [exactRow] : [];
-        omniboxRows = [...typedRows, ...searchRow, ...tabRows, ...quick, ...hist].slice(0, 24);
-        commandPaletteActiveIdx = Math.min(commandPaletteActiveIdx, Math.max(0, omniboxRows.length - 1));
-    }
-    if (renderGen !== _omniboxRenderGen) return;
-    await ensureOmniboxOverlay();
-    if (renderGen !== _omniboxRenderGen) return;
-    paintInlineOmniboxList();
-}
-
-function scheduleRenderOmniboxList(immediate = false) {
-    if (immediate) {
-        clearTimeout(_omniboxRenderTimer);
-        _omniboxRenderTimer = null;
-        void renderOmniboxList();
-        return;
-    }
-    clearTimeout(_omniboxRenderTimer);
-    _omniboxRenderTimer = setTimeout(() => {
-        _omniboxRenderTimer = null;
-        void renderOmniboxList();
-    }, 60);
-}
-
-function runOmniboxIndex(idx) {
-    const row = omniboxRows[idx];
-    if (!row) return;
-    hideCommandPalette();
-    try {
-        if (row.kind === 'cmd') row.run();
-        else if (row.kind === 'tab') void api.switchTab?.(row.tabId);
-        else if (row.kind === 'url') api.navigateTo(row.url);
-    } catch (e) {
-        console.error('[Omnibox]', e);
-        if (typeof showToast === 'function') showToast(String(e?.message || e), { type: 'error' });
-    }
-}
-
-function showOmniboxShell() {
-    if (!urlInput || !urlOmniboxDropdown) return;
-    urlOmniboxDropdown.classList.add('hidden');
-    urlOmniboxDropdown.setAttribute('aria-hidden', 'true');
-    addressBarContainer?.classList.add('omnibox-open');
-    urlInput.setAttribute('aria-expanded', 'true');
-    if (!_omniboxOverlayReady) {
-        _omniboxOverlayReady = api.showOmniboxOverlay?.().catch(() => false);
-    }
-    void _omniboxOverlayReady.then((ok) => {
-        if (ok && isOmniboxDropdownVisible()) syncOmniboxOverlay();
-    });
-}
-
-/** Focus address bar + `>` + command list (Cmd/Ctrl+K). */
-async function openCommandOmniboxHotkey() {
-    if (!urlInput) return;
-    if (isOmniboxDropdownVisible() && isCommandMode() && String(urlInput.value || '').trim() === '>') {
-        hideCommandPalette();
-        return;
-    }
-    showOmniboxShell();
-    urlInput.value = '>';
-    commandPaletteActiveIdx = 0;
-    _omniboxHighlightMoved = false;
-    void scheduleRenderOmniboxList(true);
-    urlInput.focus();
-    urlInput.setSelectionRange(1, 1);
-}
-
-/** Suggestions for normal URL mode (focus / Ctrl+L). */
-function openNavOmniboxOnFocus() {
-    if (!urlInput || isCommandMode()) return;
-    showOmniboxShell();
-    commandPaletteActiveIdx = 0;
-    _omniboxHighlightMoved = false;
-    void scheduleRenderOmniboxList(true);
-}
-
-async function onUrlInputOmnibox() {
-    _omniboxHighlightMoved = false;
-    if (isCommandMode()) {
-        if (!isOmniboxDropdownVisible()) showOmniboxShell();
-        commandPaletteActiveIdx = 0;
-        scheduleRenderOmniboxList();
-        return;
-    }
-    if (!isOmniboxDropdownVisible()) return;
-    commandPaletteActiveIdx = 0;
-    scheduleRenderOmniboxList();
-}
-
-function hideCommandPalette() {
-    resetOmniboxOverlayReady();
-    _omniboxRenderGen++;
-    clearTimeout(_omniboxRenderTimer);
-    _omniboxRenderTimer = null;
-    if (_omniboxSyncRaf) {
-        cancelAnimationFrame(_omniboxSyncRaf);
-        _omniboxSyncRaf = null;
-    }
-    try {
-        void api.hideOmniboxOverlay?.();
-    } catch (_) { /* ignore */ }
-    urlOmniboxDropdown?.classList.add('hidden');
-    urlOmniboxDropdown?.setAttribute('aria-hidden', 'true');
-    addressBarContainer?.classList.remove('omnibox-open');
-    if (urlInput) {
-        urlInput.placeholder = URL_INPUT_PLACEHOLDER_DEFAULT;
-        urlInput.setAttribute('aria-expanded', 'false');
-        if (!_urlInputDirty) {
-            const active = tabs.find((t) => t.isActive);
-            if (active) {
-                const v = _normalizeToolbarUrl(active.url || '');
-                urlInput.value = v;
-                _committedToolbarUrl = v;
-                _syncUrlDisplayAndSiteInfo(v);
-            }
-        }
-        if (urlClearBtn) urlClearBtn.hidden = !String(urlInput.value || '').trim();
-    }
-    omniboxRows = [];
-    _omniboxHighlightMoved = false;
-    void applyChromeLayoutReserve();
-}
-
-_focusUrlBarOmniboxExtra = () => {
-    void openNavOmniboxOnFocus();
-};
-
-urlInput.addEventListener('input', () => {
-    _urlInputDirty = true;
-    void onUrlInputOmnibox();
-    if (urlClearBtn) urlClearBtn.hidden = !String(urlInput.value || '').trim();
-});
-
-urlInputStack?.addEventListener('mousedown', (e) => {
-    if (e.target === urlClearBtn || urlClearBtn?.contains(e.target)) return;
-    if (document.activeElement !== urlInput) {
-        e.preventDefault();
-        urlInput.focus();
-        urlInput.select();
-    }
-});
-
-urlInput.addEventListener('mousedown', (e) => {
-    if (document.activeElement !== urlInput) {
-        e.preventDefault();
-        urlInput.focus();
-        urlInput.select();
-    }
-});
-
-urlClearBtn?.addEventListener('click', (ev) => {
-    ev.preventDefault();
-    ev.stopPropagation();
-    urlInput.value = '';
-    _urlInputDirty = true;
-    urlInput.focus();
-    if (urlClearBtn) urlClearBtn.hidden = true;
-    void onUrlInputOmnibox();
-});
-
-siteInfoBtn?.addEventListener('dragstart', (e) => {
-    const active = tabs.find((t) => t.isActive);
-    const u = active?.url ? String(active.url) : String(urlInput.value || '').trim();
-    if (!u) {
-        e.preventDefault();
-        return;
-    }
-    try {
-        e.dataTransfer.setData('text/uri-list', u);
-        e.dataTransfer.setData('text/plain', u);
-    } catch (_) { /* ignore */ }
-});
-
-siteInfoBtn?.addEventListener('click', (ev) => {
-    ev.preventDefault();
-    const active = tabs.find((t) => t.isActive);
-    if (!active || !siteInfoBtn) return;
-    const r = siteInfoBtn.getBoundingClientRect();
-    void api.toggleSiteInfoPopover?.(active.id, { x: r.left, y: r.top, w: r.width, h: r.height });
-});
-
-urlInput.addEventListener('focus', () => {
-    if (urlClearBtn) urlClearBtn.hidden = !String(urlInput.value || '').trim();
-    if (isCommandMode()) {
-        if (!isOmniboxDropdownVisible()) showOmniboxShell();
-        void scheduleRenderOmniboxList(true);
-        return;
-    }
-    openNavOmniboxOnFocus();
-});
-
-urlInput.addEventListener('blur', () => {
-    setTimeout(() => {
-        if (addressBarContainer && !addressBarContainer.contains(document.activeElement)) {
-            hideCommandPalette();
-        }
-    }, 0);
-    if (!_urlInputDirty) return;
-    if (_normalizeToolbarUrl(urlInput.value) === _committedToolbarUrl) {
-        _urlInputDirty = false;
-        return;
-    }
-    _setToolbarUrl(_committedToolbarUrl, { forceInput: true });
-});
-
-api.onToggleCommandPalette?.(() => {
-    void openCommandOmniboxHotkey();
-});
-
-api.onOmniboxOverlaySelect?.((idx) => {
-    const i = Number(idx);
-    if (Number.isFinite(i)) runOmniboxIndex(i);
-});
-api.onOmniboxOverlayDismiss?.(() => {
-    hideCommandPalette();
-});
-api.onForceCloseOmnibox?.(() => {
-    if (!isOmniboxDropdownVisible()) return;
-    hideCommandPalette();
-});
-
-/** Capture phase: arrows / Enter when omnibox is open (list is under address bar). */
-function onCommandPaletteGlobalKeydown(e) {
-    if (!isOmniboxDropdownVisible()) return;
-    if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        e.stopPropagation();
-        if (omniboxRows.length) {
-            _omniboxHighlightMoved = true;
-            commandPaletteActiveIdx = Math.min(omniboxRows.length - 1, commandPaletteActiveIdx + 1);
-            syncOmniboxHighlightOnly();
-        }
-        return;
-    }
-    if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        e.stopPropagation();
-        _omniboxHighlightMoved = true;
-        commandPaletteActiveIdx = Math.max(0, commandPaletteActiveIdx - 1);
-        syncOmniboxHighlightOnly();
-        return;
-    }
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        e.stopPropagation();
-        const raw = (urlInput?.value || '').trim();
-        const modEnter = (e.metaKey || e.ctrlKey || e.altKey) && !e.shiftKey;
-        if (isCommandMode()) {
-            if (e.shiftKey) {
-                const rest = raw.replace(/^>\s*/, '').trim();
-                if (rest) api.navigateTo(rest);
-                hideCommandPalette();
-                return;
-            }
-            if (omniboxRows.length) runOmniboxIndex(commandPaletteActiveIdx);
-            return;
-        }
-        if (modEnter && raw) {
-            hideCommandPalette();
-            void (async () => {
-                await api.newTab();
-                api.navigateTo(raw);
-            })();
-            return;
-        }
-        if (e.shiftKey) {
-            if (raw) api.navigateTo(raw);
-            hideCommandPalette();
-            return;
-        }
-        if (_omniboxHighlightMoved && omniboxRows.length) {
-            runOmniboxIndex(commandPaletteActiveIdx);
-            return;
-        }
-        if (raw) {
-            api.navigateTo(raw);
-            hideCommandPalette();
-            return;
-        }
-        if (omniboxRows.length) runOmniboxIndex(commandPaletteActiveIdx);
-        hideCommandPalette();
-    }
-}
-document.addEventListener('keydown', onCommandPaletteGlobalKeydown, true);
-
-omniboxListEl?.addEventListener('mousedown', (e) => {
-    const item = e.target.closest('.command-palette-item');
-    if (!item) return;
-    e.preventDefault();
-    const idx = Number(item.dataset.idx);
-    if (Number.isFinite(idx)) runOmniboxIndex(idx);
-});
-
-document.addEventListener('mousedown', (e) => {
-    if (!isOmniboxDropdownVisible()) return;
-    if (addressBarContainer?.contains(e.target)) return;
-    hideCommandPalette();
-}, true);
-
-let _omniboxResizeTimer = null;
-window.addEventListener('resize', () => {
-    if (!isOmniboxDropdownVisible()) return;
-    clearTimeout(_omniboxResizeTimer);
-    _omniboxResizeTimer = setTimeout(() => {
-        syncOmniboxOverlay();
-    }, 80);
-});
 
 document.addEventListener('keydown', (e) => {
     const mod = e.metaKey || e.ctrlKey;
@@ -2823,12 +2259,8 @@ document.addEventListener('keydown', (e) => {
         api.openSettingsTab?.();
         return;
     }
-    if (e.key === 'Escape' && isOmniboxDropdownVisible()) {
-        e.preventDefault();
-        hideCommandPalette();
-        return;
-    }
-    if (e.key === 'Escape' && _toolbarLoading && !isOmniboxDropdownVisible()) {
+    // Esc inside the omnibox is handled by omnibox-controller.js (revert, then blur).
+    if (e.key === 'Escape' && _toolbarLoading && !omnibox.isOpen() && document.activeElement !== urlInput) {
         e.preventDefault();
         try { api.navStop?.(); } catch (_) { /* ignore */ }
     }
@@ -2850,3 +2282,43 @@ api.onSessionProfileLoadFailed?.((result) => {
         showToast(result?.error || 'Session load failed', { type: 'error', duration: 8000 });
     }
 });
+
+
+// ─── Browser ID (toolbar button + footer indicator) ───────────────────────────
+// The button opens the Browser ID window (identity switching lives there). The toolbar shows only a
+// status dot; the active identity name is shown in the footer status bar. Live-updates on change.
+(() => {
+    const btn = document.getElementById('identity-btn');
+    const footer = document.getElementById('status-identity');
+    if (!api?.getIdentity) return;
+
+    function shortName(st) {
+        const eff = st?.effective;
+        if (!eff || eff.mode === 'engine') return 'Engine default';
+        return String(eff.description || 'Custom');
+    }
+
+    function render(st) {
+        if (!st || st.success === false) return;
+        const eff = st.effective || {};
+        const active = !!(eff.mode && eff.mode !== 'engine');
+        const overridden = st.source && st.source !== 'global';
+        const title = `Browser ID: ${eff.description || '—'}${overridden ? ' (proxy profile override)' : ''}${eff.tlsProfile ? ` · TLS ${eff.tlsProfile}` : ''}`;
+        if (btn) {
+            btn.classList.toggle('identity-active', active);
+            btn.title = active ? title : 'Browser ID — open the identity window';
+        }
+        if (footer) {
+            footer.textContent = `ID: ${shortName(st)}${overridden ? ' ·override' : ''}`;
+            footer.title = title;
+            footer.classList.toggle('browser-status-item--identity-active', active);
+        }
+    }
+
+    function openWindow() { try { api.openIdentityManager?.(); } catch (e) { console.error('[identity] open window failed', e); } }
+    btn?.addEventListener('click', (e) => { e.stopPropagation(); openWindow(); });
+    footer?.addEventListener('click', (e) => { e.stopPropagation(); openWindow(); });
+
+    api.getIdentity().then(render).catch(() => {});
+    api.onIdentityChanged?.((st) => render(st));
+})();

@@ -75,14 +75,10 @@
         </button>
         <div class="url-input-stack">
             <div id="url-display" class="url-display" aria-hidden="true"></div>
-            <input type="text" id="url-input" placeholder="Type &gt; for commands, or enter a URL…" autocomplete="off" spellcheck="false" aria-autocomplete="list" aria-controls="command-palette-list" aria-expanded="false">
+            <input type="text" id="url-input" placeholder="Search or enter address — type &gt; for commands" autocomplete="off" spellcheck="false" aria-autocomplete="both" aria-haspopup="listbox" aria-expanded="false">
             <button type="button" id="url-clear-btn" class="url-clear-btn" hidden title="Clear" aria-label="Clear address bar">×</button>
         </div>
         <div id="loading-indicator"></div>
-        <div id="url-omnibox-dropdown" class="url-omnibox-dropdown hidden" aria-hidden="true">
-            <ul id="command-palette-list" class="command-palette-list" role="listbox" aria-label="Commands"></ul>
-            <div id="url-omnibox-hint" class="command-palette-hint"></div>
-        </div>
     </div>
 
     <!-- ── Unified tool dock ── -->
@@ -127,6 +123,16 @@
             </svg>
             <span class="tool-label">Cookies</span>
             <span id="cookie-page-badge" class="rules-hit-badge rules-hit-badge--cookies" aria-hidden="true"></span>
+        </button>
+
+        <!-- Browser ID — opens the Browser ID window (identity: UA / client hints / TLS / timezone / language) -->
+        <button id="identity-btn" class="tool-btn" title="Browser ID — open the identity window" style="position:relative">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="8" cy="5.5" r="2.6"/>
+                <path d="M2.8 14c.6-3 2.6-4.5 5.2-4.5s4.6 1.5 5.2 4.5"/>
+            </svg>
+            <span class="tool-label" id="identity-btn-label">Browser ID</span>
+            <span id="identity-btn-dot" class="identity-dot" aria-hidden="true"></span>
         </button>
 
         <!-- DNS Manager -->
@@ -214,6 +220,16 @@
             <span class="tool-label">Console</span>
         </button>
 
+        <!-- Browsing history -->
+        <button id="history-btn" class="tool-btn" title="History · Ctrl+Y">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2.5 8a5.5 5.5 0 1 0 1.6-3.9"/>
+                <path d="M2.2 2.8v2.9h2.9"/>
+                <path d="M8 5.2V8l2 1.3"/>
+            </svg>
+            <span class="tool-label">History</span>
+        </button>
+
         <span class="tool-sep"></span>
 
         <!-- Settings -->
@@ -236,11 +252,6 @@
 
 <!-- Rule notification toasts -->
 <div id="rule-toast-container"></div>
-
-<!-- Command palette backdrop only (omnibox list lives under #address-bar-container) -->
-<div id="command-palette" class="command-palette command-palette--backdrop-only hidden" aria-hidden="true">
-    <div class="command-palette-backdrop" id="command-palette-backdrop" aria-hidden="true"></div>
-</div>
 
 <!-- Window switcher overlay (Ctrl+`) -->
 <div id="win-switcher-overlay" class="win-switcher-overlay" aria-hidden="true">
@@ -288,6 +299,7 @@
     <span class="browser-status-sep" aria-hidden="true">·</span>
     <span id="status-errors" class="browser-status-item" title="MITM / worker errors (recent)">Errors: —</span>
     <span class="browser-status-sep" aria-hidden="true">·</span>
+    <button type="button" id="status-identity" class="browser-status-item browser-status-item--identity" title="Browser ID — click to open the identity window">ID: —</button>
     <span class="browser-status-sep browser-status-sep--profile" aria-hidden="true">·</span>
     <span id="status-profile-wrap" class="browser-status-profile-wrap">
         <button type="button" id="status-profile" class="browser-status-item browser-status-item--profile-btn" aria-expanded="false" aria-controls="status-profile-drawer" title="Signed-in profile — click to lock">
@@ -310,6 +322,9 @@
 
 <script src="toast-notifications.js"></script>
 <script src="keyboard-shortcuts.js"></script>
+<script src="omnibox-input.js"></script>
+<script src="omnibox-model.js"></script>
+<script src="omnibox-controller.js"></script>
 <script src="browser-renderer.js"></script>
 </body>
 </html>

@@ -52,6 +52,33 @@ async function launchCupnet() {
 }
 
 /**
+ * The main shell window (preload.js API). A fresh userData also opens the Onboarding window, and
+ * on newer Electron builds `firstWindow()` may resolve to it — so find the shell by its bridge.
+ * @returns {Promise<import('@playwright/test').Page>}
+ */
+async function getMainWindow(electronApp, timeoutMs = 60_000) {
+    const deadline = Date.now() + timeoutMs;
+    let lastUrls = [];
+    while (Date.now() < deadline) {
+        lastUrls = [];
+        // Tool windows (Onboarding, Proxy Manager, …) share preload.js, so identify the shell by its
+        // page (browser.html) rather than by the bridge API.
+        for (const p of electronApp.windows()) {
+            try {
+                const url = p.url() || '';
+                lastUrls.push(url);
+                if (/\/browser\.html(?:[?#]|$)/.test(url)) {
+                    const ready = await p.evaluate(() => !!(window.electronAPI && typeof window.electronAPI.newTab === 'function'));
+                    if (ready) return p;
+                }
+            } catch { /* window navigating / closed */ }
+        }
+        await new Promise((r) => setTimeout(r, 250));
+    }
+    throw new Error(`Main shell window (browser.html) not found within ${timeoutMs}ms; urls=${JSON.stringify(lastUrls)}`);
+}
+
+/**
  * Появление __cupnetAppContext и tabManager (после app.whenReady в main).
  */
 async function waitForAppContext(electronApp, timeoutMs = 120_000) {
@@ -571,6 +598,7 @@ module.exports = {
     PROJECT_ROOT,
     getElectronExecutablePath,
     launchCupnet,
+    getMainWindow,
     waitForAppContext,
     waitMitmReady,
     getActiveTabNavigatorUserAgent,

@@ -55,6 +55,7 @@ function createCdpNetworkLogging({
     wcIdToTabId,
     incrementLogEntryCount,
     getActiveFingerprint,
+    getIdentityService,
     getMainWindow,
     requestScreenshot,
 }) {
@@ -264,7 +265,17 @@ function createCdpNetworkLogging({
             safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Network.setExtraHTTPHeaders.clear', tabId: state.tabId } }, err, 'info');
         });
 
-        if (getActiveFingerprint()) {
+        // Browser identity (UA + userAgentMetadata + timezone + locale) for this tab — the identity
+        // service resolves per-tab overrides (per-tab proxy profile) on top of the global identity.
+        const identitySvc = typeof getIdentityService === 'function' ? getIdentityService() : null;
+        if (identitySvc) {
+            const eff = identitySvc.getEffectiveForTab(tabId);
+            if (eff.mode !== 'engine' || eff.timezone || eff.language) {
+                await identitySvc.applyCdpEmulation(cdp, eff, { tabId }).catch((err) => {
+                    safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'identity.emulation', tabId: state.tabId } }, err, 'info');
+                });
+            }
+        } else if (getActiveFingerprint()) {
             if (getActiveFingerprint().user_agent) {
                 const { resolveRendererUserAgent } = require('../../user-agent-utils');
                 cdp.sendCommand('Emulation.setUserAgentOverride', {

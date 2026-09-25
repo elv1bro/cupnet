@@ -85,6 +85,20 @@ function _nativeHttpsFallback(url, method, headers, orderedHeaders, body, bodyBa
     });
 }
 const { applyIdentityToOutboundHeaders } = require('./identity-headers');
+const { ClientHintsCache } = require('./client-hints-cache');
+
+/** Reserved host served by the MITM itself (identity self-check page); never resolved or dialed. */
+const IDENTITY_CHECK_HOST = 'identity-check.cupnet';
+function _isIdentityCheckUrl(url) {
+    try { return new URL(String(url || '')).hostname.toLowerCase() === IDENTITY_CHECK_HOST; } catch { return false; }
+}
+function _maskUpstreamForEcho(proxy) {
+    if (!proxy) return null;
+    try {
+        const u = new URL(String(proxy));
+        return `${u.protocol}//${u.hostname}${u.port ? ':' + u.port : ''}`;
+    } catch { return 'configured'; }
+}
 const {
     generateCA,
     generateCAAsync,
@@ -685,6 +699,8 @@ class MitmProxy {
          * @type {import('./browser-identity-catalog').ResolvedIdentity|null}
          */
         this._identity = null;
+        /** Accept-CH memory per origin (Chrome semantics) → high-entropy hints on later requests. */
+        this._clientHintsCache = new ClientHintsCache();
         /** Global outbound HTTP version when connected profile sets force HTTP/1.1 */
         this.forceHttp1 = false;
         this._dnsOverrides = new Map();
@@ -748,15 +764,64 @@ class MitmProxy {
 
     /**
      * Set the global wire identity (User-Agent + client hints + Accept-Language).
-     * Pass null (or an engine-mode identity) to fall back to sanitize-only behaviour.
+     * Pass null (or an identity without a User-Agent) to fall back to sanitize-only behaviour.
      * @param {import('./browser-identity-catalog').ResolvedIdentity|null} identity
      */
     setIdentity(identity) {
-        this._identity = identity && identity.mode !== 'engine' && identity.userAgent ? identity : null;
+        this._identity = identity && identity.userAgent ? identity : null;
     }
 
     getIdentity() {
         return this._identity;
+    }
+
+    /** JSON echo of the outbound request (identity applied) for the built-in identity-check page. */
+    _buildIdentityCheckResponse(opts, tabUpstream, url) {
+        const headers = { ...(opts.headers || {}) };
+        const ordered = Array.isArray(opts.orderedHeaders) ? opts.orderedHeaders.map((pair) => [...pair]) : null;
+        applyIdentityToOutboundHeaders(headers, ordered, tabUpstream.identity, { url });
+        const id = tabUpstream.identity || null;
+        const payload = {
+            ok: true,
+            url,
+            tabId: opts.tabId != null ? String(opts.tabId) : null,
+            headers,
+            ordered,
+            identity: id ? {
+                mode: id.mode || null,
+                templateId: id.templateId || null,
+                userAgent: id.userAgent || null,
+                engineSynthesized: !!id.engineSynthesized,
+                hasClientHints: !!id.clientHints,
+                language: id.language || null,
+                timezone: id.timezone || null,
+            } : null,
+            tls: {
+                profile: tabUpstream.browser || this.browser || null,
+                customJa3: !!tabUpstream.ja3,
+                forceHttp1: !!tabUpstream.forceHttp1,
+            },
+            upstreamProxy: _maskUpstreamForEcho(tabUpstream.proxy),
+            egressBlocked: !!this._egressBlocked,
+            acceptChOrigins: this._clientHintsCache.size,
+            ts: Date.now(),
+        };
+        const bodyBase64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+        return {
+            statusCode: 200,
+            headers: {
+                'content-type': 'application/json; charset=utf-8',
+                'cache-control': 'no-store',
+                'access-control-allow-origin': '*',
+                'x-cupnet-identity-check': '1',
+            },
+            bodyBase64,
+        };
+    }
+
+    /** Forget every origin's Accept-CH request (identity change, explicit reset). */
+    clearClientHintsCache() {
+        this._clientHintsCache.clear();
     }
 
     /** Global custom JA3 (null = template ClientHello of the current browser profile). */
@@ -773,7 +838,7 @@ class MitmProxy {
         if (!tabId) return;
         const prev = this._tabProxyMap.get(tabId);
         const identity = config.identity !== undefined
-            ? (config.identity && config.identity.mode !== 'engine' && config.identity.userAgent ? config.identity : null)
+            ? (config.identity && config.identity.userAgent ? config.identity : null)
             : (prev ? prev.identity : null);
         this._tabProxyMap.set(tabId, {
             upstream: config.upstream || null,
@@ -788,7 +853,7 @@ class MitmProxy {
     setTabIdentity(tabId, identity) {
         if (!tabId) return;
         const prev = this._tabProxyMap.get(tabId) || { upstream: null, browser: null, ja3: null, forceHttp1: null, identity: null };
-        const next = identity && identity.mode !== 'engine' && identity.userAgent ? identity : null;
+        const next = identity && identity.userAgent ? identity : null;
         if (!next && !prev.upstream && !prev.browser && !prev.ja3 && prev.forceHttp1 == null) {
             this._tabProxyMap.delete(tabId);
             return;
@@ -1316,6 +1381,13 @@ class MitmProxy {
             dbg(`[mitm] dns  ${d.host}  →  ${d.ip}${rw}\n`);
         }
         const tabUpstream = this._resolveUpstreamForTab(opts.tabId);
+        // Built-in identity self-check: https://identity-check.cupnet/… never leaves the MITM. It echoes
+        // the request headers exactly as they would go upstream (after the identity rewrite) so the
+        // identity-check page can compare the wire with navigator.*.
+        if (_isIdentityCheckUrl(url)) {
+            st.pending--;
+            return this._buildIdentityCheckResponse(opts, tabUpstream, url);
+        }
         // Fail closed: a proxy profile connect failed and no per-tab/global proxy is available.
         // Refuse rather than egress directly and leak the real IP.
         if (this._egressBlocked && !tabUpstream.proxy) {
@@ -1348,7 +1420,8 @@ class MitmProxy {
 
             const up = plan.opts;
             if (!up.headers) up.headers = {};
-            applyIdentityToOutboundHeaders(up.headers, up.orderedHeaders, tabUpstream.identity, { url: up.url });
+            const requestedHints = tabUpstream.identity?.clientHints ? this._clientHintsCache.requestedFor(up.url) : [];
+            applyIdentityToOutboundHeaders(up.headers, up.orderedHeaders, tabUpstream.identity, { url: up.url, requestedHints });
             const noBodyUp = /^(GET|HEAD)$/i.test(up.method || '');
             const retryCountUp = /^(GET|HEAD|OPTIONS)$/i.test(up.method || '')
                 ? networkPolicy.retry.maxRetries
@@ -1403,6 +1476,16 @@ class MitmProxy {
                 if (!forceHttp1 && _responseSuggestsHttp1Retry(res)) {
                     dbg(`[mitm] ↻ http/1.1 retry after gateway body ${url}\n`);
                     res = await runWorker(true);
+                }
+                // Accept-CH / Critical-CH (top-level navigations only): remember what the origin asked
+                // for and, like Chrome, retry the navigation once when Critical-CH names hints we did not send.
+                if (tabUpstream.identity?.clientHints) {
+                    const ch = this._clientHintsCache.observeResponse(up.url, up.headers, res.headers || {});
+                    if (ch.retryWith.length) {
+                        dbg(`[mitm] ↻ Critical-CH retry ${url} (+${ch.retryWith.join(',')})\n`);
+                        applyIdentityToOutboundHeaders(up.headers, up.orderedHeaders, tabUpstream.identity, { url: up.url, requestedHints: ch.retryWith });
+                        res = await this.worker.request({ ...workerReqBase, headers: up.headers, orderedHeaders: up.orderedHeaders || undefined, forceHttp1: !!forceHttp1 });
+                    }
                 }
                 const ms = Date.now() - t0;
                 st.totalMs += ms;
@@ -2367,6 +2450,7 @@ module.exports = {
     _testMatchHostPattern: _matchHostPattern,
     _shouldAutoRetryHttp1,
     _responseSuggestsHttp1Retry,
+    IDENTITY_CHECK_HOST,
 };
 
 if (require.main === module) {

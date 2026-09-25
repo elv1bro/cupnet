@@ -14,8 +14,6 @@
  *   __password        shared password (provider mode; also embedded in encrypted template)
  */
 
-const PROXY_PROVIDER_ACCOUNTS_KEY = 'cupnet.proxy.providerAccounts';
-const PROXY_PROVIDER_ACCOUNTS_V2_KEY = 'cupnet.proxy.providerAccounts.v2';
 
 /** Pseudo-provider id for manual / own proxy URL profiles */
 const CUSTOM_LINK_PROVIDER_ID = '__custom__';
@@ -189,65 +187,6 @@ function getProviderOptionFields(provider) {
     return provider?.optionFields ? provider.optionFields.slice() : [];
 }
 
-/** Top 10 popular ISO codes used for provider account smoke tests */
-const PROVIDER_TEST_POPULAR = ['us', 'gb', 'de', 'fr', 'nl', 'pl', 'ru', 'in', 'jp', 'au'];
-
-/** Minimum successful locations to treat provider account credentials as verified */
-const PROVIDER_TEST_MIN_PASS = 2;
-
-function getProviderTestCheckUrl(providerId) {
-    return getProxyProviderById(providerId)?.testCheckUrl || 'https://ipinfo.io/json';
-}
-
-function getProviderTestMinPasses(providerId) {
-    const provider = getProxyProviderById(providerId);
-    return provider?.testMinPass ?? PROVIDER_TEST_MIN_PASS;
-}
-
-function getProviderTestCountryCodes(provider, count = 3) {
-    if (!provider) return [];
-    const pool = (provider.testCountries || PROVIDER_TEST_POPULAR)
-        .filter(code => provider.countries.some(c => c.code === code));
-    const shuffled = pool.slice().sort(() => Math.random() - 0.5);
-    return shuffled.slice(0, Math.min(count, shuffled.length));
-}
-
-function resolveProviderTemplateForTest(template, ephemeral = {}) {
-    const sid = ephemeral.SID || (`cupnet${Math.floor(Math.random() * 1e10)}`);
-    return String(template || '')
-        .replace(/\{RAND:(\d+)-(\d+)\}/gi, (_, mn, mx) => {
-            const min = parseInt(mn, 10);
-            const max = parseInt(mx, 10);
-            return String(Math.floor(Math.random() * (max - min + 1)) + min);
-        })
-        .replace(/\{SID\}/gi, sid);
-}
-
-function buildProviderAccountTestTemplate(providerId, opts) {
-    const provider = getProxyProviderById(providerId);
-    if (!provider) return '';
-    const country = getProviderCountry(provider, opts?.countryCode);
-    if (!country) return '';
-    const testDefaults = provider.testDefaults || {};
-    return buildProviderTemplate(providerId, {
-        username: opts?.username,
-        password: opts?.password,
-        countryCode: opts?.countryCode,
-        sessionMode: testDefaults.sessionMode || 'rotating',
-        durationMin: testDefaults.durationMin ?? provider.duration?.default ?? 30,
-        options: { ...(testDefaults.options || {}), ...(opts?.options || {}) },
-    });
-}
-
-function planProviderAccountTests(providerId, count = 3) {
-    const provider = getProxyProviderById(providerId);
-    if (!provider) return [];
-    return getProviderTestCountryCodes(provider, count).map(code => {
-        const country = getProviderCountry(provider, code);
-        return { code, name: country?.name || code.toUpperCase() };
-    });
-}
-
 /** @typedef {{ code: string, name: string, region: string, host: string, portRotating: number, stickyMin: number, stickyMax: number }} ProviderCountry */
 
 /** @type {Array<object>} */
@@ -289,8 +228,6 @@ const PROXY_PROVIDERS = [
         duration: { supported: true, min: 1, max: 1440, unit: 'min', default: 30 },
         defaultPort: 7777,
         gatewayHost: 'pr.oxylabs.io',
-        testCountries: ['us', 'gb', 'de', 'fr', 'nl'],
-        testMinPass: 2,
         countries: [
             { code: 'us', name: 'United States', region: 'Americas', host: 'pr.oxylabs.io', port: 7777 },
             { code: 'gb', name: 'United Kingdom', region: 'Europe', host: 'pr.oxylabs.io', port: 7777 },
@@ -553,159 +490,13 @@ function buildProviderVariables(providerId, opts) {
     return vars;
 }
 
-// ── Provider accounts (multiple per provider, stored in localStorage) ─────────
-
-function _newAccountId() {
-    return `acc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function _migrateLegacyAccountsV1() {
-    if (typeof localStorage === 'undefined') return [];
-    try {
-        const raw = localStorage.getItem(PROXY_PROVIDER_ACCOUNTS_KEY);
-        if (!raw) return [];
-        const legacy = JSON.parse(raw);
-        if (!legacy || typeof legacy !== 'object' || Array.isArray(legacy)) return [];
-        const accounts = [];
-        for (const [providerId, acc] of Object.entries(legacy)) {
-            if (!acc?.username) continue;
-            accounts.push({
-                id: _newAccountId(),
-                providerId,
-                username: String(acc.username).trim(),
-                password: String(acc.password ?? ''),
-                updatedAt: acc.updatedAt || Date.now(),
-            });
-        }
-        return accounts;
-    } catch {
-        return [];
-    }
-}
-
-function loadProviderAccounts() {
-    if (typeof localStorage === 'undefined') return [];
-    try {
-        const rawV2 = localStorage.getItem(PROXY_PROVIDER_ACCOUNTS_V2_KEY);
-        if (rawV2) {
-            const parsed = JSON.parse(rawV2);
-            return Array.isArray(parsed?.accounts) ? parsed.accounts : [];
-        }
-        const migrated = _migrateLegacyAccountsV1();
-        if (migrated.length) saveProviderAccounts(migrated);
-        return migrated;
-    } catch {
-        return [];
-    }
-}
-
-function saveProviderAccounts(accounts) {
-    if (typeof localStorage === 'undefined') return;
-    try {
-        localStorage.setItem(PROXY_PROVIDER_ACCOUNTS_V2_KEY, JSON.stringify({ accounts: accounts || [] }));
-    } catch { /* ignore quota */ }
-}
-
-function listProviderAccounts(providerId) {
-    const all = loadProviderAccounts();
-    if (!providerId) return all.slice();
-    return all.filter(a => a.providerId === providerId);
-}
-
-function getProviderAccountEntry(accountId) {
-    if (!accountId) return null;
-    return loadProviderAccounts().find(a => a.id === accountId) || null;
-}
-
-/** @deprecated use getProviderAccountEntry */
-function getProviderAccount(providerId) {
-    const list = listProviderAccounts(providerId);
-    return list[0] || null;
-}
-
-function addProviderAccount({ providerId, username, password }) {
-    if (!providerId || !String(username || '').trim()) return null;
-    const accounts = loadProviderAccounts();
-    const entry = {
-        id: _newAccountId(),
-        providerId,
-        username: String(username).trim(),
-        password: String(password ?? ''),
-        updatedAt: Date.now(),
-    };
-    accounts.push(entry);
-    saveProviderAccounts(accounts);
-    return entry;
-}
-
-function updateProviderAccount(accountId, { providerId, username, password }) {
-    if (!accountId) return false;
-    const accounts = loadProviderAccounts();
-    const idx = accounts.findIndex(a => a.id === accountId);
-    if (idx < 0) return false;
-    const cur = accounts[idx];
-    accounts[idx] = {
-        ...cur,
-        providerId: providerId || cur.providerId,
-        username: String(username ?? cur.username).trim(),
-        password: password !== undefined ? String(password) : cur.password,
-        updatedAt: Date.now(),
-    };
-    saveProviderAccounts(accounts);
-    return true;
-}
-
-function setProviderAccount(providerId, { username, password }) {
-    const existing = listProviderAccounts(providerId);
-    if (existing.length === 1) {
-        return updateProviderAccount(existing[0].id, { providerId, username, password });
-    }
-    if (existing.length === 0) {
-        return !!addProviderAccount({ providerId, username, password });
-    }
-    const match = existing.find(a => a.username === String(username || '').trim());
-    if (match) return updateProviderAccount(match.id, { providerId, username, password });
-    return !!addProviderAccount({ providerId, username, password });
-}
-
-function deleteProviderAccount(accountIdOrProviderId) {
-    if (!accountIdOrProviderId) return;
-    let accounts = loadProviderAccounts();
-    const byId = accounts.find(a => a.id === accountIdOrProviderId);
-    if (byId) {
-        accounts = accounts.filter(a => a.id !== accountIdOrProviderId);
-    } else {
-        accounts = accounts.filter(a => a.providerId !== accountIdOrProviderId);
-    }
-    saveProviderAccounts(accounts);
-}
-
-function listConfiguredProviderIds() {
-    return [...new Set(loadProviderAccounts().map(a => a.providerId).filter(Boolean))];
-}
-
-/** Credentials: profile __accountId → saved account → legacy profile vars */
+/**
+ * Credentials stored in legacy profile variables (`__username` / `__password`). Provider "accounts"
+ * (plaintext localStorage) were removed on 2026-09-24; new profiles keep the username in
+ * `__username` and the password only inside the encrypted proxy URL.
+ */
 function resolveProviderCredentials(providerId, profileVars) {
     const vars = profileVars || {};
-    const accountId = vars.__accountId;
-    if (accountId) {
-        const acc = getProviderAccountEntry(accountId);
-        if (acc && (!providerId || acc.providerId === providerId)) {
-            return { username: acc.username, password: acc.password, fromAccount: true, accountId: acc.id };
-        }
-    }
-    if (providerId) {
-        const list = listProviderAccounts(providerId);
-        if (list.length === 1) {
-            return { username: list[0].username, password: list[0].password, fromAccount: true, accountId: list[0].id };
-        }
-        if (vars.__username) {
-            const match = list.find(a => a.username === vars.__username);
-            if (match) {
-                return { username: match.username, password: match.password, fromAccount: true, accountId: match.id };
-            }
-        }
-    }
     return {
         username: vars.__username || '',
         password: vars.__password ?? '',
@@ -751,7 +542,6 @@ function suggestProfileName(providerId, countryCode, sessionMode) {
 
 if (typeof window !== 'undefined') {
     window.cupnetProxyProviders = {
-        PROXY_PROVIDER_ACCOUNTS_KEY,
         CUSTOM_LINK_PROVIDER_ID,
         CUSTOM_LINK_PROVIDER_LABEL,
         PROXY_PROVIDER_OPTION_PREFIX,
@@ -764,14 +554,6 @@ if (typeof window !== 'undefined') {
         extractProviderOptionsFromVars,
         normalizeProviderAccountUsername,
         maskProxyUrlForDisplay,
-        getProviderTestCountryCodes,
-        getProviderTestCheckUrl,
-        getProviderTestMinPasses,
-        buildProviderAccountTestTemplate,
-        resolveProviderTemplateForTest,
-        planProviderAccountTests,
-        PROVIDER_TEST_POPULAR,
-        PROVIDER_TEST_MIN_PASS,
         groupCountriesByRegion,
         isReservedProviderVar,
         filterUserTemplateVars,
@@ -779,22 +561,12 @@ if (typeof window !== 'undefined') {
         buildProviderVariables,
         getProfileProviderMeta,
         suggestProfileName,
-        loadProviderAccounts,
-        listProviderAccounts,
-        getProviderAccountEntry,
-        getProviderAccount,
-        addProviderAccount,
-        updateProviderAccount,
-        setProviderAccount,
-        deleteProviderAccount,
-        listConfiguredProviderIds,
         resolveProviderCredentials,
     };
 }
 
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
-        PROXY_PROVIDER_ACCOUNTS_KEY,
         CUSTOM_LINK_PROVIDER_ID,
         CUSTOM_LINK_PROVIDER_LABEL,
         PROXY_PROVIDER_OPTION_PREFIX,
@@ -807,14 +579,6 @@ if (typeof module !== 'undefined' && module.exports) {
         extractProviderOptionsFromVars,
         normalizeProviderAccountUsername,
         maskProxyUrlForDisplay,
-        getProviderTestCountryCodes,
-        getProviderTestCheckUrl,
-        getProviderTestMinPasses,
-        buildProviderAccountTestTemplate,
-        resolveProviderTemplateForTest,
-        planProviderAccountTests,
-        PROVIDER_TEST_POPULAR,
-        PROVIDER_TEST_MIN_PASS,
         groupCountriesByRegion,
         isReservedProviderVar,
         filterUserTemplateVars,
@@ -822,15 +586,6 @@ if (typeof module !== 'undefined' && module.exports) {
         buildProviderVariables,
         getProfileProviderMeta,
         suggestProfileName,
-        loadProviderAccounts,
-        listProviderAccounts,
-        getProviderAccountEntry,
-        getProviderAccount,
-        addProviderAccount,
-        updateProviderAccount,
-        setProviderAccount,
-        deleteProviderAccount,
-        listConfiguredProviderIds,
         resolveProviderCredentials,
     };
 }

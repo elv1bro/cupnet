@@ -1,7 +1,7 @@
 'use strict';
 
 const { test, expect } = require('@playwright/test');
-const { launchCupnet, waitForAppContext, waitMitmReady } = require('./helpers.js');
+const { launchCupnet, getMainWindow, waitForAppContext, waitMitmReady } = require('./helpers.js');
 
 test.describe.configure({ mode: 'serial' });
 
@@ -11,7 +11,8 @@ let mainWindow;
 
 test.beforeAll(async () => {
     electronApp = await launchCupnet();
-    mainWindow = await electronApp.firstWindow({ timeout: 120_000 });
+    await electronApp.firstWindow({ timeout: 120_000 });
+    mainWindow = await getMainWindow(electronApp, 120_000);
     await mainWindow.waitForLoadState('domcontentloaded');
     await waitForAppContext(electronApp, 120_000);
     await waitMitmReady(electronApp, 180_000);

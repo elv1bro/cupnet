@@ -424,4 +424,145 @@ test('write queue stats expose high/low depths and drops', async () => {
     assert.equal(typeof stats.busyRetries, 'number');
 });
 
+
+// ─── Omnibox history / browsing history ──────────────────────────────────────
+
+test('history: recordOmniboxVisit strips fragments, logs a visit and ignores placeholder titles', () => {
+    const r = db.recordOmniboxVisit({ url: 'https://hist.example/page#frag', title: 'hist.example/page', typed: true, tabId: 'tab_h', cookieGroupId: 1, sessionId: null });
+    assert.ok(r && r.urlId > 0);
+    const rows = db.listHistoryVisits({ query: 'hist.example' });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].url, 'https://hist.example/page');
+    assert.equal(rows[0].title, '');
+    assert.equal(rows[0].transition, 'typed');
+    assert.equal(rows[0].tab_id, 'tab_h');
+    assert.equal(db.countHistoryVisits({ query: 'hist.example' }), 1);
+});
+
+test('history: isPlaceholderTitle matches Chromium placeholders exactly, never real titles', () => {
+    assert.equal(db.isPlaceholderTitle('wikipedia.org', 'https://www.wikipedia.org/'), true);
+    assert.equal(db.isPlaceholderTitle('www.wikipedia.org', 'https://www.wikipedia.org/'), true);
+    assert.equal(db.isPlaceholderTitle('httpbin.org/html', 'https://httpbin.org/html'), true);
+    assert.equal(db.isPlaceholderTitle('https://httpbin.org/html', 'https://httpbin.org/html'), true);
+    assert.equal(db.isPlaceholderTitle('Wikipedia', 'https://www.wikipedia.org/'), false);
+    assert.equal(db.isPlaceholderTitle('httpbin', 'https://httpbin.org/html'), false);
+    assert.equal(db.isPlaceholderTitle('', 'https://x.example/'), true);
+});
+
+test('history: updateOmniboxTitle patches the aggregate once the real title arrives', () => {
+    assert.equal(db.updateOmniboxTitle('https://hist.example/page#x', 'hist.example/page'), false, 'placeholder rejected');
+    assert.equal(db.updateOmniboxTitle('https://hist.example/page', ''), false, 'empty rejected');
+    assert.equal(db.updateOmniboxTitle('https://hist.example/page', 'Real Title'), true);
+    const s = db.getOmniboxSuggestions('hist.exa', 5);
+    assert.equal(s[0].url, 'https://hist.example/page');
+    assert.equal(s[0].title, 'Real Title');
+    assert.equal(s[0].matchKind, 'host-prefix');
+});
+
+test('history: in_page visits are deduped within one second, other transitions are not', () => {
+    db.recordOmniboxVisit({ url: 'https://spa.example/route', transition: 'in_page' });
+    db.recordOmniboxVisit({ url: 'https://spa.example/route', transition: 'in_page' });
+    db.recordOmniboxVisit({ url: 'https://spa.example/route', transition: 'link' });
+    assert.equal(db.countHistoryVisits({ query: 'spa.example' }), 2);
+});
+
+test('history: recordOmniboxVisit rejects non-http URLs', () => {
+    assert.equal(db.recordOmniboxVisit({ url: 'file:///tmp/x.html' }), null);
+    assert.equal(db.recordOmniboxVisit({ url: 'about:blank' }), null);
+    assert.equal(db.recordOmniboxVisit({ url: 'devtools://devtools/x' }), null);
+});
+
+test('history: shortcuts remember typed text → url and match on prefix', () => {
+    assert.equal(db.recordOmniboxShortcut('WiKi', 'https://en.wikipedia.org/wiki/Main'), true);
+    db.recordOmniboxVisit({ url: 'https://en.wikipedia.org/wiki/Main', title: 'Main' });
+    const sc = db.getOmniboxShortcut('wi');
+    assert.ok(sc);
+    assert.equal(sc.url, 'https://en.wikipedia.org/wiki/Main');
+    assert.equal(sc.text, 'wiki');
+    db.recordOmniboxShortcut('wiki', 'https://en.wikipedia.org/wiki/Main');
+    assert.equal(db.getOmniboxShortcut('wiki').hits, 2);
+    db.recordOmniboxShortcut('wiki', 'https://other.example/');
+    assert.equal(db.getOmniboxShortcut('wiki').hits, 1, 'url change restarts the hit count');
+});
+
+test('history: getOmniboxSuggestions ranks host prefixes first and honours empty query as recent', () => {
+    db.recordOmniboxVisit({ url: 'https://rank-a.example/', title: 'A', typed: true });
+    db.recordOmniboxVisit({ url: 'https://other.example/rank-a', title: 'Other' });
+    const s = db.getOmniboxSuggestions('rank-a', 10);
+    assert.equal(s[0].url, 'https://rank-a.example/');
+    assert.equal(s[0].matchKind, 'host-prefix');
+    assert.ok(s.some((r) => r.matchKind === 'url-substring'));
+    const recent = db.getOmniboxSuggestions('', 3);
+    assert.equal(recent.length, 3);
+    assert.equal(recent[0].matchKind, 'recent');
+});
+
+test('history: getOmniboxTopSites returns one URL per host', () => {
+    db.recordOmniboxVisit({ url: 'https://top.example/a' });
+    db.recordOmniboxVisit({ url: 'https://top.example/a' });
+    db.recordOmniboxVisit({ url: 'https://top.example/b' });
+    const top = db.getOmniboxTopSites(40);
+    const tops = top.filter((r) => r.host === 'top.example');
+    assert.equal(tops.length, 1);
+    assert.equal(tops[0].url, 'https://top.example/a');
+});
+
+test('history: deleteHistoryUrl removes the aggregate, its visits and shortcuts', () => {
+    db.recordOmniboxVisit({ url: 'https://del.example/x', title: 'Del' });
+    db.recordOmniboxShortcut('del', 'https://del.example/x');
+    assert.equal(db.deleteHistoryUrl('https://del.example/x'), true);
+    assert.equal(db.countHistoryVisits({ query: 'del.example' }), 0);
+    assert.equal(db.getOmniboxSuggestions('del.exa', 5).some((r) => r.url === 'https://del.example/x'), false);
+    assert.equal(db.getOmniboxShortcut('del'), null);
+});
+
+test('history: deleteHistoryVisit recomputes counts and drops empty aggregates', () => {
+    db.recordOmniboxVisit({ url: 'https://vis.example/', typed: true });
+    db.recordOmniboxVisit({ url: 'https://vis.example/' });
+    const rows = db.listHistoryVisits({ query: 'vis.example' });
+    assert.equal(rows.length, 2);
+    assert.equal(db.deleteHistoryVisit(rows[0].id), true);
+    let s = db.getOmniboxCandidates('vis.example', 5);
+    assert.equal(s.length, 1);
+    assert.equal(s[0].visit_count, 1);
+    assert.equal(s[0].typed_count, 1);
+    assert.equal(db.deleteHistoryVisit(rows[1].id), true);
+    assert.equal(db.getOmniboxCandidates('vis.example', 5).length, 0);
+});
+
+test('history: clearHistory since a timestamp keeps older visits; full clear empties everything', () => {
+    db.recordOmniboxVisit({ url: 'https://clr.example/' });
+    const cutoff = Date.now() + 60_000; // nothing is newer than this
+    const r0 = db.clearHistory({ sinceMs: cutoff });
+    assert.equal(r0.visits, 0);
+    assert.ok(db.countHistoryVisits({ query: 'clr.example' }) === 1);
+    const r1 = db.clearHistory({ sinceMs: Date.now() - 60_000 });
+    assert.ok(r1.visits >= 1);
+    assert.equal(db.countHistoryVisits({ query: 'clr.example' }), 0);
+    db.recordOmniboxVisit({ url: 'https://clr2.example/' });
+    db.recordOmniboxShortcut('clr2', 'https://clr2.example/');
+    const all = db.clearHistory({});
+    assert.ok(all.visits >= 1);
+    const st = db.getHistoryStats();
+    assert.equal(st.visits, 0);
+    assert.equal(st.urls, 0);
+    assert.equal(st.shortcuts, 0);
+});
+
+test('history: purgeHistoryOlderThan removes old visits and legacy aggregates', () => {
+    db.recordOmniboxVisit({ url: 'https://old.example/' });
+    const raw = db.getDb();
+    const oldIso = new Date(Date.now() - 200 * 86400000).toISOString();
+    raw.prepare(`UPDATE history_visits SET visited_at = ? WHERE url_id = (SELECT id FROM omnibox_history WHERE url = ?)`).run(oldIso, 'https://old.example/');
+    raw.prepare(`UPDATE omnibox_history SET last_visit_at = ? WHERE url = ?`).run(oldIso, 'https://old.example/');
+    raw.prepare(`INSERT INTO omnibox_history (url, host, title, visit_count, typed_count, last_visit_at) VALUES (?,?,?,?,?,?)`)
+        .run('https://legacy.example/', 'legacy.example', 'Legacy', 3, 1, oldIso);
+    db.recordOmniboxVisit({ url: 'https://fresh.example/' });
+    const r = db.purgeHistoryOlderThan(90);
+    assert.ok(r.visits >= 1);
+    assert.equal(db.getOmniboxCandidates('old.example', 5).length, 0);
+    assert.equal(db.getOmniboxCandidates('legacy.example', 5).length, 0);
+    assert.equal(db.getOmniboxCandidates('fresh.example', 5).length, 1);
+});
+
 console.log('\n✓ All db tests passed\n');

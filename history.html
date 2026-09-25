@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:">
+    <title>History</title>
+    <link rel="stylesheet" href="shared-dark-theme.css">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg: #0f1117; --bg2: #161920; --bg3: #1e2233; --border: #2d3142;
+            --text: #e2e8f0; --muted: #64748b; --accent: #3b82f6; --danger: #ef4444; --amber: #f59e0b;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg); color: var(--text);
+            height: 100vh; display: flex; flex-direction: column; overflow: hidden; font-size: 13px;
+        }
+        .topbar, .filterbar {
+            display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+            background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0;
+        }
+        .filterbar { padding: 8px 14px; }
+        .topbar-title { font-weight: 600; font-size: 14px; margin-right: 4px; }
+        input[type="text"], select {
+            background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+            border-radius: 6px; padding: 5px 9px; font-size: 12px; outline: none;
+        }
+        input[type="text"]:focus, select:focus { border-color: var(--accent); }
+        #search { flex: 1; min-width: 180px; max-width: 420px; }
+        .btn {
+            display: inline-flex; align-items: center; gap: 5px; padding: 5px 11px; border-radius: 6px; border: none;
+            font-size: 12px; font-weight: 500; cursor: pointer; white-space: nowrap; transition: filter 0.12s;
+        }
+        .btn:hover { filter: brightness(1.15); }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-danger { background: var(--danger); color: #fff; }
+        .btn-ghost { background: var(--bg3); border: 1px solid var(--border); color: var(--text); }
+        .btn-sm { padding: 3px 8px; font-size: 11px; }
+        .btn[disabled] { opacity: 0.5; cursor: default; }
+        .spacer { flex: 1; }
+        .count-badge {
+            font-size: 11px; color: var(--muted); background: var(--bg3); border: 1px solid var(--border);
+            padding: 2px 8px; border-radius: 10px; white-space: nowrap;
+        }
+        label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+        .clear-menu { position: relative; }
+        .clear-menu .menu {
+            position: absolute; right: 0; top: calc(100% + 4px); z-index: 5; min-width: 200px;
+            background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 28px rgba(0,0,0,0.45);
+            padding: 4px; display: none;
+        }
+        .clear-menu.open .menu { display: block; }
+        .clear-menu .menu button {
+            display: block; width: 100%; text-align: left; background: transparent; border: none; color: var(--text);
+            padding: 7px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
+        }
+        .clear-menu .menu button:hover { background: var(--bg3); }
+        .clear-menu .menu button.danger { color: #fca5a5; }
+
+        .closed-bar {
+            display: flex; align-items: center; gap: 8px; padding: 6px 14px; flex-wrap: wrap;
+            background: rgba(59, 130, 246, 0.08); border-bottom: 1px solid var(--border); flex-shrink: 0;
+        }
+        .closed-bar[hidden] { display: none; }
+        .closed-bar .lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+        .closed-chip {
+            display: inline-flex; align-items: center; gap: 6px; max-width: 260px; padding: 3px 8px; border-radius: 999px;
+            background: var(--bg3); border: 1px solid var(--border); color: var(--text); font-size: 11px; cursor: pointer;
+        }
+        .closed-chip:hover { border-color: var(--accent); }
+        .closed-chip .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .table-wrap { flex: 1; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        thead { position: sticky; top: 0; z-index: 2; }
+        th {
+            background: var(--bg2); border-bottom: 1px solid var(--border); padding: 5px 8px; text-align: left;
+            font-weight: 600; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.45px; white-space: nowrap;
+        }
+        td {
+            padding: 4px 8px; border-bottom: 1px solid rgba(255,255,255,0.04); vertical-align: middle;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; max-width: 420px;
+        }
+        tr.day-row td {
+            background: var(--bg2); color: var(--muted); font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.4px; padding: 6px 8px; position: sticky; top: 26px; z-index: 1;
+        }
+        tr.visit:hover td { background: rgba(255,255,255,0.03); cursor: pointer; }
+        td.time { color: var(--muted); width: 64px; font-variant-numeric: tabular-nums; }
+        td.title { max-width: 360px; }
+        td.url { color: #93c5fd; max-width: 480px; }
+        td.meta { color: var(--muted); width: 120px; }
+        td.actions { width: 120px; text-align: right; white-space: nowrap; }
+        .act {
+            width: 22px; height: 22px; padding: 0; border-radius: 4px; border: 1px solid var(--border); background: var(--bg3);
+            color: var(--muted); font-size: 12px; line-height: 1; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+            margin-left: 3px; opacity: 0;
+        }
+        tr.visit:hover .act { opacity: 1; }
+        .act:hover { border-color: var(--accent); color: #93c5fd; }
+        .act.del:hover { border-color: var(--danger); color: #fca5a5; }
+        .badge {
+            display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; font-size: 9.5px; line-height: 15px;
+            text-transform: uppercase; letter-spacing: 0.04em; color: var(--amber); background: rgba(245,158,11,0.16); border: 1px solid rgba(245,158,11,0.4);
+            vertical-align: 1px;
+        }
+        .badge.t { color: #a5b4fc; background: rgba(129,140,248,0.14); border-color: rgba(129,140,248,0.4); }
+        .empty { padding: 40px 14px; text-align: center; color: var(--muted); }
+        .statusbar {
+            display: flex; align-items: center; gap: 10px; padding: 5px 14px; border-top: 1px solid var(--border);
+            background: var(--bg2); font-size: 11px; color: var(--muted); flex-shrink: 0;
+        }
+        .statusbar .msg.ok { color: #86efac; }
+        .statusbar .msg.err { color: #fca5a5; }
+        #load-more { margin: 12px auto; display: block; }
+        #load-more[hidden] { display: none; }
+    </style>
+</head>
+<body>
+    <div class="topbar">
+        <span class="topbar-title">History</span>
+        <input type="text" id="search" placeholder="Search title or URL…" autocomplete="off" spellcheck="false">
+        <select id="range" title="Time range">
+            <option value="all">All time</option>
+            <option value="today">Today</option>
+            <option value="yesterday">Yesterday</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+        </select>
+        <span class="count-badge" id="count">0 visits</span>
+        <span class="spacer"></span>
+        <div class="clear-menu" id="clear-menu">
+            <button type="button" class="btn btn-danger" id="clear-btn">Clear…</button>
+            <div class="menu">
+                <button type="button" data-range="hour">Last hour</button>
+                <button type="button" data-range="day">Last 24 hours</button>
+                <button type="button" data-range="week">Last 7 days</button>
+                <button type="button" data-range="all" class="danger">Everything (and shortcuts)</button>
+            </div>
+        </div>
+    </div>
+    <div class="filterbar">
+        <label class="inline">Keep visits for
+            <select id="retention">
+                <option value="7">7 days</option>
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+                <option value="365">1 year</option>
+                <option value="0">forever</option>
+            </select>
+        </label>
+        <label class="inline"><input type="checkbox" id="record-isolated"> Record isolated tabs</label>
+        <label class="inline"><input type="checkbox" id="inline-complete"> Inline-complete in the address bar</label>
+        <span class="spacer"></span>
+        <span class="count-badge" id="stats" title="Distinct URLs · visits · learned shortcuts">—</span>
+    </div>
+    <div class="closed-bar" id="closed-bar" hidden>
+        <span class="lbl">Recently closed</span>
+        <span id="closed-list"></span>
+    </div>
+    <div class="table-wrap" id="table-wrap">
+        <table>
+            <thead>
+                <tr><th>Time</th><th>Title</th><th>URL</th><th>How</th><th></th></tr>
+            </thead>
+            <tbody id="history-tbody"></tbody>
+        </table>
+        <div class="empty" id="empty" hidden>No visits yet. Pages you open in tabs appear here.</div>
+        <button type="button" class="btn btn-ghost" id="load-more" hidden>Load more</button>
+    </div>
+    <div class="statusbar">
+        <span class="msg" id="status-msg">Ready</span>
+        <span class="spacer"></span>
+        <span>Click a row to open · ⌘/Ctrl+click opens a new tab · Shift+Delete in the address bar removes a suggestion</span>
+    </div>
+    <script src="history-renderer.js"></script>
+</body>
+</html>

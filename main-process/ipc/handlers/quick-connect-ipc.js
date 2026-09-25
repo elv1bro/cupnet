@@ -25,6 +25,7 @@ function registerQuickConnectIpc(ctx) {
                 await ctx.applyEffectiveTrafficMode(ctx.getCurrentTrafficMode(), null, {
                     source: 'quick-connect-profile.disconnect',
                 });
+                if (ctx.identityService) { ctx.identityService.setGeoHint(null, { skipApply: true }); await ctx.identityService.setProxyOverride(null, { reason: 'quick-connect-disconnect' }); }
                 ctx.buildMenu();
                 ctx.notifyProxyStatus();
                 return { success: true };
@@ -48,13 +49,10 @@ function registerQuickConnectIpc(ctx) {
                 profileId,
                 force: true,
             });
-            // Apply fingerprint from this profile
-            ctx.activeFingerprint = {
-                user_agent: encData.user_agent || null,
-                timezone:   encData.timezone   || null,
-                language:   encData.language   || null,
-            };
-            await ctx.applyFingerprintToAllTabs(ctx.activeFingerprint);
+            // Identity is global (Browser ID only) — a proxy never changes it.
+            if (ctx.identityService) {
+                await ctx.identityService.setProxyOverride(null, { reason: 'quick-connect' });
+            }
             ctx.connectedProfileId = profileId;
             ctx.connectedProfileName = encData.name || null;
             ctx.buildMenu();

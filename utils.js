@@ -3,12 +3,15 @@
 // ─── Pure utility functions (no Electron deps) ────────────────────────────────
 // Exported separately so they can be unit-tested without launching Electron.
 
+const { classifyOmniboxInput } = require('./omnibox-input.js');
+
 /** Preset search URL templates (`{q}` = encoded query; if absent, query is appended). */
 const SEARCH_ENGINES = {
     duckduckgo: 'https://duckduckgo.com/?q=',
     google: 'https://www.google.com/search?q=',
     brave: 'https://search.brave.com/search?q=',
     yandex: 'https://yandex.com/search/?text=',
+    bing: 'https://www.bing.com/search?q=',
 };
 
 /** @deprecated Use SEARCH_ENGINES.duckduckgo — kept for legacy tests/imports */
@@ -58,13 +61,11 @@ function resolveNavigationUrl(input, opts = {}) {
     if (!input || typeof input !== 'string') return null;
     const s = input.trim();
     if (!s) return null;
-    if (/^[a-z][a-z\d+\-.]*:\/\//i.test(s)) {
-        try { new URL(s); return s; } catch { /* fall through */ }
-    }
-    if (/^[^\s]+\.[^\s]{2,}$/.test(s) && !s.includes(' ')) {
-        const withProto = 'https://' + s;
-        try { new URL(withProto); return withProto; } catch {}
-    }
+    // Shared classifier (omnibox-input.js): scheme URLs, localhost/host:port/IP/intranet → http,
+    // word.tld → https, everything else → search.
+    const c = classifyOmniboxInput(s);
+    if (c.kind === 'url') return c.url;
+    if (c.kind === 'internal') return s;
     const engine = opts.searchEngineUrl || SEARCH_ENGINE;
     return applySearchEngineTemplate(engine, s);
 }
@@ -332,6 +333,7 @@ module.exports = {
     shouldFilterUrl,
     sanitizeOutgoingRequestHeaders,
     shouldSkipOmniboxInlineGhost,
+    classifyOmniboxInput,
     SEARCH_ENGINE,
     SEARCH_ENGINES,
     applySearchEngineTemplate,

@@ -7,6 +7,7 @@
 const { registerMitmStartupIpc } = require('./handlers/mitm-startup-ipc');
 const { registerTrackingIpc } = require('./handlers/tracking-ipc');
 const { registerTabsIpc } = require('./handlers/tabs-ipc');
+const { registerOmniboxHistoryIpc } = require('./handlers/omnibox-history-ipc');
 const { registerDbLoggingIpc } = require('./handlers/db-logging-ipc');
 const { registerTraceHarIpc } = require('./handlers/trace-har-ipc');
 const { registerRulesIpc } = require('./handlers/rules-ipc');
@@ -28,12 +29,14 @@ const { registerRequestEditorIpc } = require('./handlers/request-editor-ipc');
 const { registerSessionProfileIpc } = require('./handlers/session-profile-ipc');
 const { registerPageHttpLabIpc } = require('./handlers/page-http-lab-ipc');
 const { registerProfileIpc } = require('./handlers/profile-ipc');
+const { registerIdentityIpc } = require('./handlers/identity-ipc');
 
 function registerMainProcessIpc(ctx) {
     registerMitmStartupIpc(ctx);
     registerToolbarActivityBadgeIpc(ctx);
     registerTrackingIpc(ctx);
     registerTabsIpc(ctx);
+    registerOmniboxHistoryIpc(ctx);
     registerDbLoggingIpc(ctx);
     registerTraceHarIpc(ctx);
     registerRulesIpc(ctx);
@@ -54,6 +57,7 @@ function registerMainProcessIpc(ctx) {
     registerSessionProfileIpc(ctx);
     registerPageHttpLabIpc(ctx);
     registerProfileIpc(ctx);
+    registerIdentityIpc(ctx);
 }
 
 module.exports = { registerMainProcessIpc };

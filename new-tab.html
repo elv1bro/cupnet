@@ -1501,6 +1501,7 @@
         <div class="engine-row">
             <button class="engine-btn active" data-engine="duckduckgo">DDG</button>
             <button class="engine-btn" data-engine="google">Google</button>
+            <button class="engine-btn" data-engine="brave">Brave</button>
             <button class="engine-btn" data-engine="yandex">Yandex</button>
             <button class="engine-btn" data-engine="bing">Bing</button>
         </div>
@@ -1833,23 +1834,48 @@ updateClock();
 const _clockTimer = setInterval(updateClock, 1000);
 
 // ── Search engines ─────────────────────────────────────────────────────────────
+// Same engine list as the omnibox (utils.SEARCH_ENGINES); the default follows Settings → Search engine
+// through the read-only get-search-engine IPC (A-338). A per-click choice is a UI pref, not a partition-local one.
 const ENGINES = {
-    google:     q => `https://www.google.com/search?q=${encodeURIComponent(q)}`,
     duckduckgo: q => `https://duckduckgo.com/?q=${encodeURIComponent(q)}`,
-    yandex:     q => `https://yandex.ru/search/?text=${encodeURIComponent(q)}`,
+    google:     q => `https://www.google.com/search?q=${encodeURIComponent(q)}`,
+    brave:      q => `https://search.brave.com/search?q=${encodeURIComponent(q)}`,
+    yandex:     q => `https://yandex.com/search/?text=${encodeURIComponent(q)}`,
     bing:       q => `https://www.bing.com/search?q=${encodeURIComponent(q)}`,
 };
+let customEngineUrl = '';
+function customEngine(q) {
+    const t = String(customEngineUrl || '');
+    const enc = encodeURIComponent(q);
+    if (!t) return ENGINES.duckduckgo(q);
+    return t.includes('{q}') ? t.split('{q}').join(enc) : t + enc;
+}
 
-let engine = localStorage.getItem('cupnet-engine') || 'duckduckgo';
+let engine = 'duckduckgo';
+const ENGINE_PREF_KEY = 'cupnet-newtab-engine';
+
+function applyEngineButtons() {
+    document.querySelectorAll('.engine-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.engine === engine);
+    });
+}
+
+(async () => {
+    try {
+        const se = await window.electronAPI?.getSearchEngine?.();
+        if (se?.searchEngine) engine = se.searchEngine;
+        if (se?.searchEngineCustomUrl) customEngineUrl = se.searchEngineCustomUrl;
+        const pref = await window.electronAPI?.getUiPref?.(ENGINE_PREF_KEY, null);
+        if (pref && (ENGINES[pref] || pref === 'custom')) engine = pref;
+    } catch { /* keep default */ }
+    applyEngineButtons();
+})();
 
 document.querySelectorAll('.engine-btn').forEach(btn => {
-    if (btn.dataset.engine === engine) btn.classList.add('active');
-    else btn.classList.remove('active');
     btn.addEventListener('click', () => {
-        document.querySelectorAll('.engine-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
         engine = btn.dataset.engine;
-        localStorage.setItem('cupnet-engine', engine);
+        applyEngineButtons();
+        window.electronAPI?.setUiPref?.(ENGINE_PREF_KEY, engine).catch(() => {});
         document.getElementById('search-input').focus();
     });
 });
@@ -1879,10 +1905,16 @@ function navigate(url) {
 function doSearch() {
     const val = document.getElementById('search-input').value.trim();
     if (!val) return;
+    // URL-vs-search decision is made by the shared classifier in main (navigate-to → omnibox-input.js);
+    // only the explicit engine choice is applied here.
+    if (window.electronAPI?.navigateTo) {
+        if (/^https?:\/\//i.test(val) || /^file:\/\//i.test(val)) return navigate(val);
+        const looksLikeSite = /^[^\s]+$/.test(val) && (/[.:]/.test(val) || /^localhost/i.test(val) || /^\[/.test(val));
+        if (looksLikeSite) { window.electronAPI.navigateTo(val); return; }
+        return navigate(engine === 'custom' ? customEngine(val) : (ENGINES[engine] || ENGINES.duckduckgo)(val));
+    }
     if (/^https?:\/\//i.test(val) || /^file:\/\//i.test(val)) return navigate(val);
-    if (/^[a-zA-Z0-9-]+(\.[a-zA-Z]{2,})+/.test(val) && !val.includes(' ')) return navigate('https://' + val);
-    if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?/.test(val)) return navigate('http://' + val);
-    navigate((ENGINES[engine] || ENGINES.google)(val));
+    navigate((ENGINES[engine] || ENGINES.duckduckgo)(val));
 }
 
 document.getElementById('search-input').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });

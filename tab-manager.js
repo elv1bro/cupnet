@@ -58,6 +58,7 @@ function displayUrl(url) {
     if (url.startsWith('file://') && url.includes('new-tab.html')) return '';
     if (url.startsWith('file://') && url.includes('settings.html')) return 'cupnet://settings';
     if (url.startsWith('file://') && url.includes('cupnet-guide.html')) return 'cupnet://guide';
+    if (url.startsWith('file://') && url.includes('identity-check.html')) return 'cupnet://identity-check';
     return url;
 }
 
@@ -100,7 +101,47 @@ let _trafficOpts = {};
 let _upstreamProxyRules = null;
 
 /** When user submits from the omnibox, next did-navigate for that tab counts as typed for frecency. */
-const _pendingOmniboxTypedTabIds = new Set();
+const _pendingOmniboxTyped = new Map();
+/** Installed by cupnet-runtime (history-service): recordVisit(payload), updateTitle(url,title), noteClosedTab(snapshot). */
+let _historyHooks = null;
+function setHistoryHooks(hooks) {
+    _historyHooks = hooks && typeof hooks === 'object' ? hooks : null;
+}
+/** Mark the next did-navigate of a tab as omnibox-typed (used when the omnibox opens a new tab). */
+function markOmniboxTyped(tabId, typedText) {
+    if (!tabId) return;
+    _pendingOmniboxTyped.set(tabId, { typedText: String(typedText || '') });
+}
+function _safeTabTitle(tab) {
+    try {
+        const wc = tab.view?.webContents;
+        const t = wc && !wc.isDestroyed() ? wc.getTitle() : '';
+        return t || tab.title || '';
+    } catch {
+        return tab.title || '';
+    }
+}
+function _recordHistoryVisit(tab, url, transition) {
+    const payload = {
+        url,
+        title: _safeTabTitle(tab),
+        transition,
+        typed: transition === 'typed',
+        tabId: tab.id,
+        cookieGroupId: tab.cookieGroupId ?? 1,
+        sessionId: tab.sessionId ?? null,
+    };
+    try {
+        if (_historyHooks && typeof _historyHooks.recordVisit === 'function') _historyHooks.recordVisit(payload);
+        else db.recordOmniboxVisit(payload);
+    } catch (_) { /* ignore */ }
+}
+function _updateHistoryTitle(url, title) {
+    try {
+        if (_historyHooks && typeof _historyHooks.updateTitle === 'function') _historyHooks.updateTitle(url, title);
+        else db.updateOmniboxTitle(url, title);
+    } catch (_) { /* ignore */ }
+}
 
 /** Local MITM without credentials in proxyRules; tab id for MITM/AzureTLS comes from X-CupNet-Rid on each request. */
 function mitmProxyRulesForTabId(_tabId) {
@@ -283,10 +324,13 @@ function attachTabListeners(tab) {
 
     view.webContents.on('page-title-updated', (_, title) => {
         if (view.webContents.isDestroyed()) return;
-        if (isTabErrorPageUrl(view.webContents.getURL())) {
+        const currentUrl = view.webContents.getURL();
+        if (isTabErrorPageUrl(currentUrl)) {
             tab.title = 'Page unavailable';
         } else {
             tab.title = title;
+            // History rows are created at did-navigate with Chromium's placeholder title (A-397).
+            _updateHistoryTitle(currentUrl, title);
         }
         broadcastTabList();
         onTabEventCb('tab-title-changed', tabId, { title: tab.title });
@@ -317,21 +361,22 @@ function attachTabListeners(tab) {
         if (tabId === activeTabId && mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('url-updated', disp);
         }
-        const typed = _pendingOmniboxTypedTabIds.delete(tabId);
-        try {
-            if (url && url !== 'about:blank' && !isTabErrorPageUrl(url)) {
-                db.recordOmniboxVisit({
-                    url,
-                    title: view.webContents.getTitle(),
-                    typed,
-                });
-            }
-        } catch (_) { /* ignore */ }
+        const typedInfo = _pendingOmniboxTyped.get(tabId) || null;
+        _pendingOmniboxTyped.delete(tabId);
+        const reloadPending = !!tab._historyReloadPending;
+        tab._historyReloadPending = false;
+        if (url && url !== 'about:blank' && !isTabErrorPageUrl(url)) {
+            _recordHistoryVisit(tab, url, typedInfo ? 'typed' : (reloadPending ? 'reload' : 'link'));
+        }
     });
 
     view.webContents.on('did-navigate-in-page', (_, url) => {
         tab.url = url;
-        if (!isTabErrorPageUrl(url)) clearTabErrorPageState(tab);
+        if (!isTabErrorPageUrl(url)) {
+            clearTabErrorPageState(tab);
+            // SPA route changes (pushState) are real visits for history / suggestions (A-398).
+            _recordHistoryVisit(tab, url, 'in_page');
+        }
         broadcastTabList();
         const disp = getTabDisplayUrl(tab);
         onTabEventCb('tab-url-changed', tabId, { url: disp });
@@ -477,7 +522,7 @@ function reinjectCameraMediaFilterAllTabs() {
             const wc = tab.view?.webContents;
             if (!wc || wc.isDestroyed()) continue;
             const url = wc.getURL() || '';
-            if (url.startsWith('file://') && (url.includes('new-tab.html') || url.includes('settings.html') || url.includes('cupnet-guide.html'))) continue;
+            if (url.startsWith('file://') && (url.includes('new-tab.html') || url.includes('settings.html') || url.includes('cupnet-guide.html') || url.includes('identity-check.html'))) continue;
             if (script) {
                 wc.send('camera-filter-update', { script });
             }
@@ -487,6 +532,31 @@ function reinjectCameraMediaFilterAllTabs() {
 
 let _trustMitmCA = null;
 function setTrustMitmCA(fn) { _trustMitmCA = fn; }
+
+/**
+ * Browser identity hooks (identity-service): UA/Accept-Language for a fresh tab session and a
+ * post-creation callback (CDP emulation). Without them tabs get the sanitized engine UA.
+ */
+let _identityForNewTab = null;
+let _onTabCreated = null;
+/** Start the identity hook synchronously (so its CDP commands are queued before any navigation); errors are logged, never awaited. */
+function _runTabCreatedHook(tab) {
+    if (!_onTabCreated) return;
+    try {
+        Promise.resolve(_onTabCreated(tab)).catch((e) => console.error('[tab] onTabCreated hook failed', e?.message || e));
+    } catch (e) {
+        console.error('[tab] onTabCreated hook failed', e?.message || e);
+    }
+}
+function setIdentityHooks({ getIdentityForNewTab, onTabCreated } = {}) {
+    _identityForNewTab = typeof getIdentityForNewTab === 'function' ? getIdentityForNewTab : null;
+    _onTabCreated = typeof onTabCreated === 'function' ? onTabCreated : null;
+}
+function _applyIdentityUaToSession(sess, tabId) {
+    let id = null;
+    try { id = _identityForNewTab ? _identityForNewTab(tabId) : null; } catch { id = null; }
+    applyRendererUserAgentToSession(sess, id?.userAgent || null, id?.language || '');
+}
 
 /** Called when a tab is closed/destroyed so MITM can drop per-tab upstream state. */
 let _mitmTabUpstreamCleanup = null;
@@ -619,7 +689,7 @@ async function createTab(opts = {}) {
     await tabSession.setProxy(getProxyOptsForTab({ id: tabId })).catch(e => console.error('[tab] setProxy', e?.message));
     applyTrafficFiltersToSession(tabSession);
     applyCupNetRidHeaderToSession(tabSession, tabId);
-    applyRendererUserAgentToSession(tabSession);
+    _applyIdentityUaToSession(tabSession, tabId);
     installMediaPermissionHandlers(tabSession, settingsStore.normalizeDevicePermissions(settingsStore.loadSettings().devicePermissions).cameraMode);
 
     const view = new WebContentsView({ webPreferences: buildTabViewWebPreferences(tabSession) });
@@ -658,6 +728,11 @@ async function createTab(opts = {}) {
         else resetWebRtcPolicy(view.webContents);
     }
 
+    // Identity hook (CDP emulation) is started synchronously BEFORE the first load so its commands
+    // are queued ahead of the navigation, but never awaited: CDP commands only complete once the
+    // renderer exists, which happens on the first load below — awaiting here would deadlock the tab.
+    _runTabCreatedHook(tab);
+
     if (url && url !== 'about:blank') {
         _loadTabUrl(view.webContents, tabId, url, baseUrl || '');
     }
@@ -672,7 +747,7 @@ async function createTab(opts = {}) {
 
 /**
  * Set per-tab proxy profile (null = use global proxy).
- * Fingerprint from the profile should be applied by the caller (via fingerprint-service).
+ * Identity override from the profile is applied by the caller (via identity-service).
  */
 async function setTabProxy(tabId, proxyProfileId) {
     const tab = tabs.get(tabId || activeTabId);
@@ -709,7 +784,7 @@ async function setTabCookieGroup(tabId, cookieGroupId) {
     await newSession.setProxy(getProxyOptsForTab(tab)).catch(() => {});
     applyTrafficFiltersToSession(newSession);
     applyCupNetRidHeaderToSession(newSession, tid);
-    applyRendererUserAgentToSession(newSession);
+    _applyIdentityUaToSession(newSession, tid);
     installMediaPermissionHandlers(newSession, settingsStore.normalizeDevicePermissions(settingsStore.loadSettings().devicePermissions).cameraMode);
 
     const newView = new WebContentsView({ webPreferences: buildTabViewWebPreferences(newSession) });
@@ -728,6 +803,7 @@ async function setTabCookieGroup(tabId, cookieGroupId) {
     attachTabListeners(tab);
 
     newView.webContents.session.setProxy(getProxyOptsForTab(tab)).catch(() => {});
+    _runTabCreatedHook(tab);
 
     if (mainWindow && !mainWindow.isDestroyed()) {
         if (!_shellOverlayHidesTabView) {
@@ -766,7 +842,7 @@ function switchTab(tabId) {
     const tab = tabs.get(tabId);
     if (!tab) return false;
 
-    _destroyOmniboxOverlayView();
+    hideOmniboxOverlay();
     try {
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('force-close-omnibox');
@@ -816,6 +892,23 @@ function closeTab(tabId) {
         _contentViewRemoveTabView(mainWindow, tab.view);
     }
 
+    // Recently-closed ring (History menu / Reopen Closed Tab): snapshot the navigation stack first.
+    try {
+        const wc = tab.view?.webContents;
+        if (_historyHooks && typeof _historyHooks.noteClosedTab === 'function' && wc && !wc.isDestroyed()) {
+            const nh = wc.navigationHistory;
+            const entries = nh && typeof nh.getAllEntries === 'function' ? nh.getAllEntries() : [];
+            const index = nh && typeof nh.getActiveIndex === 'function' ? nh.getActiveIndex() : -1;
+            _historyHooks.noteClosedTab({
+                url: wc.getURL() || tab.url,
+                title: tab.title,
+                cookieGroupId: tab.cookieGroupId ?? 1,
+                entries,
+                index,
+            });
+        }
+    } catch (_) { /* ignore */ }
+
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.destroy();
     tabs.delete(tabId);
 
@@ -864,7 +957,7 @@ function navigate(url, tabId, opts = {}) {
     const tab = tabs.get(tid);
     if (!tab) return false;
     ensureActiveTabViewVisible();
-    if (opts && opts.omniboxTyped) _pendingOmniboxTypedTabIds.add(tid);
+    if (opts && opts.omniboxTyped) _pendingOmniboxTyped.set(tid, { typedText: String(opts.typedText || '') });
     const base = tab.view.webContents.getURL() || tab.url || '';
     _loadTabUrl(tab.view.webContents, tid, url, base);
     return true;
@@ -956,7 +1049,8 @@ async function setProxyAll(proxyRules) {
 function setWindowSwitcherOverlayVisible(visible) {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (visible) {
-        _destroyOmniboxOverlayView();
+        hideOmniboxOverlay();
+        try { mainWindow.webContents.send('force-close-omnibox'); } catch (_) { /* ignore */ }
         _shellOverlayHideRefCount += 1;
         if (_shellOverlayHideRefCount !== 1) return;
         const tab = activeTabId ? tabs.get(activeTabId) : null;
@@ -1041,8 +1135,13 @@ function _destroyOmniboxOverlayView() {
 /**
  * Show omnibox suggestion overlay (above tab surface). Call hide when palette closes.
  */
+/** True while the shell wants the overlay shown; a hide during the async create wins (A-380). */
+let _omniboxWanted = false;
+let _omniboxShowPromise = null;
+
 async function showOmniboxOverlay() {
     if (!mainWindow || mainWindow.isDestroyed()) return false;
+    _omniboxWanted = true;
     if (omniboxOverlayView && !omniboxOverlayView.webContents.isDestroyed()) {
         _layoutOmniboxOverlayBounds();
         try {
@@ -1050,42 +1149,55 @@ async function showOmniboxOverlay() {
         } catch (_) { /* ignore */ }
         return true;
     }
-    await OMNIBOX_OVERLAY_SESSION.setProxy({ mode: 'direct' }).catch(() => {});
-    const v = new WebContentsView({
-        webPreferences: {
-            preload: OMNIBOX_OVERLAY_PRELOAD,
-            contextIsolation: true,
-            nodeIntegration: false,
-            session: OMNIBOX_OVERLAY_SESSION,
-            webSecurity: true,
-        },
-    });
-    try {
-        v.setBackgroundColor('#00000000');
-    } catch (_) { /* ignore */ }
-    omniboxOverlayView = v;
-    _layoutOmniboxOverlayBounds();
-    _contentViewAddTabView(mainWindow, v);
-    try {
-        const htmlPath = OMNIBOX_OVERLAY_HTML;
-        if (!fs.existsSync(htmlPath) || !fs.existsSync(OMNIBOX_OVERLAY_PRELOAD)) {
-            console.error('[tab-manager] omnibox overlay asset missing', { htmlPath, preload: OMNIBOX_OVERLAY_PRELOAD });
-            throw new Error('omnibox overlay assets not found');
-        }
+    if (_omniboxShowPromise) return _omniboxShowPromise;
+    _omniboxShowPromise = (async () => {
+        await OMNIBOX_OVERLAY_SESSION.setProxy({ mode: 'direct' }).catch(() => {});
+        if (!_omniboxWanted || !mainWindow || mainWindow.isDestroyed()) return false;
+        const v = new WebContentsView({
+            webPreferences: {
+                preload: OMNIBOX_OVERLAY_PRELOAD,
+                contextIsolation: true,
+                nodeIntegration: false,
+                sandbox: true,
+                session: OMNIBOX_OVERLAY_SESSION,
+                webSecurity: true,
+            },
+        });
         try {
-            await v.webContents.loadFile(htmlPath);
-        } catch (e1) {
-            await v.webContents.loadURL(pathToFileURL(htmlPath).href);
+            v.setBackgroundColor('#00000000');
+        } catch (_) { /* ignore */ }
+        omniboxOverlayView = v;
+        _layoutOmniboxOverlayBounds();
+        _contentViewAddTabView(mainWindow, v);
+        try {
+            const htmlPath = OMNIBOX_OVERLAY_HTML;
+            if (!fs.existsSync(htmlPath) || !fs.existsSync(OMNIBOX_OVERLAY_PRELOAD)) {
+                console.error('[tab-manager] omnibox overlay asset missing', { htmlPath, preload: OMNIBOX_OVERLAY_PRELOAD });
+                throw new Error('omnibox overlay assets not found');
+            }
+            try {
+                await v.webContents.loadFile(htmlPath);
+            } catch (e1) {
+                await v.webContents.loadURL(pathToFileURL(htmlPath).href);
+            }
+        } catch (e) {
+            console.error('[tab-manager] omnibox overlay load failed:', e?.message || e);
+            _destroyOmniboxOverlayView();
+            return false;
         }
-    } catch (e) {
-        console.error('[tab-manager] omnibox overlay load failed:', e?.message || e);
-        _destroyOmniboxOverlayView();
-        return false;
-    }
-    return true;
+        // The shell may have closed the omnibox while the page was loading.
+        if (!_omniboxWanted) {
+            try { _contentViewRemoveTabView(mainWindow, v); } catch (_) { /* ignore */ }
+            return false;
+        }
+        return true;
+    })().finally(() => { _omniboxShowPromise = null; });
+    return _omniboxShowPromise;
 }
 
+/** Detach the overlay (kept alive for the next open; destroyed only with the window). */
 function hideOmniboxOverlay() {
+    _omniboxWanted = false;
     if (!omniboxOverlayView || !mainWindow || mainWindow.isDestroyed()) return;
     try {
         _contentViewRemoveTabView(mainWindow, omniboxOverlayView);
@@ -1314,6 +1426,7 @@ module.exports = {
     setProxy, setProxyAll, relayout, destroyAll,
     broadcastTabList, setExtraTopOffset, setExtraBottomOffset, setExtraRightOffset,
     setTrustMitmCA,
+    setIdentityHooks,
     setMitmTabUpstreamCleanup,
     reapplyMitmTrustToSharedSession,
     setPasteUnlock, getPasteUnlock,
@@ -1331,5 +1444,13 @@ module.exports = {
     applyDevicePermissions,
     buildCameraFilterScript,
     _getCameraFilterDataForPreload,
-    reloadActiveTab,
+    reloadActiveTab: reloadActiveTabTracked,
+    setHistoryHooks,
+    markOmniboxTyped,
 };
+
+/** Reload wrapper so the next did-navigate is recorded as a `reload` visit, not a link. */
+function reloadActiveTabTracked(tab, opts) {
+    if (tab) tab._historyReloadPending = true;
+    return reloadActiveTab(tab, opts);
+}

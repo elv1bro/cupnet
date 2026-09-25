@@ -43,14 +43,12 @@ async function disconnectGlobalProxy(ctx, opts = {}) {
         force: true,
     });
 
-    if (ctx.activeFingerprint) {
-        for (const tab of ctx.tabManager?.getAllTabs?.() || []) {
-            if (tab?.view?.webContents && !tab.view.webContents.isDestroyed()) {
-                ctx.resetFingerprintOnWebContents?.(tab.view.webContents).catch((e) => {
-                    ctx.sysLog?.('warn', 'fingerprint', `reset fingerprint on disconnect failed: ${e?.message || e}`);
-                });
-            }
-        }
+    // Drop the connected profile's identity override → back to the global browser identity
+    // (identity-service re-applies TLS/JA3/forceHttp1/UA/timezone/language everywhere).
+    if (ctx.identityService) {
+        ctx.identityService.setGeoHint(null, { skipApply: true });
+        await ctx.identityService.setProxyOverride(null, { reason: 'proxy-disconnect' });
+    } else {
         ctx.activeFingerprint = null;
     }
 
@@ -110,26 +108,10 @@ async function connectGlobalProxyProfile(ctx, profileId, ephemeralVars = {}) {
             force: true,
         });
 
-        ctx.activeFingerprint = {
-            user_agent: row.user_agent || null,
-            timezone: row.timezone || null,
-            language: row.language || null,
-        };
-        await ctx.applyFingerprintToAllTabs?.(ctx.activeFingerprint);
-
-        if (ctx.mitmProxy) {
-            const tlsMode = row.tls_ja3_mode || 'template';
-            const tlsProfile = row.tls_profile || 'chrome';
-            const tlsJa3 = row.tls_ja3_custom || null;
-            if (tlsMode === 'custom' && tlsJa3) {
-                ctx.mitmProxy.setBrowser(tlsProfile);
-                ctx.mitmProxy._activeJa3 = tlsJa3;
-            } else {
-                ctx.mitmProxy.setBrowser(tlsProfile);
-                ctx.mitmProxy._activeJa3 = null;
-            }
-            ctx.mitmProxy.setForceHttp1(!!row.force_http1);
-            ctx.broadcastTlsProfileChanged?.(tlsProfile);
+        // Identity is global and managed only in Browser ID — connecting a proxy never changes it.
+        // (Proxy Manager is proxy-only; per-profile identity overrides were removed.)
+        if (ctx.identityService) {
+            await ctx.identityService.setProxyOverride(null, { reason: 'proxy-connect' });
         }
 
         // Proxy is up — ensure egress is allowed again.
@@ -142,6 +124,10 @@ async function connectGlobalProxyProfile(ctx, profileId, ephemeralVars = {}) {
         ctx.notifyProxyStatus?.();
 
         ctx.checkCurrentIpGeo?.().then((geo) => {
+            // Identity may follow the egress country (timezone / Accept-Language) — identity-service decides.
+            if (ctx.identityService && ctx.connectedProfileId === profileId) {
+                ctx.identityService.setGeoHint(geo, { reason: 'proxy-geo' }).catch(() => {});
+            }
             ctx.db?.updateProxyProfileGeoAsync?.(profileId, geo.ip, `${geo.city}, ${geo.country_name}`).catch((err) => {
                 ctx.safeCatch?.({
                     module: 'main',

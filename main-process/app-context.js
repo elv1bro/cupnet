@@ -12,6 +12,7 @@ function createAppContext() {
             harExporter: null,
             interceptor: null,
             mitmProxy: null,
+            historyService: null,
         },
         windows: {
             main: null,
@@ -24,6 +25,7 @@ function createAppContext() {
             consoleViewer: null,
             pageAnalyzer: null,
             notes: null,
+            history: null,
         },
         proxy: {
             actProxy: '',

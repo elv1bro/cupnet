@@ -1,6 +1,7 @@
 'use strict';
 
 const { confirmOpenAnotherTab } = require('../../services/tab-open-confirm');
+const { resolveInternalAlias } = require('../../../omnibox-input.js');
 
 /**
  * Вкладки и навигация.
@@ -61,20 +62,18 @@ function registerTabsIpc(ctx) {
     // ── Navigation ───────────────────────────────────────────────────────────
     ctx.ipcMain.on('navigate-to', (event, rawInput) => {
         const raw = String(rawInput || '').trim();
-        const alias = raw.toLowerCase();
-        if (alias === 'cupnet://settings' || alias === 'cupnet:settings') {
-            ctx.tabManager.navigate(ctx.getInternalPageUrl('settings'), undefined, { omniboxTyped: true });
+        // Internal aliases share one map with the omnibox classifier (omnibox-input.js, A-203).
+        const internal = resolveInternalAlias(raw);
+        if (internal === 'history') {
+            ctx.createHistoryWindow?.();
             return;
         }
-        if (alias === 'cupnet://guide' || alias === 'cupnet:guide') {
-            ctx.tabManager.navigate(ctx.getInternalPageUrl('guide'), undefined, { omniboxTyped: true });
-            return;
-        }
-        if (alias === 'cupnet://home'
-            || alias === 'cupnet:home'
-            || alias === 'cupnet://new-tab'
-            || alias === 'cupnet:new-tab') {
+        if (internal === 'new-tab') {
             ctx.tabManager.navigate(ctx.getNewTabUrl(), undefined, { omniboxTyped: true });
+            return;
+        }
+        if (internal) {
+            ctx.tabManager.navigate(ctx.getInternalPageUrl(internal), undefined, { omniboxTyped: true });
             return;
         }
         const se = typeof ctx.getSearchEngineUrl === 'function' ? ctx.getSearchEngineUrl() : null;
@@ -91,7 +90,7 @@ function registerTabsIpc(ctx) {
         }
         if (!url) return;
         // Always load in active tab — avoids sender-id confusion (URL bar vs new-tab)
-        ctx.tabManager.navigate(url, undefined, { omniboxTyped: true });
+        ctx.tabManager.navigate(url, undefined, { omniboxTyped: true, typedText: raw });
     });
     ctx.ipcMain.on('nav-back', () => {
         ctx.tabManager.ensureActiveTabViewVisible?.();

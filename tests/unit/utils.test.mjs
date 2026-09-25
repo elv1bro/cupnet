@@ -104,6 +104,19 @@ describe('utils', () => {
         expect(SEARCH_ENGINE).toContain('?q=');
     });
 
+    it('resolveNavigationUrl opens dev hosts over http instead of searching (A-067 / A-391)', () => {
+        expect(resolveNavigationUrl('localhost:3000')).toBe('http://localhost:3000');
+        expect(resolveNavigationUrl('[::1]:8080/x')).toBe('http://[::1]:8080/x');
+        expect(resolveNavigationUrl('10.0.0.5')).toBe('http://10.0.0.5');
+        expect(resolveNavigationUrl('api:8080/v1')).toBe('http://api:8080/v1');
+        expect(resolveNavigationUrl('intranet/path')).toBe('http://intranet/path');
+        expect(resolveNavigationUrl('app.local')).toBe('http://app.local');
+        expect(resolveNavigationUrl('8.8.8.8')).toBe('https://8.8.8.8');
+        expect(resolveNavigationUrl('about:blank')).toBe('about:blank');
+        expect(resolveNavigationUrl('what is localhost')).toMatch(/^https:\/\/duckduckgo\.com\/\?q=/);
+        expect(resolveNavigationUrl('cupnet://settings')).toBe('cupnet://settings');
+    });
+
     it('resolveNavigationUrl uses searchEngineUrl option for queries', () => {
         const u = resolveNavigationUrl('hello world', { searchEngineUrl: SEARCH_ENGINES.google });
         expect(u.startsWith('https://www.google.com/search?q=')).toBe(true);

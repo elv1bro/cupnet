@@ -4,7 +4,7 @@
  * Proxy profile CRUD and TLS profile (no external proxy required).
  */
 const { test, expect } = require('@playwright/test');
-const { launchCupnet, waitForAppContext, waitMitmReady } = require('./helpers.js');
+const { launchCupnet, getMainWindow, waitForAppContext, waitMitmReady } = require('./helpers.js');
 
 test.describe.configure({ mode: 'serial' });
 
@@ -14,9 +14,10 @@ let mainWindow;
 
 test.beforeAll(async () => {
     electronApp = await launchCupnet();
-    mainWindow = await electronApp.firstWindow({ timeout: 120_000 });
-    await mainWindow.waitForLoadState('domcontentloaded');
+    await electronApp.firstWindow({ timeout: 120_000 });
     await waitForAppContext(electronApp, 120_000);
+    mainWindow = await getMainWindow(electronApp, 60_000);
+    await mainWindow.waitForLoadState('domcontentloaded');
     await waitMitmReady(electronApp, 180_000);
 });
 

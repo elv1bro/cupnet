@@ -98,6 +98,7 @@ function registerProxyIpc(ctx) {
                 return { success: false, error: 'Failed to encrypt proxy URL' };
             }
 
+            // Identity lives only in Browser ID — a proxy profile stores no identity and never overrides it.
             if (profile.id) {
                 await ctx.db.updateProxyProfileByIdAsync(profile.id, {
                     name:          profile.name,
@@ -108,13 +109,14 @@ function registerProxyIpc(ctx) {
                     notes:         profile.notes || '',
                     country:       profile.country || '',
                     traffic_mode:  'mitm',
-                    user_agent:    profile.user_agent || null,
-                    timezone:      profile.timezone   || null,
-                    language:      profile.language   || null,
-                    tls_profile:   profile.tls_profile    || 'chrome',
-                    tls_ja3_mode:  profile.tls_ja3_mode   || 'template',
-                    tls_ja3_custom: profile.tls_ja3_custom || null,
-                    force_http1:   profile.force_http1 ? 1 : 0,
+                    user_agent:    null,
+                    timezone:      null,
+                    language:      null,
+                    tls_profile:   'chrome',
+                    tls_ja3_mode:  'template',
+                    tls_ja3_custom: null,
+                    force_http1:   0,
+                    identity_override: 0,
                 });
                 ctx.notifyProxyProfilesList();
                 return { success: true, id: profile.id };
@@ -126,13 +128,14 @@ function registerProxyIpc(ctx) {
                 notes:      profile.notes || '',
                 country:    profile.country || '',
                 traffic_mode: 'mitm',
-                user_agent: profile.user_agent || null,
-                timezone:   profile.timezone   || null,
-                language:   profile.language   || null,
-                tls_profile:   profile.tls_profile    || 'chrome',
-                tls_ja3_mode:  profile.tls_ja3_mode   || 'template',
-                tls_ja3_custom: profile.tls_ja3_custom || null,
-                force_http1:   profile.force_http1 ? 1 : 0,
+                user_agent: null,
+                timezone:   null,
+                language:   null,
+                tls_profile:   'chrome',
+                tls_ja3_mode:  'template',
+                tls_ja3_custom: null,
+                force_http1:   0,
+                identity_override: 0,
             });
             ctx.notifyProxyProfilesList();
             return { success: true, id };

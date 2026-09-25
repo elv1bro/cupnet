@@ -1,6 +1,8 @@
 'use strict';
 
 const api = window.electronAPI;
+const pmModel = window.cupnetProxyManagerModel || {};
+const psi = window.cupnetProxyStaticImport || {};
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let profiles       = [];
@@ -39,8 +41,9 @@ const editorTitle   = document.getElementById('editor-title');
 
 /** True when the profile editor panel is shown (inline style can be empty; use computed style). */
 function isEditorPanelVisible() {
-    if (!editorWrap) return false;
-    return getComputedStyle(editorWrap).display !== 'none';
+    if (editorWrap && getComputedStyle(editorWrap).display !== 'none') return true;
+    const se = document.getElementById('simple-editor');
+    return !!(se && getComputedStyle(se).display !== 'none');
 }
 const searchInput   = document.getElementById('search-profiles');
 
@@ -72,18 +75,6 @@ const providerCredsStatus = document.getElementById('provider-creds-status');
 const providerOptionsPanel  = document.getElementById('provider-options-panel');
 const filterProviderEl  = document.getElementById('filter-provider');
 const filterCountryEl   = document.getElementById('filter-country');
-const providerAccountList = document.getElementById('provider-account-list');
-const btnAcctAdd          = document.getElementById('btn-acct-add');
-const acctModalBackdrop   = document.getElementById('acct-modal-backdrop');
-const acctModalProvider   = document.getElementById('acct-modal-provider');
-const acctModalUsername   = document.getElementById('acct-modal-username');
-const acctModalPassword   = document.getElementById('acct-modal-password');
-const acctModalSave       = document.getElementById('acct-modal-save');
-const acctModalTest       = document.getElementById('acct-modal-test');
-const acctModalTestStatus = document.getElementById('acct-modal-test-status');
-const acctModalDelete     = document.getElementById('acct-modal-delete');
-const acctModalCancel     = document.getElementById('acct-modal-cancel');
-const acctModalClose      = document.getElementById('acct-modal-close');
 const unsavedModalBackdrop = document.getElementById('unsaved-modal-backdrop');
 const unsavedModalMessage  = document.getElementById('unsaved-modal-message');
 const unsavedModalCancel     = document.getElementById('unsaved-modal-cancel');
@@ -91,12 +82,12 @@ const unsavedModalSave       = document.getElementById('unsaved-modal-save');
 const unsavedModalClose      = document.getElementById('unsaved-modal-close');
 const statusSep           = document.getElementById('status-sep');
 const CUSTOM_LINK_ID      = pp.CUSTOM_LINK_PROVIDER_ID || '__custom__';
-const ACC_SELECT_PREFIX   = 'acc:';
-let acctModalEditingId    = null;
-let acctModalTestPassed   = false;
-let acctModalTestFingerprint = '';
-const providerAccountsCount = document.getElementById('provider-accounts-count');
-const providerAccountsSection = document.getElementById('provider-accounts-section');
+// Provider "accounts" (plaintext credentials in localStorage) were removed on 2026-09-24 (A-393):
+// credentials are typed per profile and live only inside the safeStorage-encrypted proxy URL.
+try {
+    localStorage.removeItem('cupnet.proxy.providerAccounts');
+    localStorage.removeItem('cupnet.proxy.providerAccounts.v2');
+} catch { /* ignore */ }
 const btnHeaderNew      = document.getElementById('btn-header-new');
 const statusCard        = document.getElementById('status-card');
 const msErrWrap         = document.getElementById('ms-err-wrap');
@@ -106,12 +97,92 @@ let _providerUiLock = false; // suppress dirty during programmatic load
 let filterProvider = '';
 let filterCountry = '';
 
-// Fingerprint fields
+// Fingerprint fields (per-profile identity OVERRIDE; the global identity lives in the Browser Identity window)
 const fUa           = document.getElementById('f-ua');
 const fTimezone     = document.getElementById('f-timezone');
 const fLanguage     = document.getElementById('f-language');
 const fpActiveBadge = document.getElementById('fp-active-badge');
 const fpSection     = document.getElementById('fp-section');
+const fpBody        = document.getElementById('fp-body');
+const fIdentityOverride = document.getElementById('f-identity-override');
+const btnOpenIdentity   = document.getElementById('btn-open-identity');
+const simpleIdentityLine = document.getElementById('simple-identity-line');
+const simpleIdentityText = document.getElementById('simple-identity-text');
+const editorModeSeg      = document.getElementById('editor-mode-seg');
+const providerCredsFields = document.getElementById('provider-creds-fields');
+
+// ─── Editor mode: simple | advanced ──────────────────────────────────────────
+let editorMode = pmModel.DEFAULT_EDITOR_MODE || 'simple';
+function applyEditorMode(mode, { persist = true } = {}) {
+    const next = pmModel.normalizeEditorMode ? pmModel.normalizeEditorMode(mode) : (mode === 'advanced' ? 'advanced' : 'simple');
+    const wasOpen = isEditorPanelVisible();
+    if (next !== editorMode && wasOpen && editorDirty && !confirmDiscardIfDirty()) {
+        editorModeSeg?.querySelectorAll('[data-editor-mode]').forEach((b) => b.classList.toggle('active', b.dataset.editorMode === editorMode));
+        return;
+    }
+    const changed = next !== editorMode;
+    editorMode = next;
+    document.body.dataset.editorMode = editorMode;
+    editorModeSeg?.querySelectorAll('[data-editor-mode]').forEach((b) => b.classList.toggle('active', b.dataset.editorMode === editorMode));
+    if (editorMode === 'simple') {
+        // Simple mode is provider-only; manual profiles switch the editor to Advanced (see openEditor).
+        if (connectionMode === 'manual' && (selectedId == null || isNew)) setConnectionMode('provider');
+        document.getElementById('tab-btn-connection')?.click();
+    }
+    if (typeof populateProfileProviderSelect === 'function' && fProvider) {
+        populateProfileProviderSelect(fProvider);
+        updateProviderCredsFieldsVisibility();
+    }
+    if (persist && api.setUiPref) api.setUiPref(pmModel.EDITOR_MODE_PREF_KEY || 'proxyManager.editorMode', editorMode).catch(() => {});
+    // Re-open the current selection in the editor that belongs to the new mode.
+    if (changed && wasOpen) {
+        setEditorDirty(false);
+        if (selectedId === DIRECT_ID) openDirectEditor();
+        else if (selectedId != null) openEditor(selectedId);
+        else openNewEditor();
+    }
+}
+editorModeSeg?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-editor-mode]');
+    if (b) applyEditorMode(b.dataset.editorMode);
+});
+// Default synchronously (so the layout is right on first paint), then the persisted preference.
+document.body.dataset.editorMode = editorMode;
+if (api.getUiPref) {
+    api.getUiPref(pmModel.EDITOR_MODE_PREF_KEY || 'proxyManager.editorMode', editorMode)
+        .then((m) => applyEditorMode(m, { persist: false }))
+        .catch(() => applyEditorMode(editorMode, { persist: false }));
+}
+
+/** Inline provider credentials are shown whenever a plain provider (not a saved account / custom URL) is selected. */
+function updateProviderCredsFieldsVisibility() {
+    if (!providerCredsFields) return;
+    const val = fProvider?.value || '';
+    const plainProvider = !!val && val !== CUSTOM_LINK_ID;
+    providerCredsFields.style.display = plainProvider && connectionMode === 'provider' ? '' : 'none';
+}
+
+// ─── Global browser identity (read-only line in Simple mode) ─────────────────
+function refreshSimpleIdentityLine(status) {
+    if (!simpleIdentityText) return;
+    const render = (st) => {
+        simpleIdentityText.textContent = pmModel.describeIdentityForSimple
+            ? pmModel.describeIdentityForSimple(st)
+            : `Browser ID: ${st?.effective?.description || '—'}`;
+    };
+    if (status) { render(status); return; }
+    if (api.getIdentity) api.getIdentity().then((st) => render(st && st.success ? st : null)).catch(() => render(null));
+}
+// Identity is managed only in Browser ID; the Proxy Manager no longer shows or edits it.
+btnOpenIdentity?.addEventListener('click', () => api.openIdentityManager?.());
+
+// Identity override checkbox → the per-profile fields only matter when it is on.
+function syncIdentityOverrideUi() {
+    const on = !!fIdentityOverride?.checked;
+    fpBody?.classList.toggle('fp-disabled', !on);
+    updateFpBadge();
+}
+fIdentityOverride?.addEventListener('change', syncIdentityOverrideUi);
 
 // UA presets
 const UA_PRESETS = {
@@ -130,8 +201,8 @@ document.querySelectorAll('.fp-preset').forEach(btn => {
 });
 
 function updateFpBadge() {
-    const hasCustom = fUa?.value.trim() || fTimezone?.value || fLanguage?.value || tlsGetMode() !== 'template' || tlsGetTemplate() !== 'chrome';
-    if (fpActiveBadge) fpActiveBadge.style.display = hasCustom ? '' : 'none';
+    const on = !!fIdentityOverride?.checked;
+    if (fpActiveBadge) fpActiveBadge.style.display = on ? '' : 'none';
 }
 
 [fUa, fTimezone, fLanguage].forEach(el => el?.addEventListener('change', updateFpBadge));
@@ -194,7 +265,7 @@ function ja3SyncFull() {
     // no-op: full string is the single source of truth
 }
 
-// Template buttons — also apply immediately to MITM worker
+// Template buttons — only edit the profile's override; nothing is applied until Connect (A-170).
 document.querySelectorAll('.tls-tpl-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         const tpl = btn.dataset.tls;
@@ -205,8 +276,6 @@ document.querySelectorAll('.tls-tpl-btn').forEach(btn => {
             if (newUa != null) fUa.value = newUa;
         }
         updateFpBadge();
-        // Apply immediately so stats panel & live requests reflect the choice
-        api.setTlsProfile && api.setTlsProfile(tpl).catch(() => {});
     });
 });
 
@@ -273,6 +342,7 @@ function tlsGetSaveData() {
         tls_ja3_mode:   mode,
         tls_ja3_custom: mode === 'custom' ? ja3BuildFull() : null,
         force_http1:    document.getElementById('tls-force-http1')?.checked ? 1 : 0,
+        identity_override: fIdentityOverride?.checked ? 1 : 0,
     };
 }
 
@@ -283,6 +353,8 @@ function tlsLoadFromProfile(profile) {
     tlsSetTemplate(tpl);
     const http1Cb = document.getElementById('tls-force-http1');
     if (http1Cb) http1Cb.checked = !!(profile.force_http1);
+    if (fIdentityOverride) fIdentityOverride.checked = !!profile.identity_override;
+    syncIdentityOverrideUi();
     if (mode === 'custom' && profile.tls_ja3_custom) {
         ja3ParseFull(profile.tls_ja3_custom);
         ja3SyncFull();
@@ -418,7 +490,6 @@ function showToast(msg, kind = '') {
 function initEditorTabs() {
     const map = [
         { btnId: 'tab-btn-connection', panelId: 'tab-panel-connection' },
-        { btnId: 'tab-btn-identity', panelId: 'tab-panel-identity' },
         { btnId: 'tab-btn-optimization', panelId: 'tab-panel-optimization' },
     ];
     function activate(selectedBtnId) {
@@ -511,6 +582,11 @@ function wireEditorDirtyListeners() {
     editorBodyEl.addEventListener('click', (e) => {
         if (e.target.closest('.tls-tpl-btn, .ja3-prefill, .fp-preset')) mark();
     });
+    const se = document.getElementById('simple-editor');
+    if (se) {
+        se.addEventListener('input', (e) => { if (e.target.closest('#se-card-profile')) mark(); });
+        se.addEventListener('change', (e) => { if (e.target.closest('#se-card-profile')) mark(); });
+    }
 }
 
 wireEditorDirtyListeners();
@@ -578,11 +654,6 @@ function collectVarsFromForm() {
 function resolveProviderSelectBinding() {
     const val = fProvider?.value || '';
     if (val === CUSTOM_LINK_ID) return { mode: 'manual', providerId: null, accountId: null };
-    if (val.startsWith(ACC_SELECT_PREFIX)) {
-        const accountId = val.slice(ACC_SELECT_PREFIX.length);
-        const acc = pp.getProviderAccountEntry?.(accountId);
-        return { mode: 'provider', providerId: acc?.providerId || null, accountId };
-    }
     return { mode: 'provider', providerId: val || null, accountId: '' };
 }
 
@@ -688,19 +759,34 @@ function getProviderStateVariables() {
     const sessionMode = sessionBtn?.dataset.session || 'rotating';
     const dur = fDurationMin?.value ?? '30';
     if (!binding.providerId) return { __connectionMode: 'manual' };
-    return pp.buildProviderVariables?.(binding.providerId, {
+    const vars = pp.buildProviderVariables?.(binding.providerId, {
         countryCode: fCountryCode?.value || '',
         sessionMode,
         durationMin: dur,
         accountId: binding.accountId,
         options: collectProviderOptionsFromForm(),
     }) || { __connectionMode: 'manual' };
+    // Inline credentials: keep the username (never the password) so the editor can show it again;
+    // the password lives only inside the encrypted proxy URL.
+    if (usesInlineCredentials() && fProviderUser?.value.trim()) vars.__username = fProviderUser.value.trim();
+    return vars;
+}
+
+/** True when the editor uses credentials typed inline (plain provider selected, not a saved account). */
+function usesInlineCredentials() {
+    const binding = resolveProviderSelectBinding();
+    return connectionMode === 'provider' && !!binding.providerId && !binding.accountId && !isCustomLinkSelected();
 }
 
 function getProviderCredentialsForCompile(profileVars) {
     const binding = resolveProviderSelectBinding();
     const vars = profileVars || getCurrentSavedVars();
     const providerId = binding.providerId || vars.__provider || '';
+    if (usesInlineCredentials()) {
+        const username = fProviderUser?.value.trim() || '';
+        const password = fProviderPass?.value || '';
+        if (username) return { username, password, fromAccount: false, inline: true, accountId: '' };
+    }
     return pp.resolveProviderCredentials?.(providerId, vars) || { username: '', password: '', fromAccount: false };
 }
 
@@ -738,7 +824,7 @@ function getActiveProvider() {
     let providerId = binding.providerId;
     if (!providerId) {
         const v = fProvider?.value || '';
-        if (v && v !== CUSTOM_LINK_ID && !v.startsWith(ACC_SELECT_PREFIX)) providerId = v;
+        if (v && v !== CUSTOM_LINK_ID) providerId = v;
     }
     return providerId ? (pp.getProxyProviderById?.(providerId) || null) : null;
 }
@@ -753,13 +839,16 @@ function updateProviderCredsStatus() {
     }
     const provider = getActiveProvider();
     const creds = getProviderCredentialsForCompile();
-    if (creds.username && creds.fromAccount) {
-        providerCredsStatus.innerHTML = `<div class="provider-creds-ok">Using saved account <b>${esc(creds.username)}</b>. Change in <b>Provider accounts</b>.</div>`;
-    } else if (creds.username) {
-        providerCredsStatus.innerHTML = `<div class="provider-creds-ok">Using legacy credentials from profile. Save an account in <b>Provider accounts</b> to reuse across profiles.</div>`;
-    } else {
-        providerCredsStatus.innerHTML = `<div class="provider-creds-hint">No account for ${esc(provider?.name || 'provider')}. Click <b>Add account</b> on the left.</div>`;
+    updateProviderCredsFieldsVisibility();
+    if (usesInlineCredentials()) {
+        providerCredsStatus.innerHTML = creds.username
+            ? `<div class="provider-creds-ok">Using the credentials entered below for <b>${esc(provider?.name || 'provider')}</b>.</div>`
+            : `<div class="provider-creds-hint">Enter your ${esc(provider?.name || 'provider')} username and password below.</div>`;
+        return;
     }
+    providerCredsStatus.innerHTML = creds.username
+        ? `<div class="provider-creds-ok">Using legacy credentials stored in this profile.</div>`
+        : `<div class="provider-creds-hint">Select a provider and enter its credentials.</div>`;
 }
 
 function getEffectiveTemplate() {
@@ -846,6 +935,7 @@ function setCountrySelection(code) {
     }
 }
 
+let _lastAutoName = '';
 function maybeAutoNameProfile() {
     if (_providerUiLock || connectionMode !== 'provider') return;
     const provider = getActiveProvider();
@@ -858,8 +948,10 @@ function maybeAutoNameProfile() {
     );
     if (!suggested) return;
     const cur = fName.value.trim();
-    if (!cur || cur === 'New Profile' || cur.startsWith(provider.name)) {
+    // Replace the name only while it is still the auto-suggested one (any provider), never a user's edit.
+    if (!cur || cur === 'New Profile' || cur === _lastAutoName || cur.startsWith(provider.name)) {
         fName.value = suggested;
+        _lastAutoName = suggested;
     }
 }
 
@@ -915,211 +1007,62 @@ function initProviderDropdown() {
         }
         updateSessionUi(provider);
         renderProviderOptions(provider);
+        updateProviderCredsFieldsVisibility();
         syncTemplateFromProviderIfNeeded();
         refreshProviderPreview();
         maybeAutoNameProfile();
         updateProviderCredsStatus();
+        if (!_providerUiLock && isNew && usesInlineCredentials()) {
+            prefillCredentialsFromExistingProfile(provider?.id).catch(() => {});
+        }
     });
+    [fProviderUser, fProviderPass].forEach((el) => el?.addEventListener('input', () => {
+        if (_providerUiLock) return;
+        syncTemplateFromProviderIfNeeded();
+        refreshProviderPreview();
+        updateProviderCredsStatus();
+    }));
 }
 
+/** Provider select: providers (credentials typed inline) always; "Custom URL" only in Advanced mode. */
 function populateProfileProviderSelect(selectEl) {
     if (!selectEl || !pp.getProxyProviders) return;
     const cur = selectEl.value;
-    selectEl.innerHTML = '<option value="">Select provider account…</option>';
-    const accounts = pp.listProviderAccounts?.() || [];
-    for (const acc of accounts) {
-        const prov = pp.getProxyProviderById?.(acc.providerId);
+    selectEl.innerHTML = '<option value="">Select provider…</option>';
+    for (const prov of pp.getProxyProviders() || []) {
         const opt = document.createElement('option');
-        opt.value = `${ACC_SELECT_PREFIX}${acc.id}`;
-        opt.textContent = `${prov?.name || acc.providerId} — ${acc.username}`;
+        opt.value = prov.id;
+        opt.textContent = prov.name;
         selectEl.appendChild(opt);
     }
-    const customOpt = document.createElement('option');
-    customOpt.value = CUSTOM_LINK_ID;
-    customOpt.textContent = pp.CUSTOM_LINK_PROVIDER_LABEL || 'Custom URL';
-    selectEl.appendChild(customOpt);
+    if (editorMode !== 'simple') {
+        const customOpt = document.createElement('option');
+        customOpt.value = CUSTOM_LINK_ID;
+        customOpt.textContent = pp.CUSTOM_LINK_PROVIDER_LABEL || 'Custom URL';
+        selectEl.appendChild(customOpt);
+    }
     if (cur) selectEl.value = cur;
+    if (cur && selectEl.value !== cur) selectEl.value = '';
 }
 
-function formatAccountListLabel(acc) {
-    const prov = pp.getProxyProviderById?.(acc.providerId);
-    return `${prov?.name || acc.providerId} — ${acc.username}`;
-}
-
-function updateProviderAccountsCount() {
-    const n = (pp.listProviderAccounts?.() || []).length;
-    if (providerAccountsCount) providerAccountsCount.textContent = `(${n})`;
-}
-
-function populateAcctModalProviders() {
-    if (!acctModalProvider || !pp.getProxyProviders) return;
-    acctModalProvider.innerHTML = '';
-    for (const p of pp.getProxyProviders()) {
-        const opt = document.createElement('option');
-        opt.value = p.id;
-        opt.textContent = p.name;
-        acctModalProvider.appendChild(opt);
-    }
-}
-
-function acctModalFormFingerprint() {
-    return [
-        acctModalProvider?.value || '',
-        acctModalUsername?.value?.trim() || '',
-        acctModalPassword?.value || '',
-    ].join('\0');
-}
-
-function resetAcctModalTestState(message) {
-    acctModalTestPassed = false;
-    acctModalTestFingerprint = '';
-    updateAcctModalSaveState();
-    renderAcctModalTestStatus(message || 'Test the account in 3 random countries before saving.');
-}
-
-function updateAcctModalSaveState() {
-    const fp = acctModalFormFingerprint();
-    const verified = acctModalTestPassed && fp === acctModalTestFingerprint;
-    if (acctModalSave) {
-        acctModalSave.disabled = !verified;
-        acctModalSave.title = verified ? '' : 'Run account test before saving';
-    }
-}
-
-function renderAcctModalTestStatus(html, kind = '') {
-    if (!acctModalTestStatus) return;
-    acctModalTestStatus.classList.remove('ok', 'err', 'busy');
-    if (kind) acctModalTestStatus.classList.add(kind);
-    acctModalTestStatus.innerHTML = html;
-}
-
-async function runAcctModalProviderTest() {
-    const providerId = acctModalProvider?.value;
-    const username = acctModalUsername?.value?.trim() || '';
-    const password = acctModalPassword?.value || '';
-    if (!providerId) { showToast('Select a provider', 'err'); return; }
-    if (!username) { showToast('Username required', 'err'); return; }
-    if (!password) { showToast('Password required', 'err'); return; }
-    if (!api.testProxyUrl) { showToast('Test API unavailable', 'err'); return; }
-
-    const provider = pp.getProxyProviderById?.(providerId);
-    const plan = pp.planProviderAccountTests?.(providerId, 3) || [];
-    if (plan.length < 3) {
-        showToast('Provider has fewer than 3 test countries', 'err');
-        return;
-    }
-
-    const checkUrl = pp.getProviderTestCheckUrl?.(providerId) || 'https://ipinfo.io/json';
-    const minPass = pp.getProviderTestMinPasses?.(providerId) ?? 2;
-
-    resetAcctModalTestState();
-    if (acctModalTest) acctModalTest.disabled = true;
-    if (acctModalSave) acctModalSave.disabled = true;
-    renderAcctModalTestStatus(`Testing ${esc(provider?.name || providerId)} in ${plan.map(p => esc(p.code.toUpperCase())).join(', ')}…`, 'busy');
-
-    const rows = [];
-    let successCount = 0;
-    for (const target of plan) {
-        const template = pp.buildProviderAccountTestTemplate?.(providerId, {
-            username,
-            password,
-            countryCode: target.code,
-        });
-        if (!template) {
-            rows.push(`<div class="acct-modal-test-row err">✗ ${esc(target.code.toUpperCase())} — failed to build URL</div>`);
-            continue;
-        }
-        const url = pp.resolveProviderTemplateForTest?.(template) || template;
-        const maskedUrl = pp.maskProxyUrlForDisplay?.(url) || url;
-        let result = await api.testProxyUrl(url, { checkUrl }).catch(e => ({ success: false, error: e?.message || String(e), resolvedUrl: url }));
-        if (!result.success) {
-            result = await api.testProxyUrl(url, { checkUrl }).catch(e => ({ success: false, error: e?.message || String(e), resolvedUrl: url }));
-        }
-        if (result.success && result.data) {
-            successCount++;
-            const geo = [result.data.city, result.data.country].filter(Boolean).join(', ');
-            rows.push(`<div class="acct-modal-test-row ok">✓ ${esc(target.code.toUpperCase())} — ${esc(result.data.ip || '—')}${geo ? ` (${esc(geo)})` : ''}${result.latency ? ` · ${result.latency}ms` : ''}</div>`);
-        } else {
-            const errUrl = pp.maskProxyUrlForDisplay?.(result.resolvedUrl || url) || maskedUrl;
-            rows.push(`<div class="acct-modal-test-row err">✗ ${esc(target.code.toUpperCase())} — ${esc(result.error || 'Test failed')}<div class="acct-modal-test-proxy">${esc(errUrl)}</div></div>`);
-        }
-    }
-
-    const verified = successCount >= minPass;
-    if (verified) {
-        acctModalTestPassed = true;
-        acctModalTestFingerprint = acctModalFormFingerprint();
-        const allOk = successCount === plan.length;
-        const title = allOk
-            ? '<strong>Account verified</strong>'
-            : `<strong>Account verified</strong> (${successCount}/${plan.length} locations — failed exits may be unavailable on your plan)`;
-        renderAcctModalTestStatus(`<div>${title}</div>${rows.join('')}`, 'ok');
-        showToast(allOk ? 'Account test passed' : 'Account verified (some locations unavailable)', 'ok');
-    } else {
-        renderAcctModalTestStatus(`<div><strong>Test failed</strong> — fix credentials and try again.</div>${rows.join('')}`, 'err');
-        showToast('Account test failed', 'err');
-    }
-
-    if (acctModalTest) acctModalTest.disabled = false;
-    updateAcctModalSaveState();
-}
-
-function loadAcctModalForm(accountId) {
-    acctModalEditingId = accountId || null;
-    const acc = accountId ? pp.getProviderAccountEntry?.(accountId) : null;
-    if (acctModalProvider) {
-        if (acc?.providerId) acctModalProvider.value = acc.providerId;
-        else if (acctModalProvider.options.length) acctModalProvider.selectedIndex = 0;
-    }
-    if (acctModalUsername) acctModalUsername.value = acc?.username || '';
-    if (acctModalPassword) acctModalPassword.value = acc?.password || '';
-    if (acctModalDelete) acctModalDelete.style.display = acc?.username ? '' : 'none';
-    const title = document.getElementById('acct-modal-title');
-    if (title) title.textContent = acc ? 'Edit provider account' : 'Add provider account';
-    resetAcctModalTestState();
-}
-
-function openAcctModal(accountId) {
-    populateAcctModalProviders();
-    loadAcctModalForm(accountId || null);
-    providerAccountsSection?.setAttribute('open', '');
-    if (acctModalBackdrop) {
-        acctModalBackdrop.classList.add('open');
-        acctModalBackdrop.setAttribute('aria-hidden', 'false');
-    }
-    acctModalUsername?.focus();
-}
-
-function closeAcctModal() {
-    if (acctModalBackdrop) {
-        acctModalBackdrop.classList.remove('open');
-        acctModalBackdrop.setAttribute('aria-hidden', 'true');
-    }
-}
-
-function renderProviderAccountList() {
-    if (!providerAccountList) return;
-    providerAccountList.innerHTML = '';
-    const accounts = pp.listProviderAccounts?.() || [];
-    updateProviderAccountsCount();
-    if (!accounts.length) {
-        providerAccountList.innerHTML = '<div class="provider-account-empty">No accounts yet. Click Add to create one.</div>';
-        return;
-    }
-    for (const acc of accounts) {
-        const row = document.createElement('div');
-        row.className = 'provider-account-item configured';
-        row.innerHTML = `<div class="provider-account-name">${esc(formatAccountListLabel(acc))}</div>`;
-        row.addEventListener('click', () => openAcctModal(acc.id));
-        providerAccountList.appendChild(row);
-    }
-}
-
-function refreshProviderAccountsUi() {
-    renderProviderAccountList();
-    populateProfileProviderSelect(fProvider);
-    updateProviderCredsStatus();
+/** New profile for a provider: reuse the credentials of the newest existing profile of that provider. */
+async function prefillCredentialsFromExistingProfile(providerId) {
+    if (!providerId || !pmModel.findCredentialSourceProfile || !fProviderUser || !fProviderPass) return;
+    if (fProviderUser.value.trim() || fProviderPass.value) return;
+    const src = pmModel.findCredentialSourceProfile(profiles, providerId);
+    if (!src) return;
+    const username = src.variables?.__username || '';
+    let password = '';
+    try {
+        const url = await api.getProxyProfileUrl(src.id);
+        password = pmModel.extractCredentialsFromUrl?.(url || '').password || '';
+    } catch { /* ignore */ }
+    if (fProviderUser.value.trim() || fProviderPass.value) return; // user typed meanwhile
+    fProviderUser.value = username;
+    fProviderPass.value = password;
+    syncTemplateFromProviderIfNeeded();
     refreshProviderPreview();
+    updateProviderCredsStatus();
 }
 
 function populateProfileFilters() {
@@ -1219,19 +1162,7 @@ function loadProviderFromVariables(vars) {
         } else {
             setConnectionMode('provider');
             populateProfileProviderSelect(fProvider);
-            let pick = '';
-            if (v.__accountId && pp.getProviderAccountEntry?.(v.__accountId)) {
-                pick = `${ACC_SELECT_PREFIX}${v.__accountId}`;
-            } else if (v.__provider) {
-                const list = pp.listProviderAccounts?.(v.__provider) || [];
-                if (list.length === 1) pick = `${ACC_SELECT_PREFIX}${list[0].id}`;
-                else if (v.__username) {
-                    const m = list.find(a => a.username === v.__username);
-                    if (m) pick = `${ACC_SELECT_PREFIX}${m.id}`;
-                }
-            }
-            if (pick && fProvider) fProvider.value = pick;
-            else if (v.__provider && fProvider) fProvider.value = v.__provider;
+            if (v.__provider && fProvider) fProvider.value = v.__provider;
             fProvider?.dispatchEvent(new Event('change'));
             if (v.__country) setCountrySelection(v.__country);
             if (v.__sessionMode) setSessionMode(v.__sessionMode);
@@ -1243,12 +1174,21 @@ function loadProviderFromVariables(vars) {
             if (fProviderUser) fProviderUser.value = v.__username || '';
             if (fProviderPass) fProviderPass.value = v.__password || '';
         }
+        updateProviderCredsFieldsVisibility();
         syncTemplateFromProviderIfNeeded();
         refreshProviderPreview();
         updateProviderCredsStatus();
     } finally {
         _providerUiLock = false;
     }
+}
+
+/** Fill the inline password from the decrypted template (credentials are never stored in variables). */
+function loadInlinePasswordFromTemplate(template) {
+    if (!fProviderPass || !usesInlineCredentials()) return;
+    const creds = pmModel.extractCredentialsFromUrl ? pmModel.extractCredentialsFromUrl(template) : { password: '' };
+    if (creds.password) fProviderPass.value = creds.password;
+    if (!fProviderUser?.value.trim() && creds.username) fProviderUser.value = creds.username;
 }
 
 function shouldPreserveEditorSelection() {
@@ -1264,55 +1204,6 @@ initCountryPicker();
 initSessionControls();
 providerOptionsPanel?.addEventListener('input', onProviderOptionsChanged);
 providerOptionsPanel?.addEventListener('change', onProviderOptionsChanged);
-renderProviderAccountList();
-
-btnAcctAdd?.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    openAcctModal();
-});
-acctModalClose?.addEventListener('click', closeAcctModal);
-acctModalCancel?.addEventListener('click', closeAcctModal);
-acctModalBackdrop?.addEventListener('click', (e) => {
-    if (e.target === acctModalBackdrop) closeAcctModal();
-});
-
-acctModalProvider?.addEventListener('change', () => resetAcctModalTestState());
-acctModalUsername?.addEventListener('input', () => resetAcctModalTestState());
-acctModalPassword?.addEventListener('input', () => resetAcctModalTestState());
-
-acctModalTest?.addEventListener('click', () => runAcctModalProviderTest());
-
-acctModalSave?.addEventListener('click', () => {
-    const providerId = acctModalProvider?.value;
-    const username = acctModalUsername?.value?.trim() || '';
-    const password = acctModalPassword?.value || '';
-    if (!providerId) { showToast('Select a provider', 'err'); return; }
-    if (!username) { showToast('Username required', 'err'); return; }
-    if (!acctModalTestPassed || acctModalFormFingerprint() !== acctModalTestFingerprint) {
-        showToast('Run account test before saving', 'err');
-        return;
-    }
-    if (acctModalEditingId) {
-        pp.updateProviderAccount?.(acctModalEditingId, { providerId, username, password });
-    } else {
-        pp.addProviderAccount?.({ providerId, username, password });
-    }
-    refreshProviderAccountsUi();
-    closeAcctModal();
-    showToast('Account saved', 'ok');
-});
-
-acctModalDelete?.addEventListener('click', () => {
-    if (!acctModalEditingId) return;
-    const acc = pp.getProviderAccountEntry?.(acctModalEditingId);
-    if (!confirm(`Remove account "${acc?.username || acctModalEditingId}"?`)) return;
-    pp.deleteProviderAccount?.(acctModalEditingId);
-    refreshProviderAccountsUi();
-    closeAcctModal();
-    showToast('Account removed', 'ok');
-});
-
 filterProviderEl?.addEventListener('change', () => {
     filterProvider = filterProviderEl.value;
     renderProfileList();
@@ -1464,11 +1355,13 @@ function openDirectEditor() {
     isNew         = false;
     ephemeralVars = {};
     lastResolvedVars = {};
+    if (editorMode === 'simple') { seOpenDirect(); return; }
+    seHide();
 
-    // Load saved Direct settings from localStorage (since it's not in DB)
-    let saved = {};
-    try { saved = JSON.parse(localStorage.getItem('direct_profile') || '{}'); } catch {}
-    const profile = { ...DIRECT_PROFILE, ...saved };
+    // Direct = MITM without upstream. Identity is global (Browser Identity window), nothing to edit here.
+    const profile = { ...DIRECT_PROFILE };
+    document.body.dataset.direct = '1';
+    document.getElementById('tab-btn-connection')?.click();
 
     editorEmpty.style.display  = 'none';
     editorWrap.style.display   = 'flex';
@@ -1493,9 +1386,9 @@ function openDirectEditor() {
     setSaveStatus('');
     updateEditorActionButtons();
 
-    if (fUa)       fUa.value       = profile.user_agent || '';
-    if (fTimezone) fTimezone.value = profile.timezone   || '';
-    if (fLanguage) fLanguage.value = profile.language   || '';
+    if (fUa)       fUa.value       = '';
+    if (fTimezone) fTimezone.value = '';
+    if (fLanguage) fLanguage.value = '';
     tlsLoadFromProfile(profile);
     updateFpBadge();
     setEditorDirty(false);
@@ -1512,10 +1405,22 @@ function openEditor(id) {
     const profile = profiles.find(p => p.id === id);
     if (!profile) return;
 
+    // Manual / option-rich / identity-override profiles cannot be edited in Simple mode.
+    if (editorMode === 'simple') {
+        if (pmModel.editorModeForProfile && pmModel.editorModeForProfile(profile, 'simple', pp) === 'simple') {
+            seOpenProfile(profile);
+            return;
+        }
+        applyEditorMode('advanced');
+        showToast('Switched to Advanced: this profile uses features not shown in Simple mode');
+    }
+    seHide();
+
     // Restore proxy URL row if was hidden by Direct editor
     const fTemplateRow = document.getElementById('f-template-row');
     if (fTemplateRow) fTemplateRow.style.display = '';
     if (connModeSwitch) connModeSwitch.style.display = '';
+    delete document.body.dataset.direct;
 
     editorEmpty.style.display  = 'none';
     editorWrap.style.display   = 'flex';
@@ -1539,8 +1444,12 @@ function openEditor(id) {
 
     // Fetch decrypted template for editor
     api.getProxyProfileUrl(id).then(template => {
+        if (selectedId !== id) return; // user switched profiles meanwhile (A-352)
         if (template) fTemplate.value = template;
         loadProviderFromVariables(profile.variables || {});
+        _providerUiLock = true;
+        try { loadInlinePasswordFromTemplate(template || ''); } finally { _providerUiLock = false; }
+        syncTemplateFromProviderIfNeeded();
         buildVarsTable(getEffectiveTemplate(), filterReservedFromVars(profile.variables || {}));
         updatePreview();
         updateProviderCredsStatus();
@@ -1555,10 +1464,13 @@ function openNewEditor() {
     isNew      = true;
     ephemeralVars = {};
     lastResolvedVars = {};
+    if (editorMode === 'simple') { seOpenNew(); return; }
+    seHide();
 
     const fTemplateRow = document.getElementById('f-template-row');
     if (fTemplateRow) fTemplateRow.style.display = '';
     if (connModeSwitch) connModeSwitch.style.display = '';
+    delete document.body.dataset.direct;
 
     editorEmpty.style.display  = 'none';
     editorWrap.style.display   = 'flex';
@@ -1567,9 +1479,9 @@ function openNewEditor() {
     fTemplate.value            = '';
     fNotes.value               = '';
     populateProfileProviderSelect(fProvider);
-    const accounts = pp.listProviderAccounts?.() || [];
-    if (fProvider && accounts.length) {
-        fProvider.value = `${ACC_SELECT_PREFIX}${accounts[0].id}`;
+    const providersList = pp.getProxyProviders?.() || [];
+    if (fProvider && providersList.length) {
+        fProvider.value = providersList[0].id;
     } else if (fProvider) {
         fProvider.value = '';
     }
@@ -1604,6 +1516,7 @@ function closeEditor() {
     setEditorDirty(false);
     editorEmpty.style.display = '';
     editorWrap.style.display  = 'none';
+    seHide();
     renderProfileList();
 }
 
@@ -1677,19 +1590,15 @@ fTemplate.addEventListener('input', debounce(() => {
 
 // ─── Save ─────────────────────────────────────────────────────────────────────
 async function saveProfileFromForm({ silent = false } = {}) {
+    if (seVisible()) return seSave({ silent });
     if (selectedId === DIRECT_ID) {
-        const data = {
-            user_agent: fUa?.value.trim() || null,
-            timezone:   fTimezone?.value  || null,
-            language:   fLanguage?.value  || null,
-            ...tlsGetSaveData(),
-        };
-        try { localStorage.setItem('direct_profile', JSON.stringify(data)); } catch {}
-        if (!silent) setSaveStatus('Saved ✓', 'ok');
+        // Nothing profile-specific to persist: Direct has no upstream and the identity is global.
+        if (!silent) setSaveStatus('Direct has no settings to save', 'ok');
         setEditorDirty(false);
         return { success: true, id: DIRECT_ID };
     }
 
+    if (connectionMode === 'provider' && !fName.value.trim()) maybeAutoNameProfile();
     const name = fName.value.trim();
     syncTemplateFromProviderIfNeeded();
     const template = getEffectiveTemplate();
@@ -1697,21 +1606,32 @@ async function saveProfileFromForm({ silent = false } = {}) {
         if (!silent) setSaveStatus('Name required', 'err');
         return { success: false, error: 'Name required' };
     }
-    if (!template) {
-        if (!silent) setSaveStatus('Proxy URL required', 'err');
-        return { success: false, error: 'Proxy URL required' };
-    }
     if (connectionMode === 'provider') {
         const binding = resolveProviderSelectBinding();
-        if (!binding.accountId) {
-            if (!silent) setSaveStatus('Select a provider account', 'err');
-            return { success: false, error: 'Provider account required' };
+        if (!binding.providerId) {
+            if (!silent) setSaveStatus('Select a provider', 'err');
+            return { success: false, error: 'Provider required' };
         }
         const creds = getProviderCredentialsForCompile();
-        if (!creds.username) {
+        if (usesInlineCredentials()) {
+            const errs = pmModel.validateSimpleForm ? pmModel.validateSimpleForm({
+                providerId: binding.providerId, username: creds.username, password: creds.password,
+                countryCode: fCountryCode?.value || '',
+                sessionMode: sessionSeg?.querySelector('.session-seg-btn.active')?.dataset.session,
+                durationMin: fDurationMin?.value,
+            }) : (creds.username && creds.password ? [] : ['Enter provider credentials']);
+            if (errs.length) {
+                if (!silent) setSaveStatus(errs[0], 'err');
+                return { success: false, error: errs[0] };
+            }
+        } else if (!creds.username) {
             if (!silent) setSaveStatus('Add provider account on the left', 'err');
             return { success: false, error: 'Provider account required' };
         }
+    }
+    if (!template) {
+        if (!silent) setSaveStatus('Proxy URL required', 'err');
+        return { success: false, error: 'Proxy URL required' };
     }
 
     const savedVars = collectVarsFromForm();
@@ -1722,11 +1642,11 @@ async function saveProfileFromForm({ silent = false } = {}) {
         template,
         variables:  savedVars,
         notes:      fNotes.value.trim(),
+        country:    (savedVars.__country || '').toLowerCase(),
         traffic_mode: 'mitm',
-        user_agent: fUa?.value.trim()       || null,
-        timezone:   fTimezone?.value        || null,
-        language:   fLanguage?.value        || null,
-        ...tlsGetSaveData(),
+        // Browser identity is global (Browser ID) — a proxy profile stores none.
+        user_agent: null, timezone: null, language: null,
+        tls_profile: 'chrome', tls_ja3_mode: 'template', tls_ja3_custom: null, force_http1: 0, identity_override: 0,
     };
     try {
         const result = await api.saveProxyProfileFull(profile);
@@ -1760,16 +1680,9 @@ async function performConnectGlobal() {
     if (selectedId === DIRECT_ID) {
         btnConnectGlobal.disabled = true;
         btnConnectGlobal.textContent = 'Applying…';
-        const directData = {
-            user_agent: fUa?.value.trim() || null,
-            timezone:   fTimezone?.value  || null,
-            language:   fLanguage?.value  || null,
-            ...tlsGetSaveData(),
-        };
-        try { localStorage.setItem('direct_profile', JSON.stringify(directData)); } catch {}
-
+        // Direct keeps the global browser identity (TLS included) — no per-profile values to pass.
         const result = await (api.connectDirect
-            ? api.connectDirect(directData.tls_profile || 'chrome')
+            ? api.connectDirect()
             : api.disconnectProxy());
 
         if (result?.success !== false) connectedId = DIRECT_ID;
@@ -1881,6 +1794,9 @@ async function performDuplicateProfile() {
     updateFpBadge();
 
     loadProviderFromVariables(src.variables || {});
+    _providerUiLock = true;
+    try { loadInlinePasswordFromTemplate(realTemplate || ''); } finally { _providerUiLock = false; }
+    syncTemplateFromProviderIfNeeded();
     buildVarsTable(getEffectiveTemplate(), filterReservedFromVars(src.variables || {}));
     updatePreview();
 
@@ -1889,6 +1805,75 @@ async function performDuplicateProfile() {
     setEditorDirty(true);
     renderProfileList();
 }
+
+// ─── Bulk / static list import (Advanced) ────────────────────────────────────
+const bulkModalBackdrop = document.getElementById('bulk-modal-backdrop');
+const bulkModalText     = document.getElementById('bulk-modal-text');
+const bulkModalPrefix   = document.getElementById('bulk-modal-prefix');
+const bulkModalCountry  = document.getElementById('bulk-modal-country');
+const bulkModalStatus   = document.getElementById('bulk-modal-status');
+const bulkModalImport   = document.getElementById('bulk-modal-import');
+let _bulkParsed = null;
+
+function openBulkModal() {
+    if (!bulkModalBackdrop) return;
+    if (bulkModalText) bulkModalText.value = '';
+    if (bulkModalPrefix) bulkModalPrefix.value = '';
+    if (bulkModalCountry) bulkModalCountry.value = '';
+    _bulkParsed = null;
+    if (bulkModalStatus) bulkModalStatus.textContent = 'Paste a list to see what will be imported.';
+    if (bulkModalImport) { bulkModalImport.disabled = true; bulkModalImport.textContent = 'Import'; }
+    bulkModalBackdrop.classList.add('open');
+    bulkModalBackdrop.setAttribute('aria-hidden', 'false');
+    bulkModalText?.focus();
+}
+function closeBulkModal() {
+    bulkModalBackdrop?.classList.remove('open');
+    bulkModalBackdrop?.setAttribute('aria-hidden', 'true');
+}
+function refreshBulkPreview() {
+    if (!psi.parseStaticProxyLines) return;
+    _bulkParsed = psi.parseStaticProxyLines(bulkModalText?.value || '');
+    const { entries, errors, duplicates } = _bulkParsed;
+    const parts = [`${entries.length} proxies ready`];
+    if (duplicates) parts.push(`${duplicates} duplicate${duplicates > 1 ? 's' : ''} skipped`);
+    if (errors.length) parts.push(`${errors.length} invalid line${errors.length > 1 ? 's' : ''}: ${errors.slice(0, 3).map((e) => `#${e.line} ${e.reason}`).join('; ')}${errors.length > 3 ? '…' : ''}`);
+    if (bulkModalStatus) bulkModalStatus.textContent = parts.join(' · ');
+    if (bulkModalImport) bulkModalImport.disabled = entries.length === 0;
+}
+async function runBulkImport() {
+    if (!_bulkParsed || !_bulkParsed.entries.length) return;
+    const names = psi.suggestStaticProfileNames ? psi.suggestStaticProfileNames(_bulkParsed.entries, bulkModalPrefix?.value) : _bulkParsed.entries.map((e) => `${e.host}:${e.port}`);
+    const country = (bulkModalCountry?.value || '').trim().toLowerCase();
+    if (bulkModalImport) { bulkModalImport.disabled = true; bulkModalImport.textContent = 'Importing…'; }
+    let ok = 0;
+    let failed = 0;
+    for (let i = 0; i < _bulkParsed.entries.length; i++) {
+        const e = _bulkParsed.entries[i];
+        try {
+            const res = await api.saveProxyProfileFull({
+                name: names[i],
+                template: e.url,
+                variables: { __connectionMode: 'manual' },
+                notes: 'Imported from list',
+                country,
+                traffic_mode: 'mitm',
+                tls_profile: 'chrome', tls_ja3_mode: 'template', tls_ja3_custom: null, force_http1: 0,
+                identity_override: 0,
+            });
+            if (res && res.success) ok++; else failed++;
+        } catch { failed++; }
+    }
+    closeBulkModal();
+    showToast(`Imported ${ok} proxy profile${ok === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''}`, failed ? 'err' : 'ok');
+    await reloadProfilesFromMain();
+}
+document.getElementById('btn-bulk-import')?.addEventListener('click', openBulkModal);
+document.getElementById('bulk-modal-close')?.addEventListener('click', closeBulkModal);
+document.getElementById('bulk-modal-cancel')?.addEventListener('click', closeBulkModal);
+bulkModalBackdrop?.addEventListener('click', (e) => { if (e.target === bulkModalBackdrop) closeBulkModal(); });
+bulkModalText?.addEventListener('input', refreshBulkPreview);
+bulkModalImport?.addEventListener('click', () => runBulkImport());
 
 btnSave.addEventListener('click', () => saveProfileFromForm());
 
@@ -1980,6 +1965,7 @@ function updateConnectDisconnectButtons() {
 
 function updateEditorActionButtons() {
     updateConnectDisconnectButtons();
+    seUpdateButtons();
 }
 
 btnConnectGlobal.addEventListener('click', async () => {
@@ -2024,6 +2010,7 @@ btnCheckIp.addEventListener('click', () => runCheckIp());
 statusPillBtn?.addEventListener('click', () => runCheckIp());
 
 btnEmptyNew?.addEventListener('click', () => tryOpenNewEditor());
+document.getElementById('btn-simple-new')?.addEventListener('click', () => tryOpenNewEditor());
 
 // ─── Search ───────────────────────────────────────────────────────────────────
 searchInput.addEventListener('input', () => { searchQuery = searchInput.value; renderProfileList(); });
@@ -2054,9 +2041,9 @@ document.addEventListener('keydown', (e) => {
         closeUnsavedModal('cancel');
         return;
     }
-    if (e.key === 'Escape' && acctModalBackdrop?.classList.contains('open')) {
+    if (e.key === 'Escape' && bulkModalBackdrop?.classList.contains('open')) {
         e.preventDefault();
-        closeAcctModal();
+        closeBulkModal();
         return;
     }
     if (e.key === 'Escape' && isEditorPanelVisible()) {
@@ -2265,3 +2252,360 @@ captchaWLField?.addEventListener('input', () => {
 });
 
 api.getTrafficOpts().then(applyTrafficOptsToUI).catch(() => {});
+
+
+// ─── Simple editor ────────────────────────────────────────────────────────────
+// One card: provider chips, credentials, country, session, "Save & Connect". Profiles that need
+// anything else (manual URLs, options, fallback lists, identity overrides) open in Advanced.
+const seEl = {
+    root: document.getElementById('simple-editor'),
+    title: document.getElementById('se-title'),
+    unsaved: document.getElementById('se-unsaved-dot'),
+    state: document.getElementById('se-state'),
+    cardProfile: document.getElementById('se-card-profile'),
+    cardDirect: document.getElementById('se-card-direct'),
+    providers: document.getElementById('se-providers'),
+    user: document.getElementById('se-user'),
+    pass: document.getElementById('se-pass'),
+    passToggle: document.getElementById('se-pass-toggle'),
+    country: document.getElementById('se-country'),
+    sessionSeg: document.getElementById('se-session-seg'),
+    duration: document.getElementById('se-duration'),
+    durationMin: document.getElementById('se-duration-min'),
+    name: document.getElementById('se-name'),
+    saveConnect: document.getElementById('se-save-connect'),
+    save: document.getElementById('se-save'),
+    test: document.getElementById('se-test'),
+    disconnect: document.getElementById('se-disconnect'),
+    del: document.getElementById('se-delete'),
+    status: document.getElementById('se-status'),
+    useDirect: document.getElementById('se-use-direct'),
+    directState: document.getElementById('se-direct-state'),
+};
+let seProviderId = null;
+let seNameAuto = '';
+let seLoading = false;
+
+function seVisible() {
+    return !!seEl.root && getComputedStyle(seEl.root).display !== 'none';
+}
+
+function seSetStatus(msg, kind = '') {
+    if (!seEl.status) return;
+    seEl.status.textContent = msg || '';
+    seEl.status.className = `se-status ${kind}`.trim();
+}
+
+function seShow(kind) {
+    if (!seEl.root) return;
+    editorEmpty.style.display = 'none';
+    editorWrap.style.display = 'none';
+    seEl.root.style.display = 'flex';
+    seEl.cardProfile.style.display = kind === 'direct' ? 'none' : '';
+    seEl.cardDirect.style.display = kind === 'direct' ? '' : 'none';
+    document.body.dataset.direct = kind === 'direct' ? '1' : '';
+    if (kind !== 'direct') delete document.body.dataset.direct;
+    seSetStatus('');
+    testResult?.classList.remove('visible', 'ok', 'err');
+    renderProfileList();
+    seUpdateButtons();
+}
+
+function seHide() {
+    if (seEl.root) seEl.root.style.display = 'none';
+}
+
+function seRenderProviders() {
+    if (!seEl.providers || !pp.getProxyProviders) return;
+    seEl.providers.innerHTML = '';
+    for (const prov of pp.getProxyProviders()) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'se-chip' + (prov.id === seProviderId ? ' active' : '');
+        b.dataset.provider = prov.id;
+        b.setAttribute('role', 'radio');
+        b.setAttribute('aria-checked', prov.id === seProviderId ? 'true' : 'false');
+        b.textContent = prov.name;
+        b.addEventListener('click', () => seSelectProvider(prov.id));
+        seEl.providers.appendChild(b);
+    }
+}
+
+function seFillCountries(providerId, selectedCode) {
+    if (!seEl.country) return;
+    const prov = pp.getProxyProviderById?.(providerId);
+    seEl.country.innerHTML = '';
+    if (!prov) return;
+    const groups = pp.groupCountriesByRegion?.(prov) || [{ region: 'Countries', countries: prov.countries || [] }];
+    for (const { region, countries } of groups) {
+        const og = document.createElement('optgroup');
+        og.label = region;
+        for (const c of countries) {
+            const opt = document.createElement('option');
+            opt.value = c.code;
+            const flag = countryCodeToFlagEmoji(String(c.code || '').toUpperCase());
+            opt.textContent = `${flag ? flag + ' ' : ''}${c.name}`;
+            og.appendChild(opt);
+        }
+        seEl.country.appendChild(og);
+    }
+    const want = selectedCode && (prov.countries || []).some((c) => c.code === selectedCode) ? selectedCode : (prov.countries?.[0]?.code || '');
+    seEl.country.value = want;
+}
+
+function seSessionMode() {
+    return seEl.sessionSeg?.querySelector('.session-seg-btn.active')?.dataset.session || 'rotating';
+}
+
+function seSetSession(mode) {
+    seEl.sessionSeg?.querySelectorAll('.session-seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.session === mode));
+    const prov = pp.getProxyProviderById?.(seProviderId);
+    const showDuration = mode === 'sticky' && (prov?.duration?.supported ?? true);
+    if (seEl.duration) seEl.duration.style.display = showDuration ? '' : 'none';
+    if (prov?.duration && seEl.durationMin) {
+        seEl.durationMin.min = String(prov.duration.min ?? 1);
+        seEl.durationMin.max = String(prov.duration.max ?? 1440);
+    }
+}
+
+function seAutoName() {
+    if (seLoading || !seEl.name || !seProviderId) return;
+    const suggested = pp.suggestProfileName?.(seProviderId, seEl.country?.value, seSessionMode()) || '';
+    if (!suggested) return;
+    const cur = seEl.name.value.trim();
+    if (!cur || cur === seNameAuto) {
+        seEl.name.value = suggested;
+        seNameAuto = suggested;
+    }
+}
+
+async function seMaybePrefillCredentials(providerId) {
+    if (seLoading || !isNew || !providerId || !pmModel.findCredentialSourceProfile) return;
+    if (seEl.user.value.trim() || seEl.pass.value) return;
+    const src = pmModel.findCredentialSourceProfile(profiles, providerId);
+    if (!src) return;
+    let password = '';
+    try {
+        const url = await api.getProxyProfileUrl(src.id);
+        password = pmModel.extractCredentialsFromUrl?.(url || '').password || '';
+    } catch { /* ignore */ }
+    if (!isNew || seProviderId !== providerId || seEl.user.value.trim() || seEl.pass.value) return;
+    seEl.user.value = src.variables?.__username || '';
+    seEl.pass.value = password;
+    seSetStatus(`Credentials reused from "${src.name}"`, '');
+}
+
+function seSelectProvider(providerId, { countryCode, silent } = {}) {
+    seProviderId = providerId || null;
+    seRenderProviders();
+    seFillCountries(seProviderId, countryCode);
+    seSetSession(seSessionMode());
+    seAutoName();
+    if (!silent) {
+        setEditorDirty(true);
+        seMaybePrefillCredentials(seProviderId).catch(() => {});
+    }
+}
+
+function seCollect() {
+    return {
+        providerId: seProviderId,
+        username: seEl.user?.value.trim() || '',
+        password: seEl.pass?.value || '',
+        countryCode: seEl.country?.value || '',
+        sessionMode: seSessionMode(),
+        durationMin: seEl.durationMin?.value,
+        name: seEl.name?.value.trim() || '',
+    };
+}
+
+function seUpdateButtons() {
+    if (!seEl.root || !seVisible()) return;
+    const connected = selectedId != null && selectedId === connectedId;
+    if (seEl.disconnect) seEl.disconnect.style.display = connected && selectedId !== DIRECT_ID ? '' : 'none';
+    if (seEl.del) seEl.del.style.display = !isNew && selectedId != null && selectedId !== DIRECT_ID ? '' : 'none';
+    if (seEl.state) seEl.state.textContent = connected ? '● CONNECTED' : '';
+    if (seEl.saveConnect) seEl.saveConnect.textContent = connected ? 'Save & Reconnect' : 'Save & Connect';
+    if (seEl.unsaved) seEl.unsaved.style.display = editorDirty ? 'inline-block' : 'none';
+    const directActive = connectedId === DIRECT_ID;
+    if (seEl.useDirect) seEl.useDirect.disabled = directActive;
+    if (seEl.directState) seEl.directState.textContent = directActive ? '● Direct is active' : '';
+}
+
+function seOpenNew() {
+    seLoading = true;
+    try {
+        seEl.title.textContent = 'New profile';
+        seEl.user.value = '';
+        seEl.pass.value = '';
+        seEl.name.value = '';
+        seNameAuto = '';
+        seSetSession('rotating');
+        if (seEl.durationMin) seEl.durationMin.value = '30';
+        const first = pp.getProxyProviders?.()?.[0]?.id || null;
+        seSelectProvider(first, { silent: true });
+    } finally {
+        seLoading = false;
+    }
+    seAutoName();
+    seShow('profile');
+    setEditorDirty(false);
+    seMaybePrefillCredentials(seProviderId).catch(() => {});
+    seEl.user.focus();
+}
+
+function seOpenProfile(profile) {
+    const v = profile.variables || {};
+    seLoading = true;
+    try {
+        seEl.title.textContent = profile.name || 'Profile';
+        seEl.name.value = profile.name || '';
+        seNameAuto = '';
+        seEl.user.value = v.__username || '';
+        seEl.pass.value = '';
+        if (seEl.durationMin) seEl.durationMin.value = String(v.__durationMin || 30);
+        seSelectProvider(v.__provider || null, { countryCode: v.__country, silent: true });
+        seSetSession(v.__sessionMode === 'sticky' ? 'sticky' : 'rotating');
+    } finally {
+        seLoading = false;
+    }
+    seShow('profile');
+    setEditorDirty(false);
+    const id = profile.id;
+    api.getProxyProfileUrl(id).then((template) => {
+        if (selectedId !== id || !seVisible()) return;
+        const creds = pmModel.extractCredentialsFromUrl ? pmModel.extractCredentialsFromUrl(template || '') : { username: '', password: '' };
+        if (creds.password) seEl.pass.value = creds.password;
+        if (!seEl.user.value.trim() && creds.username) seEl.user.value = creds.username;
+        setEditorDirty(false);
+    }).catch(() => {});
+}
+
+function seOpenDirect() {
+    seShow('direct');
+    setEditorDirty(false);
+}
+
+async function seSave({ silent = false, connectAfter = false } = {}) {
+    if (!seVisible() || selectedId === DIRECT_ID) return { success: true, id: selectedId };
+    const form = seCollect();
+    const errs = pmModel.validateSimpleForm ? pmModel.validateSimpleForm(form) : [];
+    if (errs.length) {
+        if (!silent) seSetStatus(errs[0], 'err');
+        return { success: false, error: errs[0] };
+    }
+    const existing = !isNew && selectedId != null ? profiles.find((p) => p.id === selectedId) : null;
+    if (!form.name) { seAutoName(); form.name = seEl.name.value.trim(); }
+    const built = pmModel.buildSimpleProfile(pp, { ...form, id: existing ? existing.id : undefined, notes: existing?.notes || '' });
+    if (!built.profile) {
+        const err = built.errors?.[0] || 'Cannot build the proxy URL';
+        if (!silent) seSetStatus(err, 'err');
+        return { success: false, error: err };
+    }
+    seSetStatus('Saving…', 'busy');
+    [seEl.save, seEl.saveConnect, seEl.test].forEach((b) => { if (b) b.disabled = true; });
+    try {
+        const res = await api.saveProxyProfileFull(built.profile);
+        if (!res || !res.success) {
+            seSetStatus(`Save failed: ${res?.error || 'unknown error'}`, 'err');
+            return { success: false, error: res?.error || 'Save failed' };
+        }
+        selectedId = res.id;
+        isNew = false;
+        seEl.title.textContent = built.profile.name;
+        setEditorDirty(false);
+        await reloadProfilesFromMain();
+        if (!connectAfter) seSetStatus(silent ? '' : 'Saved ✓', 'ok');
+        seUpdateButtons();
+        return { success: true, id: res.id };
+    } catch (e) {
+        seSetStatus(`Save failed: ${e?.message || e}`, 'err');
+        return { success: false, error: e?.message || String(e) };
+    } finally {
+        [seEl.save, seEl.saveConnect, seEl.test].forEach((b) => { if (b) b.disabled = false; });
+    }
+}
+
+async function seSaveAndConnect() {
+    const saved = await seSave({ silent: true, connectAfter: true });
+    if (!saved.success) return;
+    seSetStatus('Connecting…', 'busy');
+    if (seEl.saveConnect) seEl.saveConnect.disabled = true;
+    try {
+        const result = await api.connectProxyTemplate(saved.id, {});
+        if (result?.success) {
+            connectedId = saved.id;
+            _storedResolvedVars = result.resolvedVars || {};
+            lastResolvedVars = { ..._storedResolvedVars };
+            seSetStatus('Connected ✓ — all tabs now use this proxy. Checking the exit IP…', 'ok');
+            renderProfileList();
+        } else {
+            seSetStatus(`Connect failed: ${result?.error || 'unknown error'}`, 'err');
+        }
+    } catch (e) {
+        seSetStatus(`Connect failed: ${e?.message || e}`, 'err');
+    } finally {
+        if (seEl.saveConnect) seEl.saveConnect.disabled = false;
+        seUpdateButtons();
+    }
+}
+
+async function seTest() {
+    const saved = editorDirty || isNew ? await seSave({ silent: true }) : { success: true, id: selectedId };
+    if (!saved.success) return;
+    seSetStatus('Testing…', 'busy');
+    if (seEl.test) seEl.test.disabled = true;
+    try {
+        const result = await api.testProxyTemplate(saved.id, {});
+        if (result?.success && result.data) {
+            const d = result.data;
+            const parts = [d.ip || '—', formatTestLocationLine(d), d.org || '', result.latency ? `${result.latency}ms` : ''].filter(Boolean);
+            seSetStatus(`Test OK · ${parts.join(' · ')}`, 'ok');
+        } else {
+            seSetStatus(`Test failed: ${result?.error || 'unknown error'}`, 'err');
+        }
+        await reloadProfilesFromMain();
+    } catch (e) {
+        seSetStatus(`Test failed: ${e?.message || e}`, 'err');
+    } finally {
+        if (seEl.test) seEl.test.disabled = false;
+    }
+}
+
+async function seDelete() {
+    if (isNew || selectedId == null || selectedId === DIRECT_ID) return;
+    const p = profiles.find((x) => x.id === selectedId);
+    if (!confirm(`Delete profile "${p?.name || selectedId}"?`)) return;
+    await api.deleteProxyProfileById(selectedId);
+    closeEditor();
+}
+
+seEl.passToggle?.addEventListener('click', () => {
+    if (!seEl.pass) return;
+    seEl.pass.type = seEl.pass.type === 'password' ? 'text' : 'password';
+});
+seEl.sessionSeg?.addEventListener('click', (e) => {
+    const b = e.target.closest('.session-seg-btn');
+    if (!b) return;
+    seSetSession(b.dataset.session);
+    seAutoName();
+    setEditorDirty(true);
+});
+seEl.country?.addEventListener('change', () => seAutoName());
+seEl.name?.addEventListener('input', () => { seNameAuto = ''; });
+seEl.save?.addEventListener('click', () => seSave());
+seEl.saveConnect?.addEventListener('click', () => seSaveAndConnect());
+seEl.test?.addEventListener('click', () => seTest());
+seEl.disconnect?.addEventListener('click', async () => {
+    seEl.disconnect.disabled = true;
+    try { await api.disconnectProxy(); seSetStatus('Disconnected — traffic goes direct through the local MITM.', ''); }
+    finally { seEl.disconnect.disabled = false; seUpdateButtons(); }
+});
+seEl.del?.addEventListener('click', () => seDelete());
+seEl.useDirect?.addEventListener('click', async () => {
+    seEl.useDirect.disabled = true;
+    try {
+        const r = await (api.connectDirect ? api.connectDirect() : api.disconnectProxy());
+        if (r?.success !== false) connectedId = DIRECT_ID;
+    } finally { seUpdateButtons(); renderProfileList(); }
+});

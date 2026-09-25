@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:">
 <style>
 *, *::before, *::after { box-sizing: border-box; }
 html, body {
@@ -15,15 +15,16 @@ html, body {
 }
 #backdrop {
     position: fixed; inset: 0;
-    background: rgba(0, 0, 0, 0.42);
-}
-#backdrop.transparent {
     background: transparent;
+}
+#backdrop.veil {
+    background: rgba(0, 0, 0, 0.42);
 }
 #dropdown {
     position: relative;
     display: flex;
     flex-direction: column;
+    --content-max: 960px;
     max-height: min(58vh, 440px);
     border-radius: 12px;
     background: #161b22;
@@ -54,6 +55,7 @@ html, body {
     align-items: flex-start;
     justify-content: space-between;
     gap: 10px;
+    max-width: var(--content-max);
     padding: 8px 10px;
     border-radius: 6px;
     cursor: pointer;
@@ -129,6 +131,40 @@ html, body {
     color: #656d76;
     flex-shrink: 0;
 }
+.item-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    line-height: 16px;
+    vertical-align: 1px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.16);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+}
+.item-del {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    margin-top: 1px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: #656d76;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    padding: 0;
+}
+.item:hover .item-del, .item.active .item-del { opacity: 1; }
+.item-del:hover { background: rgba(248, 81, 73, 0.18); color: #f85149; }
+#hint {
+    max-width: var(--content-max);
+}
 #hint {
     padding: 6px 10px;
     border-top: 1px solid #30363d;
@@ -148,105 +184,11 @@ html, body {
 </style>
 </head>
 <body>
-<div id="backdrop"></div>
+<div id="backdrop" class="transparent"></div>
 <div id="dropdown" style="display:none">
-    <ul id="items"></ul>
+    <ul id="items" role="listbox" aria-label="Suggestions"></ul>
     <div id="hint"></div>
 </div>
-<script>
-'use strict';
-const api = window.omniboxOverlay;
-const backdrop = document.getElementById('backdrop');
-const dropdown = document.getElementById('dropdown');
-const itemsList = document.getElementById('items');
-const hintEl   = document.getElementById('hint');
-
-function esc(s) {
-    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
-}
-
-function labelWithMatch(label, match) {
-    const s = String(label || '');
-    if (!match || !Array.isArray(match) || match.length < 2) return esc(s);
-    let a = Number(match[0]);
-    let b = Number(match[1]);
-    if (!Number.isFinite(a)) a = 0;
-    if (!Number.isFinite(b)) b = 0;
-    a = Math.max(0, Math.min(a, s.length));
-    b = Math.max(a, Math.min(b, s.length));
-    return esc(s.slice(0, a)) + '<b>' + esc(s.slice(a, b)) + '</b>' + esc(s.slice(b));
-}
-
-function iconInnerSvg(kind) {
-    const k = String(kind || 'url');
-    const svgs = {
-        search: '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11 6.5a4.5 4.5 0 10-1 2.8l3.2 3.2.7-.7-3.2-3.2A4.5 4.5 0 0011 6.5zM7 10a3.5 3.5 0 110-7 3.5 3.5 0 010 7z"/></svg>',
-        history: '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zm0 1a5.5 5.5 0 110 11A5.5 5.5 0 018 2.5z"/><path d="M8 4.5V8l2.2 1.3.5-.9L8.5 7.4V4.5H8z"/></svg>',
-        tab: '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M3 3h10a1 1 0 011 1v8a1 1 0 01-1 1H3a1 1 0 01-1-1V4a1 1 0 011-1zm0 1v8h10V4H3z"/></svg>',
-        quick: '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 2l1.5 4H14l-4 3 1.5 5L8 11l-3.5 3L6 9 2 6h4.5L8 2z"/></svg>',
-        cmd: '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M2 3h12v2H2V3zm0 4h8v2H2V7zm0 4h12v2H2v-2z"/></svg>',
-        url: '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1a5 5 0 012.8.9L10 5.5A3.5 3.5 0 108 13c1.2 0 2.3-.6 2.9-1.5h1.6A5 5 0 118 3z"/></svg>',
-    };
-    return svgs[k] || svgs.url;
-}
-
-function iconInner(it) {
-    return iconInnerSvg(it && it.icon);
-}
-
-function render(data) {
-    if (!data) { dropdown.style.display = 'none'; return; }
-    dropdown.style.display = '';
-    backdrop.classList.toggle('transparent', data.backdrop === false);
-    dropdown.classList.toggle('attached', data.attached === true);
-    if (data.left != null && data.width != null) {
-        dropdown.style.marginLeft = data.left + 'px';
-        dropdown.style.width      = data.width + 'px';
-    }
-    if (data.topGap != null) {
-        dropdown.style.marginTop = data.topGap + 'px';
-    }
-    const items = data.items || [];
-    if (!items.length) {
-        itemsList.innerHTML = '<li class="empty">' + esc(data.emptyText || 'No results') + '</li>';
-    } else {
-        itemsList.innerHTML = items.map((it, i) => {
-            const cls = 'item' + (it.active ? ' active' : '');
-            const kbd = it.shortcut
-                ? '<span class="item-kbd">' + esc(it.shortcut) + '</span>'
-                : '';
-            const preview = it.urlPreview
-                ? '<span class="item-url-preview">' + esc(it.urlPreview) + '</span>'
-                : '';
-            return '<li class="' + cls + '" data-idx="' + i + '">'
-                + '<span class="item-icon">' + iconInner(it) + '</span>'
-                + '<span class="item-main">'
-                + '<span class="item-label-row">' + labelWithMatch(it.label, it.match) + '</span>'
-                + preview
-                + '</span>'
-                + '<span class="item-cat">' + esc(it.sub || '') + '</span>'
-                + kbd + '</li>';
-        }).join('');
-    }
-    hintEl.textContent = data.hint || '';
-    const activeEl = itemsList.querySelector('.item.active');
-    if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
-}
-
-api.onUpdate(render);
-
-backdrop.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    api.dismiss();
-});
-
-itemsList.addEventListener('mousedown', (e) => {
-    const li = e.target.closest('.item');
-    if (!li) return;
-    e.preventDefault();
-    const idx = Number(li.dataset.idx);
-    if (Number.isFinite(idx)) api.selectItem(idx);
-});
-</script>
+<script src="omnibox-overlay-renderer.js"></script>
 </body>
 </html>

@@ -73,10 +73,34 @@ const SETTINGS_DEFAULTS = {
     searchEngineCustomUrl: '',
     /** MITM: inject Access-Control-* on all matching HTTPS responses (toolbar). */
     corsBypassEnabled: false,
+    /** Browsing history: purge visits older than N days at startup (0 = keep forever). */
+    historyRetentionDays: 90,
+    /** Browsing history: record visits made in isolated tabs (shown with a badge). */
+    historyRecordIsolatedTabs: true,
+    /** Omnibox: inline-complete the host of the best history match (Tab / → accepts). */
+    omniboxInlineComplete: true,
     /** Tool dock placement: inline (toolbar) | subbar (under address bar) | bottom | separate. */
     toolbarToolsPlacement: 'subbar',
     /** Toolbar tools mini horizontal bars (subbar / bottom): left | right alignment. */
     toolbarToolsMiniAlign: 'right',
+    /**
+     * Browser identity (UA / client hints / TLS profile / timezone / language) — see
+     * browser-identity-catalog.js + services/identity-service.js. `tlsProfile` (top-level, legacy)
+     * is kept as a mirror of identity.tlsProfile.
+     */
+    identity: {
+        mode: 'engine',
+        templateId: 'chrome-win',
+        userAgent: '',
+        tlsProfile: null,
+        tlsJa3Mode: 'template',
+        tlsJa3Custom: '',
+        forceHttp1: false,
+        timezone: '',
+        language: '',
+        engineHints: true,
+        followProxyGeo: false,
+    },
     /** Auto-lock vault/profile after N minutes idle (0 = disabled). */
     vaultAutoLockMinutes: 15,
     /** Allow exporting credentials vault as plaintext JSON/CSV. */
@@ -189,10 +213,27 @@ function normalizeDevicePermissions(raw) {
     };
 }
 
+/**
+ * @param {object} raw settings object
+ * @returns {{ historyRetentionDays: number, historyRecordIsolatedTabs: boolean, omniboxInlineComplete: boolean }}
+ */
+function normalizeHistorySettings(raw) {
+    const base = SETTINGS_DEFAULTS;
+    const r = raw && typeof raw === 'object' ? raw : {};
+    let days = Number(r.historyRetentionDays);
+    if (!Number.isFinite(days) || days < 0) days = base.historyRetentionDays;
+    days = Math.min(3650, Math.round(days));
+    return {
+        historyRetentionDays: days,
+        historyRecordIsolatedTabs: r.historyRecordIsolatedTabs == null ? base.historyRecordIsolatedTabs : r.historyRecordIsolatedTabs !== false,
+        omniboxInlineComplete: r.omniboxInlineComplete == null ? base.omniboxInlineComplete : r.omniboxInlineComplete !== false,
+    };
+}
+
 function normalizeSearchEngineSettings(raw) {
     const base = SETTINGS_DEFAULTS;
     const key = String((raw && raw.searchEngine) || base.searchEngine || 'duckduckgo').toLowerCase();
-    const allowed = new Set(['duckduckgo', 'google', 'brave', 'yandex', 'custom']);
+    const allowed = new Set(['duckduckgo', 'google', 'brave', 'yandex', 'bing', 'custom']);
     const searchEngine = allowed.has(key) ? key : 'duckduckgo';
     const searchEngineCustomUrl = String(
         (raw && raw.searchEngineCustomUrl != null) ? raw.searchEngineCustomUrl : base.searchEngineCustomUrl
@@ -327,6 +368,7 @@ function mergeImportedSettings(current, imported) {
         'currentProxy', 'effectiveTrafficMode', 'onboardingComplete',
         'activityMonitorEnabled', 'activityMonitorRateLimit', 'activityMonitorStorageStackTraces',
         'lastLogPath', 'searchEngine', 'searchEngineCustomUrl', 'corsBypassEnabled',
+        'historyRetentionDays', 'historyRecordIsolatedTabs', 'omniboxInlineComplete',
     ];
     for (const k of keys) {
         if (importedClean[k] !== undefined) next[k] = importedClean[k];
@@ -416,6 +458,7 @@ module.exports = {
     normalizeTrafficOpts,
     normalizeDevicePermissions,
     normalizeSearchEngineSettings,
+    normalizeHistorySettings,
     normalizeMaxTabsBeforeWarning,
     normalizeToolbarToolsPlacement,
     normalizeToolbarToolsMiniAlign,

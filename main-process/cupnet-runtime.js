@@ -70,6 +70,7 @@ const {
 const { createProxyNotifyBroadcast } = require('./services/proxy-notify-broadcast');
 const { createCdpNetworkLogging } = require('./services/cdp-network-logging');
 const { createIdentityService } = require('./services/identity-service');
+const { createHistoryService } = require('./services/history-service');
 const { createScreenshotService } = require('./services/screenshot-service');
 
 const {
@@ -116,6 +117,9 @@ let cookieManagerWindow        = null;
 let dnsManagerWindow           = null;
 let proxyManagerWindow         = null;
 let identityManagerWindow      = null;
+let historyWindow              = null;
+/** Browsing history + omnibox suggestions (services/history-service.js); created after db.init(). */
+let historyService             = null;
 let compareViewerWindow        = null;
 let consoleViewerWindow        = null;
 let pageAnalyzerWindow         = null;
@@ -208,6 +212,7 @@ function syncAppContextSnapshot() {
     appCtx.windows.proxyManager = proxyManagerWindow;
     appCtx.windows.cookieManager = cookieManagerWindow;
     appCtx.windows.dnsManager = dnsManagerWindow;
+    appCtx.windows.history = historyWindow;
     appCtx.windows.compareViewer = compareViewerWindow;
     appCtx.windows.consoleViewer = consoleViewerWindow;
     appCtx.windows.pageAnalyzer = pageAnalyzerWindow;
@@ -675,6 +680,7 @@ Object.defineProperties(dSub, {
     dnsManagerWindow: rwWin(() => dnsManagerWindow, (v) => { dnsManagerWindow = v; }),
     proxyManagerWindow: rwWin(() => proxyManagerWindow, (v) => { proxyManagerWindow = v; }),
     identityManagerWindow: rwWin(() => identityManagerWindow, (v) => { identityManagerWindow = v; }),
+    historyWindow: rwWin(() => historyWindow, (v) => { historyWindow = v; }),
     compareViewerWindow: rwWin(() => compareViewerWindow, (v) => { compareViewerWindow = v; }),
     consoleViewerWindow: rwWin(() => consoleViewerWindow, (v) => { consoleViewerWindow = v; }),
     pageAnalyzerWindow: rwWin(() => pageAnalyzerWindow, (v) => { pageAnalyzerWindow = v; }),
@@ -712,6 +718,7 @@ Object.assign(dMain, {
     },
 });
 Object.defineProperties(dMain, {
+    historyService:  { get() { return historyService; }, enumerable: true, configurable: true },
     forceAppQuit:    { get() { return forceAppQuit; },    set(v) { forceAppQuit = v; },    enumerable: true, configurable: true },
     isWindowActive:  { get() { return isWindowActive; },  set(v) { isWindowActive = v; },  enumerable: true, configurable: true },
     lastMouseMoveTime: { get() { return lastMouseMoveTime; }, set(v) { lastMouseMoveTime = v; }, enumerable: true, configurable: true },
@@ -774,6 +781,7 @@ const {
     createSiteInfoPopoverWindow,
     createProxyManagerWindow,
     createIdentityManagerWindow,
+    createHistoryWindow,
     createRulesWindow,
     openBreakpointWindow,
     reattachInterceptorToAllTabs,
@@ -854,6 +862,27 @@ app.whenReady().then(async () => {
         onTabCreated: (tab) => identityService.onTabCreated(tab),
     });
     db.init();
+    historyService = createHistoryService({
+        db,
+        settingsStore,
+        loadSettings,
+        saveSettings,
+        tabManager,
+        getCurrentSessionId: () => currentSessionId,
+        afterTabCreated: (tabId) => {
+            const tab = tabManager.getTab(tabId);
+            if (tab && interceptor) {
+                try { interceptor.attachToSession(tab.tabSession, tabId); } catch (_) { /* ignore */ }
+            }
+            try { notifyCookieManagerTabs(); } catch (_) { /* ignore */ }
+        },
+        safeCatch,
+    });
+    tabManager.setHistoryHooks({
+        recordVisit: (payload) => historyService.recordVisit(payload),
+        updateTitle: (url, title) => historyService.updateTitle(url, title),
+        noteClosedTab: (snapshot) => historyService.noteClosedTab(snapshot),
+    });
     try {
         const { runProfileDataMigration, ensureProfileSetupFlag, readMigrationState } = require('./services/profile-data-migration.js');
         runProfileDataMigration({ db, sysLog });
@@ -862,6 +891,7 @@ app.whenReady().then(async () => {
         safeCatch({ module: 'main', eventCode: 'profile.migration.failed' }, e, 'warn');
     }
     try { db.purgeConsoleLogsOlderThanDays(14); } catch { /* ignore */ }
+    try { historyService.purge(); } catch { /* ignore */ }
     _syncDnsOverrideHostsSet();
     loadSettings();
     try {
@@ -933,6 +963,8 @@ app.whenReady().then(async () => {
     const { createAppContext } = require('./app-context');
     appCtx = createAppContext();
     syncAppContextSnapshot();
+    // historyService is created before appCtx exists (see above) — register it here, not earlier.
+    appCtx.modules.historyService = historyService;
     globalThis.__cupnetAppContext = appCtx;
 
     // Non-critical modules loaded after window is shown
@@ -1250,6 +1282,9 @@ app.whenReady().then(async () => {
             case 'createPageAnalyzerWindow': return createPageAnalyzerWindow;
             case 'createProxyManagerWindow': return createProxyManagerWindow;
             case 'createIdentityManagerWindow': return createIdentityManagerWindow;
+            case 'createHistoryWindow': return createHistoryWindow;
+            case 'historyService': return historyService;
+            case 'historyWindow': return historyWindow;
             case 'identityService': return identityService;
             case 'createRequestEditorWindow': return createRequestEditorWindow;
             case 'openRequestEditorWindow': return openRequestEditorWindow;

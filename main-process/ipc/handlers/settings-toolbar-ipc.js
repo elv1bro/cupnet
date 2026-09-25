@@ -58,9 +58,14 @@ function broadcastBrowserChromeSettings(ctx) {
     try {
         const s = ctx.loadSettings();
         if (!ctx.mainWindow || ctx.mainWindow.isDestroyed()) return;
+        const se = ctx.settingsStore.normalizeSearchEngineSettings(s);
+        const hs = ctx.settingsStore.normalizeHistorySettings(s);
         ctx.mainWindow.webContents.send('browser-settings-updated', {
             toolbarToolsPlacement: ctx.settingsStore.normalizeToolbarToolsPlacement(s),
             toolbarToolsMiniAlign: ctx.settingsStore.normalizeToolbarToolsMiniAlign(s),
+            searchEngine: se.searchEngine,
+            searchEngineCustomUrl: se.searchEngineCustomUrl,
+            omniboxInlineComplete: hs.omniboxInlineComplete,
         });
     } catch { /* ignore */ }
 }
@@ -89,9 +94,13 @@ function registerSettingsToolbarIpc(ctx) {
     ctx.ipcMain.handle('get-settings-all', () => {
         const s = ctx.loadSettings();
         const se = ctx.settingsStore.normalizeSearchEngineSettings(s);
+        const hs = ctx.settingsStore.normalizeHistorySettings(s);
         return {
             filterPatterns:  s.filterPatterns  || [],
             pasteUnlock:     s.pasteUnlock !== false,
+            historyRetentionDays: hs.historyRetentionDays,
+            historyRecordIsolatedTabs: hs.historyRecordIsolatedTabs,
+            omniboxInlineComplete: hs.omniboxInlineComplete,
             trafficOpts:     s.trafficOpts || {},
             effectiveTrafficMode: ctx.getCurrentTrafficMode(),
             tracking:        ctx.getTrackingSettings(),
@@ -140,6 +149,8 @@ function registerSettingsToolbarIpc(ctx) {
         s.searchEngine = n.searchEngine;
         s.searchEngineCustomUrl = n.searchEngineCustomUrl;
         ctx.saveSettings(s);
+        // Keep the omnibox "Search <engine> for" label in sync (A-208).
+        broadcastBrowserChromeSettings(ctx);
         return { success: true, searchEngine: n.searchEngine, searchEngineCustomUrl: n.searchEngineCustomUrl };
     });
 
@@ -350,4 +361,4 @@ function registerSettingsToolbarIpc(ctx) {
     });
 }
 
-module.exports = { registerSettingsToolbarIpc };
+module.exports = { registerSettingsToolbarIpc, broadcastBrowserChromeSettings };

@@ -8,11 +8,7 @@ import {
     filterUserTemplateVars,
     isReservedProviderVar,
     resolveProviderCredentials,
-    planProviderAccountTests,
-    buildProviderAccountTestTemplate,
     maskProxyUrlForDisplay,
-    getProviderTestCheckUrl,
-    getProviderTestMinPasses,
 } from '../../proxy-providers.js';
 
 describe('proxy-providers', () => {
@@ -52,20 +48,6 @@ describe('proxy-providers', () => {
         assert.match(tpl, /user-myuser:/);
         assert.doesNotMatch(tpl, /country-random/);
         assert.match(tpl, /@gate\.decodo\.com:10000$/);
-    });
-
-    it('provider account test picks three countries from popular pool', () => {
-        const decodo = getProxyProviderById('decodo');
-        const plan = planProviderAccountTests('decodo', 3);
-        assert.equal(plan.length, 3);
-        assert.ok(plan.every(p => decodo.countries.some(c => c.code === p.code)));
-        const tpl = buildProviderAccountTestTemplate('decodo', {
-            username: 'u',
-            password: 'p',
-            countryCode: plan[0].code,
-        });
-        assert.match(tpl, /^http:\/\//);
-        assert.match(tpl, /user-u-country-/);
     });
 
     it('decodo exposes all endpoint countries', () => {
@@ -142,16 +124,6 @@ describe('proxy-providers', () => {
         assert.match(masked, /:p\*+!@pr\.oxylabs\.io:7777$/);
         assert.doesNotMatch(masked, /pAzzw0rd!/);
         assert.doesNotMatch(masked, /7777\/$/);
-    });
-
-    it('oxylabs uses reliable test countries and pass threshold', () => {
-        const oxylabs = getProxyProviderById('oxylabs');
-        assert.deepEqual(oxylabs.testCountries, ['us', 'gb', 'de', 'fr', 'nl']);
-        assert.equal(getProviderTestCheckUrl('oxylabs'), 'https://ipinfo.io/json');
-        assert.equal(getProviderTestMinPasses('oxylabs'), 2);
-        const plan = planProviderAccountTests('oxylabs', 3);
-        assert.equal(plan.length, 3);
-        assert.ok(plan.every(p => oxylabs.testCountries.includes(p.code)));
     });
 
     it('getProfileProviderMeta reads saved vars', () => {
