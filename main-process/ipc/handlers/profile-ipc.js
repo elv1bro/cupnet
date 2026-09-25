@@ -110,6 +110,24 @@ function profileRowNeedsSetup(setup, profile, legacyVaultId, profileCount) {
     return false;
 }
 
+/**
+ * Single-profile app: choose the one vault to expose to the UI (most-recently
+ * used wins, with a stable id tiebreak). Any extra vault rows that exist in the
+ * DB (e.g. from an older multi-profile build) are ignored everywhere, so the
+ * gate and the status-bar panel only ever see one profile.
+ * @param {Array<{id?: number, last_login_at?: string}>} rows
+ */
+function pickPrimaryVaultRow(rows) {
+    const list = Array.isArray(rows) ? rows.filter(Boolean) : [];
+    if (!list.length) return null;
+    return list.slice().sort((a, b) => {
+        const ta = Date.parse(a.last_login_at || '') || 0;
+        const tb = Date.parse(b.last_login_at || '') || 0;
+        if (tb !== ta) return tb - ta;
+        return (a.id || 0) - (b.id || 0);
+    })[0];
+}
+
 function registerProfileIpc(ctx) {
     const { guardIpcHandler } = require('../ipc-trusted-sender.js');
     const handle = (channel, fn) => ctx.ipcMain.handle(channel, guardIpcHandler(channel, fn));
@@ -117,7 +135,9 @@ function registerProfileIpc(ctx) {
     handle('profile-gate-status', () => {
         try {
             const setup = needsProfileSetup(ctx.db);
-            const profiles = ctx.db ? ctx.db.listVaults().map((v) => mapProfileRow(v, ctx.db)) : [];
+            // Single-profile app: expose only the primary vault, never a picker.
+            const primaryRow = ctx.db ? pickPrimaryVaultRow(ctx.db.listVaults()) : null;
+            const profiles = primaryRow ? [mapProfileRow(primaryRow, ctx.db)] : [];
 
             const migration = readMigrationState();
             let legacyVaultId = migration.primaryVaultId ?? getPrimaryLegacyVaultId();
@@ -163,7 +183,9 @@ function registerProfileIpc(ctx) {
     handle('profile-list', () => {
         try {
             if (!ctx.db) return [];
-            return ctx.db.listVaults().map((v) => mapProfileRow(v, ctx.db));
+            // Single-profile app: only the primary vault is ever listed.
+            const primaryRow = pickPrimaryVaultRow(ctx.db.listVaults());
+            return primaryRow ? [mapProfileRow(primaryRow, ctx.db)] : [];
         } catch {
             return [];
         }
