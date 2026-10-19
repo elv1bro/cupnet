@@ -16,6 +16,7 @@ const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
 const { SessionLog } = require('./session-log');
+const sessionCrypto = require('./session-crypto');
 
 const UI_HTML = path.join(__dirname, 'ui.html');
 const JSON_BODY_MAX = 2 * 1024 * 1024;
@@ -152,6 +153,23 @@ async function _route(app, req, res, u) {
         const file = path.join(app.sessionsDir, `${sess[1]}.jsonl`);
         if (!fs.existsSync(file)) return _send(res, 404, { error: 'no such session' });
         return _send(res, 200, fs.readFileSync(file), 'application/x-ndjson; charset=utf-8');
+    }
+
+    // Encrypt a session (own key per session) and fetch its key file / sealed file by the stable id.
+    const seal = /^\/api\/sessions\/([\w-]+)\/(seal|key|sealed)$/.exec(p);
+    if (seal) {
+        const [, sessionId, what] = seal;
+        if (!fs.existsSync(path.join(app.sessionsDir, `${sessionId}.jsonl`))) return _send(res, 404, { error: 'no such session' });
+        if (what === 'seal' && m === 'POST') {
+            const r = app.sealSession(sessionId);
+            return _send(res, 200, { id: r.id, sessionId, keyFile: r.keyFile, sealedFile: r.sealedFile, bytes: r.bytes });
+        }
+        if (m !== 'GET') return _send(res, 405, { error: 'method not allowed' });
+        const k = sessionCrypto.findKeyBySessionId(app.keysDir, sessionId);
+        if (!k) return _send(res, 404, { error: 'session is not sealed yet' });
+        const file = what === 'key' ? k.file : path.join(app.sealedDir, `${k.id}.cupsess`);
+        if (!fs.existsSync(file)) return _send(res, 404, { error: 'session is not sealed yet' });
+        return _send(res, 200, fs.readFileSync(file), what === 'key' ? 'application/json' : 'application/octet-stream');
     }
 
     return _send(res, 404, { error: 'not found' });

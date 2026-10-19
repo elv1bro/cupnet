@@ -87,7 +87,7 @@
   </section>
 
   <section id="tab-sessions" hidden>
-    <p class="muted">Each run writes one JSONL file (requests with headers/bodies, page events). They contain cookies and tokens — treat them as secrets.</p>
+    <p class="muted">Each run writes one JSONL file (requests with headers/bodies, page events). They contain cookies and tokens — treat them as secrets. <b>Seal</b> encrypts a session with its own key: the <code>.cupkey</code> file opens the matching <code>.cupsess</code> (same name) in <code>viewer.html</code>.</p>
     <table>
       <colgroup><col><col style="width:120px"><col style="width:200px"><col style="width:120px"></colgroup>
       <thead><tr><th>Session</th><th>Size</th><th>Modified</th><th></th></tr></thead>
@@ -239,7 +239,16 @@ async function loadSessions() {
       const a = el('a', { href: URL.createObjectURL(blob), download: `cupnet-${s.id}.jsonl` }); a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     };
-    tb.append(el('tr', {}, el('td', {}, s.id + (s.id === current ? ' (current)' : '')), el('td', {}, `${(s.bytes / 1024).toFixed(1)} KB`), el('td', {}, new Date(s.mtime).toLocaleString()), el('td', {}, dl)));
+    const sealBtn = el('button', { className: 'btn' }, 'Seal');
+    sealBtn.onclick = async () => {
+      const r = await api(`/api/sessions/${s.id}/seal`, { method: 'POST' });
+      for (const [what, name] of [['key', `${r.id}.cupkey`], ['sealed', `${r.id}.cupsess`]]) {
+        const f = await fetch(`/api/sessions/${s.id}/${what}`, { headers: { 'X-CupNet-Token': TOKEN } });
+        const a = el('a', { href: URL.createObjectURL(await f.blob()), download: name }); a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      }
+    };
+    tb.append(el('tr', {}, el('td', {}, s.id + (s.id === current ? ' (current)' : '')), el('td', {}, `${(s.bytes / 1024).toFixed(1)} KB`), el('td', {}, new Date(s.mtime).toLocaleString()), el('td', {}, dl, ' ', sealBtn)));
   }
 }
 

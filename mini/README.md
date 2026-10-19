@@ -60,10 +60,32 @@ Pages can report back with a same-origin request:
 `http://127.0.0.1:8878/`. The API requires the `X-CupNet-Token` header (the token is in
 `<data>/ui-token`, and the UI page has it embedded). Requests with a non-loopback `Host` get 421,
 which blocks DNS rebinding. Routes: `GET /api/status`, `GET /api/log`, `GET|POST /api/rules`,
-`DELETE /api/rules/:id`, `POST /api/chrome`, `GET /api/sessions`.
+`DELETE /api/rules/:id`, `POST /api/chrome`, `GET /api/sessions`, `GET /api/sessions/:id`,
+`POST /api/sessions/:id/seal`, `GET /api/sessions/:id/key`, `GET /api/sessions/:id/sealed`.
 
 ## Data
 
-`<data>/ca/` (CA key + cert), `cupnet-mini.db` (rules), `sessions/<id>.jsonl` (one file per run,
-with bodies truncated), `chrome-profile/`, `ui-token`. The directory is created with mode 0700.
-Session files hold cookies and auth headers in clear text, so treat them as secrets.
+`<data>/ca/` (CA key + cert), `cupnet-mini.db` (rules), `sessions/<sessionId>.jsonl` (one file per
+run, everything as captured; bodies over 512 KB are truncated), `keys/`, `sealed/`,
+`chrome-profile/`, `ui-token`. The directory is created with mode 0700.
+
+## Sealed sessions (one key per session)
+
+```bash
+npm run mini -- seal SESSION_ID          # or --all
+npm run mini -- open path/to/<id>.cupkey # decrypt to stdout (finds <id>.cupsess next to it or in sealed/)
+```
+
+- When a session starts it gets its own random 256-bit key: `keys/<id>.cupkey`.
+  `id = sha256("cupnet-session-id:v1" ‖ key)[:16]` in hex. It depends only on the key, so it never
+  changes while the session grows, and it reveals nothing about the key.
+- `sealed/<id>.cupsess` is the session encrypted with AES-256-GCM. It is written in 1 MB frames,
+  and each frame's AAD is `<id>:<index>`. Sealing again rewrites the same file. The session is
+  sealed automatically on `stop`. The UI's Sessions tab has a **Seal** button that downloads both
+  files.
+- **The key file is the whole secret.** Whoever has `<id>.cupkey` can find `<id>.cupsess` (same
+  name) and read everything. Without the key, the `.cupsess` is opaque, so it can sit on any
+  static host.
+- `mini/viewer.html` opens the session in the browser with WebCrypto, and nothing is uploaded. Host it with
+  a `sealed/` folder next to it (or point it at one with `?base=URL`) and drop in only the
+  `.cupkey`. Or open the page locally and drop in both files.

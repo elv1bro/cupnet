@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CupNet Session Viewer</title>
+<!--
+  Opens a sealed CupNet mini session in the browser. Nothing leaves the page: decryption runs with
+  WebCrypto. Give it the session's .cupkey file. The matching <id>.cupsess is fetched from
+  ./sealed/<id>.cupsess or from ?base=<url>, or you can drop it here too.
+  Format: mini/session-crypto.js.
+-->
+<style>
+  :root { --bg:#fafafa; --fg:#1d1d1f; --muted:#6e6e73; --line:#e3e3e8; --card:#fff; --accent:#0a66d8; --bad:#c62828; --ok:#2e7d32; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#141416; --fg:#ececf0; --muted:#9a9aa3; --line:#2c2c31; --card:#1c1c1f; --accent:#5aa0ff; --bad:#ff6b6b; --ok:#6fcf73; } }
+  :root[data-theme="dark"] { --bg:#141416; --fg:#ececf0; --muted:#9a9aa3; --line:#2c2c31; --card:#1c1c1f; --accent:#5aa0ff; --bad:#ff6b6b; --ok:#6fcf73; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 -apple-system, system-ui, sans-serif; }
+  main { max-width:1200px; margin:0 auto; padding:16px; }
+  h1 { font-size:18px; margin:0 0 12px; }
+  .drop { border:2px dashed var(--line); border-radius:10px; padding:28px 16px; text-align:center; color:var(--muted); background:var(--card); }
+  .drop.over { border-color:var(--accent); color:var(--fg); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:12px 0; }
+  input[type=search] { flex:1; min-width:180px; padding:7px 10px; border:1px solid var(--line); border-radius:7px; background:var(--card); color:var(--fg); }
+  .muted { color:var(--muted); } .bad { color:var(--bad); } .ok { color:var(--ok); }
+  .wrap { overflow-x:auto; border:1px solid var(--line); border-radius:8px; background:var(--card); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  td.url { white-space:normal; word-break:break-all; min-width:260px; }
+  tbody tr { cursor:pointer; } tbody tr:hover, tbody tr.sel { background:color-mix(in srgb, var(--accent) 12%, transparent); }
+  pre { white-space:pre-wrap; word-break:break-all; background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; font:12px/1.4 ui-monospace, Menlo, monospace; max-height:70vh; overflow:auto; }
+  code { font:12px ui-monospace, Menlo, monospace; }
+  button { padding:6px 12px; border:1px solid var(--line); border-radius:7px; background:var(--card); color:var(--fg); cursor:pointer; }
+</style>
+</head>
+<body>
+<main>
+  <h1>CupNet Session Viewer</h1>
+  <div id="drop" class="drop">Drop a <code>.cupkey</code> file here (and its <code>.cupsess</code>, if it isn't hosted next to this page), or <label style="color:var(--accent);cursor:pointer">choose files<input id="pick" type="file" multiple hidden></label>.</div>
+  <p id="status" class="muted"></p>
+  <div id="view" hidden>
+    <div class="row">
+      <input id="q" type="search" placeholder="Filter by URL, method, status, kind…">
+      <span id="count" class="muted"></span>
+      <button id="save">Save decrypted JSONL</button>
+    </div>
+    <div class="wrap"><table>
+      <thead><tr><th>#</th><th>Time</th><th>Kind</th><th>Method</th><th>Status</th><th>ms</th><th>URL</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+    <pre id="detail" class="muted">Select a row.</pre>
+  </div>
+</main>
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const MAGIC = 'CUPSESS1';
+let keyInfo = null, sealedBytes = null, entries = [], plainJsonl = null;
+
+const b64url = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+const status = (msg, cls = 'muted') => { const s = $('status'); s.textContent = msg; s.className = cls; };
+
+async function parseKey(text) {
+  const j = JSON.parse(text);
+  if (!j || j.format !== 'cupnet-session-key' || j.v !== 1) throw new Error('not a CupNet session key file');
+  const raw = b64url(j.key);
+  if (raw.length !== 32) throw new Error('bad key length');
+  const prefix = new TextEncoder().encode('cupnet-session-id:v1');
+  const msg = new Uint8Array(prefix.length + 32); msg.set(prefix); msg.set(raw, prefix.length);
+  const id = hex(await crypto.subtle.digest('SHA-256', msg)).slice(0, 32);
+  if (j.id && j.id !== id) throw new Error('key file id does not match its key');
+  const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
+  return { id, sessionId: j.sessionId, key };
+}
+
+async function decrypt(bytes, { id, key }) {
+  const u8 = new Uint8Array(bytes);
+  if (new TextDecoder().decode(u8.subarray(0, 8)) !== MAGIC) throw new Error('not a .cupsess file');
+  const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const parts = []; let off = 8;
+  for (let i = 0; off < u8.length; i++) {
+    if (off + 32 > u8.length) throw new Error('truncated .cupsess file');
+    const len = dv.getUint32(off);
+    const iv = u8.subarray(off + 4, off + 16), ct = u8.subarray(off + 16, off + 16 + len);
+    if (ct.length !== len) throw new Error('truncated .cupsess file');
+    const additionalData = new TextEncoder().encode(`${id}:${i}`);
+    try { parts.push(new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv, additionalData }, key, ct))); }
+    catch { throw new Error(`frame ${i}: wrong key or tampered data`); }
+    off += 16 + len;
+  }
+  return new Blob(parts);
+}
+
+async function tryOpen() {
+  if (!keyInfo) return;
+  if (!sealedBytes) {
+    const base = new URLSearchParams(location.search).get('base') || './sealed/';
+    try {
+      const r = await fetch(new URL(`${keyInfo.id}.cupsess`, new URL(base.endsWith('/') ? base : base + '/', location.href)));
+      if (r.ok) sealedBytes = await r.arrayBuffer();
+    } catch { /* not hosted here (or file://) — wait for a dropped .cupsess */ }
+  }
+  if (!sealedBytes) return status(`Key for ${keyInfo.id} loaded. Now drop ${keyInfo.id}.cupsess.`);
+  try {
+    const blob = await decrypt(sealedBytes, keyInfo);
+    plainJsonl = blob;
+    entries = (await blob.text()).split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return { kind: 'unparsed', raw: l }; } });
+    status(`Session ${keyInfo.sessionId || ''} · ${keyInfo.id} · ${entries.length} entries`, 'ok');
+    $('view').hidden = false; render();
+  } catch (e) { sealedBytes = null; status(e.message, 'bad'); }
+}
+
+async function takeFiles(files) {
+  if (!globalThis.crypto?.subtle) return status('WebCrypto is unavailable: open this page over https://, http://localhost or file://.', 'bad');
+  for (const f of files) {
+    try {
+      if (f.name.endsWith('.cupkey')) keyInfo = await parseKey(await f.text());
+      else if (f.name.endsWith('.cupsess')) sealedBytes = await f.arrayBuffer();
+      else {
+        const head = new Uint8Array(await f.slice(0, 8).arrayBuffer());
+        if (new TextDecoder().decode(head) === MAGIC) sealedBytes = await f.arrayBuffer();
+        else keyInfo = await parseKey(await f.text());
+      }
+    } catch (e) { return status(`${f.name}: ${e.message}`, 'bad'); }
+  }
+  await tryOpen();
+}
+
+function render() {
+  const q = $('q').value.trim().toLowerCase();
+  const tb = $('rows'); tb.textContent = '';
+  let n = 0;
+  for (const e of entries) {
+    const hay = `${e.kind} ${e.method || ''} ${e.status || ''} ${e.url || ''}`.toLowerCase();
+    if (q && !hay.includes(q)) continue;
+    if (++n > 5000) break;
+    const tr = document.createElement('tr');
+    const cells = [e.seq, e.ts ? new Date(e.ts).toLocaleTimeString() : '', e.kind, e.method || '', e.status ?? '', e.duration ?? '', e.url || ''];
+    cells.forEach((v, i) => { const td = document.createElement('td'); td.textContent = String(v); if (i === 6) td.className = 'url'; tr.append(td); });
+    tr.onclick = () => {
+      tb.querySelectorAll('tr.sel').forEach((r) => r.classList.remove('sel')); tr.classList.add('sel');
+      const d = $('detail'); d.className = ''; d.textContent = JSON.stringify(e, null, 2);
+    };
+    tb.append(tr);
+  }
+  $('count').textContent = `${Math.min(n, 5000)} shown${n > 5000 ? ' (first 5000)' : ''}`;
+}
+
+$('q').oninput = render;
+$('save').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(plainJsonl); a.download = `cupnet-${keyInfo.sessionId || keyInfo.id}.jsonl`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+};
+$('pick').onchange = (ev) => takeFiles([...ev.target.files]);
+const drop = $('drop');
+drop.ondragover = (ev) => { ev.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = (ev) => { ev.preventDefault(); drop.classList.remove('over'); takeFiles([...ev.dataTransfer.files]); };
+</script>
+</body>
+</html>

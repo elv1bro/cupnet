@@ -7,12 +7,18 @@
  *   start [--chrome] [--url URL]   run the proxy + UI (default command)
  *   chrome [--url URL]             launch Chrome on the mini profile (proxy must be running)
  *   ca                             print CA path, SHA-256, SPKI and the OS trust commands
+ *   seal [SESSION_ID | --all]      encrypt saved session(s) → keys/<id>.cupkey + sealed/<id>.cupsess
+ *   open KEYFILE [--sealed FILE]   decrypt a sealed session to stdout (JSONL)
  *
  * Options: --data DIR  --port 8877  --ui-port 8878  --browser chrome_120  --upstream URL
  *          --trust spki|system  --chrome-bin PATH
  */
 
+const fs = require('fs');
+const path = require('path');
 const { MiniApp } = require('./mini-app');
+const { SessionLog } = require('./session-log');
+const sessionCrypto = require('./session-crypto');
 
 function parseArgs(argv) {
     const out = { _: [] };
@@ -65,8 +71,31 @@ async function main() {
         return;
     }
 
+    if (cmd === 'seal') {
+        const ids = a.all ? SessionLog.listSessions(app.sessionsDir).map((s) => s.id) : [a._[1]];
+        if (!ids[0]) { console.error('Usage: seal SESSION_ID | --all'); process.exitCode = 2; return; }
+        for (const id of ids) {
+            const r = app.sealSession(id);
+            console.log(`${id}\n  key:    ${r.keyFile}\n  sealed: ${r.sealedFile}`);
+        }
+        return;
+    }
+
+    if (cmd === 'open') {
+        const keyFile = a._[1];
+        if (!keyFile) { console.error('Usage: open KEYFILE [--sealed FILE]'); process.exitCode = 2; return; }
+        const k = sessionCrypto.readKeyFile(keyFile);
+        // Default: <id>.cupsess next to the key file, else in <data>/sealed/.
+        const sealed = typeof a.sealed === 'string' ? a.sealed
+            : [path.join(path.dirname(keyFile), `${k.id}.cupsess`), path.join(app.sealedDir, `${k.id}.cupsess`)]
+                .find((f) => fs.existsSync(f));
+        if (!sealed) { console.error(`${k.id}.cupsess not found; pass --sealed FILE`); process.exitCode = 1; return; }
+        process.stdout.write(sessionCrypto.openBuffer(fs.readFileSync(sealed), k));
+        return;
+    }
+
     if (cmd !== 'start') {
-        console.error(`Unknown command "${cmd}". Use start | chrome | ca.`);
+        console.error(`Unknown command "${cmd}". Use start | chrome | ca | seal | open.`);
         process.exitCode = 2;
         return;
     }
@@ -76,6 +105,7 @@ async function main() {
     console.log(`  proxy:    http://127.0.0.1:${app.mitmPort}${app.upstream ? ' → upstream' : ' (direct)'}`);
     console.log(`  UI:       ${app.uiUrl}`);
     console.log(`  log file: ${app.log.file}`);
+    console.log(`  key file: ${app.sessionKey.file} (sealed on stop → sealed/${app.sessionKey.id}.cupsess)`);
     console.log(`  trust:    ${app.trust}${app.trust === 'spki' ? ` (SPKI ${app.ca.spki})` : ''}`);
     if (a.chrome) {
         const r = app.launchChrome(typeof a.url === 'string' ? a.url : undefined);

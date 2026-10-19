@@ -10,6 +10,7 @@
  *
  * Everything listens on loopback only. Data lives in <dataDir> (default ~/.cupnet-mini):
  *   ca/ca-key.pem, ca/ca-cert.pem · cupnet-mini.db (rules) · sessions/*.jsonl · chrome-profile/ · ui-token
+ *   keys/<id>.cupkey (one key per session) · sealed/<id>.cupsess (encrypted sessions, see session-crypto.js)
  *
  * Must run on the Node ABI better-sqlite3 was built for (Electron's): see scripts/run-mini.cjs.
  */
@@ -20,6 +21,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const { SessionLog } = require('./session-log');
+const sessionCrypto = require('./session-crypto');
 const { spkiHashFromCertPem, fingerprintSha256, caInstructions } = require('./ca');
 const { launchChrome } = require('./chrome');
 const { createUiServer } = require('./ui-server');
@@ -76,6 +78,15 @@ class MiniApp {
     get caCertPath() { return path.join(this.caDir, 'ca-cert.pem'); }
     get profileDir() { return path.join(this.dataDir, 'chrome-profile'); }
     get sessionsDir() { return path.join(this.dataDir, 'sessions'); }
+    get keysDir() { return path.join(this.dataDir, 'keys'); }
+    get sealedDir() { return path.join(this.dataDir, 'sealed'); }
+
+    /** Encrypt a saved session into sealed/<id>.cupsess (its key file is created on first use). */
+    sealSession(sessionId) {
+        return sessionCrypto.sealSession({
+            sessionsDir: this.sessionsDir, keysDir: this.keysDir, sealedDir: this.sealedDir, sessionId,
+        });
+    }
 
     /** CA only (no MITM/db) — for `ca` CLI commands. */
     loadCa() {
@@ -104,6 +115,8 @@ class MiniApp {
         interceptor.setLocalEndpointHandler((req) => this._handleLocalEndpoint(req));
 
         this.log = new SessionLog({ dir: this.sessionsDir });
+        // The key exists from the first request, so the session's sealed name is known up front.
+        this.sessionKey = sessionCrypto.ensureSessionKey(this.keysDir, this.log.sessionId);
 
         const { MitmProxy } = require('../mitm-proxy');
         this.mitm = new MitmProxy({
@@ -169,7 +182,12 @@ class MiniApp {
         try { this.interceptor?.setLocalEndpointHandler(null); } catch { /* ignore */ }
         if (this.ui) { await this.ui.close().catch(() => {}); this.ui = null; }
         if (this.mitm) { this.mitm.stop(); this.mitm = null; }
-        if (this.log) { this.log.close(); this.log = null; }
+        if (this.log) {
+            const { sessionId } = this.log;
+            await this.log.close();
+            this.log = null;
+            try { this.sealed = this.sealSession(sessionId); } catch { /* the plain JSONL is still there */ }
+        }
         try { this.db?.close(); } catch { /* ignore */ }
     }
 }

@@ -288,4 +288,26 @@ describe.skipIf(!haveBinary)('MiniApp end to end (local HTTPS origin)', () => {
         expect(file.status).toBe(200);
         expect(String(file.data)).toContain('"kind":"page-event"');
     });
+
+    it('each session has its own key file from the start; seal via the API; stop seals the session', async () => {
+        const sc = require('../../mini/session-crypto.js');
+        const sid = app.log.sessionId;
+        const k = app.sessionKey;
+        expect(readFileSync(k.file, 'utf8')).toContain(`"sessionId": "${sid}"`);
+
+        const sealed = await ui(app, 'POST', `/api/sessions/${sid}/seal`);
+        expect(sealed.status).toBe(200);
+        expect(sealed.data.id).toBe(k.id);
+        expect((await ui(app, 'GET', `/api/sessions/${sid}/key`)).data.id).toBe(k.id);
+        expect((await ui(app, 'GET', `/api/sessions/${sid}/sealed`)).status).toBe(200);
+        expect((await ui(app, 'GET', `/api/sessions/${sid}/sealed`, { token: null })).status).toBe(401);
+        expect((await ui(app, 'POST', '/api/sessions/nope/seal')).status).toBe(404);
+
+        await app.stop();
+        const plain = sc.openBuffer(readFileSync(path.join(app.sealedDir, `${k.id}.cupsess`)), sc.readKeyFile(k.file)).toString();
+        const kinds = plain.trim().split('\n').map((l) => JSON.parse(l).kind);
+        expect(kinds[0]).toBe('session-start');
+        expect(kinds.at(-1)).toBe('session-end'); // sealed after the log was flushed
+        expect(kinds).toContain('page-event');
+    });
 });

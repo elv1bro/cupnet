@@ -89,9 +89,12 @@ class SessionLog {
         return this._ring.find((e) => e.seq === seq) || null;
     }
 
+    /** Resolves once the JSONL file is flushed (safe to seal it then). */
     close() {
         this._append({ kind: 'session-end' });
-        try { this._out.end(); } catch { /* ignore */ }
+        return new Promise((resolve) => {
+            try { this._out.end(resolve); } catch { resolve(); }
+        });
     }
 
     /** Saved sessions in `dir`, newest first. */
