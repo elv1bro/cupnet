@@ -1871,6 +1871,17 @@ npm run pack:mini        # standalone dist/CupNet mini.app (or dist/cupnet-mini/
 **CupNet mini notes:**
 - mini reuses `mitm-proxy.js` and `request-interceptor.js`, and injects its JSON rule store (`mini/rule-store.js`) through `setRuleStore`. Never `require('./db')` on mini's path: `scripts/pack-mini.cjs` leaves db.js out, and its `walkRequires` test fails if a new npm package shows up.
 - mini logs every body in full (`CUPNET_LOG_BODY_MAX_BYTES` defaults to 256 MB; `CUPNET_LOG_MEDIA_BODIES=1`).
+- mini modules:
+  - `mini/mini-app.js`: wiring, settings, Repeater, breakpoints.
+  - `mini/ui-server.js`: loopback API with token auth and strict CSP.
+  - `mini/ui.html`, `mini/ui.js`, `mini/ui.css`: the UI, with no inline scripts. Build DOM with `h()`/`append()`, never native `Element.append` with arrays.
+  - `mini/proxy-store.js`:
+    - `ProxyStore`: encrypted profiles in `proxies.json` + `proxies.key`.
+    - `ProxyManager`: test, connect, kill switch, a self-loop guard, and restore.
+  - `mini/har.js`: HAR 1.2.
+  - `mini/browser-libs.json`: browser libs copied into the pack and served at `/lib/*`.
+- `upstream-tunnel.js` (`connectThroughProxy`) gives the raw MITM paths (TLS passthrough, WebSocket) http, https, socks4(a) and socks5(h) upstreams (A-410).
+- `MitmProxy.setUpstream()` clears egress blocking. The kill switch is applied in `ProxyManager._applyDirect`.
 
 **Gotchas:** 6 unit files under `tests/unit/` still `import { describe, it } from 'node:test'` — Vitest reports "No test suite found" and PR checks stay red (see AUDIT). `npm run test:go` needs Go on PATH. The azuretls-go worker test hits the network; the concurrency case flakes on a slow link.
 

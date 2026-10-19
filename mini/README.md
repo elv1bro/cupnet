@@ -92,8 +92,35 @@ Pages can report back with a same-origin request:
     Follow (auto-scroll). Keyboard: ↑/↓, Esc.
   - The detail pane has Headers, Request, Response and JSON views. Images, audio and video show a
     preview. Bodies over 2 MB show a preview with **Load full body**. Every body can be downloaded.
-- **Rules**: intercept rules (`inject`, `block`, `mock`, `modifyHeaders`, …) with hit counters.
-- **Sessions**: open, download JSONL, seal.
+  - **HAR** exports the rows the current filter shows (the whole session when no filter is
+    set). From the detail pane any request can go to Repeater, be copied as curl, or seed a
+    Mock or Pause rule.
+- **Proxies**: the upstream proxy manager.
+  - Profiles come from a provider preset (decodo, …) or a custom template such as
+    `http://user-{SID}:{PASSWORD}@host:{RAND:10001-10100}`.
+    - `{SID}` and `{RAND:a-b}` are rolled once and pinned, giving a sticky exit. **New IP**
+      re-rolls them.
+    - User variables are `{NAME}`.
+    - The password is stored encrypted in `proxies.json` with `proxies.key` and is never sent
+      back to the UI (`•••`).
+  - Supported schemes: http, https, socks4(a), socks5(h).
+  - Features: **Test** and **Test all** (exit IP, country, latency through the AzureTLS worker),
+    **Connect**, **Disconnect**, filters (provider, country, status, group, search) and bulk
+    **Import** (one proxy per line, dry-run preview).
+  - **Kill switch**: while no proxy is connected, nothing leaves directly. Chrome gets 502 and
+    Repeater gets 409.
+  - A profile pointing at mini's own proxy port is refused, because it would loop.
+- **Repeater**: edit and resend any request (method, URL, headers, body) through the same worker
+  and upstream. Import from curl; generate code as curl, fetch, axios, Python requests, Go or PHP.
+  Each send is logged with type `repeater`. Cmd/Ctrl+Enter sends.
+- **Rules**: a structured form per rule type (`inject`, `mock`, `block`, `modifyHeaders`,
+  `script`, `pause`). A rule matches on URL pattern, methods, headers and body, and has a
+  priority. Rules show hit counters.
+- **Breakpoints**: a rule with **Pause** holds matching requests. Edit method, URL, headers and
+  body, then **Forward** or **Block**.
+- **Settings**: TLS profile (`--browser` overrides it for one run), TLS-passthrough domains, CORS
+  bypass, force HTTP/1.1. Stored in `settings.json`.
+- **Sessions**: open, download JSONL or HAR, seal.
 
 ## API
 
@@ -112,9 +139,22 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
   served as `application/octet-stream` with `Content-Disposition: attachment` and
   `CSP: sandbox`. The original type is in `X-CupNet-Content-Type`.
 - `GET|POST /api/rules`, `DELETE /api/rules/:id`
+- Proxies:
+  - `GET|POST /api/proxies`, `GET /api/proxies/providers`, `POST /api/proxies/preview`,
+    `POST /api/proxies/import` (`{text, group, dryRun}`).
+  - `POST /api/proxies/test` (`{ids}`, or all), `/disconnect`, `/kill-switch` (`{enabled}`),
+    `/new-ip`.
+  - `PUT|DELETE /api/proxies/:id`, `POST /api/proxies/:id/duplicate|test|connect|new-ip`.
+  - `GET /api/egress[?force=1]`.
+- `GET|POST /api/settings`
+- `POST /api/replay` (`{method, url, headers: [[k, v]], body}`). Only http(s) is accepted. It
+  returns 409 while the kill switch blocks egress.
+- `GET /api/breakpoints`, `POST /api/breakpoints/:id` (`{action: 'forward'|'block', method, url, headers, body}`)
 - `POST /api/chrome`, `POST /api/window`, `POST /api/quit`
-- `GET /api/sessions`, `GET /api/sessions/:id` (JSONL download), `POST /api/sessions/:id/seal`,
-  `GET /api/sessions/:id/key`, `GET /api/sessions/:id/sealed`
+- Sessions:
+  - `GET /api/sessions`, `GET /api/sessions/:id` (JSONL download).
+  - `GET /api/sessions/:id/har[?seqs=1-20,25]`: requests only. Each entry has `_cupnetSeq`.
+  - `POST /api/sessions/:id/seal`, `GET /api/sessions/:id/key`, `GET /api/sessions/:id/sealed`.
 
 ## Data
 
@@ -123,6 +163,9 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
 - `ca/`: CA key and cert.
 - `rules.json`: intercept rules. Rules from an old `cupnet-mini.db` are imported once, if
   `node:sqlite` is available.
+- `proxies.json` + `proxies.key`: proxy profiles, the active profile and the kill switch.
+  Passwords are AES-256-GCM encrypted with the key file.
+- `settings.json`: TLS profile, passthrough domains, CORS, force HTTP/1.1.
 - `sessions/<sessionId>.jsonl`: one file per run, one JSON line per entry.
 - `keys/`, `sealed/`
 - `chrome-profile/`: the proxied Chrome.

@@ -4,563 +4,220 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CupNet mini</title>
-<style>
-  :root { --bg:#fff; --fg:#1b1f24; --muted:#6a737d; --line:#e1e4e8; --accent:#0969da; --err:#cf222e; --warn:#9a6700; --ok:#1a7f37; --row:#f6f8fa; --sel:#ddf4ff; --panel:#fbfbfc; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --line:#30363d; --accent:#4493f8; --err:#f85149; --warn:#d29922; --ok:#3fb950; --row:#161b22; --sel:#1f3a5f; --panel:#11161d; } }
-  * { box-sizing: border-box; }
-  html, body { height:100%; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, system-ui, sans-serif; display:flex; flex-direction:column; overflow:hidden; }
-  header { display:flex; gap:10px; align-items:center; padding:7px 12px; border-bottom:1px solid var(--line); flex-wrap:wrap; flex:none; }
-  header b { font-size:14px; }
-  nav { display:flex; gap:4px; }
-  nav button, .btn { background:none; border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:3px 10px; cursor:pointer; font:inherit; }
-  nav button.on { border-color:var(--accent); color:var(--accent); }
-  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-  .btn:disabled { opacity:.5; cursor:default; }
-  #status { color:var(--muted); margin-left:auto; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:45vw; }
-  main { flex:1; min-height:0; display:flex; flex-direction:column; }
-  section { flex:1; min-height:0; }
-  section[hidden] { display:none !important; }
-  .pad { padding:12px 16px; overflow:auto; }
-  .err { color:var(--err); } .warn { color:var(--warn); } .ok { color:var(--ok); } .muted { color:var(--muted); }
-  input, select, textarea { font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:3px 6px; }
-  textarea { width:100%; min-height:160px; font-family:ui-monospace, monospace; font-size:12px; }
-  code { font:12px ui-monospace, monospace; background:var(--row); padding:1px 4px; border-radius:4px; word-break:break-all; }
-  pre { white-space:pre-wrap; word-break:break-all; margin:4px 0 10px; font:12px/1.45 ui-monospace, Menlo, monospace; }
-  .toolbar { display:flex; gap:8px; padding:6px 12px; flex-wrap:wrap; align-items:center; border-bottom:1px solid var(--line); flex:none; }
-  .toolbar input[type=search] { flex:1; min-width:200px; max-width:520px; }
-
-  /* traffic */
-  #tab-traffic { display:flex; flex-direction:column; }
-  #split { flex:1; min-height:0; display:flex; }
-  #gridWrap { flex:1; min-width:0; display:flex; flex-direction:column; }
-  #detail { width:46%; min-width:320px; border-left:1px solid var(--line); display:flex; flex-direction:column; background:var(--panel); }
-  #detail[hidden] { display:none; }
-  .cols { display:grid; grid-template-columns: 58px 92px 58px 50px 70px 120px 70px 56px minmax(120px, 1fr) minmax(160px, 3fr); }
-  .gh { flex:none; font-weight:600; color:var(--muted); border-bottom:1px solid var(--line); font-size:12px; }
-  .gh > div, .r > div { padding:0 6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .gh > div { padding-top:4px; padding-bottom:4px; }
-  #grid { flex:1; overflow:auto; position:relative; outline:none; }
-  #spacer { position:relative; }
-  .r { position:absolute; left:0; right:0; height:22px; line-height:22px; cursor:pointer; border-bottom:1px solid var(--line); font-size:12px; }
-  .r[hidden] { display:none; }
-  .r:hover { background:var(--row); }
-  .r.sel { background:var(--sel); }
-  .r .num { text-align:right; color:var(--muted); }
-  .r.ev { color:var(--accent); }
-  .num { font-variant-numeric: tabular-nums; }
-  #dtabs { display:flex; gap:4px; padding:6px 8px; border-bottom:1px solid var(--line); align-items:center; flex:none; }
-  #dbody { flex:1; overflow:auto; padding:8px 10px; }
-  #dbody h4 { margin:10px 0 4px; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
-  .kv { display:grid; grid-template-columns: minmax(120px, 30%) 1fr; gap:1px 10px; font:12px/1.5 ui-monospace, monospace; }
-  .kv > :nth-child(odd) { color:var(--muted); word-break:break-all; }
-  .kv > :nth-child(even) { word-break:break-all; }
-  .preview img, .preview video, .preview audio { max-width:100%; max-height:60vh; border:1px solid var(--line); border-radius:6px; background:repeating-conic-gradient(#8882 0 25%, transparent 0 50%) 0 0/16px 16px; }
-  .note { padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--row); margin:6px 0; }
-
-  /* tables */
-  table { width:100%; border-collapse:collapse; table-layout:fixed; }
-  th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .form { display:grid; grid-template-columns: 120px 1fr; gap:6px 10px; max-width:900px; align-items:start; margin-bottom:16px; }
-  #login { padding:40px; text-align:center; }
-</style>
+<link rel="stylesheet" href="/ui.css">
+<script src="/lib/codegen.js" defer></script>
+<script src="/lib/curl.js" defer></script>
+<script src="/ui.js" defer></script>
 </head>
 <body>
-<header>
-  <b>CupNet mini</b>
-  <nav>
-    <button data-tab="traffic" class="on">Traffic</button>
-    <button data-tab="rules">Rules</button>
-    <button data-tab="sessions">Sessions</button>
-    <button data-tab="setup">Setup</button>
+<aside id="side">
+  <div class="brand"><span class="logo">◆</span><span>CupNet <b>mini</b></span></div>
+  <nav id="nav">
+    <button data-page="traffic" class="on"><svg viewBox="0 0 16 16"><path d="M2 3h12M2 8h12M2 13h8"/></svg><span>Traffic</span></button>
+    <button data-page="proxies"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/></svg><span>Proxies</span></button>
+    <button data-page="repeater"><svg viewBox="0 0 16 16"><path d="M3 6h9l-3-3M13 10H4l3 3"/></svg><span>Repeater</span></button>
+    <button data-page="rules"><svg viewBox="0 0 16 16"><path d="M3 3h10v3H3zM3 10h6v3H3z"/></svg><span>Rules</span></button>
+    <button data-page="paused"><svg viewBox="0 0 16 16"><path d="M5 3v10M11 3v10"/></svg><span>Breakpoints</span><i class="count" id="pausedCount" hidden></i></button>
+    <button data-page="sessions"><svg viewBox="0 0 16 16"><path d="M3 2h7l3 3v9H3z"/><path d="M10 2v3h3"/></svg><span>Sessions</span></button>
+    <button data-page="settings"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg><span>Settings</span></button>
   </nav>
-  <select id="session" title="Session"></select>
-  <button class="btn primary" id="launch">Open Chrome</button>
-  <button class="btn" id="quit" hidden title="Stop the proxy and close CupNet mini">Quit</button>
-  <span id="status">connecting…</span>
-</header>
-<main>
-  <div id="login" hidden>Open the URL printed by <code>cupnet-mini</code> (it carries the access token), or run <code>cupnet-mini window</code>.</div>
+  <div class="side-foot">
+    <button class="btn primary wide" id="launch" title="Open the proxied Chrome (dedicated profile)">Open Chrome</button>
+    <button class="btn ghost wide" id="quit" hidden title="Stop the proxy and close CupNet mini">Quit</button>
+  </div>
+</aside>
 
-  <section id="tab-traffic">
-    <div class="toolbar">
-      <input id="q" type="search" placeholder="Filter: text in URL · -exclude · status:4xx method:POST type:xhr mime:json host:example.com">
-      <select id="fKind"><option value="request">Requests</option><option value="page-event">Page events</option><option value="">All</option></select>
-      <select id="fMethod"><option value="">Any method</option></select>
-      <select id="fStatus"><option value="">Any status</option><option>2xx</option><option>3xx</option><option>4xx</option><option>5xx</option><option value="fail">failed</option></select>
-      <select id="fType"><option value="">Any type</option></select>
-      <label title="Keep the newest row in view"><input type="checkbox" id="follow" checked> follow</label>
-      <span class="muted num" id="count"></span>
+<div id="app">
+  <header id="top">
+    <h1 id="pageTitle">Traffic</h1>
+    <button id="egress" class="pill" title="Exit IP of the proxy — click to manage proxies"><i class="dot"></i><span id="egressText">checking…</span></button>
+    <span id="stats" class="muted mono"></span>
+  </header>
+
+  <div id="login" hidden>
+    <div class="card narrow">
+      <h2>No access token</h2>
+      <p>Open the URL printed by <code>cupnet-mini start</code> (it carries the token), or run <code>cupnet-mini window</code>.</p>
     </div>
-    <div id="split">
-      <div id="gridWrap">
-        <div class="gh cols"><div>#</div><div>Time</div><div>Method</div><div>Status</div><div>Type</div><div>MIME</div><div>Size</div><div>ms</div><div>Host</div><div>Path</div></div>
-        <div id="grid" tabindex="0"><div id="spacer"></div></div>
+  </div>
+
+  <main id="pages">
+    <!-- ── Traffic ── -->
+    <section id="page-traffic" class="page">
+      <div class="toolbar">
+        <select id="session" title="Session" class="w-session"></select>
+        <input id="q" type="search" placeholder="Filter URL · -exclude · status:4xx method:POST type:xhr mime:json host:example.com">
+        <select id="fKind" title="Entry kind"><option value="request">Requests</option><option value="page-event">Page events</option><option value="">All</option></select>
+        <select id="fMethod" title="Method"><option value="">Method</option></select>
+        <select id="fStatus" title="Status"><option value="">Status</option><option>2xx</option><option>3xx</option><option>4xx</option><option>5xx</option><option value="fail">failed</option></select>
+        <select id="fType" title="Resource type"><option value="">Type</option></select>
+        <label class="chk" title="Hide CORS preflight requests"><input type="checkbox" id="hideOptions" checked> no OPTIONS</label>
+        <label class="chk" title="Keep the newest row in view"><input type="checkbox" id="follow" checked> follow</label>
+        <span class="spacer"></span>
+        <span class="muted mono" id="count"></span>
+        <button class="btn" id="harBtn" title="Export the filtered rows as HAR 1.2">HAR</button>
       </div>
-      <div id="detail" hidden>
-        <div id="dtabs">
-          <button class="btn" data-d="overview">Headers</button>
-          <button class="btn" data-d="request">Request</button>
-          <button class="btn" data-d="response">Response</button>
-          <button class="btn" data-d="raw">JSON</button>
-          <span style="flex:1"></span>
-          <button class="btn" id="dclose" title="Close (Esc)">✕</button>
+      <div id="split">
+        <div id="gridWrap">
+          <div class="gh cols"><div>#</div><div>Time</div><div>Method</div><div>Status</div><div>Type</div><div>Host</div><div>Path</div><div class="r-al">Size</div><div class="r-al">Time</div></div>
+          <div id="grid" tabindex="0"><div id="spacer"></div><div id="empty" class="empty" hidden>No requests yet. Click <b>Open Chrome</b> and browse — traffic shows up here live.</div></div>
         </div>
-        <div id="dbody"></div>
+        <div id="resizer" hidden></div>
+        <div id="detail" hidden>
+          <div class="dhead">
+            <div class="dline"><span id="dMethod" class="badge"></span><span id="dStatus" class="badge"></span><span id="dUrl" class="mono ell"></span><button class="icon" id="dclose" title="Close (Esc)">✕</button></div>
+            <div class="dactions">
+              <button class="btn sm" id="aCopyUrl">Copy URL</button>
+              <button class="btn sm" id="aCopyCurl">Copy as curl</button>
+              <button class="btn sm" id="aRepeat" title="Open in Repeater">Repeater</button>
+              <button class="btn sm" id="aResend" title="Send again through AzureTLS now">Resend</button>
+              <button class="btn sm" id="aMock" title="Create a mock rule that serves this response">Mock from response</button>
+              <button class="btn sm" id="aBreak" title="Create a rule that pauses this URL">Break on URL</button>
+            </div>
+            <div class="tabs" id="dtabs">
+              <button data-d="headers" class="on">Headers</button>
+              <button data-d="request">Request</button>
+              <button data-d="response">Response</button>
+              <button data-d="cookies">Cookies</button>
+              <button data-d="raw">Raw</button>
+              <button data-d="json">JSON</button>
+            </div>
+          </div>
+          <div id="dbody"></div>
+        </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <section id="tab-rules" class="pad" hidden>
-    <div class="form">
-      <label>Name</label><input id="r-name" placeholder="My page hook">
-      <label>URL pattern</label><input id="r-pattern" placeholder="https://example.com/*  (or *)">
-      <label>Type</label>
-      <select id="r-type">
-        <option value="inject">inject — add JS to HTML pages</option>
-        <option value="block">block</option>
-        <option value="mock">mock</option>
-        <option value="modifyHeaders">modifyHeaders</option>
-        <option value="script">script (before/after)</option>
-      </select>
-      <label>Params (JSON)</label><textarea id="r-params"></textarea>
-      <label></label><div><button class="btn primary" id="r-save">Save rule</button> <button class="btn" id="r-new">New</button> <span id="r-msg"></span></div>
-    </div>
-    <table>
-      <colgroup><col style="width:40px"><col style="width:200px"><col style="width:110px"><col><col style="width:60px"><col style="width:70px"><col style="width:150px"></colgroup>
-      <thead><tr><th>id</th><th>Name</th><th>Type</th><th>Pattern</th><th>On</th><th>Hits</th><th></th></tr></thead>
-      <tbody id="rules"></tbody>
-    </table>
-  </section>
+    <!-- ── Proxies ── -->
+    <section id="page-proxies" class="page" hidden>
+      <div class="conn" id="conn">
+        <div class="conn-main">
+          <div class="conn-label">Connection</div>
+          <div class="conn-name" id="connName">Direct</div>
+          <div class="conn-sub mono" id="connSub"></div>
+        </div>
+        <div class="conn-egress">
+          <div class="conn-label">Exit IP</div>
+          <div class="conn-ip mono" id="connIp">—</div>
+          <div class="conn-sub" id="connGeo"></div>
+        </div>
+        <div class="conn-actions">
+          <button class="btn" id="pCheck" title="Check the exit IP now">Check IP</button>
+          <button class="btn" id="pNewIp" title="New sticky session → new exit IP">New IP</button>
+          <button class="btn danger" id="pDisconnect">Disconnect</button>
+          <label class="switch" title="Block all traffic when no proxy is connected (no accidental direct connections)"><input type="checkbox" id="pKill"><span></span>Kill switch</label>
+        </div>
+      </div>
+      <div class="split2">
+        <div class="list-pane">
+          <div class="toolbar">
+            <input id="pq" type="search" placeholder="Search name, host, group, IP…">
+            <select id="pfProvider" title="Provider"><option value="">All providers</option></select>
+            <select id="pfCountry" title="Country"><option value="">All countries</option></select>
+            <select id="pfStatus" title="Last test"><option value="">Any status</option><option value="ok">Working</option><option value="fail">Failing</option><option value="untested">Untested</option></select>
+            <select id="pfGroup" title="Group"><option value="">All groups</option></select>
+          </div>
+          <div class="toolbar sub">
+            <button class="btn primary sm" id="pAdd">+ Add proxy</button>
+            <button class="btn sm" id="pImport">Import list</button>
+            <button class="btn sm" id="pTestAll" title="Test every proxy shown">Test all</button>
+            <span class="spacer"></span>
+            <span class="muted" id="pCount"></span>
+          </div>
+          <div id="plist" class="plist"></div>
+        </div>
+        <div class="edit-pane" id="pEditor"></div>
+      </div>
+    </section>
 
-  <section id="tab-sessions" class="pad" hidden>
-    <p class="muted">Each run writes one JSONL file with everything captured: headers and full bodies, plus page events. They contain cookies and tokens, so treat them as secrets. <b>Seal</b> encrypts a session with its own key. The <code>.cupkey</code> file opens the matching <code>.cupsess</code> (same name) in <code>viewer.html</code>.</p>
-    <table>
-      <colgroup><col><col style="width:110px"><col style="width:190px"><col style="width:80px"><col style="width:230px"></colgroup>
-      <thead><tr><th>Session</th><th>Size</th><th>Modified</th><th>Sealed</th><th></th></tr></thead>
-      <tbody id="sessions"></tbody>
-    </table>
-  </section>
+    <!-- ── Repeater ── -->
+    <section id="page-repeater" class="page" hidden>
+      <div class="toolbar">
+        <select id="rpMethod" class="w-method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option></select>
+        <input id="rpUrl" class="mono grow" placeholder="https://example.com/api" spellcheck="false">
+        <label class="chk"><input type="checkbox" id="rpFollow"> follow redirects</label>
+        <button class="btn primary" id="rpSend">Send</button>
+        <button class="btn" id="rpCurl" title="Paste a curl command">Import curl</button>
+      </div>
+      <div class="split2 even">
+        <div class="col">
+          <div class="tabs" id="rpTabs"><button data-t="headers" class="on">Headers</button><button data-t="body">Body</button><button data-t="code">Code</button></div>
+          <div class="tabbody" id="rpHeaders"></div>
+          <div class="tabbody" id="rpBodyWrap" hidden><textarea id="rpBody" class="mono code" spellcheck="false" placeholder="Request body"></textarea></div>
+          <div class="tabbody" id="rpCodeWrap" hidden>
+            <div class="toolbar sub"><select id="rpLang"><option value="curl">curl</option><option value="fetch">fetch</option><option value="axios">axios</option><option value="python">Python requests</option><option value="go">Go</option><option value="php">PHP</option></select><button class="btn sm" id="rpCopyCode">Copy</button></div>
+            <pre id="rpCode" class="codebox"></pre>
+          </div>
+        </div>
+        <div class="col">
+          <div class="resp-head" id="rpRespHead"><span class="muted">Send a request — it goes through AzureTLS with the current proxy and TLS profile, and is logged as type <code>repeater</code>.</span></div>
+          <div class="tabs" id="rpRespTabs" hidden><button data-t="body" class="on">Body</button><button data-t="headers">Headers</button></div>
+          <div class="tabbody" id="rpResp"></div>
+        </div>
+      </div>
+    </section>
 
-  <section id="tab-setup" class="pad" hidden><div id="setup"></div></section>
-</main>
-<script>
-'use strict';
-const $ = (id) => document.getElementById(id);
-const el = (tag, props = {}, ...kids) => {
-  const n = document.createElement(tag);
-  Object.assign(n, props);
-  for (const k of kids) n.append(k instanceof Node ? k : document.createTextNode(String(k ?? '')));
-  return n;
-};
-const ROW = 22;
-let TOKEN = '';
+    <!-- ── Rules ── -->
+    <section id="page-rules" class="page" hidden>
+      <div class="split2">
+        <div class="list-pane">
+          <div class="toolbar">
+            <input id="rq" type="search" placeholder="Search rules…">
+            <button class="btn primary sm" id="rNew">+ New rule</button>
+            <button class="btn sm" id="rExport">Export</button>
+            <button class="btn sm" id="rImport">Import</button>
+          </div>
+          <div id="rlist" class="plist"></div>
+        </div>
+        <div class="edit-pane" id="rEditor"></div>
+      </div>
+    </section>
 
-// ── auth: #t=<token>, or #c=<one-time launch code> traded for the token; kept per tab ──
-async function auth() {
-  const h = new URLSearchParams(location.hash.slice(1));
-  try { TOKEN = sessionStorage.getItem('cupnet-token') || ''; } catch { /* storage blocked */ }
-  if (h.get('t')) TOKEN = h.get('t');
-  else if (h.get('c')) {
-    const r = await fetch('/api/auth/exchange', { method: 'POST', headers: { 'X-CupNet-Code': h.get('c') } });
-    if (r.ok) TOKEN = (await r.json()).token;
-  }
-  if (location.hash) history.replaceState(null, '', location.pathname);
-  try { if (TOKEN) sessionStorage.setItem('cupnet-token', TOKEN); } catch { /* ignore */ }
-  return !!TOKEN;
-}
-async function api(path, opts = {}) {
-  const r = await fetch(path, { ...opts, headers: { 'X-CupNet-Token': TOKEN, 'Content-Type': 'application/json', ...(opts.headers || {}) } });
-  const text = await r.text();
-  let data; try { data = JSON.parse(text); } catch { data = text; }
-  if (!r.ok) throw new Error((data && data.error) || r.statusText);
-  return data;
-}
-async function apiBlob(path) {
-  const r = await fetch(path, { headers: { 'X-CupNet-Token': TOKEN } });
-  if (!r.ok) throw new Error(r.statusText);
-  return { blob: await r.blob(), type: r.headers.get('X-CupNet-Content-Type') || '' };
-}
-function download(blob, name) {
-  const a = el('a', { href: URL.createObjectURL(blob), download: name }); a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-}
-const fmtSize = (n) => n == null || n === 0 ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
-const fmtTime = (ts) => { if (!ts) return ''; const d = new Date(ts); return d.toLocaleTimeString([], { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0'); };
-const splitUrl = (u) => { const m = /^[a-z]+:\/\/([^/?#]*)([^#]*)/i.exec(u || ''); return m ? [m[1], m[2] || '/'] : ['', u || '']; };
+    <!-- ── Breakpoints ── -->
+    <section id="page-paused" class="page" hidden>
+      <div class="split2">
+        <div class="list-pane">
+          <div class="toolbar"><span class="muted">Requests held by rules with <b>Pause</b> on. They continue unchanged after 2 minutes.</span></div>
+          <div id="bplist" class="plist"></div>
+        </div>
+        <div class="edit-pane" id="bpEditor"><div class="empty">Nothing paused. Add a rule with <b>Pause (breakpoint)</b>, or use <b>Break on URL</b> in Traffic.</div></div>
+      </div>
+    </section>
 
-// ── tabs ──
-document.querySelectorAll('nav button').forEach((b) => b.onclick = () => {
-  document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('on', x === b));
-  document.querySelectorAll('main section').forEach((s) => s.hidden = s.id !== `tab-${b.dataset.tab}`);
-  if (b.dataset.tab === 'traffic') draw();
-  if (b.dataset.tab === 'rules') loadRules();
-  if (b.dataset.tab === 'sessions') loadSessions();
-  if (b.dataset.tab === 'setup') loadSetup();
-});
-$('launch').onclick = async () => { try { await api('/api/chrome', { method: 'POST', body: '{}' }); } catch (e) { alert(e.message); } };
-$('quit').onclick = async () => {
-  if (!confirm('Stop CupNet mini? The session is sealed on exit.')) return;
-  try { await api('/api/quit', { method: 'POST' }); $('status').textContent = 'stopped'; window.close(); } catch (e) { alert(e.message); }
-};
+    <!-- ── Sessions ── -->
+    <section id="page-sessions" class="page scroll" hidden>
+      <div class="card">
+        <p class="muted">Each run writes one JSONL file with everything captured: headers, full bodies and page events. Sessions hold cookies and tokens — treat them as secrets. <b>Seal</b> encrypts a session with its own key: the <code>.cupkey</code> file opens the matching <code>.cupsess</code> in <code>viewer.html</code>.</p>
+        <table class="tbl">
+          <thead><tr><th>Session</th><th class="w-110">Size</th><th class="w-180">Modified</th><th class="w-80">Sealed</th><th class="w-300"></th></tr></thead>
+          <tbody id="sessions"></tbody>
+        </table>
+      </div>
+    </section>
 
-// ── traffic data ──
-// all: every summary of the shown session; view: indexes into all that pass the filter.
-let current = '';       // live session id
-let shown = '';         // session in the viewer ('' = live)
-let all = [], view = [], bySeq = new Map(), selSeq = null;
-let gen = 0;            // bumps on session switch, so stale loads stop
-const methods = new Set(), types = new Set();
+    <!-- ── Settings ── -->
+    <section id="page-settings" class="page scroll" hidden>
+      <div class="card">
+        <h2>TLS fingerprint</h2>
+        <p class="muted">The AzureTLS profile the MITM uses towards sites (TLS ClientHello, HTTP/2 settings). Chrome sends its own headers and JS, so keep it on a Chromium profile.</p>
+        <div id="tlsProfiles" class="radios"></div>
+        <p class="warn" id="tlsCli" hidden>Started with <code>--browser</code>: picking a profile here overrides it and is saved.</p>
+      </div>
+      <div class="card">
+        <h2>Connection</h2>
+        <label class="switch"><input type="checkbox" id="sCors"><span></span>Add permissive CORS headers to every response</label>
+        <label class="switch"><input type="checkbox" id="sH1"><span></span>Force HTTP/1.1 upstream</label>
+        <h3>TLS passthrough</h3>
+        <p class="muted">Hosts tunnelled without MITM (not logged, not changed) — e.g. Turnstile, certificate-pinned APIs. One per line, <code>*.example.com</code> allowed.</p>
+        <textarea id="sPass" class="mono code short" spellcheck="false"></textarea>
+        <div class="row-end"><button class="btn primary" id="sSave">Save settings</button></div>
+      </div>
+      <div class="card" id="setup"></div>
+    </section>
+  </main>
+</div>
 
-function parseQuery(q) {
-  const f = { inc: [], exc: [], status: null, method: null, type: null, mime: null, host: null };
-  for (const t of q.trim().toLowerCase().split(/\s+/).filter(Boolean)) {
-    const m = /^(status|method|type|mime|host):(.+)$/.exec(t);
-    if (m) f[m[1]] = m[2];
-    else if (t.startsWith('-') && t.length > 1) f.exc.push(t.slice(1));
-    else f.inc.push(t);
-  }
-  return f;
-}
-const statusOk = (s, want) => {
-  if (!want) return true;
-  if (want === 'fail') return !s;
-  if (/^\dxx$/.test(want)) return Math.floor((s || 0) / 100) === Number(want[0]);
-  return String(s ?? '').startsWith(want);
-};
-let F = null;
-function buildFilter() {
-  F = parseQuery($('q').value);
-  F.kind = $('fKind').value; F.m = $('fMethod').value; F.st = $('fStatus').value; F.t = $('fType').value;
-}
-function matches(e) {
-  if (F.kind && e.kind !== F.kind) return false;
-  if (e.kind === 'session-start' || e.kind === 'session-end') return F.kind === '';
-  if (F.m && e.method !== F.m) return false;
-  if (!statusOk(e.status, F.st) || !statusOk(e.status, F.status)) return false;
-  if (F.t && e.type !== F.t) return false;
-  if (F.method && String(e.method || '').toLowerCase() !== F.method) return false;
-  if (F.type && !String(e.type || '').toLowerCase().includes(F.type)) return false;
-  if (F.mime && !String(e.mime || '').toLowerCase().includes(F.mime)) return false;
-  const url = e._lc || (e._lc = String(e.url || '').toLowerCase());
-  if (F.host && !splitUrl(url)[0].includes(F.host)) return false;
-  for (const t of F.inc) if (!url.includes(t)) return false;
-  for (const t of F.exc) if (url.includes(t)) return false;
-  return true;
-}
-function addOption(sel, set, v) {
-  if (!v || set.has(v)) return;
-  set.add(v); sel.append(el('option', { value: v }, v));
-}
-function ingest(items) {
-  const atBottom = isAtBottom();
-  for (const e of items) {
-    if (bySeq.has(e.seq)) continue;
-    bySeq.set(e.seq, all.length);
-    all.push(e);
-    addOption($('fMethod'), methods, e.method); addOption($('fType'), types, e.type);
-    if (matches(e)) view.push(all.length - 1);
-  }
-  scheduleDraw(atBottom && $('follow').checked);
-}
-function refilter() {
-  buildFilter();
-  view = [];
-  for (let i = 0; i < all.length; i++) if (matches(all[i])) view.push(i);
-  scheduleDraw($('follow').checked);
-}
-for (const id of ['q', 'fKind', 'fMethod', 'fStatus', 'fType']) $(id).addEventListener(id === 'q' ? 'input' : 'change', refilter);
-
-// ── virtual grid ──
-const grid = $('grid'), spacer = $('spacer');
-let drawQueued = false, stick = false;
-const pool = [];
-function isAtBottom() { return grid.scrollTop + grid.clientHeight >= grid.scrollHeight - ROW * 2; }
-function scheduleDraw(toBottom) { stick = stick || toBottom; if (!drawQueued) { drawQueued = true; requestAnimationFrame(draw); } }
-function cell(cls) { const d = document.createElement('div'); if (cls) d.className = cls; return d; }
-function rowNode(i) {
-  let r = pool[i];
-  if (!r) {
-    r = document.createElement('div'); r.className = 'r cols';
-    for (const c of ['num', 'num', '', 'num', '', '', 'num', 'num', '', '']) r.append(cell(c));
-    r.onclick = () => select(Number(r.dataset.seq));
-    pool[i] = r; spacer.append(r);
-  }
-  return r;
-}
-function draw() {
-  drawQueued = false;
-  $('count').textContent = `${view.length.toLocaleString()} / ${all.length.toLocaleString()}`;
-  spacer.style.height = `${view.length * ROW}px`;
-  if (stick) { grid.scrollTop = grid.scrollHeight; stick = false; }
-  const first = Math.max(0, Math.floor(grid.scrollTop / ROW) - 10);
-  const n = Math.min(view.length - first, Math.ceil(grid.clientHeight / ROW) + 20);
-  for (let k = 0; k < Math.max(n, 0); k++) {
-    const e = all[view[first + k]];
-    const r = rowNode(k);
-    r.hidden = false;
-    r.style.top = `${(first + k) * ROW}px`;
-    if (r.dataset.seq !== String(e.seq)) {
-      r.dataset.seq = e.seq;
-      const [host, p] = splitUrl(e.url);
-      const ev = e.kind !== 'request';
-      const c = r.children;
-      c[0].textContent = e.seq; c[1].textContent = fmtTime(e.ts);
-      c[2].textContent = ev ? '' : (e.method || '');
-      c[3].textContent = ev ? (e.kind === 'page-event' ? 'event' : '') : (e.status || 'ERR');
-      c[3].className = 'num ' + (ev ? '' : !e.status || e.status >= 500 ? 'err' : e.status >= 400 ? 'warn' : e.status >= 300 ? 'muted' : '');
-      c[4].textContent = e.type || ''; c[5].textContent = e.mime || '';
-      c[6].textContent = fmtSize(e.resSize); c[7].textContent = e.duration ?? '';
-      c[8].textContent = host; c[9].textContent = ev && !e.url ? e.kind : p; c[9].title = e.url || '';
-      r.classList.toggle('ev', ev);
-    }
-    r.classList.toggle('sel', e.seq === selSeq);
-  }
-  for (let k = Math.max(n, 0); k < pool.length; k++) if (pool[k]) { pool[k].hidden = true; pool[k].dataset.seq = ''; }
-}
-grid.addEventListener('scroll', () => scheduleDraw(false), { passive: true });
-window.addEventListener('resize', () => scheduleDraw(false));
-grid.addEventListener('keydown', (ev) => {
-  if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
-  ev.preventDefault();
-  let pos = view.findIndex((i) => all[i].seq === selSeq);
-  pos = pos < 0 ? 0 : Math.max(0, Math.min(view.length - 1, pos + (ev.key === 'ArrowDown' ? 1 : -1)));
-  if (!view.length) return;
-  select(all[view[pos]].seq);
-  const top = pos * ROW;
-  if (top < grid.scrollTop) grid.scrollTop = top;
-  else if (top + ROW > grid.scrollTop + grid.clientHeight) grid.scrollTop = top + ROW - grid.clientHeight;
-});
-document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !$('detail').hidden) closeDetail(); });
-
-// ── sessions: live stream (current) or a saved one ──
-function resetView() {
-  gen++; all = []; view = []; bySeq = new Map(); selSeq = null; methods.clear(); types.clear();
-  for (const s of [$('fMethod'), $('fType')]) while (s.options.length > 1) s.remove(1);
-  closeDetail(); buildFilter(); scheduleDraw(true);
-}
-async function streamLive(myGen) {
-  let lastSeq = 0;
-  while (myGen === gen) {
-    try {
-      const r = await fetch(`/api/log/stream?after=${lastSeq}`, { headers: { 'X-CupNet-Token': TOKEN } });
-      if (!r.ok) throw new Error(r.statusText);
-      const reader = r.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done || myGen !== gen) { if (myGen !== gen) reader.cancel(); break; }
-        buf += dec.decode(value, { stream: true });
-        const cut = buf.lastIndexOf('\n');
-        if (cut < 0) continue;
-        const lines = buf.slice(0, cut).split('\n'); buf = buf.slice(cut + 1);
-        const items = [];
-        for (const l of lines) if (l) { try { items.push(JSON.parse(l)); } catch { /* skip */ } }
-        if (items.length) { lastSeq = items[items.length - 1].seq; ingest(items); }
-      }
-    } catch { /* reconnect below */ }
-    if (myGen !== gen) return;
-    await new Promise((res) => setTimeout(res, 1000));
-  }
-}
-async function loadSaved(id, myGen) {
-  let after = 0;
-  for (;;) {
-    const items = await api(`/api/log?session=${encodeURIComponent(id)}&after=${after}&limit=20000`);
-    if (myGen !== gen) return;
-    if (!items.length) break;
-    ingest(items); after = items[items.length - 1].seq;
-  }
-}
-function openSession(id) {
-  shown = id === current ? '' : id;
-  $('session').value = id;
-  resetView();
-  const g = gen;
-  if (shown) loadSaved(shown, g).catch((e) => { $('count').textContent = e.message; });
-  else streamLive(g);
-  document.querySelector('nav button[data-tab="traffic"]').click();
-}
-$('session').onchange = () => openSession($('session').value);
-async function fillSessionSelect() {
-  const { current: cur, sessions } = await api('/api/sessions');
-  current = cur;
-  const sel = $('session'); const keep = sel.value || cur;
-  sel.textContent = '';
-  for (const s of sessions) sel.append(el('option', { value: s.id }, s.id === cur ? `● live — ${s.id}` : `${s.id} (${fmtSize(s.bytes)})`));
-  sel.value = sessions.some((s) => s.id === keep) ? keep : cur;
-  return sessions;
-}
-const qs = () => (shown ? `?session=${encodeURIComponent(shown)}` : '');
-
-// ── detail ──
-let dTab = 'overview', dEntry = null;
-function closeDetail() { $('detail').hidden = true; selSeq = null; dEntry = null; scheduleDraw(false); }
-$('dclose').onclick = closeDetail;
-document.querySelectorAll('#dtabs [data-d]').forEach((b) => b.onclick = () => { dTab = b.dataset.d; renderDetail(); });
-async function select(seq) {
-  selSeq = seq; scheduleDraw(false);
-  $('detail').hidden = false;
-  const myGen = gen;
-  try {
-    const e = await api(`/api/log/${seq}${qs()}`);
-    if (myGen !== gen || selSeq !== seq) return;
-    dEntry = e; renderDetail();
-  } catch (err) { $('dbody').textContent = err.message; }
-}
-function kv(obj) {
-  const g = el('div', { className: 'kv' });
-  const entries = Object.entries(obj || {});
-  if (!entries.length) g.append(el('div', {}, '(none)'), el('div'));
-  for (const [k, v] of entries) for (const one of (Array.isArray(v) ? v : [v])) g.append(el('div', {}, k), el('div', {}, String(one)));
-  return g;
-}
-const headerOf = (h, name) => { const k = Object.keys(h || {}).find((x) => x.toLowerCase() === name); const v = k ? h[k] : ''; return String(Array.isArray(v) ? v[0] : v); };
-function renderDetail() {
-  document.querySelectorAll('#dtabs [data-d]').forEach((b) => b.classList.toggle('on', b.dataset.d === dTab));
-  document.querySelectorAll('#dtabs [data-d]').forEach((b) => { b.style.borderColor = b.dataset.d === dTab ? 'var(--accent)' : ''; });
-  const d = $('dbody'); d.textContent = ''; d.scrollTop = 0;
-  const e = dEntry; if (!e) return;
-  if (dTab === 'raw') { d.append(el('pre', {}, JSON.stringify(e, null, 2))); return; }
-  if (e.kind !== 'request') {
-    d.append(el('h4', {}, e.kind), el('div', {}, el('code', {}, e.url || '')), el('pre', {}, JSON.stringify(e.data ?? e, null, 2)));
-    return;
-  }
-  if (dTab === 'overview') {
-    d.append(el('h4', {}, 'General'), kv({ URL: e.url, Method: e.method, Status: e.status, Type: e.type, Duration: e.duration != null ? `${e.duration} ms` : '', Time: new Date(e.ts).toISOString(), 'Request body': fmtSize(e.reqSize) || '—', 'Response body': fmtSize(e.resSize) || '—' }));
-    d.append(el('h4', {}, 'Response headers'), kv(e.responseHeaders), el('h4', {}, 'Request headers'), kv(e.requestHeaders));
-    return;
-  }
-  const which = dTab;
-  const body = which === 'request' ? e.requestBody : e.responseBody;
-  const truncated = which === 'request' ? e.requestBodyTruncated : e.responseBodyTruncated;
-  const ct = headerOf(which === 'request' ? e.requestHeaders : e.responseHeaders, 'content-type').toLowerCase();
-  const size = which === 'request' ? e.reqSize : e.resSize;
-  const bar = el('div', { className: 'note' }, `${ct || 'no content-type'} · ${fmtSize(size) || '0 B'} `);
-  if (body == null) { d.append(bar, el('div', { className: 'muted' }, 'No body.')); return; }
-  const dl = el('button', { className: 'btn' }, 'Download');
-  dl.onclick = async () => { const { blob } = await apiBlob(`/api/log/${e.seq}/body/${which}${qs()}`); download(blob, `cupnet-${e.seq}-${which}${extFor(ct)}`); };
-  bar.append(dl); d.append(bar);
-  const isB64 = String(body).startsWith('__b64__:');
-  if (isB64 && /^(image|video|audio)\//.test(ct)) {
-    const box = el('div', { className: 'preview' }, 'loading…'); d.append(box);
-    apiBlob(`/api/log/${e.seq}/body/${which}${qs()}`).then(({ blob }) => {
-      const url = URL.createObjectURL(new Blob([blob], { type: ct.split(';')[0] }));
-      const tag = ct.startsWith('image/') ? 'img' : ct.startsWith('video/') ? 'video' : 'audio';
-      const m = el(tag, { src: url, controls: tag !== 'img' }); box.textContent = ''; box.append(m);
-    }).catch((err) => { box.textContent = err.message; });
-    return;
-  }
-  if (isB64) { d.append(el('div', { className: 'muted' }, 'Binary body (base64 in the log). Use Download to get the bytes.')); return; }
-  if (truncated) {
-    const full = el('button', { className: 'btn' }, 'Load full body');
-    full.onclick = async () => { const { blob } = await apiBlob(`/api/log/${e.seq}/body/${which}${qs()}`); showText(d, await blob.text(), ct, true); };
-    d.append(el('div', { className: 'note warn' }, 'Showing the first 2 MB. ', full));
-  }
-  showText(d, String(body), ct, false);
-}
-function showText(d, text, ct, replace) {
-  let out = text;
-  if (/json/.test(ct) || /^\s*[[{]/.test(text.slice(0, 1))) {
-    if (text.length < 20 * 1048576) { try { out = JSON.stringify(JSON.parse(text), null, 2); } catch { /* not JSON */ } }
-  }
-  const pre = el('pre', {}, out);
-  if (replace) { const old = d.querySelector('pre'); if (old) old.replaceWith(pre); else d.append(pre); } else d.append(pre);
-}
-const extFor = (ct) => { const m = /\/([a-z0-9.+-]+)/.exec(ct || ''); if (!m) return '.bin'; const t = m[1].replace(/\+.*$/, ''); return '.' + ({ javascript: 'js', 'x-javascript': 'js', plain: 'txt', 'svg': 'svg', jpeg: 'jpg', 'octet-stream': 'bin' }[t] || t); };
-
-// ── rules ──
-const PARAM_TEMPLATES = {
-  inject: { position: 'head', source: "// Runs in the page before its own scripts (position 'head') or at the end of <body> ('body-end').\n// Report to the CupNet log: navigator.sendBeacon('/__cupnet/event', JSON.stringify({...}))\nconsole.log('[cupnet] injected into', location.href);" },
-  block: {},
-  mock: { status: 200, mimeType: 'application/json', body: '{"ok":true}' },
-  modifyHeaders: { requestHeaders: { 'X-Example': '1' }, removeRequestHeaders: [], responseHeaders: {}, removeResponseHeaders: [] },
-  script: { beforeSource: '// ctx.url, ctx.headers …', afterSource: '' },
-};
-let editingId = null;
-function fillParams() { $('r-params').value = JSON.stringify(PARAM_TEMPLATES[$('r-type').value] || {}, null, 2); }
-$('r-type').onchange = fillParams; fillParams();
-$('r-new').onclick = () => { editingId = null; $('r-name').value = ''; $('r-pattern').value = ''; fillParams(); $('r-msg').textContent = ''; };
-$('r-save').onclick = async () => {
-  $('r-msg').textContent = ''; $('r-msg').className = '';
-  let params;
-  try { params = JSON.parse($('r-params').value || '{}'); } catch (e) { $('r-msg').textContent = `Params: ${e.message}`; $('r-msg').className = 'err'; return; }
-  const rule = { name: $('r-name').value.trim(), url_pattern: $('r-pattern').value.trim(), type: $('r-type').value, params, enabled: true };
-  if (editingId) rule.id = editingId;
-  try { await api('/api/rules', { method: 'POST', body: JSON.stringify(rule) }); $('r-msg').textContent = 'Saved'; $('r-msg').className = 'ok'; editingId = null; loadRules(); }
-  catch (e) { $('r-msg').textContent = e.message; $('r-msg').className = 'err'; }
-};
-async function loadRules() {
-  const rules = await api('/api/rules');
-  const tb = $('rules'); tb.textContent = '';
-  for (const r of rules) {
-    const edit = el('button', { className: 'btn' }, 'Edit');
-    edit.onclick = () => { editingId = r.id; $('r-name').value = r.name; $('r-pattern').value = r.url_pattern; $('r-type').value = r.type; $('r-params').value = JSON.stringify(r.params || {}, null, 2); };
-    const del = el('button', { className: 'btn' }, 'Delete');
-    del.onclick = async () => { if (confirm(`Delete rule "${r.name}"?`)) { await api(`/api/rules/${r.id}`, { method: 'DELETE' }); loadRules(); } };
-    const on = el('input', { type: 'checkbox', checked: !!r.enabled });
-    on.onchange = async () => { await api('/api/rules', { method: 'POST', body: JSON.stringify({ ...r, enabled: on.checked }) }); };
-    tb.append(el('tr', {}, el('td', {}, r.id), el('td', { title: r.name }, r.name), el('td', {}, r.type), el('td', { title: r.url_pattern }, r.url_pattern), el('td', {}, on),
-      el('td', { title: r.last_error || '', className: r.last_error ? 'err' : '' }, r.hit_count || 0), el('td', {}, edit, ' ', del)));
-  }
-}
-
-// ── sessions ──
-async function loadSessions() {
-  const sessions = await fillSessionSelect();
-  const tb = $('sessions'); tb.textContent = '';
-  for (const s of sessions) {
-    const open = el('button', { className: 'btn' }, 'Open');
-    open.onclick = () => openSession(s.id);
-    const dl = el('button', { className: 'btn' }, 'JSONL');
-    dl.onclick = async () => { const { blob } = await apiBlob(`/api/sessions/${s.id}`); download(blob, `cupnet-${s.id}.jsonl`); };
-    const sealBtn = el('button', { className: 'btn' }, 'Seal');
-    sealBtn.onclick = async () => {
-      const r = await api(`/api/sessions/${s.id}/seal`, { method: 'POST' });
-      for (const [what, name] of [['key', `${r.id}.cupkey`], ['sealed', `${r.id}.cupsess`]]) download((await apiBlob(`/api/sessions/${s.id}/${what}`)).blob, name);
-      loadSessions();
-    };
-    tb.append(el('tr', {}, el('td', { title: s.keyId ? `key id ${s.keyId}` : '' }, s.id + (s.id === current ? ' (live)' : '')), el('td', {}, fmtSize(s.bytes) || '0 B'),
-      el('td', {}, new Date(s.mtime).toLocaleString()), el('td', {}, s.sealed ? 'yes' : ''), el('td', {}, open, ' ', dl, ' ', sealBtn)));
-  }
-}
-
-// ── setup ──
-async function loadSetup() {
-  const st = await api('/api/status');
-  const s = $('setup'); s.textContent = '';
-  s.append(
-    el('p', {}, 'Proxy: ', el('code', {}, `http://127.0.0.1:${st.mitmPort}`), ` · upstream: ${st.upstream || 'direct'} · TLS profile: ${st.browser}`),
-    el('p', {}, `Certificate trust: ${st.trust === 'spki' ? 'SPKI pin on the dedicated Chrome profile (nothing installed system-wide)' : 'CupNet CA installed in the OS trust store'}`),
-    el('p', {}, 'CA file: ', el('code', {}, st.ca.certPath)),
-    el('p', {}, 'CA SHA-256: ', el('code', {}, st.ca.sha256)),
-    el('p', {}, 'CA SPKI (for --ignore-certificate-errors-spki-list): ', el('code', {}, st.ca.spki)),
-    el('p', {}, 'Install the CA system-wide (only for --trust system; run it yourself):'), el('pre', {}, st.ca.commands.install),
-    el('p', {}, 'Remove it again:'), el('pre', {}, st.ca.commands.remove),
-    el('p', {}, 'Rules file: ', el('code', {}, st.rulesFile)),
-    el('p', {}, 'Data dir: ', el('code', {}, st.dataDir)),
-  );
-}
-
-async function pollStatus() {
-  try {
-    const st = await api('/api/status');
-    $('quit').hidden = !st.canQuit;
-    const req = st.stats ? ` · ${st.stats.requests} req` : '';
-    $('status').textContent = `proxy 127.0.0.1:${st.mitmPort} · ${st.entries.toLocaleString()} entries${req}${st.writeErrors ? ` · ${st.writeErrors} write errors` : ''}`;
-    $('status').className = st.writeErrors ? 'err' : '';
-  } catch (e) { $('status').textContent = `disconnected: ${e.message}`; $('status').className = 'err'; }
-}
-
-(async () => {
-  if (!(await auth())) { $('login').hidden = false; document.querySelectorAll('main section').forEach((s) => s.hidden = true); $('status').textContent = 'no access token'; return; }
-  buildFilter();
-  try { await fillSessionSelect(); } catch (e) { $('status').textContent = e.message; }
-  openSession(current);
-  grid.focus();
-  pollStatus(); setInterval(pollStatus, 2000);
-})();
-</script>
+<div id="toasts"></div>
+<div id="modalWrap" hidden><div id="modal" role="dialog" aria-modal="true"></div></div>
 </body>
 </html>

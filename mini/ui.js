@@ -1,0 +1,1552 @@
+'use strict';
+/* CupNet mini UI. Served under a strict CSP (script-src 'self'): no inline scripts or handlers, and
+ * user data never goes through innerHTML — every node is built with h(). */
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core helpers
+// ─────────────────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const ATTR_ONLY = new Set(['list', 'for', 'role', 'colspan', 'rowspan', 'viewBox']);
+function h(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === 'class') n.className = v;
+      else if (k === 'dataset') Object.assign(n.dataset, v);
+      else if (k.startsWith('on') && typeof v === 'function') n.addEventListener(k.slice(2).toLowerCase(), v);
+      else if (ATTR_ONLY.has(k) || k.startsWith('aria-') || k.startsWith('data-')) n.setAttribute(k, v === true ? '' : String(v));
+      else if (k in n) n[k] = v;
+      else n.setAttribute(k, v === true ? '' : String(v));
+    }
+  }
+  append(n, kids);
+  return n;
+}
+function append(n, kids) {
+  for (const k of kids) {
+    if (k == null || k === false) continue;
+    if (Array.isArray(k)) append(n, k);
+    else n.append(k instanceof Node ? k : document.createTextNode(String(k)));
+  }
+  return n;
+}
+const clear = (n) => { n.textContent = ''; return n; };
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(`cupnet-mini:${k}`); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(`cupnet-mini:${k}`, JSON.stringify(v)); } catch { /* storage blocked */ } },
+};
+
+let TOKEN = '';
+async function auth() {
+  const hp = new URLSearchParams(location.hash.slice(1));
+  try { TOKEN = sessionStorage.getItem('cupnet-token') || ''; } catch { /* storage blocked */ }
+  if (hp.get('t')) TOKEN = hp.get('t');
+  else if (hp.get('c')) {
+    const r = await fetch('/api/auth/exchange', { method: 'POST', headers: { 'X-CupNet-Code': hp.get('c') } });
+    if (r.ok) TOKEN = (await r.json()).token;
+  }
+  if (location.hash) history.replaceState(null, '', location.pathname);
+  try { if (TOKEN) sessionStorage.setItem('cupnet-token', TOKEN); } catch { /* ignore */ }
+  return !!TOKEN;
+}
+async function api(path, opts = {}) {
+  const body = opts.body != null && typeof opts.body !== 'string' ? JSON.stringify(opts.body) : opts.body;
+  const r = await fetch(path, { ...opts, body, headers: { 'X-CupNet-Token': TOKEN, 'Content-Type': 'application/json', ...(opts.headers || {}) } });
+  const text = await r.text();
+  let data; try { data = JSON.parse(text); } catch { data = text; }
+  if (!r.ok) throw new Error((data && data.error) || r.statusText || `HTTP ${r.status}`);
+  return data;
+}
+const post = (path, body = {}) => api(path, { method: 'POST', body });
+const put = (path, body = {}) => api(path, { method: 'PUT', body });
+const del = (path) => api(path, { method: 'DELETE' });
+async function apiBlob(path) {
+  const r = await fetch(path, { headers: { 'X-CupNet-Token': TOKEN } });
+  if (!r.ok) { let m = r.statusText; try { m = (await r.json()).error || m; } catch { /* not JSON */ } throw new Error(m); }
+  return { blob: await r.blob(), type: r.headers.get('X-CupNet-Content-Type') || '' };
+}
+function download(blob, name) {
+  const a = h('a', { href: URL.createObjectURL(blob), download: name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+async function copy(text, what = 'Copied') {
+  try { await navigator.clipboard.writeText(text); }
+  catch {
+    const t = h('textarea', { value: text }); document.body.append(t); t.select();
+    try { document.execCommand('copy'); } finally { t.remove(); }
+  }
+  toast(what, 'ok');
+}
+const guard = (fn) => async (...a) => { try { return await fn(...a); } catch (e) { toast(e.message || String(e), 'err'); return undefined; } };
+async function busy(btn, label, fn) {
+  const old = btn.textContent; btn.disabled = true; if (label) btn.textContent = label;
+  try { return await fn(); } finally { btn.disabled = false; btn.textContent = old; }
+}
+let _deb = new Map();
+function debounce(key, ms, fn) { clearTimeout(_deb.get(key)); _deb.set(key, setTimeout(fn, ms)); }
+
+const fmtSize = (n) => n == null || n === 0 ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+const fmtTime = (ts) => { if (!ts) return ''; const d = new Date(ts); return d.toLocaleTimeString([], { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0'); };
+const fmtAgo = (ts) => {
+  if (!ts) return '';
+  const s = Math.round((Date.now() - new Date(ts).getTime()) / 1000);
+  return s < 60 ? `${Math.max(s, 0)}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : s < 86400 ? `${Math.round(s / 3600)}h ago` : new Date(ts).toLocaleDateString();
+};
+const splitUrl = (u) => { const m = /^[a-z]+:\/\/([^/?#]*)([^#]*)/i.exec(u || ''); return m ? [m[1], m[2] || '/'] : ['', u || '']; };
+const flag = (cc) => { cc = String(cc || '').toUpperCase(); return /^[A-Z]{2}$/.test(cc) ? String.fromCodePoint(...[...cc].map((c) => 127397 + c.charCodeAt(0))) : ''; };
+const stCls = (s) => (!s ? 'sf' : s >= 500 ? 's5' : s >= 400 ? 's4' : s >= 300 ? 's3' : 's2');
+const pairsOf = (obj) => {
+  const out = [];
+  for (const [k, v] of Object.entries(obj || {})) for (const one of (Array.isArray(v) ? v : [v])) out.push([k, String(one ?? '')]);
+  return out;
+};
+const headerOf = (obj, name) => { const k = Object.keys(obj || {}).find((x) => x.toLowerCase() === name); const v = k ? obj[k] : ''; return String(Array.isArray(v) ? v[0] : v ?? ''); };
+const originPath = (u) => { try { const x = new URL(u); return x.origin + x.pathname; } catch { return String(u || '').split(/[?#]/)[0]; } };
+const tag = (text, cls = '') => h('span', { class: `tag ${cls}` }, text);
+const badge = (text, cls = '') => h('span', { class: `badge ${cls}` }, text);
+const seg = (options, value, onPick) => h('div', { class: 'seg' }, options.map(([v, label]) =>
+  h('button', { type: 'button', class: v === value ? 'on' : '', onclick: () => onPick(v) }, label)));
+const sw = (checked, label, onChange, title) => h('label', { class: 'switch', title },
+  h('input', { type: 'checkbox', checked, onchange: (ev) => onChange(ev.target.checked) }), h('span'), label);
+
+// Request headers that must not be copied into a new request (the client sets them).
+const HOP = new Set(['host', 'content-length', 'connection', 'proxy-connection', 'keep-alive', 'transfer-encoding', 'te', 'upgrade', 'proxy-authorization']);
+const sendableHeaders = (obj) => pairsOf(obj).filter(([k]) => !k.startsWith(':') && !HOP.has(k.toLowerCase()));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Toasts + modal
+// ─────────────────────────────────────────────────────────────────────────────
+function toast(msg, kind = '', o = {}) {
+  const t = h('div', { class: `toast ${kind}` }, msg);
+  if (o.action) {
+    t.append(' ', h('button', { class: 'btn sm', onclick: () => { t.remove(); o.action.fn(); } }, o.action.label));
+  }
+  $('toasts').append(t);
+  setTimeout(() => t.remove(), o.ms || (kind === 'err' ? 7000 : 3500));
+}
+let _modalClose = null;
+function modal(title, body, buttons = []) {
+  const wrap = $('modalWrap'), m = clear($('modal'));
+  const close = () => { wrap.hidden = true; clear(m); _modalClose = null; };
+  m.append(h('h2', null, title), body);
+  const row = h('div', { class: 'row-end' });
+  for (const b of buttons) {
+    const btn = h('button', { class: `btn ${b.cls || ''}`, type: 'button' }, b.label);
+    btn.addEventListener('click', guard(async () => {
+      if (!b.fn) return close();
+      const keep = await busy(btn, null, () => b.fn(close));
+      if (keep !== false) close();
+    }));
+    row.append(btn);
+  }
+  m.append(row);
+  wrap.hidden = false; _modalClose = close;
+  const first = m.querySelector('textarea, input, select'); if (first) first.focus();
+  return { close, root: m };
+}
+$('modalWrap').addEventListener('mousedown', (ev) => { if (ev.target === $('modalWrap') && _modalClose) _modalClose(); });
+function confirmBox(text, okLabel = 'OK', danger = false) {
+  return new Promise((resolve) => {
+    let done = false;
+    const fin = (v) => { if (!done) { done = true; resolve(v); } };
+    modal('Confirm', h('p', null, text), [
+      { label: 'Cancel', fn: () => fin(false) },
+      { label: okLabel, cls: danger ? 'danger' : 'primary', fn: () => fin(true) },
+    ]);
+    const obs = new MutationObserver(() => { if ($('modalWrap').hidden) { obs.disconnect(); fin(false); } });
+    obs.observe($('modalWrap'), { attributes: true, attributeFilter: ['hidden'] });
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Navigation
+// ─────────────────────────────────────────────────────────────────────────────
+const TITLES = { traffic: 'Traffic', proxies: 'Proxies', repeater: 'Repeater', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
+let PAGE = 'traffic';
+function go(page) {
+  if (!TITLES[page]) page = 'traffic';
+  PAGE = page; store.set('page', page);
+  document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.page === page));
+  document.querySelectorAll('#pages > section').forEach((s) => { s.hidden = s.id !== `page-${page}`; });
+  $('pageTitle').textContent = TITLES[page];
+  const load = { traffic: () => scheduleDraw(false), proxies: loadProxies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode }[page];
+  if (load) guard(load)();
+}
+document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.page)));
+$('launch').addEventListener('click', guard(async () => { await post('/api/chrome', {}); toast('Chrome is starting with the CupNet proxy', 'ok'); }));
+$('quit').addEventListener('click', guard(async () => {
+  if (!(await confirmBox('Stop CupNet mini? The session is sealed on exit.', 'Quit', true))) return;
+  await post('/api/quit'); $('stats').textContent = 'stopped'; window.close();
+}));
+$('egress').addEventListener('click', () => go('proxies'));
+document.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Escape') return;
+  if (_modalClose) { _modalClose(); return; }
+  if (PAGE === 'traffic' && !$('detail').hidden) closeDetail();
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Status, stats and the egress pill
+// ─────────────────────────────────────────────────────────────────────────────
+let ST = null;
+const EG = { data: null, key: '', at: 0, pending: false };
+const EGRESS_RECHECK_MS = 120000;
+function egressKey(px) {
+  if (!px) return '';
+  return `${px.mode}|${px.active?.id || ''}|${px.active?.pinnedSid || ''}|${px.active?.updatedAt || ''}|${px.cliUpstream || ''}|${px.blocked}`;
+}
+async function checkEgress(force = false) {
+  if (EG.pending) return;
+  EG.pending = true; renderEgress();
+  try {
+    const r = await api(`/api/egress${force ? '?force=1' : ''}`);
+    EG.data = r.egress; EG.at = Date.now();
+    if (ST) ST.proxy = r.status;
+  } catch (e) { EG.data = { ok: false, error: e.message }; EG.at = Date.now(); }
+  finally { EG.pending = false; renderEgress(); if (PAGE === 'proxies') renderConn(); }
+}
+function connLabel(px) {
+  if (!px) return '—';
+  if (px.mode === 'proxy') return px.active?.name || 'Proxy';
+  if (px.mode === 'cli') return 'CLI upstream';
+  return 'Direct';
+}
+function geoText(e) {
+  if (!e || !e.ok) return '';
+  return [e.city, e.region && e.region !== e.city ? e.region : '', e.country].filter(Boolean).join(', ');
+}
+function renderEgress() {
+  const px = ST?.proxy; const pill = $('egress'); const dot = pill.querySelector('.dot');
+  const label = connLabel(px);
+  let cls = '', text = label, title = 'Exit IP — click to manage proxies';
+  if (px?.blocked && px.mode === 'direct') { cls = 'err'; text = 'Blocked — kill switch is on, no proxy'; }
+  else if (EG.data?.ok) { cls = px?.mode === 'direct' ? 'warn' : 'ok'; text = `${label} · ${flag(EG.data.country)} ${EG.data.ip}`; title = `${EG.data.ip} · ${geoText(EG.data)}${EG.data.org ? ` · ${EG.data.org}` : ''}\nClick to manage proxies`; }
+  else if (EG.pending) { text = `${label} · checking…`; }
+  else if (EG.data && !EG.data.ok) { cls = 'err'; text = `${label} · ${EG.data.error || 'check failed'}`; }
+  pill.className = `pill ${cls}`;
+  dot.className = `dot ${EG.pending && !EG.data ? 'busy' : ''}`;
+  $('egressText').textContent = text; pill.title = title;
+}
+let _lastPaused = 0;
+async function pollStatus() {
+  try {
+    const st = await api('/api/status');
+    ST = st;
+    $('quit').hidden = !st.canQuit;
+    const s = st.stats;
+    const parts = [`proxy 127.0.0.1:${st.mitmPort}`];
+    if (s) {
+      parts.push(`${s.requests.toLocaleString()} req`);
+      if (s.reqPerSec) parts.push(`${s.reqPerSec}/s`);
+      if (s.avgMs) parts.push(`avg ${Math.round(s.avgMs)} ms`);
+      if (s.errors) parts.push(`${s.errors} err`);
+      if (!s.workerReady) parts.push('TLS worker starting…');
+    }
+    if (st.writeErrors) parts.push(`${st.writeErrors} write errors`);
+    $('stats').textContent = parts.join(' · ');
+    $('stats').className = `mono ${st.writeErrors || (s && !s.workerReady) ? 'warn' : 'muted'}`;
+    const pc = $('pausedCount');
+    pc.hidden = !st.paused; pc.textContent = st.paused || '';
+    if (st.paused > _lastPaused && PAGE !== 'paused') toast(`${st.paused} request(s) paused by a breakpoint`, 'warn', { action: { label: 'Open', fn: () => go('paused') } });
+    _lastPaused = st.paused;
+    const key = egressKey(st.proxy);
+    if (key !== EG.key) { EG.key = key; EG.data = st.proxy?.egress || null; EG.at = EG.data ? Date.now() : 0; if (!EG.data) checkEgress(); }
+    else if (Date.now() - EG.at > EGRESS_RECHECK_MS) checkEgress();
+    renderEgress();
+    if (PAGE === 'proxies') { P.status = st.proxy; renderConn(); }
+  } catch (e) {
+    $('stats').textContent = `disconnected: ${e.message}`; $('stats').className = 'mono err';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Traffic: data, filter, virtual grid
+// ─────────────────────────────────────────────────────────────────────────────
+const ROW = 26;
+let current = '', shown = '';
+let all = [], view = [], bySeq = new Map(), selSeq = null, gen = 0;
+const methods = new Set(), types = new Set();
+const qs = () => (shown ? `?session=${encodeURIComponent(shown)}` : '');
+
+function parseQuery(q) {
+  const f = { inc: [], exc: [], status: null, method: null, type: null, mime: null, host: null };
+  for (const t of q.trim().toLowerCase().split(/\s+/).filter(Boolean)) {
+    const m = /^(status|method|type|mime|host):(.+)$/.exec(t);
+    if (m) f[m[1]] = m[2];
+    else if (t.startsWith('-') && t.length > 1) f.exc.push(t.slice(1));
+    else f.inc.push(t);
+  }
+  return f;
+}
+const statusOk = (s, want) => {
+  if (!want) return true;
+  if (want === 'fail') return !s;
+  if (/^\dxx$/.test(want)) return Math.floor((s || 0) / 100) === Number(want[0]);
+  return String(s ?? '').startsWith(want);
+};
+let F = null;
+function buildFilter() {
+  F = parseQuery($('q').value);
+  F.kind = $('fKind').value; F.m = $('fMethod').value; F.st = $('fStatus').value; F.t = $('fType').value;
+  F.noOptions = $('hideOptions').checked;
+}
+function matches(e) {
+  if (F.kind && e.kind !== F.kind) return false;
+  if (e.kind === 'session-start' || e.kind === 'session-end') return F.kind === '';
+  if (F.noOptions && e.method === 'OPTIONS') return false;
+  if (F.m && e.method !== F.m) return false;
+  if (!statusOk(e.status, F.st) || !statusOk(e.status, F.status)) return false;
+  if (F.t && e.type !== F.t) return false;
+  if (F.method && String(e.method || '').toLowerCase() !== F.method) return false;
+  if (F.type && !String(e.type || '').toLowerCase().includes(F.type)) return false;
+  if (F.mime && !String(e.mime || '').toLowerCase().includes(F.mime)) return false;
+  const url = e._lc || (e._lc = String(e.url || '').toLowerCase());
+  if (F.host && !splitUrl(url)[0].includes(F.host)) return false;
+  for (const t of F.inc) if (!url.includes(t)) return false;
+  for (const t of F.exc) if (url.includes(t)) return false;
+  return true;
+}
+function addOption(sel, set, v) { if (!v || set.has(v)) return; set.add(v); sel.append(h('option', { value: v }, v)); }
+function ingest(items) {
+  const atBottom = isAtBottom();
+  for (const e of items) {
+    if (bySeq.has(e.seq)) continue;
+    bySeq.set(e.seq, all.length);
+    all.push(e);
+    addOption($('fMethod'), methods, e.method); addOption($('fType'), types, e.type);
+    if (matches(e)) view.push(all.length - 1);
+  }
+  scheduleDraw(atBottom && $('follow').checked);
+}
+function refilter() {
+  buildFilter();
+  view = [];
+  for (let i = 0; i < all.length; i++) if (matches(all[i])) view.push(i);
+  scheduleDraw($('follow').checked);
+}
+for (const id of ['q', 'fKind', 'fMethod', 'fStatus', 'fType', 'hideOptions']) $(id).addEventListener(id === 'q' ? 'input' : 'change', refilter);
+
+const grid = $('grid'), spacer = $('spacer');
+let drawQueued = false, stick = false;
+const pool = [];
+function isAtBottom() { return grid.scrollTop + grid.clientHeight >= grid.scrollHeight - ROW * 2; }
+function scheduleDraw(toBottom) { stick = stick || toBottom; if (!drawQueued) { drawQueued = true; requestAnimationFrame(draw); } }
+const CELLS = ['n', 'tm', 'm', 'st', '', 'host', 'p', 'r-al', 'r-al tm'];
+function rowNode(i) {
+  let r = pool[i];
+  if (!r) {
+    r = h('div', { class: 'r cols' }, CELLS.map((c) => h('div', { class: c })));
+    r.addEventListener('click', () => select(Number(r.dataset.seq)));
+    pool[i] = r; spacer.append(r);
+  }
+  return r;
+}
+function draw() {
+  drawQueued = false;
+  $('count').textContent = `${view.length.toLocaleString()} / ${all.length.toLocaleString()}`;
+  $('empty').hidden = all.length > 0;
+  spacer.style.height = `${view.length * ROW}px`;
+  if (stick) { grid.scrollTop = grid.scrollHeight; stick = false; }
+  const first = Math.max(0, Math.floor(grid.scrollTop / ROW) - 10);
+  const n = Math.max(0, Math.min(view.length - first, Math.ceil(grid.clientHeight / ROW) + 20));
+  for (let k = 0; k < n; k++) {
+    const e = all[view[first + k]];
+    const r = rowNode(k);
+    r.hidden = false;
+    r.style.top = `${(first + k) * ROW}px`;
+    if (r.dataset.seq !== String(e.seq)) {
+      r.dataset.seq = e.seq;
+      const [host, p] = splitUrl(e.url);
+      const ev = e.kind !== 'request';
+      const c = r.children;
+      c[0].textContent = e.seq;
+      c[1].textContent = fmtTime(e.ts);
+      c[2].textContent = ev ? '' : (e.method || ''); c[2].className = `m m-${e.method || ''}`;
+      c[3].textContent = ev ? (e.kind === 'page-event' ? 'event' : '') : (e.status || 'ERR'); c[3].className = `st ${ev ? '' : stCls(e.status)}`;
+      c[4].textContent = e.type || '';
+      c[5].textContent = host; c[5].title = host;
+      c[6].textContent = ev && !e.url ? e.kind : p; c[6].title = e.url || '';
+      c[7].textContent = fmtSize(e.resSize);
+      c[8].textContent = e.duration != null ? `${e.duration} ms` : '';
+      r.className = `r cols${ev ? ' ev' : ''}${e.type === 'repeater' ? ' rep' : ''}${ev ? '' : !e.status ? ' tf' : e.status >= 500 ? ' t5' : e.status >= 400 ? ' t4' : ''}`;
+    }
+    r.classList.toggle('sel', e.seq === selSeq);
+  }
+  for (let k = n; k < pool.length; k++) if (pool[k]) { pool[k].hidden = true; pool[k].dataset.seq = ''; }
+}
+grid.addEventListener('scroll', () => scheduleDraw(false), { passive: true });
+window.addEventListener('resize', () => scheduleDraw(false));
+grid.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
+  ev.preventDefault();
+  if (!view.length) return;
+  let pos = view.findIndex((i) => all[i].seq === selSeq);
+  pos = pos < 0 ? 0 : Math.max(0, Math.min(view.length - 1, pos + (ev.key === 'ArrowDown' ? 1 : -1)));
+  select(all[view[pos]].seq);
+  const top = pos * ROW;
+  if (top < grid.scrollTop) grid.scrollTop = top;
+  else if (top + ROW > grid.scrollTop + grid.clientHeight) grid.scrollTop = top + ROW - grid.clientHeight;
+});
+
+// ── resizable split ──
+(() => {
+  const det = $('detail'), rz = $('resizer');
+  const w = store.get('detailWidth', 0);
+  if (w) det.style.width = `${w}px`;
+  rz.addEventListener('mousedown', (ev) => {
+    ev.preventDefault(); rz.classList.add('drag');
+    const right = $('split').getBoundingClientRect().right;
+    const move = (e) => { const nw = Math.max(360, Math.min(right - 320, right - e.clientX)); det.style.width = `${nw}px`; };
+    const up = () => { rz.classList.remove('drag'); document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); store.set('detailWidth', det.offsetWidth); scheduleDraw(false); };
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+  });
+})();
+
+// ── sessions: live stream or a saved one ──
+function resetView() {
+  gen++; all = []; view = []; bySeq = new Map(); selSeq = null; methods.clear(); types.clear();
+  for (const s of [$('fMethod'), $('fType')]) while (s.options.length > 1) s.remove(1);
+  closeDetail(); buildFilter(); scheduleDraw(true);
+}
+async function streamLive(myGen) {
+  let lastSeq = 0;
+  while (myGen === gen) {
+    try {
+      const r = await fetch(`/api/log/stream?after=${lastSeq}`, { headers: { 'X-CupNet-Token': TOKEN } });
+      if (!r.ok) throw new Error(r.statusText);
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done || myGen !== gen) { if (myGen !== gen) reader.cancel(); break; }
+        buf += dec.decode(value, { stream: true });
+        const cut = buf.lastIndexOf('\n');
+        if (cut < 0) continue;
+        const lines = buf.slice(0, cut).split('\n'); buf = buf.slice(cut + 1);
+        const items = [];
+        for (const l of lines) if (l) { try { items.push(JSON.parse(l)); } catch { /* skip */ } }
+        if (items.length) { lastSeq = items[items.length - 1].seq; ingest(items); }
+      }
+    } catch { /* reconnect below */ }
+    if (myGen !== gen) return;
+    await new Promise((res) => setTimeout(res, 1000));
+  }
+}
+async function loadSaved(id, myGen) {
+  let after = 0;
+  for (;;) {
+    const items = await api(`/api/log?session=${encodeURIComponent(id)}&after=${after}&limit=20000`);
+    if (myGen !== gen) return;
+    if (!items.length) break;
+    ingest(items); after = items[items.length - 1].seq;
+  }
+}
+function openSession(id) {
+  shown = id === current ? '' : id;
+  $('session').value = id;
+  resetView();
+  const g = gen;
+  if (shown) loadSaved(shown, g).catch((e) => toast(e.message, 'err'));
+  else streamLive(g);
+}
+$('session').addEventListener('change', () => openSession($('session').value));
+async function fillSessionSelect() {
+  const { current: cur, sessions } = await api('/api/sessions');
+  current = cur;
+  const sel = $('session'); const keep = sel.value || cur;
+  clear(sel);
+  for (const s of sessions) sel.append(h('option', { value: s.id }, s.id === cur ? `● Live — ${s.id}` : `${s.id} · ${fmtSize(s.bytes) || '0 B'}`));
+  sel.value = sessions.some((s) => s.id === keep) ? keep : cur;
+  return sessions;
+}
+
+// ── HAR export of the filtered rows ──
+function compressSeqs(seqs) {
+  const out = []; let a = null, b = null;
+  for (const n of seqs) {
+    if (a == null) { a = b = n; continue; }
+    if (n === b + 1) { b = n; continue; }
+    out.push(a === b ? `${a}` : `${a}-${b}`); a = b = n;
+  }
+  if (a != null) out.push(a === b ? `${a}` : `${a}-${b}`);
+  return out.join(',');
+}
+$('harBtn').addEventListener('click', guard(async () => {
+  const sid = shown || current;
+  const reqs = view.map((i) => all[i]).filter((e) => e.kind === 'request');
+  const total = all.reduce((n, e) => n + (e.kind === 'request' ? 1 : 0), 0);
+  if (!reqs.length) { toast('No requests to export', 'warn'); return; }
+  let q = '';
+  if (reqs.length !== total) {
+    q = `?seqs=${compressSeqs(reqs.map((e) => e.seq).sort((x, y) => x - y))}`;
+    if (q.length > 12000) { toast('Too many scattered rows for one export — narrow the filter, or clear it to export the whole session', 'warn'); return; }
+  }
+  await busy($('harBtn'), 'HAR…', async () => {
+    const { blob } = await apiBlob(`/api/sessions/${encodeURIComponent(sid)}/har${q}`);
+    download(blob, `cupnet-${sid}${q ? '-filtered' : ''}.har`);
+  });
+  toast(`Exported ${reqs.length.toLocaleString()} requests as HAR`, 'ok');
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Traffic: detail panel
+// ─────────────────────────────────────────────────────────────────────────────
+let dTab = store.get('dTab', 'headers'), dEntry = null;
+function closeDetail() { $('detail').hidden = true; $('resizer').hidden = true; selSeq = null; dEntry = null; scheduleDraw(false); }
+$('dclose').addEventListener('click', closeDetail);
+document.querySelectorAll('#dtabs [data-d]').forEach((b) => b.addEventListener('click', () => { dTab = b.dataset.d; store.set('dTab', dTab); renderDetail(); }));
+async function select(seq) {
+  selSeq = seq; scheduleDraw(false);
+  $('detail').hidden = false; $('resizer').hidden = false;
+  const myGen = gen;
+  try {
+    const e = await api(`/api/log/${seq}${qs()}`);
+    if (myGen !== gen || selSeq !== seq) return;
+    dEntry = e; renderDetail();
+  } catch (err) { clear($('dbody')).append(h('div', { class: 'note warn' }, err.message)); }
+}
+function kvGrid(pairs, empty = '(none)') {
+  const g = h('div', { class: 'kv' });
+  if (!pairs.length) g.append(h('div', { class: 'k dim' }, empty), h('div'));
+  for (const [k, v] of pairs) g.append(h('div', { class: 'k' }, k), h('div', null, v));
+  return g;
+}
+const sect = (title, body, open = true, extra = null) => h('details', { class: 'sect', open }, h('summary', null, title, extra ? [' ', extra] : null), body);
+
+function renderDetail() {
+  document.querySelectorAll('#dtabs [data-d]').forEach((b) => b.classList.toggle('on', b.dataset.d === dTab));
+  const d = clear($('dbody')); d.scrollTop = 0;
+  const e = dEntry; if (!e) return;
+  const isReq = e.kind === 'request';
+  $('dMethod').textContent = isReq ? e.method : e.kind; $('dMethod').className = `badge m-${isReq ? e.method : ''}`;
+  $('dStatus').textContent = isReq ? (e.status || 'ERR') : ''; $('dStatus').className = `badge ${stCls(e.status)}`; $('dStatus').hidden = !isReq;
+  $('dUrl').textContent = e.url || ''; $('dUrl').title = e.url || '';
+  document.querySelector('.dactions').hidden = !isReq;
+  if (!isReq) {
+    d.append(sect('Event', kvGrid([['Kind', e.kind], ['URL', e.url || ''], ['Time', new Date(e.ts).toISOString()]])), sect('Data', jsonPre(JSON.stringify(e.data ?? e, null, 2))));
+    return;
+  }
+  ({ headers: tabHeaders, request: tabRequest, response: tabResponse, cookies: tabCookies, raw: tabRaw, json: tabJson }[dTab] || tabHeaders)(d, e);
+}
+function tabHeaders(d, e) {
+  d.append(sect('General', kvGrid([
+    ['URL', e.url], ['Method', e.method], ['Status', String(e.status || 'failed')], ['Type', e.type || ''],
+    ['Duration', e.duration != null ? `${e.duration} ms` : ''], ['Time', new Date(e.ts).toLocaleString()],
+    ['Request body', fmtSize(e.reqSize) || '—'], ['Response body', fmtSize(e.resSize) || '—'],
+    ...(e.error ? [['Error', String(e.error)]] : []),
+  ])));
+  const rs = pairsOf(e.responseHeaders), rq = pairsOf(e.requestHeaders);
+  d.append(sect('Response headers', kvGrid(rs), true, tag(rs.length)), sect('Request headers', kvGrid(rq), true, tag(rq.length)));
+}
+function tabRequest(d, e) {
+  let qp = [];
+  try { qp = [...new URL(e.url).searchParams.entries()]; } catch { /* not a URL */ }
+  if (qp.length) d.append(sect('Query string', kvGrid(qp), true, tag(qp.length)));
+  d.append(sect('Body', bodyView(e, 'request', qs())));
+}
+function tabResponse(d, e) { d.append(bodyView(e, 'response', qs())); }
+function parseSetCookie(line) {
+  const parts = String(line).split(';').map((s) => s.trim()).filter(Boolean);
+  const [nv, ...attrs] = parts;
+  const i = (nv || '').indexOf('=');
+  return { name: i < 0 ? nv : nv.slice(0, i), value: i < 0 ? '' : nv.slice(i + 1), attrs: attrs.join('; ') };
+}
+function tabCookies(d, e) {
+  const reqCookies = [];
+  for (const [k, v] of pairsOf(e.requestHeaders)) {
+    if (k.toLowerCase() !== 'cookie') continue;
+    for (const p of v.split(';').map((s) => s.trim()).filter(Boolean)) { const i = p.indexOf('='); reqCookies.push(i < 0 ? [p, ''] : [p.slice(0, i), p.slice(i + 1)]); }
+  }
+  const set = [];
+  for (const [k, v] of pairsOf(e.responseHeaders)) if (k.toLowerCase() === 'set-cookie') for (const line of v.split('\n')) if (line.trim()) set.push(parseSetCookie(line));
+  d.append(sect('Request cookies', kvGrid(reqCookies, 'No Cookie header'), true, tag(reqCookies.length)));
+  const tbl = h('table', { class: 'tbl' }, h('thead', null, h('tr', null, h('th', { class: 'w-180' }, 'Name'), h('th', null, 'Value'), h('th', null, 'Attributes'))),
+    h('tbody', null, set.length ? set.map((c) => h('tr', null, h('td', { class: 'mono', title: c.name }, c.name), h('td', { class: 'mono', title: c.value }, c.value), h('td', { class: 'muted', title: c.attrs }, c.attrs)))
+      : h('tr', null, h('td', { colspan: 3, class: 'muted' }, 'No Set-Cookie headers'))));
+  d.append(sect('Set by the response', tbl, true, tag(set.length)));
+}
+function bodyText(body) {
+  if (body == null || body === '') return '';
+  const s = String(body);
+  return s.startsWith('__b64__:') ? `[binary body, ${fmtSize(Math.floor((s.length - 8) * 3 / 4))}]` : s;
+}
+function rawHttp(e, maxBody = 512 * 1024) {
+  const [, path] = splitUrl(e.url);
+  const cut = (s) => (s.length > maxBody ? `${s.slice(0, maxBody)}\n… [${fmtSize(s.length - maxBody)} more — use Download]` : s);
+  const hasHost = pairsOf(e.requestHeaders).some(([k]) => /^(host|:authority)$/i.test(k));
+  const req = [`${e.method} ${path} HTTP/1.1`, ...(hasHost ? [] : [`Host: ${splitUrl(e.url)[0]}`]), ...pairsOf(e.requestHeaders).map(([k, v]) => `${k}: ${v}`)].join('\n');
+  const res = [`HTTP/1.1 ${e.status || 0}`, ...pairsOf(e.responseHeaders).map(([k, v]) => `${k}: ${v}`)].join('\n');
+  return `${req}\n\n${cut(bodyText(e.requestBody))}${e.requestBodyTruncated ? '\n… [truncated]' : ''}\n\n${res}\n\n${cut(bodyText(e.responseBody))}${e.responseBodyTruncated ? '\n… [truncated]' : ''}`;
+}
+function tabRaw(d, e) {
+  const text = rawHttp(e);
+  d.append(h('div', { class: 'bodybar' }, h('span', { class: 'muted' }, 'Request and response as HTTP/1.1 text'), h('span', { class: 'spacer' }),
+    h('button', { class: 'btn sm', onclick: () => copy(rawHttp(e, Infinity), 'Raw HTTP copied') }, 'Copy')), h('pre', { class: 'codebox' }, text));
+}
+function tabJson(d, e) {
+  const text = JSON.stringify(e, null, 2);
+  d.append(h('div', { class: 'bodybar' }, h('span', { class: 'muted' }, 'The full log entry'), h('span', { class: 'spacer' }),
+    h('button', { class: 'btn sm', onclick: () => copy(text, 'JSON copied') }, 'Copy')), jsonPre(text));
+}
+
+// ── body viewer (traffic detail + repeater) ──
+function jsonPre(text) {
+  const pre = h('pre', { class: 'codebox' });
+  if (text.length > 600000) { pre.textContent = text; return pre; }
+  const re = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false)\b|\bnull\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+  let last = 0, m;
+  const frag = document.createDocumentFragment();
+  while ((m = re.exec(text))) {
+    if (m.index > last) frag.append(text.slice(last, m.index));
+    const cls = m[1] ? (m[2] ? 'j-k' : 'j-s') : m[3] ? 'j-b' : m[0] === 'null' ? 'j-z' : 'j-n';
+    frag.append(h('span', { class: cls }, m[1] || m[0]));
+    if (m[2]) frag.append(m[2]);
+    last = re.lastIndex;
+  }
+  if (last < text.length) frag.append(text.slice(last));
+  pre.append(frag);
+  return pre;
+}
+function markPre(text, q) {
+  const pre = h('pre', { class: 'codebox' });
+  const marks = [];
+  if (!q) { pre.textContent = text; return { pre, marks }; }
+  const lc = text.toLowerCase(), ql = q.toLowerCase();
+  let pos = 0, i;
+  const frag = document.createDocumentFragment();
+  while ((i = lc.indexOf(ql, pos)) >= 0 && marks.length < 5000) {
+    if (i > pos) frag.append(text.slice(pos, i));
+    const mk = h('mark', null, text.slice(i, i + q.length)); marks.push(mk); frag.append(mk);
+    pos = i + q.length;
+  }
+  frag.append(text.slice(pos));
+  pre.append(frag);
+  return { pre, marks };
+}
+const extFor = (ct) => { const m = /\/([a-z0-9.+-]+)/.exec(ct || ''); if (!m) return '.bin'; const t = m[1].replace(/\+.*$/, ''); return '.' + ({ javascript: 'js', 'x-javascript': 'js', plain: 'txt', jpeg: 'jpg', 'octet-stream': 'bin', 'x-www-form-urlencoded': 'txt' }[t] || t); };
+function bodyView(e, which, sessQs) {
+  const box = h('div');
+  const body = which === 'request' ? e.requestBody : e.responseBody;
+  const hdrs = which === 'request' ? e.requestHeaders : e.responseHeaders;
+  const ct = headerOf(hdrs, 'content-type').toLowerCase();
+  const size = which === 'request' ? e.reqSize : e.resSize;
+  const bodyUrl = `/api/log/${e.seq}/body/${which}${sessQs}`;
+  const bar = h('div', { class: 'bodybar' }, tag(ct.split(';')[0] || 'no content-type'), h('span', { class: 'muted' }, fmtSize(size) || '0 B'));
+  box.append(bar);
+  if (body == null || body === '') { box.append(h('div', { class: 'empty' }, 'No body')); return box; }
+  const dl = h('button', { class: 'btn sm', onclick: guard(async () => { const { blob } = await apiBlob(bodyUrl); download(blob, `cupnet-${e.seq}-${which}${extFor(ct)}`); }) }, 'Download');
+  const isB64 = String(body).startsWith('__b64__:');
+  if (isB64 && /^(image|video|audio)\//.test(ct)) {
+    bar.append(h('span', { class: 'spacer' }), dl);
+    const pv = h('div', { class: 'preview' }, 'loading…'); box.append(pv);
+    apiBlob(bodyUrl).then(({ blob }) => {
+      const url = URL.createObjectURL(new Blob([blob], { type: ct.split(';')[0] }));
+      const t = ct.startsWith('image/') ? 'img' : ct.startsWith('video/') ? 'video' : 'audio';
+      clear(pv).append(h(t, { src: url, controls: t !== 'img' }));
+    }).catch((err) => { pv.textContent = err.message; });
+    return box;
+  }
+  if (isB64) { bar.append(h('span', { class: 'spacer' }), dl); box.append(h('div', { class: 'note' }, 'Binary body. Use Download to get the bytes.')); return box; }
+
+  let text = String(body);
+  let truncated = which === 'request' ? e.requestBodyTruncated : e.responseBodyTruncated;
+  const isJson = /json/.test(ct) || /^\s*[[{]/.test(text.slice(0, 64));
+  const isForm = /x-www-form-urlencoded/.test(ct);
+  const modes = isJson ? [['pretty', 'Pretty'], ['raw', 'Raw']] : isForm ? [['form', 'Form'], ['raw', 'Raw']] : [];
+  let mode = modes.length ? modes[0][0] : 'raw';
+  let q = '', marks = [], cur = -1;
+  const segBox = h('span');
+  const find = h('input', { type: 'search', placeholder: 'Find in body…' });
+  const cnt = h('span', { class: 'muted mono' });
+  const content = h('div');
+  const copyBtn = h('button', { class: 'btn sm', onclick: () => copy(text, 'Body copied') }, 'Copy');
+  bar.append(segBox, find, cnt, h('span', { class: 'spacer' }), copyBtn, dl);
+  const renderSeg = () => { clear(segBox); if (modes.length) segBox.append(seg(modes, mode, (v) => { mode = v; renderSeg(); paint(); })); };
+  const paint = () => {
+    clear(content); marks = []; cur = -1;
+    if (truncated) {
+      content.append(h('div', { class: 'note warn' }, `Showing the first ${fmtSize(text.length)}. `,
+        h('button', { class: 'btn sm', onclick: guard(async (ev) => { await busy(ev.target, 'Loading…', async () => { text = await (await apiBlob(bodyUrl)).blob.text(); truncated = false; }); paint(); }) }, 'Load full body')));
+    }
+    if (mode === 'form' && !q) {
+      content.append(kvGrid([...new URLSearchParams(text).entries()]));
+    } else if (mode === 'pretty') {
+      let out = text;
+      if (text.length < 20 * 1048576) { try { out = JSON.stringify(JSON.parse(text), null, 2); } catch { /* not JSON */ } }
+      if (q) { const r = markPre(out, q); marks = r.marks; content.append(r.pre); } else content.append(jsonPre(out));
+    } else {
+      const r = markPre(text, q); marks = r.marks; content.append(r.pre);
+    }
+    cnt.textContent = q ? `${marks.length >= 5000 ? '5000+' : marks.length} found` : '';
+    if (marks.length) step(0);
+  };
+  const step = (dir) => {
+    if (!marks.length) return;
+    if (cur >= 0) marks[cur].classList.remove('cur');
+    cur = dir === 0 ? 0 : (cur + dir + marks.length) % marks.length;
+    marks[cur].classList.add('cur'); marks[cur].scrollIntoView({ block: 'center' });
+    cnt.textContent = `${cur + 1} / ${marks.length >= 5000 ? '5000+' : marks.length}`;
+  };
+  find.addEventListener('input', () => debounce('find', 200, () => { q = find.value; paint(); }));
+  find.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); step(ev.shiftKey ? -1 : 1); } });
+  renderSeg(); paint();
+  box.append(content);
+  return box;
+}
+
+// ── detail actions ──
+async function fullBodyText(e, which) {
+  const body = which === 'request' ? e.requestBody : e.responseBody;
+  if (body == null) return '';
+  const truncated = which === 'request' ? e.requestBodyTruncated : e.responseBodyTruncated;
+  if (!truncated) return String(body);
+  return (await apiBlob(`/api/log/${e.seq}/body/${which}${qs()}`)).blob.text();
+}
+const isB64Body = (b) => String(b ?? '').startsWith('__b64__:');
+$('aCopyUrl').addEventListener('click', () => dEntry && copy(dEntry.url, 'URL copied'));
+$('aCopyCurl').addEventListener('click', guard(async () => {
+  const e = dEntry; if (!e) return;
+  if (!window.CupNetCodegen) throw new Error('Code generator did not load');
+  const body = isB64Body(e.requestBody) ? '' : await fullBodyText(e, 'request');
+  const code = window.CupNetCodegen.generateRequestCode('curl', { method: e.method, url: e.url, headers: Object.fromEntries(sendableHeaders(e.requestHeaders)), body });
+  copy(code, isB64Body(e.requestBody) ? 'curl copied (binary body left out)' : 'curl copied');
+}));
+$('aRepeat').addEventListener('click', guard(async () => {
+  const e = dEntry; if (!e) return;
+  rpLoad({ method: e.method, url: e.url, headers: sendableHeaders(e.requestHeaders), body: isB64Body(e.requestBody) ? '' : await fullBodyText(e, 'request') });
+  go('repeater');
+}));
+$('aResend').addEventListener('click', guard(async () => {
+  const e = dEntry; if (!e) return;
+  if (isB64Body(e.requestBody)) throw new Error('Binary request bodies cannot be resent yet');
+  const r = await busy($('aResend'), 'Sending…', async () => post('/api/replay', { method: e.method, url: e.url, headers: sendableHeaders(e.requestHeaders), body: await fullBodyText(e, 'request') }));
+  if (r.error) toast(`Resend failed: ${r.error}`, 'err');
+  else toast(`Resent → ${r.status} in ${r.duration} ms (#${r.seq})`, r.status >= 400 ? 'warn' : 'ok', shown ? {} : { action: { label: 'Show', fn: () => select(r.seq) } });
+}));
+$('aMock').addEventListener('click', guard(async () => {
+  const e = dEntry; if (!e) return;
+  if (isB64Body(e.responseBody)) throw new Error('Only text responses can be mocked from the log');
+  const body = await fullBodyText(e, 'response');
+  const [, path] = splitUrl(originPath(e.url));
+  const rule = {
+    name: `Mock ${e.method} ${path}`.slice(0, 120), type: 'mock', url_pattern: originPath(e.url), method: e.method, enabled: true,
+    params: { status: e.status || 200, mimeType: headerOf(e.responseHeaders, 'content-type') || 'text/plain', body },
+  };
+  const { id } = await post('/api/rules', rule);
+  toast('Mock rule created and enabled', 'ok');
+  R.sel = id; R.ed = null; go('rules');
+}));
+$('aBreak').addEventListener('click', guard(async () => {
+  const e = dEntry; if (!e) return;
+  const [, path] = splitUrl(originPath(e.url));
+  const { id } = await post('/api/rules', { name: `Pause ${e.method} ${path}`.slice(0, 120), type: 'modifyHeaders', url_pattern: originPath(e.url), method: e.method, params: {}, breakpoint_enabled: true, enabled: true });
+  toast(`Next ${e.method} to this URL will pause in Breakpoints`, 'ok', { action: { label: 'Edit rule', fn: () => { R.sel = id; R.ed = null; go('rules'); } } });
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Proxies
+// ─────────────────────────────────────────────────────────────────────────────
+const P = { providers: [], byId: new Map(), profiles: [], status: null, testing: new Set(), sel: null, ed: null, edInit: '', result: null, preview: null };
+async function loadProxies() {
+  if (!P.providers.length) { P.providers = await api('/api/proxies/providers'); P.byId = new Map(P.providers.map((p) => [p.id, p])); }
+  applyListing(await api('/api/proxies'));
+}
+function applyListing(r) {
+  if (!r || !r.profiles) return;
+  P.profiles = r.profiles; P.status = r.status;
+  if (ST) ST.proxy = r.status;
+  const key = egressKey(r.status);
+  if (key !== EG.key) { EG.key = key; EG.data = r.status.egress || null; EG.at = EG.data ? Date.now() : 0; if (!EG.data) checkEgress(); }
+  renderEgress(); renderConn(); renderPFilters(); renderPList();
+  if (P.sel && P.sel !== 'new' && !P.profiles.some((p) => p.id === P.sel)) { P.sel = null; P.ed = null; }
+  if (!P.ed) renderPEditor();
+}
+function renderConn() {
+  const px = P.status; if (!px) return;
+  const conn = $('conn');
+  conn.classList.toggle('blocked', !!(px.blocked && px.mode === 'direct'));
+  const nameBox = clear($('connName'));
+  nameBox.append(h('i', { class: `dot ${px.mode === 'direct' ? (px.blocked ? 'err' : 'warn') : 'ok'}` }), connLabel(px));
+  if (px.active?.sticky) nameBox.append(tag('sticky', 'accent'));
+  $('connSub').textContent = px.mode === 'proxy' ? px.active.display : px.mode === 'cli' ? `${px.cliUpstream} (--upstream)` : (px.blocked ? px.blockReason : 'No proxy — sites see this machine\'s IP');
+  $('connSub').title = $('connSub').textContent;
+  const eg = EG.data;
+  if (px.blocked && px.mode === 'direct') { $('connIp').textContent = 'Blocked'; $('connGeo').textContent = 'Kill switch is on'; }
+  else if (EG.pending && !eg) { $('connIp').textContent = 'checking…'; $('connGeo').textContent = ''; }
+  else if (eg?.ok) { $('connIp').textContent = `${flag(eg.country)} ${eg.ip}`; $('connGeo').textContent = [geoText(eg), eg.org, eg.latencyMs ? `${eg.latencyMs} ms` : ''].filter(Boolean).join(' · '); }
+  else { $('connIp').textContent = '—'; $('connGeo').textContent = eg?.error || ''; }
+  $('pNewIp').disabled = !(px.mode === 'proxy' && px.active?.sticky);
+  $('pNewIp').title = $('pNewIp').disabled ? 'Only for sticky sessions ({SID} / sticky mode) — rotating proxies change IP on every connection' : 'New sticky session → new exit IP';
+  $('pDisconnect').disabled = px.mode === 'direct';
+  $('pKill').checked = !!px.killSwitch;
+}
+$('pCheck').addEventListener('click', () => checkEgress(true));
+$('pNewIp').addEventListener('click', guard(async () => { applyListing(await post('/api/proxies/new-ip')); toast('New session — checking the exit IP…', 'ok'); checkEgress(true); }));
+$('pDisconnect').addEventListener('click', guard(async () => { applyListing(await post('/api/proxies/disconnect')); toast(P.status.killSwitch ? 'Disconnected — kill switch blocks traffic' : 'Disconnected — traffic goes direct', 'warn'); }));
+$('pKill').addEventListener('change', guard(async (ev) => { applyListing(await post('/api/proxies/kill-switch', { enabled: ev.target.checked })); toast(ev.target.checked ? 'Kill switch on: no direct connections' : 'Kill switch off', ev.target.checked ? 'ok' : 'warn'); }));
+
+const pCountry = (p) => (p.country || p.lastTest?.country || '').toLowerCase();
+const pStatus = (p) => (P.testing.has(p.id) ? 'testing' : !p.lastTest ? 'untested' : p.lastTest.ok ? 'ok' : 'fail');
+function fillSelect(sel, values, allLabel) {
+  const keep = sel.value;
+  append(clear(sel), [h('option', { value: '' }, allLabel), values.map(([v, l]) => h('option', { value: v }, l))]);
+  sel.value = values.some(([v]) => v === keep) ? keep : '';
+}
+function renderPFilters() {
+  const provs = new Map(), countries = new Map(), groups = new Set();
+  for (const p of P.profiles) {
+    provs.set(p.provider, p.providerName);
+    const cc = pCountry(p); if (cc) countries.set(cc, p.countryName || cc.toUpperCase());
+    if (p.group) groups.add(p.group);
+  }
+  fillSelect($('pfProvider'), [...provs].sort((a, b) => a[1].localeCompare(b[1])), 'All providers');
+  fillSelect($('pfCountry'), [...countries].sort((a, b) => a[1].localeCompare(b[1])).map(([c, n]) => [c, `${flag(c)} ${n}`]), 'All countries');
+  fillSelect($('pfGroup'), [...groups].sort().map((g) => [g, g]), 'All groups');
+}
+function pFiltered() {
+  const q = $('pq').value.trim().toLowerCase(), prov = $('pfProvider').value, cc = $('pfCountry').value, st = $('pfStatus').value, grp = $('pfGroup').value;
+  return P.profiles.filter((p) => {
+    if (prov && p.provider !== prov) return false;
+    if (cc && pCountry(p) !== cc) return false;
+    if (grp && p.group !== grp) return false;
+    if (st && pStatus(p) !== st) return false;
+    if (q) {
+      const hay = `${p.name} ${p.host}:${p.port} ${p.group} ${p.providerName} ${p.countryName} ${p.notes} ${p.lastTest?.ip || ''} ${p.lastTest?.org || ''}`.toLowerCase();
+      if (!q.split(/\s+/).every((t) => hay.includes(t))) return false;
+    }
+    return true;
+  });
+}
+for (const id of ['pq', 'pfProvider', 'pfCountry', 'pfStatus', 'pfGroup']) $(id).addEventListener(id === 'pq' ? 'input' : 'change', () => renderPList());
+const PLIST_MAX = 1000;
+function renderPList() {
+  const list = pFiltered();
+  const box = clear($('plist'));
+  $('pCount').textContent = list.length === P.profiles.length ? `${P.profiles.length} proxies` : `${list.length} of ${P.profiles.length}`;
+  const px = P.status;
+  if (!$('pq').value && !$('pfProvider').value && !$('pfCountry').value && !$('pfStatus').value && !$('pfGroup').value) {
+    const isDirect = px?.mode === 'direct';
+    box.append(h('div', { class: `prow direct${isDirect ? ' sel' : ''}` },
+      h('i', { class: `dot ${isDirect ? (px.blocked ? 'err' : 'warn') : ''}` }),
+      h('div', null, h('div', { class: 'title' }, h('b', null, 'Direct'), isDirect ? tag(px.blocked ? 'blocked' : 'active', px.blocked ? 'err' : 'warn') : null),
+        h('div', { class: 'meta' }, h('span', null, px?.killSwitch ? 'Blocked while the kill switch is on' : 'No proxy — your own IP'))),
+      h('div', { class: 'acts' }, isDirect ? null : h('button', { class: 'btn sm', onclick: guard(async (ev) => { ev.stopPropagation(); applyListing(await post('/api/proxies/disconnect')); }) }, 'Use'))));
+  }
+  if (!P.profiles.length) {
+    box.append(h('div', { class: 'empty' }, h('p', null, 'No proxies yet.'), h('p', { class: 'muted' }, 'Add a provider account (Decodo, Oxylabs, IPRoyal, NodeMaven), paste a proxy URL, or import a list.'),
+      h('button', { class: 'btn primary', onclick: () => openPEditor('new') }, '+ Add proxy'), ' ', h('button', { class: 'btn', onclick: openImport }, 'Import list')));
+    return;
+  }
+  if (!list.length) { box.append(h('div', { class: 'empty' }, 'Nothing matches the filter.')); return; }
+  for (const p of list.slice(0, PLIST_MAX)) box.append(pRow(p));
+  if (list.length > PLIST_MAX) box.append(h('div', { class: 'empty' }, `Showing the first ${PLIST_MAX} — refine the filter.`));
+}
+function pRow(p) {
+  const st = pStatus(p), t = p.lastTest;
+  const port = String(p.port || '').replace(/\{RAND:(\d+)-(\d+)\}/i, '$1–$2');
+  const meta = [h('span', { class: 'mono' }, p.host ? `${p.scheme}://${p.host}${port ? `:${port}` : ''}` : '')];
+  const cc = pCountry(p);
+  if (cc && cc !== 'random') meta.push(h('span', null, `${flag(cc)} ${p.countryName || cc.toUpperCase()}`));
+  if (st === 'testing') meta.push(h('span', { class: 'muted' }, 'testing…'));
+  else if (t?.ok) meta.push(h('span', { class: 'mono ok' }, t.ip), h('span', null, `${t.latencyMs} ms`), h('span', { class: 'faint' }, fmtAgo(t.at)));
+  else if (t) meta.push(h('span', { class: 'err', title: t.error }, t.error || 'failed'));
+  const row = h('div', { class: `prow${P.sel === p.id ? ' sel' : ''}`, onclick: () => openPEditor(p.id) },
+    h('i', { class: `dot ${st === 'testing' ? 'busy' : st === 'ok' ? 'ok' : st === 'fail' ? 'err' : ''}`, title: st }),
+    h('div', { style: 'min-width:0' },
+      h('div', { class: 'title' }, h('b', { title: p.name }, p.name), p.active ? tag('connected', 'ok') : null, tag(p.providerName, p.kind === 'provider' ? 'accent' : ''),
+        p.sticky ? tag('sticky') : null, p.group ? tag(p.group) : null),
+      h('div', { class: 'meta' }, meta)),
+    h('div', { class: 'acts' },
+      h('button', { class: 'btn sm', disabled: st === 'testing', title: 'Check IP, geo and latency through this proxy', onclick: (ev) => { ev.stopPropagation(); testProxies([p.id]); } }, 'Test'),
+      p.active ? h('button', { class: 'btn sm', disabled: true }, 'Connected')
+        : h('button', { class: 'btn sm primary', onclick: guard(async (ev) => { ev.stopPropagation(); await connectProxy(p.id); }) }, 'Connect')));
+  return row;
+}
+async function connectProxy(id) {
+  applyListing(await post(`/api/proxies/${id}/connect`));
+  toast(`Connected: ${P.status.active?.name || 'proxy'} — new requests use it`, 'ok');
+  checkEgress(true);
+}
+/** Tests run TEST_PARALLEL at a time from here so each row updates as soon as its own check finishes. */
+const TEST_PARALLEL = 6;
+async function testProxies(ids) {
+  for (const id of ids) P.testing.add(id);
+  renderPList();
+  const results = [];
+  const queue = [...ids];
+  const worker = async () => {
+    for (let id = queue.shift(); id; id = queue.shift()) {
+      try {
+        const r = await post(`/api/proxies/${id}/test`);
+        results.push(r.result);
+        P.testing.delete(id);
+        applyListing(r);
+        if (P.sel === id) { P.result = r.result; renderPResult(); }
+      } catch (e) {
+        results.push({ ok: false, error: e.message });
+        P.testing.delete(id); renderPList();
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(TEST_PARALLEL, ids.length) }, worker));
+  if (ids.length === 1) {
+    const t = results[0];
+    toast(t.ok ? `Works: ${flag(t.country)} ${t.ip} · ${t.latencyMs} ms` : `Failed: ${t.error}`, t.ok ? 'ok' : 'err');
+  } else {
+    const ok = results.filter((x) => x.ok).length;
+    toast(`Tested ${results.length}: ${ok} working, ${results.length - ok} failing`, ok === results.length ? 'ok' : 'warn');
+  }
+}
+$('pAdd').addEventListener('click', () => openPEditor('new'));
+$('pTestAll').addEventListener('click', guard(async () => {
+  const ids = pFiltered().map((p) => p.id);
+  if (!ids.length) { toast('No proxies to test', 'warn'); return; }
+  await busy($('pTestAll'), `Testing ${ids.length}…`, () => testProxies(ids));
+}));
+
+// ── proxy editor ──
+function providerDefaults(meta) {
+  const o = {};
+  for (const f of meta?.optionFields || []) if (f.default !== undefined) o[f.key] = f.default;
+  return o;
+}
+function edFromProfile(p) {
+  const first = P.providers[0];
+  if (!p) {
+    return { id: null, kind: 'provider', provider: first?.id || '', name: '', group: '', notes: '', username: '', password: '', hasPassword: false,
+      country: first?.countries[0]?.code || '', sessionMode: first?.session?.sticky ? 'sticky' : 'rotating', durationMin: first?.duration?.default || null,
+      options: providerDefaults(first), template: '', vars: {} };
+  }
+  const meta = P.byId.get(p.provider);
+  return { id: p.id, kind: p.kind, provider: p.kind === 'provider' ? p.provider : (first?.id || ''), name: p.name, group: p.group, notes: p.notes,
+    username: p.username, password: '', hasPassword: p.hasPassword, country: p.kind === 'provider' ? p.country : (first?.countries[0]?.code || ''),
+    sessionMode: p.kind === 'provider' ? p.sessionMode : 'rotating', durationMin: p.durationMin ?? meta?.duration?.default ?? null,
+    options: { ...providerDefaults(meta), ...(p.options || {}) }, template: p.template || '', vars: { ...(p.vars || {}) } };
+}
+const edPayload = (ed) => ({ kind: ed.kind, provider: ed.provider, name: ed.name, group: ed.group, notes: ed.notes, username: ed.username, password: ed.password,
+  country: ed.country, sessionMode: ed.sessionMode, durationMin: ed.durationMin, options: ed.options, template: ed.template, vars: ed.vars });
+const edDirty = () => P.ed && JSON.stringify(edPayload(P.ed)) !== P.edInit;
+async function openPEditor(id) {
+  if (edDirty() && P.sel !== id && !(await confirmBox('Discard unsaved changes to this proxy?', 'Discard', true))) return;
+  P.sel = id;
+  P.ed = edFromProfile(id === 'new' ? null : P.profiles.find((p) => p.id === id));
+  P.edInit = JSON.stringify(edPayload(P.ed));
+  P.result = id === 'new' ? null : P.profiles.find((p) => p.id === id)?.lastTest || null;
+  renderPList(); renderPEditor();
+}
+const tplVars = (t) => [...new Set([...String(t || '').matchAll(/\{([A-Z_][A-Z0-9_]*)\}/gi)].map((m) => m[1].toUpperCase()))].filter((v) => v !== 'PASSWORD' && v !== 'SID');
+function field(label, control, hint, top = false) {
+  const out = [h('label', { class: top ? 'top' : '' }, label), control];
+  if (hint) out.push(h('div', { class: 'hint' }, hint));
+  return out;
+}
+function renderPEditor() {
+  const box = clear($('pEditor'));
+  const ed = P.ed;
+  if (!P.sel || !ed) {
+    box.append(h('div', { class: 'empty' },
+      h('p', null, h('b', null, 'Pick a proxy to edit it, or add a new one.')),
+      h('p', { class: 'muted' }, 'Proxies apply to all traffic of the proxied Chrome. Passwords are stored encrypted in the data dir and never shown again.'),
+      h('button', { class: 'btn primary', onclick: () => openPEditor('new') }, '+ Add proxy'), ' ',
+      h('button', { class: 'btn', onclick: openImport }, 'Import list')));
+    return;
+  }
+  const prof = ed.id ? P.profiles.find((p) => p.id === ed.id) : null;
+  const meta = P.byId.get(ed.provider);
+  const changed = () => { schedulePreview(); markDirty(); };
+  const rerender = () => { renderPEditor(); schedulePreview(); };
+
+  box.append(h('div', { class: 'edit-head' }, h('h2', { class: 'ell' }, ed.id ? (prof?.name || 'Proxy') : 'New proxy'),
+    prof?.active ? tag('connected', 'ok') : null,
+    ed.id ? h('button', { class: 'btn sm', onclick: guard(async () => { const r = await post(`/api/proxies/${ed.id}/duplicate`); P.ed = null; applyListing(r); openPEditor(r.profile.id); toast('Duplicated', 'ok'); }) }, 'Duplicate') : null,
+    ed.id ? h('button', { class: 'btn sm danger', onclick: guard(async () => {
+      if (!(await confirmBox(`Delete proxy "${prof?.name}"?${prof?.active ? ' It is connected — traffic will go direct.' : ''}`, 'Delete', true))) return;
+      const r = await del(`/api/proxies/${ed.id}`); P.sel = null; P.ed = null; applyListing(r); toast('Deleted', 'ok');
+    }) }, 'Delete') : null));
+
+  const form = h('div', { class: 'form' });
+  form.append(...field('Type', seg([['provider', 'Provider account'], ['custom', 'Proxy URL']], ed.kind, (v) => { ed.kind = v; rerender(); markDirty(); })));
+
+  if (ed.kind === 'provider') {
+    const provSel = h('select', { onchange: (ev) => {
+      ed.provider = ev.target.value; const m = P.byId.get(ed.provider);
+      ed.country = m?.countries[0]?.code || ''; ed.options = providerDefaults(m); ed.durationMin = m?.duration?.default || null;
+      if (m && !m.session?.[ed.sessionMode]) ed.sessionMode = m.session?.rotating ? 'rotating' : 'sticky';
+      rerender(); markDirty();
+    } }, P.providers.map((p) => h('option', { value: p.id, selected: p.id === ed.provider }, `${p.name} · ${p.type}`)));
+    form.append(...field('Provider', provSel));
+    form.append(...field('Username', h('input', { value: ed.username, placeholder: 'Account username (without user- / country prefixes)', spellcheck: false, autocomplete: 'off', oninput: (ev) => { ed.username = ev.target.value; changed(); } })));
+    form.append(...field('Password', h('input', { type: 'password', value: ed.password, autocomplete: 'new-password', placeholder: ed.hasPassword ? '•••••• saved — type to replace' : 'Account password', oninput: (ev) => { ed.password = ev.target.value; changed(); } })));
+    const regions = new Map();
+    for (const c of meta?.countries || []) { const r = c.region || 'Other'; if (!regions.has(r)) regions.set(r, []); regions.get(r).push(c); }
+    const cSel = h('select', { onchange: (ev) => { ed.country = ev.target.value; changed(); } },
+      [...regions].map(([r, cs]) => h('optgroup', { label: r }, cs.map((c) => h('option', { value: c.code, selected: c.code === ed.country }, `${flag(c.code)} ${c.name}`)))));
+    form.append(...field('Country', cSel));
+    const modes = [];
+    if (meta?.session?.rotating !== false) modes.push(['rotating', 'Rotating']);
+    if (meta?.session?.sticky) modes.push(['sticky', 'Sticky']);
+    const sessHint = ed.sessionMode === 'sticky' ? 'Same exit IP for the session length; New IP starts a fresh session.' : 'A new exit IP for every connection.';
+    form.append(...field('Session', seg(modes, ed.sessionMode, (v) => { ed.sessionMode = v; rerender(); markDirty(); }), sessHint));
+    if (ed.sessionMode === 'sticky' && meta?.duration?.supported) {
+      const d = meta.duration;
+      form.append(...field('Session length', h('div', { class: 'inline' },
+        h('input', { type: 'number', min: d.min, max: d.max, value: ed.durationMin ?? d.default, oninput: (ev) => { ed.durationMin = Number(ev.target.value) || d.default; changed(); } }),
+        h('span', { class: 'muted' }, `${d.unit || 'min'} (${d.min}–${d.max})`))));
+    }
+    for (const f of meta?.optionFields || []) {
+      const val = ed.options[f.key];
+      let ctl;
+      if (f.type === 'select') ctl = h('select', { onchange: (ev) => { ed.options[f.key] = ev.target.value; changed(); } }, (f.choices || []).map((c) => h('option', { value: c.value, selected: String(c.value) === String(val ?? '') }, c.label)));
+      else if (f.type === 'checkbox') ctl = h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!val, onchange: (ev) => { ed.options[f.key] = ev.target.checked; changed(); } }), f.hint || '');
+      else ctl = h('input', { value: val ?? '', placeholder: f.placeholder || (f.optional ? 'optional' : ''), oninput: (ev) => { ed.options[f.key] = ev.target.value; changed(); } });
+      form.append(...field(f.label || f.key, ctl, f.type === 'checkbox' ? null : f.hint));
+    }
+  } else {
+    form.append(...field('Proxy URL', h('input', { class: 'mono', value: ed.template, spellcheck: false, autocomplete: 'off', placeholder: 'socks5://user:pass@host:1080 · http://host:8080 · host:port:user:pass',
+      oninput: (ev) => { ed.template = ev.target.value; changed(); debounce('vars', 400, () => { if (JSON.stringify(tplVars(ed.template)) !== box.dataset.vars) rerender(); }); } }),
+      h('span', null, 'http, https, socks4, socks5, socks5h. Placeholders: ', h('code', null, '{SID}'), ' sticky session, ', h('code', null, '{RAND:1000-9999}'), ', ', h('code', null, '{PASSWORD}'), ', any ', h('code', null, '{VAR}'), '. A password typed in the URL is moved to encrypted storage.')));
+    if (/\{PASSWORD\}/i.test(ed.template) || ed.hasPassword) {
+      form.append(...field('Password', h('input', { type: 'password', value: ed.password, autocomplete: 'new-password', placeholder: ed.hasPassword ? '•••••• saved — type to replace' : 'Fills {PASSWORD}', oninput: (ev) => { ed.password = ev.target.value; changed(); } })));
+    }
+    const vars = tplVars(ed.template);
+    box.dataset.vars = JSON.stringify(vars);
+    for (const v of vars) {
+      form.append(...field(`{${v}}`, h('input', { class: 'mono', value: ed.vars[v] ?? '', placeholder: `Value for {${v}}`, oninput: (ev) => { ed.vars[v] = ev.target.value; changed(); } })));
+    }
+  }
+  const groups = [...new Set(P.profiles.map((p) => p.group).filter(Boolean))];
+  form.append(h('datalist', { id: 'pGroups' }, groups.map((g) => h('option', { value: g }))));
+  form.append(...field('Name', h('input', { value: ed.name, placeholder: 'Auto (provider · country · mode)', oninput: (ev) => { ed.name = ev.target.value; markDirty(); } })));
+  form.append(...field('Group', h('input', { value: ed.group, list: 'pGroups', placeholder: 'e.g. US residential', oninput: (ev) => { ed.group = ev.target.value; markDirty(); } })));
+  form.append(...field('Notes', h('textarea', { rows: 2, value: ed.notes, oninput: (ev) => { ed.notes = ev.target.value; markDirty(); } }), null, true));
+  form.append(...field('Connects as', h('div', { id: 'pPreview', class: 'preview-url' }, P.preview || '…')));
+  box.append(form);
+
+  const saveBtn = h('button', { class: 'btn', id: 'pSave', onclick: guard(() => busy(saveBtn, 'Saving…', () => saveProxy(false))) }, 'Save');
+  const connBtn = h('button', { class: 'btn primary', onclick: guard(() => busy(connBtn, 'Connecting…', () => saveProxy(true))) }, prof?.active ? 'Save & reconnect' : 'Save & connect');
+  const testBtn = h('button', { class: 'btn', onclick: guard(() => busy(testBtn, 'Testing…', async () => { const id = edDirty() || !ed.id ? await saveProxy(false) : ed.id; if (id) await testProxies([id]); })) }, 'Test');
+  const newIp = ed.id && prof?.sticky ? h('button', { class: 'btn', title: 'Re-roll the sticky session', onclick: guard(async () => { applyListing(await post(`/api/proxies/${ed.id}/new-ip`)); toast('New session id', 'ok'); if (prof.active) checkEgress(true); schedulePreview(); }) }, 'New IP') : null;
+  box.append(h('div', { class: 'row-end', style: 'justify-content:flex-start' }, connBtn, saveBtn, testBtn, newIp, h('span', { id: 'pDirty', class: 'muted', hidden: true }, 'unsaved changes')));
+  box.append(h('div', { id: 'pResult' }));
+  renderPResult(); markDirty(); schedulePreview(0);
+}
+function markDirty() { const d = $('pDirty'); if (d) d.hidden = !edDirty(); }
+function renderPResult() {
+  const box = $('pResult'); if (!box) return;
+  clear(box);
+  const t = P.result; if (!t) return;
+  if (t.ok) {
+    box.append(h('div', { class: 'result ok' }, h('b', null, `${flag(t.country)} ${t.ip}`), ' · ', geoText(t), t.org ? ` · ${t.org}` : '', ` · ${t.latencyMs} ms`, t.timezone ? ` · ${t.timezone}` : '', h('span', { class: 'faint' }, ` · tested ${fmtAgo(t.at)}`)));
+  } else box.append(h('div', { class: 'result err' }, h('b', null, 'Test failed: '), t.error || 'unknown error', t.at ? h('span', { class: 'faint' }, ` · ${fmtAgo(t.at)}`) : null));
+}
+function schedulePreview(ms = 350) {
+  debounce('pPreview', ms, async () => {
+    const ed = P.ed; const el = $('pPreview'); if (!ed || !el) return;
+    try {
+      const r = await post('/api/proxies/preview', { profile: edPayload(ed), id: ed.id });
+      P.preview = r.display; el.textContent = r.display; el.className = 'preview-url';
+    } catch (e) { el.textContent = e.message; el.className = 'preview-url err'; }
+  });
+}
+async function saveProxy(andConnect) {
+  const ed = P.ed;
+  const r = ed.id ? await put(`/api/proxies/${ed.id}`, edPayload(ed)) : await post('/api/proxies', edPayload(ed));
+  const id = r.profile.id;
+  P.sel = id; P.ed = null; applyListing(r);
+  P.ed = edFromProfile(r.profile); P.edInit = JSON.stringify(edPayload(P.ed));
+  renderPList(); renderPEditor();
+  if (andConnect) await connectProxy(id);
+  else toast('Saved', 'ok');
+  return id;
+}
+
+// ── bulk import ──
+function openImport() {
+  const ta = h('textarea', { class: 'code', spellcheck: false, placeholder: 'One proxy per line:\nhost:port\nhost:port:user:pass\nuser:pass@host:port\nsocks5://user:pass@host:1080' });
+  const group = h('input', { placeholder: 'Group (optional)' });
+  const prefix = h('input', { placeholder: 'Name prefix (optional)' });
+  const out = h('div');
+  const preview = async () => {
+    const r = await post('/api/proxies/import', { text: ta.value, group: group.value, namePrefix: prefix.value, dryRun: true });
+    clear(out).append(h('p', null, h('b', null, `${r.added.length} new`), ` · ${r.duplicates} duplicates · ${r.errors.length} errors · ${r.total} lines`));
+    if (r.added.length) out.append(h('pre', { class: 'codebox', style: 'max-height:180px' }, r.added.slice(0, 50).map((a) => `${a.name}  ${a.display}`).join('\n') + (r.added.length > 50 ? `\n… ${r.added.length - 50} more` : '')));
+    if (r.errors.length) out.append(h('pre', { class: 'codebox err', style: 'max-height:120px' }, r.errors.slice(0, 50).map((e) => `line ${e.line}: ${e.reason}`).join('\n')));
+    return r;
+  };
+  ta.addEventListener('input', () => debounce('imp', 500, guard(preview)));
+  modal('Import proxies', h('div', null, ta, h('div', { class: 'toolbar sub', style: 'padding:8px 0' }, group, prefix), out), [
+    { label: 'Cancel' },
+    { label: 'Import', cls: 'primary', fn: async () => {
+      const r = await post('/api/proxies/import', { text: ta.value, group: group.value, namePrefix: prefix.value });
+      applyListing(r);
+      toast(`Imported ${r.added.length} proxies${r.duplicates ? ` · ${r.duplicates} duplicates skipped` : ''}${r.errors.length ? ` · ${r.errors.length} bad lines` : ''}`, r.added.length ? 'ok' : 'warn');
+      if (r.added.length && await confirmBox(`Test the ${r.added.length} imported proxies now?`, 'Test')) testProxies(r.added.map((a) => a.id));
+      return true;
+    } },
+  ]);
+}
+$('pImport').addEventListener('click', openImport);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Header table (Repeater, Breakpoints)
+// ─────────────────────────────────────────────────────────────────────────────
+function headerTable(rows, onChange = () => {}) {
+  const box = h('div');
+  let bulk = false;
+  const paint = () => {
+    clear(box);
+    const bar = h('div', { class: 'bodybar' }, h('span', { class: 'muted' }, `${rows.filter((r) => r[2] !== false && r[0]).length} headers`), h('span', { class: 'spacer' }),
+      h('button', { class: 'btn sm', onclick: () => { bulk = !bulk; paint(); } }, bulk ? 'Table' : 'Bulk edit'));
+    box.append(bar);
+    if (bulk) {
+      const ta = h('textarea', { class: 'code', spellcheck: false, value: rows.map(([k, v, on]) => `${on === false ? '# ' : ''}${k}: ${v}`).join('\n'),
+        oninput: () => {
+          rows.length = 0;
+          for (const line of ta.value.split('\n')) {
+            const off = /^\s*(#|\/\/)/.test(line); const l = line.replace(/^\s*(#|\/\/)\s?/, '');
+            const i = l.indexOf(':', l.startsWith(':') ? 1 : 0);
+            if (i > 0) rows.push([l.slice(0, i).trim(), l.slice(i + 1).trim(), !off]);
+          }
+          onChange();
+        } });
+      box.append(ta, h('div', { class: 'hint muted' }, 'One "Name: value" per line; # disables a line.'));
+      return;
+    }
+    const tb = h('tbody');
+    rows.forEach((r, i) => {
+      tb.append(h('tr', { class: r[2] === false ? 'off' : '' },
+        h('td', null, h('input', { type: 'checkbox', checked: r[2] !== false, onchange: (ev) => { r[2] = ev.target.checked; ev.target.closest('tr').className = r[2] ? '' : 'off'; onChange(); } })),
+        h('td', null, h('input', { type: 'text', value: r[0], placeholder: 'Name', spellcheck: false, oninput: (ev) => { r[0] = ev.target.value; onChange(); } })),
+        h('td', null, h('input', { type: 'text', value: r[1], placeholder: 'Value', spellcheck: false, oninput: (ev) => { r[1] = ev.target.value; onChange(); } })),
+        h('td', null, h('button', { class: 'icon', title: 'Remove', onclick: () => { rows.splice(i, 1); paint(); onChange(); } }, '✕'))));
+    });
+    box.append(h('table', { class: 'htable' }, tb), h('button', { class: 'btn sm ghost', onclick: () => { rows.push(['', '', true]); paint(); box.querySelector('tr:last-child input[type=text]')?.focus(); } }, '+ Add header'));
+  };
+  paint();
+  return box;
+}
+const enabledPairs = (rows) => rows.filter((r) => r[2] !== false && String(r[0]).trim()).map(([k, v]) => [String(k).trim(), String(v)]);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Repeater
+// ─────────────────────────────────────────────────────────────────────────────
+const RP = { rows: [['Accept', '*/*', true]], tab: 'headers', respTab: 'body', last: null };
+function rpLoad({ method, url, headers, body }) {
+  $('rpMethod').value = [...$('rpMethod').options].some((o) => o.value === method) ? method : 'GET';
+  $('rpUrl').value = url || '';
+  RP.rows = (headers || []).map(([k, v]) => [k, v, true]);
+  $('rpBody').value = body || '';
+  renderRpHeaders(); renderRpCode();
+  if (body) rpShowTab('body');
+}
+function renderRpHeaders() { clear($('rpHeaders')).append(headerTable(RP.rows, () => debounce('rpcode', 300, renderRpCode))); }
+function rpShowTab(t) {
+  RP.tab = t;
+  document.querySelectorAll('#rpTabs button').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
+  $('rpHeaders').hidden = t !== 'headers'; $('rpBodyWrap').hidden = t !== 'body'; $('rpCodeWrap').hidden = t !== 'code';
+  if (t === 'code') renderRpCode();
+}
+document.querySelectorAll('#rpTabs button').forEach((b) => b.addEventListener('click', () => rpShowTab(b.dataset.t)));
+function rpRequest() { return { method: $('rpMethod').value, url: $('rpUrl').value.trim(), headers: enabledPairs(RP.rows), body: $('rpBody').value }; }
+function renderRpCode() {
+  if (!window.CupNetCodegen) { $('rpCode').textContent = 'Code generator did not load.'; return; }
+  const r = rpRequest();
+  $('rpCode').textContent = window.CupNetCodegen.generateRequestCode($('rpLang').value, { ...r, headers: Object.fromEntries(r.headers) });
+}
+$('rpLang').addEventListener('change', renderRpCode);
+for (const id of ['rpUrl', 'rpBody']) $(id).addEventListener('input', () => debounce('rpcode', 300, renderRpCode));
+$('rpMethod').addEventListener('change', renderRpCode);
+$('rpCopyCode').addEventListener('click', () => copy($('rpCode').textContent, 'Code copied'));
+$('rpCurl').addEventListener('click', () => {
+  const ta = h('textarea', { class: 'code', spellcheck: false, placeholder: "curl 'https://example.com/api' -H 'Accept: application/json' --data-raw '{…}'" });
+  modal('Import curl', ta, [{ label: 'Cancel' }, { label: 'Import', cls: 'primary', fn: () => {
+    const r = window.CupNetParseCurl ? window.CupNetParseCurl(ta.value) : null;
+    if (!r || !r.url) throw new Error('Could not parse that curl command');
+    rpLoad({ method: r.method, url: r.url, headers: pairsOf(r.headers), body: r.body || '' });
+    toast('Imported', 'ok');
+  } }]);
+});
+async function rpSend() {
+  const r = rpRequest();
+  if (!/^https?:\/\//i.test(r.url)) { toast('Enter an http(s) URL', 'warn'); $('rpUrl').focus(); return; }
+  const head = clear($('rpRespHead'));
+  head.append(h('i', { class: 'dot busy' }), h('span', { class: 'muted' }, ` ${r.method} ${r.url}`));
+  $('rpRespTabs').hidden = true; clear($('rpResp'));
+  const res = await busy($('rpSend'), 'Sending…', () => post('/api/replay', { ...r, followRedirects: $('rpFollow').checked }));
+  RP.last = res.seq ? await api(`/api/log/${res.seq}`).catch(() => null) : null;
+  renderRpResponse(res);
+}
+function renderRpResponse(res) {
+  const head = clear($('rpRespHead'));
+  if (res.error && !res.status) {
+    head.append(badge('failed', 'sf'), ' ', h('span', { class: 'err' }, res.error));
+    return;
+  }
+  const e = RP.last;
+  append(head, [badge(res.status || 'ERR', stCls(res.status)), h('span', { class: 'mono' }, `${res.duration} ms`), e ? h('span', { class: 'muted' }, fmtSize(e.resSize) || '0 B') : null,
+    h('span', { class: 'spacer' }), res.seq ? h('button', { class: 'btn sm', title: 'Show in Traffic (live session)', onclick: () => { if (shown) openSession(current); go('traffic'); setTimeout(() => select(res.seq), 50); } }, `#${res.seq} in Traffic`) : null]);
+  if (res.error) head.append(h('span', { class: 'err' }, res.error));
+  $('rpRespTabs').hidden = !e;
+  renderRpRespTab();
+}
+function renderRpRespTab() {
+  document.querySelectorAll('#rpRespTabs button').forEach((b) => b.classList.toggle('on', b.dataset.t === RP.respTab));
+  const box = clear($('rpResp')); const e = RP.last; if (!e) return;
+  if (RP.respTab === 'headers') box.append(kvGrid(pairsOf(e.responseHeaders)));
+  else box.append(bodyView(e, 'response', ''));
+}
+document.querySelectorAll('#rpRespTabs button').forEach((b) => b.addEventListener('click', () => { RP.respTab = b.dataset.t; renderRpRespTab(); }));
+$('rpSend').addEventListener('click', guard(rpSend));
+$('rpUrl').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') guard(rpSend)(); });
+document.addEventListener('keydown', (ev) => { if (PAGE === 'repeater' && ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); guard(rpSend)(); } });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rules
+// ─────────────────────────────────────────────────────────────────────────────
+const RULE_TYPES = [
+  ['inject', 'Inject JS into HTML', 'Adds your script to matching HTML pages (in <head> before the page scripts, or at the end of <body>).'],
+  ['mock', 'Mock response', 'Answers with your status and body; the request never reaches the site.'],
+  ['block', 'Block', 'Fails the request; nothing is sent.'],
+  ['modifyHeaders', 'Modify headers', 'Sets or removes request headers before sending and response headers before Chrome sees them.'],
+  ['script', 'Script hooks', 'JS that edits the request before sending (ctx.url, ctx.method, ctx.headers, ctx.body, ctx.shortCircuit) and the response after (ctx.request, ctx.response.statusCode / headers / body).'],
+  ['pause', 'Pause only (breakpoint)', 'Holds matching requests in Breakpoints so you can edit, forward or block them.'],
+];
+const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'];
+const R = { rules: [], sel: null, ed: null, edInit: '' };
+const isEmptyHeaderParams = (p) => !Object.keys(p.requestHeaders || {}).length && !(p.removeRequestHeaders || []).length && !Object.keys(p.responseHeaders || {}).length && !(p.removeResponseHeaders || []).length;
+const uiType = (r) => (r.type === 'modifyHeaders' && r.breakpoint_enabled && isEmptyHeaderParams(r.params || {}) ? 'pause' : r.type);
+const RULE_TEMPLATES = {
+  inject: () => ({ position: 'head', source: "// Runs in the page before its own scripts.\n// Report to the CupNet log: navigator.sendBeacon('/__cupnet/event', JSON.stringify({ hello: 1 }))\nconsole.log('[cupnet] injected into', location.href);\n" }),
+  mock: () => ({ status: 200, mimeType: 'application/json', body: '{"ok":true}' }),
+  block: () => ({}),
+  modifyHeaders: () => ({ requestHeaders: {}, removeRequestHeaders: [], responseHeaders: {}, removeResponseHeaders: [] }),
+  script: () => ({ beforeSource: '// ctx.headers["x-example"] = "1";\n', afterSource: '' }),
+  pause: () => ({}),
+};
+function edFromRule(r) {
+  if (!r) return { id: null, name: '', type: 'inject', url_pattern: '', methods: [], priority: 0, delay_ms: 0, stop_on_match: true, breakpoint_enabled: false, group_name: '', enabled: true, params: RULE_TEMPLATES.inject(), matchHeaders: [], matchBody: { mode: '', value: '' } };
+  const p = JSON.parse(JSON.stringify(r.params || {}));
+  const mh = Array.isArray(p.matchHeaders) ? p.matchHeaders : []; delete p.matchHeaders;
+  const mb = p.matchBody && p.matchBody.mode ? p.matchBody : { mode: '', value: '' }; delete p.matchBody;
+  return { id: r.id, name: r.name, type: uiType(r), url_pattern: r.url_pattern, methods: r.method && r.method !== '*' ? r.method.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean) : [],
+    priority: r.priority || 0, delay_ms: r.delay_ms || 0, stop_on_match: r.stop_on_match !== false, breakpoint_enabled: !!r.breakpoint_enabled, group_name: r.group_name || '', enabled: r.enabled !== false,
+    params: p, matchHeaders: mh, matchBody: mb };
+}
+function ruleRow(ed) {
+  const params = ed.type === 'pause' ? {} : { ...ed.params };
+  const mh = ed.matchHeaders.filter((m) => m.key);
+  if (mh.length) params.matchHeaders = mh;
+  if (ed.matchBody.mode && ed.matchBody.value) params.matchBody = ed.matchBody;
+  return { ...(ed.id != null ? { id: ed.id } : {}), name: ed.name.trim(), type: ed.type === 'pause' ? 'modifyHeaders' : ed.type, url_pattern: ed.url_pattern.trim(), params,
+    method: ed.methods.length ? ed.methods.join(',') : '*', priority: Number(ed.priority) || 0, delay_ms: Number(ed.delay_ms) || 0, stop_on_match: ed.stop_on_match,
+    breakpoint_enabled: ed.type === 'pause' ? true : ed.breakpoint_enabled, group_name: ed.group_name.trim() || null, enabled: ed.enabled };
+}
+const rDirty = () => R.ed && JSON.stringify(ruleRow(R.ed)) !== R.edInit;
+async function loadRules() {
+  R.rules = await api('/api/rules');
+  if (R.sel != null && R.sel !== 'new' && !R.rules.some((r) => r.id === R.sel)) { R.sel = null; R.ed = null; }
+  if (R.sel != null && !R.ed) { R.ed = edFromRule(R.sel === 'new' ? null : R.rules.find((r) => r.id === R.sel)); R.edInit = JSON.stringify(ruleRow(R.ed)); }
+  renderRList(); renderREditor();
+}
+$('rq').addEventListener('input', () => renderRList());
+function renderRList() {
+  const q = $('rq').value.trim().toLowerCase();
+  const list = R.rules.filter((r) => !q || `${r.name} ${r.url_pattern} ${r.type} ${r.group_name || ''}`.toLowerCase().includes(q));
+  const box = clear($('rlist'));
+  if (!R.rules.length) {
+    box.append(h('div', { class: 'empty' }, h('p', null, 'No rules yet.'), h('p', { class: 'muted' }, 'Rules inject JS into pages, mock or block requests, rewrite headers and pause requests for editing.'),
+      h('button', { class: 'btn primary', onclick: () => openRule('new') }, '+ New rule')));
+    return;
+  }
+  for (const r of list) {
+    const t = uiType(r);
+    box.append(h('div', { class: `prow${R.sel === r.id ? ' sel' : ''}${r.enabled ? '' : ' off'}`, onclick: () => openRule(r.id) },
+      h('input', { type: 'checkbox', checked: !!r.enabled, title: r.enabled ? 'Enabled' : 'Disabled', onclick: (ev) => ev.stopPropagation(),
+        onchange: guard(async (ev) => { await post(`/api/rules/${r.id}/enabled`, { enabled: ev.target.checked }); r.enabled = ev.target.checked; renderRList(); }) }),
+      h('div', { style: 'min-width:0' },
+        h('div', { class: 'title' }, h('b', { title: r.name }, r.name), tag((RULE_TYPES.find((x) => x[0] === t) || [, t])[1], t === 'pause' ? 'warn' : 'accent'),
+          r.breakpoint_enabled && t !== 'pause' ? tag('pause', 'warn') : null, r.method && r.method !== '*' ? tag(r.method) : null, r.group_name ? tag(r.group_name) : null),
+        h('div', { class: 'meta' }, h('span', { class: 'mono', title: r.url_pattern }, r.url_pattern), r.last_error ? h('span', { class: 'err', title: r.last_error }, r.last_error) : null)),
+      h('div', { class: 'acts muted mono', title: r.last_hit_at ? `last hit ${new Date(r.last_hit_at).toLocaleString()}` : 'never matched' }, `${r.hit_count || 0} hits`)));
+  }
+  if (!list.length) box.append(h('div', { class: 'empty' }, 'Nothing matches.'));
+}
+async function openRule(id) {
+  if (rDirty() && R.sel !== id && !(await confirmBox('Discard unsaved changes to this rule?', 'Discard', true))) return;
+  R.sel = id;
+  R.ed = edFromRule(id === 'new' ? null : R.rules.find((r) => r.id === id));
+  R.edInit = JSON.stringify(ruleRow(R.ed));
+  renderRList(); renderREditor();
+}
+$('rNew').addEventListener('click', () => openRule('new'));
+function kvObjEditor(obj, onChange) {
+  const rows = Object.entries(obj || {}).map(([k, v]) => [k, String(v), true]);
+  const sync = () => { for (const k of Object.keys(obj)) delete obj[k]; for (const [k, v] of enabledPairs(rows)) obj[k] = v; onChange(); };
+  return headerTable(rows, sync);
+}
+function listEditor(arr, onChange, placeholder) {
+  return h('textarea', { class: 'mono', rows: 2, spellcheck: false, placeholder, value: (arr || []).join('\n'),
+    oninput: (ev) => { arr.length = 0; arr.push(...ev.target.value.split(/[\n,]/).map((s) => s.trim()).filter(Boolean)); onChange(); } });
+}
+function renderREditor() {
+  const box = clear($('rEditor'));
+  const ed = R.ed;
+  if (R.sel == null || !ed) {
+    box.append(h('div', { class: 'empty' }, h('p', null, h('b', null, 'Pick a rule to edit it, or create one.')),
+      h('p', { class: 'muted' }, 'Rules run in the MITM for every matching request of the proxied Chrome. Higher priority runs first.'),
+      h('button', { class: 'btn primary', onclick: () => openRule('new') }, '+ New rule')));
+    return;
+  }
+  const changed = () => { const d = $('rDirty'); if (d) d.hidden = !rDirty(); };
+  const p = ed.params;
+  box.append(h('div', { class: 'edit-head' }, h('h2', { class: 'ell' }, ed.id != null ? ed.name || 'Rule' : 'New rule'),
+    ed.id != null ? h('button', { class: 'btn sm', onclick: guard(async () => { const row = ruleRow(ed); delete row.id; row.name = `${row.name} (copy)`; const { id } = await post('/api/rules', row); R.sel = id; R.ed = null; await loadRules(); toast('Duplicated', 'ok'); }) }, 'Duplicate') : null,
+    ed.id != null ? h('button', { class: 'btn sm danger', onclick: guard(async () => { if (!(await confirmBox(`Delete rule "${ed.name}"?`, 'Delete', true))) return; await del(`/api/rules/${ed.id}`); R.sel = null; R.ed = null; await loadRules(); toast('Deleted', 'ok'); }) }, 'Delete') : null));
+
+  const form = h('div', { class: 'form' });
+  form.append(...field('Enabled', sw(ed.enabled, '', (v) => { ed.enabled = v; changed(); })));
+  form.append(...field('Name', h('input', { value: ed.name, placeholder: 'What this rule does', oninput: (ev) => { ed.name = ev.target.value; changed(); } })));
+  const typeSel = h('select', { onchange: (ev) => { ed.type = ev.target.value; ed.params = RULE_TEMPLATES[ed.type](); renderREditor(); changed(); } },
+    RULE_TYPES.map(([v, l]) => h('option', { value: v, selected: v === ed.type }, l)));
+  form.append(...field('Action', typeSel, (RULE_TYPES.find((t) => t[0] === ed.type) || [])[2]));
+  form.append(...field('URL pattern', h('input', { class: 'mono', value: ed.url_pattern, spellcheck: false, placeholder: 'https://example.com/api/  ·  *://*.example.com/*  ·  *',
+    oninput: (ev) => { ed.url_pattern = ev.target.value; changed(); } }), 'A URL without * matches that origin and path prefix (query ignored). * is a wildcard over the whole URL.'));
+  const mBox = h('div', { class: 'inline' });
+  const paintMethods = () => {
+    append(clear(mBox), [h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !ed.methods.length, onchange: () => { ed.methods = []; paintMethods(); changed(); } }), 'Any'),
+      METHODS.map((m) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: ed.methods.includes(m), onchange: (ev) => {
+        ed.methods = ev.target.checked ? [...ed.methods, m] : ed.methods.filter((x) => x !== m); paintMethods(); changed();
+      } }), h('span', { class: `m m-${m}` }, m)))]);
+  };
+  paintMethods();
+  form.append(...field('Methods', mBox));
+
+  // ── action-specific ──
+  if (ed.type === 'inject') {
+    form.append(...field('Position', seg([['head', 'Start of <head>'], ['body-end', 'End of <body>']], p.position || 'head', (v) => { p.position = v; renderREditor(); changed(); })));
+    form.append(...field('Script', h('textarea', { class: 'code', spellcheck: false, value: p.source || '', oninput: (ev) => { p.source = ev.target.value; changed(); } }), null, true));
+  } else if (ed.type === 'mock') {
+    form.append(...field('Status', h('input', { type: 'number', min: 100, max: 599, value: p.status ?? 200, oninput: (ev) => { p.status = Number(ev.target.value) || 200; changed(); } })));
+    form.append(h('datalist', { id: 'mimes' }, ['application/json', 'text/html; charset=utf-8', 'text/plain; charset=utf-8', 'application/javascript', 'text/css', 'image/svg+xml'].map((m) => h('option', { value: m }))));
+    form.append(...field('Content-Type', h('input', { class: 'mono', list: 'mimes', value: p.mimeType || '', oninput: (ev) => { p.mimeType = ev.target.value; changed(); } })));
+    form.append(...field('Body', h('textarea', { class: 'code', spellcheck: false, value: p.body || '', oninput: (ev) => { p.body = ev.target.value; changed(); } }), null, true));
+  } else if (ed.type === 'modifyHeaders') {
+    for (const k of ['requestHeaders', 'responseHeaders']) p[k] = p[k] || {};
+    for (const k of ['removeRequestHeaders', 'removeResponseHeaders']) p[k] = p[k] || [];
+    form.append(...field('Set on request', kvObjEditor(p.requestHeaders, changed), null, true));
+    form.append(...field('Remove from request', listEditor(p.removeRequestHeaders, changed, 'One header name per line'), null, true));
+    form.append(...field('Set on response', kvObjEditor(p.responseHeaders, changed), null, true));
+    form.append(...field('Remove from response', listEditor(p.removeResponseHeaders, changed, 'e.g. content-security-policy'), null, true));
+  } else if (ed.type === 'script') {
+    form.append(...field('Before request', h('textarea', { class: 'code short', spellcheck: false, value: p.beforeSource || '', oninput: (ev) => { p.beforeSource = ev.target.value; changed(); } }), 'ctx.url, ctx.method, ctx.headers, ctx.body; set ctx.shortCircuit = { statusCode, headers, body } to answer without the network.', true));
+    form.append(...field('After response', h('textarea', { class: 'code short', spellcheck: false, value: p.afterSource || '', oninput: (ev) => { p.afterSource = ev.target.value; changed(); } }), 'ctx.request, ctx.response.statusCode, ctx.response.headers, ctx.response.bodyBase64 (or set ctx.response.body).', true));
+  }
+
+  // ── conditions + behaviour ──
+  const mhBox = h('div');
+  const paintMh = () => {
+    clear(mhBox);
+    ed.matchHeaders.forEach((m, i) => {
+      mhBox.append(h('div', { class: 'inline', style: 'margin-bottom:4px' },
+        h('input', { class: 'mono', value: m.key || '', placeholder: 'header', style: 'width:150px', oninput: (ev) => { m.key = ev.target.value; changed(); } }),
+        h('select', { onchange: (ev) => { m.op = ev.target.value; paintMh(); changed(); } }, [['eq', 'equals'], ['contains', 'contains'], ['regex', 'matches regex'], ['exists', 'exists'], ['notexists', 'is missing']].map(([v, l]) => h('option', { value: v, selected: (m.op || 'eq') === v }, l))),
+        /exists/.test(m.op || '') ? null : h('input', { class: 'mono grow', value: m.value || '', placeholder: 'value', oninput: (ev) => { m.value = ev.target.value; changed(); } }),
+        h('button', { class: 'icon', onclick: () => { ed.matchHeaders.splice(i, 1); paintMh(); changed(); } }, '✕')));
+    });
+    mhBox.append(h('button', { class: 'btn sm ghost', onclick: () => { ed.matchHeaders.push({ key: '', op: 'eq', value: '' }); paintMh(); } }, '+ Header condition'));
+  };
+  paintMh();
+  const cond = h('div', { class: 'form' });
+  cond.append(...field('Request headers', mhBox, null, true));
+  cond.append(...field('Request body', h('div', { class: 'inline' },
+    h('select', { onchange: (ev) => { ed.matchBody.mode = ev.target.value; changed(); } }, [['', 'any body'], ['contains', 'contains'], ['regex', 'matches regex']].map(([v, l]) => h('option', { value: v, selected: ed.matchBody.mode === v }, l))),
+    h('input', { class: 'mono grow', value: ed.matchBody.value || '', placeholder: 'text or regex', oninput: (ev) => { ed.matchBody.value = ev.target.value; changed(); } }))));
+  cond.append(...field('Priority', h('input', { type: 'number', value: ed.priority, oninput: (ev) => { ed.priority = Number(ev.target.value) || 0; changed(); } }), 'Higher runs first.'));
+  cond.append(...field('Delay', h('div', { class: 'inline' }, h('input', { type: 'number', min: 0, max: 60000, value: ed.delay_ms, oninput: (ev) => { ed.delay_ms = Number(ev.target.value) || 0; changed(); } }), h('span', { class: 'muted' }, 'ms before the action'))));
+  cond.append(...field('Stop on match', sw(ed.stop_on_match, 'Do not run lower-priority rules after this one', (v) => { ed.stop_on_match = v; changed(); })));
+  if (ed.type !== 'pause') cond.append(...field('Pause', sw(ed.breakpoint_enabled, 'Also hold matching requests in Breakpoints', (v) => { ed.breakpoint_enabled = v; changed(); })));
+  cond.append(...field('Group', h('input', { value: ed.group_name, placeholder: 'optional', oninput: (ev) => { ed.group_name = ev.target.value; changed(); } })));
+
+  const adv = h('textarea', { class: 'code short', spellcheck: false, value: JSON.stringify(ruleRow(ed).params, null, 2) });
+  const advBox = h('details', { class: 'sect' }, h('summary', null, 'Params JSON (advanced)'), adv,
+    h('div', { class: 'row-end' }, h('button', { class: 'btn sm', onclick: guard(() => {
+      const obj = JSON.parse(adv.value || '{}');
+      const next = edFromRule({ ...ruleRow(ed), params: obj, id: ed.id });
+      next.type = ed.type; Object.assign(ed, { params: next.params, matchHeaders: next.matchHeaders, matchBody: next.matchBody });
+      renderREditor(); changed(); toast('Params applied', 'ok');
+    }) }, 'Apply JSON')));
+  advBox.addEventListener('toggle', () => { if (advBox.open) adv.value = JSON.stringify(ruleRow(ed).params, null, 2); });
+
+  box.append(form, h('h3', null, 'Conditions & behaviour'), cond, advBox);
+  const saveBtn = h('button', { class: 'btn primary', onclick: guard(() => busy(saveBtn, 'Saving…', async () => {
+    const row = ruleRow(ed);
+    if (!row.name) throw new Error('Give the rule a name');
+    if (!row.url_pattern) throw new Error('URL pattern is required');
+    const { id } = await post('/api/rules', row);
+    R.sel = id; R.ed = null; await loadRules(); toast('Rule saved', 'ok');
+  })) }, 'Save rule');
+  box.append(h('div', { class: 'row-end', style: 'justify-content:flex-start' }, saveBtn, h('span', { id: 'rDirty', class: 'muted', hidden: !rDirty() }, 'unsaved changes')));
+}
+$('rExport').addEventListener('click', guard(async () => {
+  const rules = (await api('/api/rules')).map(({ id, hit_count, last_hit_at, last_error, created_at, ...r }) => r);
+  download(new Blob([JSON.stringify({ cupnetRules: 1, rules }, null, 2)], { type: 'application/json' }), 'cupnet-rules.json');
+}));
+$('rImport').addEventListener('click', () => {
+  const ta = h('textarea', { class: 'code', spellcheck: false, placeholder: 'Paste exported rules JSON, or pick a file' });
+  const file = h('input', { type: 'file', accept: '.json,application/json', onchange: async (ev) => { const f = ev.target.files[0]; if (f) ta.value = await f.text(); } });
+  modal('Import rules', h('div', null, file, ta), [{ label: 'Cancel' }, { label: 'Import', cls: 'primary', fn: async () => {
+    const j = JSON.parse(ta.value);
+    const list = Array.isArray(j) ? j : Array.isArray(j?.rules) ? j.rules : null;
+    if (!list) throw new Error('Expected an array of rules or { rules: [...] }');
+    let ok = 0; const errs = [];
+    for (const r of list) {
+      const { id, hit_count, last_hit_at, last_error, created_at, ...row } = r || {};
+      try { await post('/api/rules', row); ok++; } catch (e) { errs.push(`${row.name || '?'}: ${e.message}`); }
+    }
+    await loadRules();
+    toast(`Imported ${ok} rule(s)${errs.length ? ` · ${errs.length} failed: ${errs.slice(0, 2).join('; ')}` : ''}`, errs.length ? 'warn' : 'ok');
+  } }]);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Breakpoints
+// ─────────────────────────────────────────────────────────────────────────────
+const BP = { items: [], sel: null, ed: null };
+async function loadPaused() {
+  BP.items = await api('/api/breakpoints');
+  if (BP.sel && !BP.items.some((b) => b.id === BP.sel)) { BP.sel = null; BP.ed = null; renderBpEditor(); }
+  if (!BP.sel && BP.items.length) openBp(BP.items[0].id);
+  renderBpList();
+}
+function renderBpList() {
+  const box = clear($('bplist'));
+  if (!BP.items.length) { box.append(h('div', { class: 'empty' }, 'No paused requests.')); return; }
+  for (const b of BP.items) {
+    const left = Math.max(0, Math.round((b.timeoutMs - (Date.now() - b.at)) / 1000));
+    const [host, path] = splitUrl(b.url);
+    box.append(h('div', { class: `prow${BP.sel === b.id ? ' sel' : ''}`, onclick: () => openBp(b.id) },
+      h('i', { class: 'dot warn' }),
+      h('div', { style: 'min-width:0' }, h('div', { class: 'title' }, h('span', { class: `m m-${b.method}` }, b.method), h('b', { title: b.url }, path)),
+        h('div', { class: 'meta' }, h('span', null, host), h('span', { class: 'faint' }, `rule: ${b.ruleName}`))),
+      h('div', { class: 'acts mono muted' }, `${left}s`)));
+  }
+}
+function openBp(id) {
+  const b = BP.items.find((x) => x.id === id); if (!b) return;
+  BP.sel = id;
+  BP.ed = { method: b.method, url: b.url, rows: b.headers.map(([k, v]) => [k, v, true]), body: b.body, binary: String(b.body).startsWith('__b64__:') };
+  renderBpList(); renderBpEditor();
+}
+function renderBpEditor() {
+  const box = clear($('bpEditor'));
+  const ed = BP.ed;
+  if (!ed) { box.append(h('div', { class: 'empty' }, 'Nothing paused. Add a rule with ', h('b', null, 'Pause'), ', or use ', h('b', null, 'Break on URL'), ' in Traffic.')); return; }
+  const resume = (action, edited) => guard(async () => {
+    const body = edited ? { action, method: ed.method, url: ed.url, headers: enabledPairs(ed.rows), ...(ed.binary ? {} : { body: ed.body }) } : { action };
+    await post(`/api/breakpoints/${BP.sel}`, body);
+    toast(action === 'block' ? 'Blocked' : edited ? 'Forwarded with your edits' : 'Forwarded', action === 'block' ? 'warn' : 'ok');
+    BP.sel = null; BP.ed = null; renderBpEditor(); await loadPaused(); pollStatus();
+  });
+  box.append(h('div', { class: 'edit-head' }, h('h2', null, 'Paused request'),
+    h('button', { class: 'btn primary', onclick: resume('forward', true) }, 'Forward'),
+    h('button', { class: 'btn', onclick: resume('forward', false) }, 'Forward unchanged'),
+    h('button', { class: 'btn danger', onclick: resume('block', false) }, 'Block')));
+  const form = h('div', { class: 'form' });
+  form.append(...field('Method', h('input', { class: 'mono', value: ed.method, style: 'width:120px', oninput: (ev) => { ed.method = ev.target.value.toUpperCase(); } })));
+  form.append(...field('URL', h('input', { class: 'mono', value: ed.url, spellcheck: false, oninput: (ev) => { ed.url = ev.target.value; } })));
+  form.append(...field('Headers', headerTable(ed.rows), null, true));
+  form.append(...field('Body', ed.binary ? h('div', { class: 'note' }, 'Binary body — forwarded unchanged.') : h('textarea', { class: 'code short', spellcheck: false, value: ed.body, oninput: (ev) => { ed.body = ev.target.value; } }), null, true));
+  box.append(form);
+}
+setInterval(() => {
+  if (PAGE === 'paused') guard(loadPaused)();
+}, 1000);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sessions
+// ─────────────────────────────────────────────────────────────────────────────
+async function loadSessions() {
+  const sessions = await fillSessionSelect();
+  const tb = clear($('sessions'));
+  for (const s of sessions) {
+    const isLive = s.id === current;
+    const viewing = (shown || current) === s.id;
+    const btn = (label, fn, title) => h('button', { class: 'btn sm', title, onclick: guard(fn) }, label);
+    tb.append(h('tr', null,
+      h('td', { title: s.keyId ? `key id ${s.keyId}` : '' }, h('span', { class: 'mono' }, s.id), isLive ? [' ', tag('live', 'ok')] : null, viewing ? [' ', tag('viewing', 'accent')] : null),
+      h('td', null, fmtSize(s.bytes) || '0 B'),
+      h('td', null, new Date(s.mtime).toLocaleString()),
+      h('td', null, s.sealed ? tag('sealed', 'ok') : ''),
+      h('td', null,
+        btn('Open', () => { openSession(s.id); go('traffic'); }),
+        btn('HAR', async (ev) => busy(ev.target, '…', async () => download((await apiBlob(`/api/sessions/${s.id}/har`)).blob, `cupnet-${s.id}.har`)), 'Export as HAR 1.2'),
+        btn('JSONL', async () => download((await apiBlob(`/api/sessions/${s.id}`)).blob, `cupnet-${s.id}.jsonl`), 'Raw session log'),
+        btn('Seal', async () => {
+          const r = await post(`/api/sessions/${s.id}/seal`);
+          for (const [what, name] of [['key', `${r.id}.cupkey`], ['sealed', `${r.id}.cupsess`]]) download((await apiBlob(`/api/sessions/${s.id}/${what}`)).blob, name);
+          toast('Sealed: keep the .cupkey separate from the .cupsess', 'ok');
+          loadSessions();
+        }, 'Encrypt with this session\'s own key and download both files'))));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Settings
+// ─────────────────────────────────────────────────────────────────────────────
+const S = { data: null, browser: null };
+async function loadSettings() {
+  const s = await api('/api/settings');
+  S.data = s; S.browser = s.browser;
+  renderTls();
+  $('tlsCli').hidden = !s.browserFromCli;
+  $('sCors').checked = !!s.cors; $('sH1').checked = !!s.forceHttp1;
+  $('sPass').value = (s.tlsPassthrough || []).join('\n');
+  const st = ST || await api('/api/status');
+  const setup = clear($('setup'));
+  const row = (k, v) => [h('div', null, k), h('div', null, v)];
+  setup.append(h('h2', null, 'Setup'), h('div', { class: 'setup-grid' },
+    row('Proxy for Chrome', h('code', null, `http://127.0.0.1:${st.mitmPort}`)),
+    row('Certificate trust', st.trust === 'spki' ? 'SPKI pin on the dedicated Chrome profile (nothing installed system-wide)' : 'CupNet CA in the OS trust store'),
+    row('CA file', h('code', null, st.ca.certPath)),
+    row('CA SHA-256', h('code', null, st.ca.sha256)),
+    row('CA SPKI', h('code', null, st.ca.spki)),
+    row('Rules file', h('code', null, st.rulesFile)),
+    row('Data dir', h('code', null, st.dataDir))),
+  h('h3', null, 'Install the CA system-wide (only for --trust system; run it yourself)'), h('pre', { class: 'codebox' }, st.ca.commands.install),
+  h('h3', null, 'Remove it again'), h('pre', { class: 'codebox' }, st.ca.commands.remove));
+}
+function renderTls() {
+  const box = clear($('tlsProfiles'));
+  for (const p of S.data.tlsProfiles) {
+    box.append(h('div', { class: `radio${S.browser === p.id ? ' on' : ''}`, onclick: () => { S.browser = p.id; renderTls(); } },
+      h('b', null, p.name), h('span', { class: 'muted' }, p.note)));
+  }
+}
+$('sSave').addEventListener('click', guard(async () => {
+  const patch = { cors: $('sCors').checked, forceHttp1: $('sH1').checked, tlsPassthrough: $('sPass').value.split(/[\n,]/).map((x) => x.trim()).filter(Boolean) };
+  if (S.browser && S.browser !== S.data?.browser) patch.browser = S.browser;
+  await busy($('sSave'), 'Saving…', async () => { S.data = await post('/api/settings', patch); });
+  S.browser = S.data.browser; renderTls(); $('tlsCli').hidden = !S.data.browserFromCli;
+  $('sPass').value = (S.data.tlsPassthrough || []).join('\n');
+  toast('Settings saved — they apply to new connections', 'ok');
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Boot
+// ─────────────────────────────────────────────────────────────────────────────
+(async () => {
+  if (!(await auth())) {
+    $('login').hidden = false; $('pages').hidden = true; $('stats').textContent = 'no access token';
+    return;
+  }
+  buildFilter();
+  renderRpHeaders();
+  try { await fillSessionSelect(); } catch (e) { toast(e.message, 'err'); }
+  openSession(current);
+  go(store.get('page', 'traffic'));
+  grid.focus();
+  pollStatus(); setInterval(pollStatus, 2000);
+})();

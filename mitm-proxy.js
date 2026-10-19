@@ -28,6 +28,7 @@ const http             = require('http');
 const { EventEmitter } = require('events');
 const { safeCatch } = require('./sys-log');
 const { networkPolicy, computeBackoffMs } = require('./network-policy');
+const { connectThroughProxy } = require('./upstream-tunnel');
 const {
     buildMitmGatewayErrorResponse,
     isLikelyDocumentNavigation,
@@ -923,13 +924,6 @@ function _responseSuggestsHttp1Retry(res) {
     return !Number.isFinite(code) || code === 0 || code === 502 || code === 503 || code === 504;
 }
 
-function _buildProxyAuthorizationHeader(upstreamUrl) {
-    const username = upstreamUrl?.username ? decodeURIComponent(upstreamUrl.username) : '';
-    const password = upstreamUrl?.password ? decodeURIComponent(upstreamUrl.password) : '';
-    if (!username && !password) return '';
-    return `Basic ${Buffer.from(`${username}:${password}`, 'utf8').toString('base64')}`;
-}
-
 class MitmProxy {
     constructor(opts = {}) {
         this.port       = opts.port != null ? opts.port : networkPolicy.mitmPort;
@@ -1510,54 +1504,13 @@ class MitmProxy {
             return;
         }
 
-        let upstreamUrl;
-        try {
-            upstreamUrl = new URL(proxyUrl);
-        } catch (err) {
-            fail(err);
-            return;
-        }
-        const proxyHost = upstreamUrl.hostname;
-        const proxyPort = Number(upstreamUrl.port || (upstreamUrl.protocol === 'https:' ? 443 : 80));
-        const upstreamSocket = net.connect(proxyPort, proxyHost);
-        upstreamSocket.setTimeout(networkPolicy.timeouts.upstreamRequestMs, () => upstreamSocket.destroy());
-        upstreamSocket.once('connect', () => {
-            const proxyAuth = _buildProxyAuthorizationHeader(upstreamUrl);
-            const lines = [
-                `CONNECT ${target} HTTP/1.1`,
-                `Host: ${target}`,
-                'Proxy-Connection: Keep-Alive',
-                'Connection: Keep-Alive',
-            ];
-            if (proxyAuth) lines.push(`Proxy-Authorization: ${proxyAuth}`);
-            const connectReq = `${lines.join('\r\n')}\r\n\r\n`;
-            upstreamSocket.write(connectReq);
-        });
-        upstreamSocket.once('error', fail);
-
-        let respBuf = Buffer.alloc(0);
-        const onResp = (chunk) => {
-            respBuf = Buffer.concat([respBuf, chunk]);
-            const sep = respBuf.indexOf('\r\n\r\n');
-            if (sep === -1) {
-                if (respBuf.length > 16 * 1024) {
-                    upstreamSocket.removeListener('data', onResp);
-                    fail(new Error('Upstream CONNECT response too large'));
-                }
-                return;
-            }
-            upstreamSocket.removeListener('data', onResp);
-            const head = respBuf.toString('utf8', 0, sep);
-            if (!/^HTTP\/1\.[01]\s+200\b/i.test(head)) {
-                const firstLine = (head.split('\r\n')[0] || '').trim();
-                fail(new Error(`Upstream CONNECT rejected for ${target}: ${firstLine || 'unknown status'}`));
-                try { upstreamSocket.destroy(); } catch {}
-                return;
-            }
-            const remaining = respBuf.subarray(sep + 4);
-            attachTunnel(upstreamSocket, remaining);
-        };
-        upstreamSocket.on('data', onResp);
+        // http / https / socks4(a) / socks5(h) upstreams (A-410: was HTTP CONNECT only).
+        connectThroughProxy(proxyUrl, hostname, port, { timeoutMs: networkPolicy.timeouts.upstreamRequestMs })
+            .then(({ socket: upstreamSocket, buffered }) => {
+                upstreamSocket.setTimeout(networkPolicy.timeouts.upstreamRequestMs, () => upstreamSocket.destroy());
+                attachTunnel(upstreamSocket, buffered);
+            })
+            .catch(fail);
     }
 
     // ── Plain HTTP ─────────────────────────────────────────────────────────────
@@ -1952,49 +1905,10 @@ class MitmProxy {
                 sock.once('error', reject);
             });
         }
-        let upstreamUrl;
-        try {
-            upstreamUrl = new URL(proxyUrl);
-        } catch (e) {
-            return Promise.reject(e);
-        }
-        const proxyHost = upstreamUrl.hostname;
-        const proxyPort = Number(upstreamUrl.port || (upstreamUrl.protocol === 'https:' ? 443 : 80));
-        const target = `${connectHost}:${connectPort}`;
-        return new Promise((resolve, reject) => {
-            const upstreamSocket = net.connect(proxyPort, proxyHost);
-            upstreamSocket.setTimeout(to, () => upstreamSocket.destroy());
-            upstreamSocket.once('error', reject);
-            upstreamSocket.once('connect', () => {
-                const proxyAuth = _buildProxyAuthorizationHeader(upstreamUrl);
-                const lines = [
-                    `CONNECT ${target} HTTP/1.1`,
-                    `Host: ${target}`,
-                    'Proxy-Connection: Keep-Alive',
-                    'Connection: Keep-Alive',
-                ];
-                if (proxyAuth) lines.push(`Proxy-Authorization: ${proxyAuth}`);
-                upstreamSocket.write(`${lines.join('\r\n')}\r\n\r\n`);
-            });
-            let respBuf = Buffer.alloc(0);
-            const onResp = (chunk) => {
-                respBuf = Buffer.concat([respBuf, chunk]);
-                const sep = respBuf.indexOf('\r\n\r\n');
-                if (sep === -1) {
-                    if (respBuf.length > 16 * 1024) {
-                        upstreamSocket.removeListener('data', onResp);
-                        reject(new Error('Upstream CONNECT response too large'));
-                    }
-                    return;
-                }
-                upstreamSocket.removeListener('data', onResp);
-                const head = respBuf.toString('utf8', 0, sep);
-                if (!/^HTTP\/1\.[01]\s+200\b/i.test(head)) {
-                    const firstLine = (head.split('\r\n')[0] || '').trim();
-                    reject(new Error(`Upstream CONNECT rejected: ${firstLine || 'unknown'}`));
-                    try { upstreamSocket.destroy(); } catch {}
-                    return;
-                }
+        // http / https / socks4(a) / socks5(h) upstreams (A-410: was HTTP CONNECT only).
+        return connectThroughProxy(proxyUrl, connectHost, connectPort, { timeoutMs: to })
+            .then(({ socket: upstreamSocket, buffered }) => new Promise((resolve, reject) => {
+                if (buffered.length) upstreamSocket.unshift(buffered);
                 const tlsSock = tls.connect({
                     socket: upstreamSocket,
                     servername,
@@ -2007,9 +1921,7 @@ class MitmProxy {
                 });
                 tlsSock.once('secureConnect', () => resolve(tlsSock));
                 tlsSock.once('error', reject);
-            };
-            upstreamSocket.on('data', onResp);
-        });
+            }));
     }
 
     /**

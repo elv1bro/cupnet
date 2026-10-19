@@ -1,0 +1,4 @@
+{
+  "lib/codegen.js": "request-editor-codegen.js",
+  "lib/curl.js": "request-editor-curl-parser.js"
+}

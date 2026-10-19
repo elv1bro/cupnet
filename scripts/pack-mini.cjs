@@ -160,6 +160,12 @@ function pack(opts) {
         if (!copied.has(rel) && fs.statSync(path.join(ROOT, rel)).isFile()) { copy(path.join(ROOT, rel), path.join(app, rel)); copied.add(rel); }
     }
 
+    // Repo modules the UI loads in the browser (served by ui-server.js, never require()d by mini).
+    const libs = JSON.parse(fs.readFileSync(path.join(ROOT, 'mini', 'browser-libs.json'), 'utf8'));
+    for (const rel of Object.values(libs)) {
+        if (!copied.has(rel)) { copy(path.join(ROOT, rel), path.join(app, rel)); copied.add(rel); }
+    }
+
     // Go AzureTLS worker (mitm-proxy.js looks in <its dir>/azuretls-go/bin).
     const binDir = path.join(ROOT, 'azuretls-go', 'bin');
     const workers = opts.allPlatforms

@@ -21,8 +21,18 @@ const path = require('path');
 const crypto = require('crypto');
 const { SessionLog, SessionIndex } = require('./session-log');
 const sessionCrypto = require('./session-crypto');
+const { providerCatalog } = require('./proxy-store');
+const { writeHar } = require('./har');
 
 const UI_HTML = path.join(__dirname, 'ui.html');
+const UI_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src blob:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+/** UI assets (no data in them, so no token): mini/ui.* plus repo modules listed in browser-libs.json. */
+const STATIC = new Map([
+    ['/ui.css', [path.join(__dirname, 'ui.css'), 'text/css; charset=utf-8']],
+    ['/ui.js', [path.join(__dirname, 'ui.js'), 'text/javascript; charset=utf-8']],
+    ...Object.entries(JSON.parse(fs.readFileSync(path.join(__dirname, 'browser-libs.json'), 'utf8')))
+        .map(([k, rel]) => [`/${k}`, [path.join(__dirname, '..', rel), 'text/javascript; charset=utf-8']]),
+]);
 const JSON_BODY_MAX = 2 * 1024 * 1024;
 /** Bodies in /api/log/:seq are cut to this many chars; the full body is at /api/log/:seq/body/<which>. */
 const BODY_PREVIEW_CHARS = 2 * 1024 * 1024;
@@ -72,6 +82,44 @@ function _preview(body) {
     return { body: s.slice(0, BODY_PREVIEW_CHARS), truncated: true };
 }
 
+/** A user-facing error (bad input, unknown profile) → 400; the message is shown in the UI. */
+function _badRequest(res, e) {
+    return _send(res, Number(e?.status) || 400, { error: e?.message || String(e) });
+}
+
+/** `1,4-9,12` → [1,4,5,…,9,12] (at most 100 000 seqs). */
+function _parseSeqList(s) {
+    const out = [];
+    for (const part of String(s).split(',')) {
+        const m = /^(\d+)(?:-(\d+))?$/.exec(part.trim());
+        if (!m) continue;
+        const a = Number(m[1]);
+        const b = m[2] ? Number(m[2]) : a;
+        for (let n = a; n <= b && out.length < 100000; n++) if (n > 0) out.push(n);
+        if (out.length >= 100000) break;
+    }
+    return out;
+}
+
+/** Full request entries of a session, in order (read back from the JSONL one by one). */
+function* _fullEntries(src, seqs = null) {
+    if (seqs) {
+        for (const q of seqs) { const e = src.get(q); if (e && e.kind === 'request') yield e; }
+        return;
+    }
+    let after = 0;
+    for (;;) {
+        const batch = src.list(after, 2000);
+        if (!batch.length) return;
+        for (const s of batch) {
+            after = s.seq;
+            if (s.kind !== 'request') continue;
+            const e = src.get(s.seq);
+            if (e) yield e;
+        }
+    }
+}
+
 function _headerVal(h, name) {
     if (!h) return '';
     const k = Object.keys(h).find((x) => x.toLowerCase() === name);
@@ -110,9 +158,11 @@ function createUiServer(app) {
 
         if (u.pathname === '/' && req.method === 'GET') {
             const html = fs.readFileSync(UI_HTML);
-            return _send(res, 200, html, 'text/html; charset=utf-8', {
-                'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src blob:; frame-src 'none'; object-src 'none'; frame-ancestors 'none'",
-            });
+            return _send(res, 200, html, 'text/html; charset=utf-8', { 'Content-Security-Policy': UI_CSP });
+        }
+        const asset = req.method === 'GET' && STATIC.get(u.pathname);
+        if (asset) {
+            try { return _send(res, 200, fs.readFileSync(asset[0]), asset[1]); } catch { return _send(res, 404, { error: 'not found' }); }
         }
         if (!u.pathname.startsWith('/api/')) return _send(res, 404, { error: 'not found' });
 
@@ -213,7 +263,9 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
             dataDir: app.dataDir,
             mitmPort: app.mitmPort,
             browser: app.browser,
-            upstream: app.upstream ? String(app.upstream).replace(/\/\/[^@/]*@/, '//***@') : null,
+            upstream: app.mitm?.upstream ? String(app.mitm.upstream).replace(/\/\/[^@/]*@/, '//***@') : null,
+            proxy: app.proxies?.status() || null,
+            paused: app._paused?.size || 0,
             trust: app.trust,
             rulesFile: app.rulesFile,
             ca: { certPath: app.ca.certPath, spki: app.ca.spki, sha256: app.ca.sha256, commands: app.ca.commands },
@@ -282,6 +334,41 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
         return _send(res, 200, { ok: true });
     }
 
+    const ruleToggle = /^\/api\/rules\/(\d+)\/enabled$/.exec(p);
+    if (ruleToggle && m === 'POST') {
+        const body = await _readJson(req).catch(() => null);
+        const rule = app.rules.getAllInterceptRules().find((r) => r.id === Number(ruleToggle[1]));
+        if (!rule) return _send(res, 404, { error: 'no such rule' });
+        app.rules.saveInterceptRule({ ...rule, enabled: !!body?.enabled });
+        app.interceptor.invalidateRulesCache();
+        return _send(res, 200, { ok: true });
+    }
+
+    // ── Proxy manager ───────────────────────────────────────────────────────────
+    if (p.startsWith('/api/proxies') || p === '/api/egress') {
+        const r = await _proxyRoute(app, req, res, u).catch((e) => _badRequest(res, e));
+        if (r !== false) return r;
+    }
+
+    if (p === '/api/settings' && m === 'GET') return _send(res, 200, app.getSettings());
+    if (p === '/api/settings' && m === 'POST') {
+        const body = await _readJson(req);
+        return _send(res, 200, app.updateSettings(body || {}));
+    }
+
+    if (p === '/api/replay' && m === 'POST') {
+        const body = await _readJson(req);
+        try { return _send(res, 200, await app.replay(body || {})); } catch (e) { return _badRequest(res, e); }
+    }
+
+    if (p === '/api/breakpoints' && m === 'GET') return _send(res, 200, app.listPaused());
+    const bp = /^\/api\/breakpoints\/([0-9a-f]+)$/.exec(p);
+    if (bp && m === 'POST') {
+        const body = await _readJson(req);
+        const ok = app.resumeRequest(bp[1], body || {});
+        return _send(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'request is no longer paused' });
+    }
+
     if (p === '/api/chrome' && m === 'POST') {
         const body = await _readJson(req).catch(() => ({}));
         const r = app.launchChrome(body?.url);
@@ -320,6 +407,23 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
         return undefined;
     }
 
+    const har = /^\/api\/sessions\/([\w-]+)\/har$/.exec(p);
+    if (har && m === 'GET') {
+        const src = sessionSource(har[1]);
+        if (!src) return _send(res, 404, { error: 'no such session' });
+        const seqs = u.searchParams.get('seqs');
+        const list = seqs ? _parseSeqList(seqs) : null;
+        res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Disposition': `attachment; filename="cupnet-${har[1]}.har"`,
+        });
+        await writeHar(res, _fullEntries(src, list), { comment: `CupNet mini session ${har[1]}` });
+        res.end();
+        return undefined;
+    }
+
     // Encrypt a session (own key per session) and fetch its key file / sealed file by the stable id.
     const seal = /^\/api\/sessions\/([\w-]+)\/(seal|key|sealed)$/.exec(p);
     if (seal) {
@@ -340,4 +444,70 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
     return _send(res, 404, { error: 'not found' });
 }
 
-module.exports = { createUiServer, BODY_PREVIEW_CHARS };
+/** /api/proxies* and /api/egress. Returns false when nothing matched. Thrown errors → 400. */
+async function _proxyRoute(app, req, res, u) {
+    const p = u.pathname;
+    const m = req.method;
+    const pm = app.proxies;
+    const store = pm.store;
+    const listing = () => ({ profiles: store.list(), status: pm.status(), testing: pm.testing });
+
+    if (p === '/api/egress' && m === 'GET') {
+        const egress = await pm.egress({ force: u.searchParams.get('force') === '1' });
+        return _send(res, 200, { egress, status: pm.status() });
+    }
+    if (p === '/api/proxies' && m === 'GET') return _send(res, 200, listing());
+    if (p === '/api/proxies/providers' && m === 'GET') return _send(res, 200, providerCatalog());
+    if (p === '/api/proxies' && m === 'POST') {
+        const saved = store.save((await _readJson(req)) || {});
+        return _send(res, 200, { profile: store.publicProfile(saved), ...listing() });
+    }
+    if (p === '/api/proxies/preview' && m === 'POST') {
+        const body = (await _readJson(req)) || {};
+        const draft = store.build(body.profile || {}, body.id || null);
+        return _send(res, 200, { display: store.display(draft), sticky: store.publicProfile(draft).sticky });
+    }
+    if (p === '/api/proxies/import' && m === 'POST') {
+        const body = (await _readJson(req)) || {};
+        const r = store.importLines(body.text, { group: body.group, namePrefix: body.namePrefix, dryRun: !!body.dryRun });
+        return _send(res, 200, { ...r, ...(body.dryRun ? {} : listing()) });
+    }
+    if (p === '/api/proxies/test' && m === 'POST') {
+        const body = (await _readJson(req)) || {};
+        const ids = Array.isArray(body.ids) && body.ids.length ? body.ids.map(String) : store.list().map((x) => x.id);
+        const results = await pm.testMany(ids);
+        return _send(res, 200, { results, ...listing() });
+    }
+    if (p === '/api/proxies/disconnect' && m === 'POST') { pm.disconnect(); return _send(res, 200, listing()); }
+    if (p === '/api/proxies/kill-switch' && m === 'POST') {
+        const body = (await _readJson(req)) || {};
+        pm.setKillSwitch(!!body.enabled);
+        return _send(res, 200, listing());
+    }
+    if (p === '/api/proxies/new-ip' && m === 'POST') { pm.newIp(null); return _send(res, 200, listing()); }
+
+    const one = /^\/api\/proxies\/([0-9a-f]{16})(?:\/(duplicate|test|connect|new-ip))?$/.exec(p);
+    if (!one) return false;
+    const [, id, action] = one;
+    if (!store.get(id)) return _send(res, 404, { error: 'Proxy profile not found' });
+    if (!action && m === 'PUT') {
+        const saved = store.save((await _readJson(req)) || {}, id);
+        // Editing the connected profile re-applies it right away.
+        if (store.activeId === id) pm.connect(id);
+        return _send(res, 200, { profile: store.publicProfile(saved), ...listing() });
+    }
+    if (!action && m === 'DELETE') {
+        const wasActive = store.activeId === id;
+        store.remove(id);
+        if (wasActive) pm.disconnect();
+        return _send(res, 200, listing());
+    }
+    if (m !== 'POST') return _send(res, 405, { error: 'method not allowed' });
+    if (action === 'duplicate') { const c = store.duplicate(id); return _send(res, 200, { profile: store.publicProfile(c), ...listing() }); }
+    if (action === 'test') { const result = await pm.test(id); return _send(res, 200, { result, ...listing() }); }
+    if (action === 'connect') { pm.connect(id); return _send(res, 200, listing()); }
+    if (action === 'new-ip') { pm.newIp(id); return _send(res, 200, listing()); }
+    return false;
+}
+
+module.exports = { createUiServer, BODY_PREVIEW_CHARS, UI_CSP };
