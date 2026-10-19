@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CupNet mini</title>
+<style>
+  :root { --bg:#fff; --fg:#1b1f24; --muted:#6a737d; --line:#e1e4e8; --accent:#0969da; --err:#cf222e; --row:#f6f8fa; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --line:#30363d; --accent:#4493f8; --err:#f85149; --row:#161b22; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, system-ui, sans-serif; }
+  header { display:flex; gap:12px; align-items:center; padding:8px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header b { font-size:14px; }
+  nav button, .btn { background:none; border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:4px 10px; cursor:pointer; font:inherit; }
+  nav button.on { border-color:var(--accent); color:var(--accent); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  #status { color:var(--muted); margin-left:auto; font-size:12px; }
+  main { padding:12px 16px; }
+  section[hidden] { display:none; }
+  table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  th, td { text-align:left; padding:3px 6px; border-bottom:1px solid var(--line); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  tr.sel td { background:var(--row); }
+  tbody tr { cursor:pointer; }
+  .err { color:var(--err); }
+  .muted { color:var(--muted); }
+  #split { display:grid; grid-template-columns: 1fr; gap:12px; }
+  @media (min-width: 1000px) { #split.open { grid-template-columns: 3fr 2fr; } }
+  #detail { border:1px solid var(--line); border-radius:6px; padding:8px; overflow:auto; max-height:80vh; }
+  pre { white-space:pre-wrap; word-break:break-all; margin:4px 0 10px; font:12px ui-monospace, monospace; }
+  input, select, textarea { font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:4px 6px; }
+  textarea { width:100%; min-height:160px; font-family:ui-monospace, monospace; font-size:12px; }
+  .form { display:grid; grid-template-columns: 120px 1fr; gap:6px 10px; max-width:900px; align-items:start; margin-bottom:16px; }
+  .toolbar { display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; align-items:center; }
+  code { font:12px ui-monospace, monospace; background:var(--row); padding:1px 4px; border-radius:4px; word-break:break-all; }
+</style>
+</head>
+<body>
+<header>
+  <b>CupNet mini</b>
+  <nav>
+    <button data-tab="log" class="on">Log</button>
+    <button data-tab="rules">Rules</button>
+    <button data-tab="sessions">Sessions</button>
+    <button data-tab="setup">Setup</button>
+  </nav>
+  <button class="btn primary" id="launch">Open Chrome</button>
+  <span id="status">connecting…</span>
+</header>
+<main>
+  <section id="tab-log">
+    <div class="toolbar">
+      <input id="filter" placeholder="Filter URL…" size="40">
+      <label><input type="checkbox" id="follow" checked> follow</label>
+      <button class="btn" id="clear">Clear view</button>
+      <span class="muted" id="count"></span>
+    </div>
+    <div id="split">
+      <div><table>
+        <colgroup><col style="width:60px"><col style="width:60px"><col style="width:50px"><col><col style="width:70px"></colgroup>
+        <thead><tr><th>#</th><th>Method</th><th>Status</th><th>URL</th><th>ms</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+      <div id="detail" hidden></div>
+    </div>
+  </section>
+
+  <section id="tab-rules" hidden>
+    <div class="form">
+      <label>Name</label><input id="r-name" placeholder="My page hook">
+      <label>URL pattern</label><input id="r-pattern" placeholder="https://example.com/*  (or *)">
+      <label>Type</label>
+      <select id="r-type">
+        <option value="inject">inject — add JS to HTML pages</option>
+        <option value="block">block</option>
+        <option value="mock">mock</option>
+        <option value="modifyHeaders">modifyHeaders</option>
+        <option value="script">script (before/after)</option>
+      </select>
+      <label>Params (JSON)</label><textarea id="r-params"></textarea>
+      <label></label><div class="toolbar"><button class="btn primary" id="r-save">Save rule</button><span id="r-msg"></span></div>
+    </div>
+    <table>
+      <colgroup><col style="width:40px"><col style="width:200px"><col style="width:110px"><col><col style="width:60px"><col style="width:150px"></colgroup>
+      <thead><tr><th>id</th><th>Name</th><th>Type</th><th>Pattern</th><th>On</th><th></th></tr></thead>
+      <tbody id="rules"></tbody>
+    </table>
+  </section>
+
+  <section id="tab-sessions" hidden>
+    <p class="muted">Each run writes one JSONL file (requests with headers/bodies, page events). They contain cookies and tokens — treat them as secrets.</p>
+    <table>
+      <colgroup><col><col style="width:120px"><col style="width:200px"><col style="width:120px"></colgroup>
+      <thead><tr><th>Session</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+      <tbody id="sessions"></tbody>
+    </table>
+  </section>
+
+  <section id="tab-setup" hidden>
+    <div id="setup"></div>
+  </section>
+</main>
+<script>
+'use strict';
+const TOKEN = new URLSearchParams(location.hash.slice(1)).get('t') || '';
+const $ = (id) => document.getElementById(id);
+const el = (tag, props = {}, ...kids) => {
+  const n = document.createElement(tag);
+  Object.assign(n, props);
+  for (const k of kids) n.append(k instanceof Node ? k : document.createTextNode(String(k ?? '')));
+  return n;
+};
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { 'X-CupNet-Token': TOKEN, 'Content-Type': 'application/json', ...(opts.headers || {}) } });
+  const text = await r.text();
+  let data; try { data = JSON.parse(text); } catch { data = text; }
+  if (!r.ok) throw new Error((data && data.error) || r.statusText);
+  return data;
+}
+
+// ── tabs ──
+document.querySelectorAll('nav button').forEach((b) => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('on', x === b));
+  document.querySelectorAll('main section').forEach((s) => s.hidden = s.id !== `tab-${b.dataset.tab}`);
+  if (b.dataset.tab === 'rules') loadRules();
+  if (b.dataset.tab === 'sessions') loadSessions();
+  if (b.dataset.tab === 'setup') loadSetup();
+});
+
+$('launch').onclick = async () => {
+  try { await api('/api/chrome', { method: 'POST', body: '{}' }); } catch (e) { alert(e.message); }
+};
+
+// ── log ──
+let lastSeq = 0; let entries = []; let selected = null;
+function rowFor(e) {
+  const tr = el('tr');
+  tr.dataset.seq = e.seq;
+  const status = e.kind === 'page-event' ? 'event' : (e.status ?? '');
+  tr.append(el('td', {}, e.seq), el('td', {}, e.kind === 'page-event' ? '—' : e.method), el('td', { className: e.status >= 400 ? 'err' : '' }, status),
+    el('td', { title: e.url || '' }, e.url || e.kind), el('td', {}, e.duration ?? ''));
+  tr.onclick = () => showDetail(e.seq, tr);
+  return tr;
+}
+function matches(e) {
+  const f = $('filter').value.trim().toLowerCase();
+  return !f || String(e.url || '').toLowerCase().includes(f);
+}
+function render() {
+  const tb = $('rows'); tb.textContent = '';
+  const shown = entries.filter(matches);
+  for (const e of shown.slice(-1500)) tb.append(rowFor(e));
+  $('count').textContent = `${shown.length} shown`;
+  if ($('follow').checked) window.scrollTo(0, document.body.scrollHeight);
+}
+async function poll() {
+  try {
+    const items = await api(`/api/log?after=${lastSeq}`);
+    if (items.length) {
+      lastSeq = items[items.length - 1].seq;
+      entries.push(...items.filter((e) => e.kind === 'request' || e.kind === 'page-event'));
+      if (entries.length > 5000) entries = entries.slice(-5000);
+      render();
+    }
+    const st = await api('/api/status');
+    $('status').textContent = `session ${st.sessionId} · proxy 127.0.0.1:${st.mitmPort} · ${st.stats ? st.stats.requests + ' req' : ''}`;
+  } catch (e) {
+    $('status').textContent = TOKEN ? `error: ${e.message}` : 'open the URL printed by cupnet-mini (with #t=token)';
+  }
+}
+$('filter').oninput = render;
+$('clear').onclick = () => { entries = []; render(); };
+function headersBlock(title, h) {
+  const lines = Object.entries(h || {}).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join('\n');
+  return [el('b', {}, title), el('pre', {}, lines || '(none)')];
+}
+async function showDetail(seq, tr) {
+  document.querySelectorAll('#rows tr.sel').forEach((x) => x.classList.remove('sel'));
+  tr.classList.add('sel');
+  const d = $('detail'); d.hidden = false; $('split').classList.add('open');
+  d.textContent = 'loading…';
+  try {
+    const e = await api(`/api/log/${seq}`);
+    d.textContent = '';
+    if (e.kind === 'page-event') {
+      d.append(el('b', {}, 'Page event from '), el('code', {}, e.url), el('pre', {}, JSON.stringify(e.data, null, 2)));
+      return;
+    }
+    d.append(el('div', {}, el('b', {}, `${e.method} ${e.status} `), el('code', {}, e.url)));
+    d.append(...headersBlock('Request headers', e.requestHeaders));
+    if (e.requestBody) d.append(el('b', {}, 'Request body'), el('pre', {}, e.requestBody));
+    d.append(...headersBlock('Response headers', e.responseHeaders));
+    if (e.responseBody) d.append(el('b', {}, 'Response body'), el('pre', {}, String(e.responseBody).slice(0, 200000)));
+  } catch (err) { d.textContent = err.message; }
+}
+
+// ── rules ──
+const PARAM_TEMPLATES = {
+  inject: { position: 'head', source: "// Runs in the page before its own scripts (position 'head') or at the end of <body> ('body-end').\n// Report to the CupNet log: fetch('/__cupnet/event', { method: 'POST', body: JSON.stringify({...}) })\nconsole.log('[cupnet] injected into', location.href);" },
+  block: {},
+  mock: { status: 200, mimeType: 'application/json', body: '{"ok":true}' },
+  modifyHeaders: { requestHeaders: { 'X-Example': '1' }, removeRequestHeaders: [], responseHeaders: {}, removeResponseHeaders: [] },
+  script: { beforeSource: '// ctx.url, ctx.headers …', afterSource: '' },
+};
+let editingId = null;
+function fillParams() { $('r-params').value = JSON.stringify(PARAM_TEMPLATES[$('r-type').value] || {}, null, 2); }
+$('r-type').onchange = fillParams; fillParams();
+$('r-save').onclick = async () => {
+  $('r-msg').textContent = '';
+  let params;
+  try { params = JSON.parse($('r-params').value || '{}'); } catch (e) { $('r-msg').textContent = `Params: ${e.message}`; return; }
+  const rule = { name: $('r-name').value.trim(), url_pattern: $('r-pattern').value.trim(), type: $('r-type').value, params, enabled: true };
+  if (editingId) rule.id = editingId;
+  try { await api('/api/rules', { method: 'POST', body: JSON.stringify(rule) }); $('r-msg').textContent = 'Saved'; editingId = null; loadRules(); }
+  catch (e) { $('r-msg').textContent = e.message; $('r-msg').className = 'err'; }
+};
+async function loadRules() {
+  const rules = await api('/api/rules');
+  const tb = $('rules'); tb.textContent = '';
+  for (const r of rules) {
+    const edit = el('button', { className: 'btn' }, 'Edit');
+    edit.onclick = () => { editingId = r.id; $('r-name').value = r.name; $('r-pattern').value = r.url_pattern; $('r-type').value = r.type; $('r-params').value = JSON.stringify(r.params || {}, null, 2); };
+    const del = el('button', { className: 'btn' }, 'Delete');
+    del.onclick = async () => { if (confirm(`Delete rule "${r.name}"?`)) { await api(`/api/rules/${r.id}`, { method: 'DELETE' }); loadRules(); } };
+    const on = el('input', { type: 'checkbox', checked: !!r.enabled });
+    on.onchange = async () => { await api('/api/rules', { method: 'POST', body: JSON.stringify({ ...r, enabled: on.checked }) }); };
+    tb.append(el('tr', {}, el('td', {}, r.id), el('td', { title: r.name }, r.name), el('td', {}, r.type), el('td', { title: r.url_pattern }, r.url_pattern), el('td', {}, on), el('td', {}, edit, ' ', del)));
+  }
+}
+
+// ── sessions ──
+async function loadSessions() {
+  const { current, sessions } = await api('/api/sessions');
+  const tb = $('sessions'); tb.textContent = '';
+  for (const s of sessions) {
+    const dl = el('button', { className: 'btn' }, 'Download');
+    dl.onclick = async () => {
+      const r = await fetch(`/api/sessions/${s.id}`, { headers: { 'X-CupNet-Token': TOKEN } });
+      const blob = await r.blob();
+      const a = el('a', { href: URL.createObjectURL(blob), download: `cupnet-${s.id}.jsonl` }); a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    };
+    tb.append(el('tr', {}, el('td', {}, s.id + (s.id === current ? ' (current)' : '')), el('td', {}, `${(s.bytes / 1024).toFixed(1)} KB`), el('td', {}, new Date(s.mtime).toLocaleString()), el('td', {}, dl)));
+  }
+}
+
+// ── setup ──
+async function loadSetup() {
+  const st = await api('/api/status');
+  const s = $('setup'); s.textContent = '';
+  s.append(
+    el('p', {}, 'Proxy: ', el('code', {}, `http://127.0.0.1:${st.mitmPort}`), ` · upstream: ${st.upstream || 'direct'} · TLS profile: ${st.browser}`),
+    el('p', {}, `Certificate trust: ${st.trust === 'spki' ? 'SPKI pin on the dedicated Chrome profile (nothing installed system-wide)' : 'CupNet CA installed in the OS trust store'}`),
+    el('p', {}, 'CA file: ', el('code', {}, st.ca.certPath)),
+    el('p', {}, 'CA SHA-256: ', el('code', {}, st.ca.sha256)),
+    el('p', {}, 'CA SPKI (for --ignore-certificate-errors-spki-list): ', el('code', {}, st.ca.spki)),
+    el('p', {}, 'Install the CA system-wide (only for --trust system; run it yourself):'), el('pre', {}, st.ca.commands.install),
+    el('p', {}, 'Remove it again:'), el('pre', {}, st.ca.commands.remove),
+    el('p', {}, 'Data dir: ', el('code', {}, st.dataDir)),
+  );
+}
+
+poll(); setInterval(poll, 1000);
+</script>
+</body>
+</html>

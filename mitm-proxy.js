@@ -940,6 +940,12 @@ class MitmProxy {
         this._egressBlockReason = '';
         this.onRequestLogged = opts.onRequestLogged || null;
         this.onGatewayError = opts.onGatewayError || null;
+        /**
+         * Present the CupNet CA after the leaf in the TLS chain. Lets an external Chrome trust the MITM
+         * via --ignore-certificate-errors-spki-list=<CA SPKI> (matched against any cert in the chain)
+         * without installing the CA system-wide (CupNet mini).
+         */
+        this._sendCaChain = opts.sendCaChain === true;
         this.worker = createMitmAzureBackend();
         this._server    = null;
         this._activeJa3 = null;
@@ -1330,7 +1336,7 @@ class MitmProxy {
         const tlsSocket = new tls.TLSSocket(socket, {
             isServer:           true,
             key:                fakeCert.key,
-            cert:               fakeCert.cert,
+            cert:               this._sendCaChain ? fakeCert.cert + getCACertPem() : fakeCert.cert,
             rejectUnauthorized: false,
         });
         tlsSocket.once('secure', () => clearTimeout(hsTimer));

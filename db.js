@@ -183,6 +183,26 @@ function migrateInterceptRulesCommercialColumns() {
     if (!cols.includes('breakpoint_enabled')) add(`ALTER TABLE intercept_rules ADD COLUMN breakpoint_enabled INTEGER NOT NULL DEFAULT 0`);
 }
 
+/**
+ * Allow type 'inject' (HTML script injection) on existing DBs. SQLite cannot ALTER a CHECK, so the
+ * table is rebuilt with the current DDL from sqlite_master, keeping every column and row (idempotent).
+ */
+function migrateInterceptRulesInjectType() {
+    const row = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='intercept_rules'`).get();
+    if (!row?.sql || row.sql.includes("'inject'")) return;
+    const newDdl = row.sql
+        .replace(/CHECK\s*\(\s*type\s+IN\s*\(([^)]*)\)\s*\)/i, (m, list) => `CHECK(type IN (${list},'inject'))`)
+        .replace(/CREATE TABLE\s+("?)intercept_rules\1/i, 'CREATE TABLE intercept_rules__cupnet_inject');
+    if (!newDdl.includes("'inject'") || !newDdl.includes('intercept_rules__cupnet_inject')) return;
+    const cols = db.pragma('table_info(intercept_rules)').map((c) => `"${c.name}"`).join(', ');
+    db.transaction(() => {
+        db.exec(newDdl);
+        db.exec(`INSERT INTO intercept_rules__cupnet_inject (${cols}) SELECT ${cols} FROM intercept_rules`);
+        db.exec('DROP TABLE intercept_rules');
+        db.exec('ALTER TABLE intercept_rules__cupnet_inject RENAME TO intercept_rules');
+    })();
+}
+
 /** Legacy DBs used a singleton credentials_vault (CHECK (id = 1)); allow multiple profiles. */
 function credentialsVaultHasSingletonIdConstraint() {
     try {
@@ -382,7 +402,7 @@ function migrateSchema() {
                 name        TEXT    NOT NULL,
                 enabled     INTEGER NOT NULL DEFAULT 1,
                 url_pattern TEXT    NOT NULL,
-                type        TEXT    NOT NULL CHECK(type IN ('block','modifyHeaders','mock','script')),
+                type        TEXT    NOT NULL CHECK(type IN ('block','modifyHeaders','mock','script','inject')),
                 params      TEXT,
                 priority    INTEGER NOT NULL DEFAULT 0,
                 method      TEXT    DEFAULT '*',
@@ -411,6 +431,7 @@ function migrateSchema() {
         db.exec(`DROP TABLE IF EXISTS trace_entries`);
     } catch { /* ignore */ }
     migrateInterceptRulesCommercialColumns();
+    migrateInterceptRulesInjectType();
     try {
         db.exec(`
             CREATE TABLE IF NOT EXISTS intercept_rule_history (
@@ -723,7 +744,7 @@ function createSchema() {
             name        TEXT    NOT NULL,
             enabled     INTEGER NOT NULL DEFAULT 1,
             url_pattern TEXT    NOT NULL,
-            type        TEXT    NOT NULL CHECK(type IN ('block','modifyHeaders','mock','script')),
+            type        TEXT    NOT NULL CHECK(type IN ('block','modifyHeaders','mock','script','inject')),
             params      TEXT,
             priority    INTEGER NOT NULL DEFAULT 0,
             method      TEXT    DEFAULT '*',

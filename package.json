@@ -26,6 +26,7 @@
     "build:guide": "node scripts/build-new-tab-guide.mjs",
     "test:mitm": "node tests/test-mitm.js",
     "test:mitm:live": "node scripts/mitm-standalone-check.mjs",
+    "mini": "node scripts/run-mini.cjs",
     "test:dns-mitm": "node --test --test-force-exit tests/test-dns-mitm.js",
     "test:db": "ELECTRON_RUN_AS_NODE=1 node_modules/electron/dist/Electron.app/Contents/MacOS/Electron tests/test-db.js",
     "chaos:proxy-sim": "node scripts/chaos-proxy-sim.js",

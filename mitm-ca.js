@@ -51,9 +51,12 @@ function encodeRDN(oidHex, value) {
     return SET([SEQ([OID(Buffer.from(oidHex, 'hex')), UTF8(value)])]);
 }
 
+/** RFC 5280 §4.1.2.5: UTCTime through 2049, GeneralizedTime from 2050. */
 function encodeTime(date) {
     const s = date.toISOString().replace(/[-:T]/g, '').slice(0, 14) + 'Z';
-    return asn1(0x18, Buffer.from(s, 'ascii'));
+    return date.getUTCFullYear() < 2050
+        ? asn1(0x17, Buffer.from(s.slice(2), 'ascii'))
+        : asn1(0x18, Buffer.from(s, 'ascii'));
 }
 
 function encodeSerial(n) {
@@ -64,16 +67,42 @@ function encodeSerial(n) {
     return INT(b);
 }
 
-function buildCert({ subjectCN, subjectOrg, issuerCN, serial, notBefore, notAfter,
+/** DER element at `off`: { start, end, body } (body = offset of the contents). */
+function _derElement(buf, off) {
+    let len = buf[off + 1];
+    let body = off + 2;
+    if (len & 0x80) {
+        const n = len & 0x7f;
+        len = 0;
+        for (let i = 0; i < n; i++) len = (len * 256) + buf[body + i];
+        body += n;
+    }
+    return { start: off, end: body + len, body };
+}
+
+/** Raw subject Name DER of a certificate (Certificate → tbsCertificate → subject). */
+function _subjectDerOf(certDer) {
+    const tbs = _derElement(certDer, _derElement(certDer, 0).body);
+    let el = _derElement(certDer, tbs.body);
+    if (certDer[el.start] === 0xa0) el = _derElement(certDer, el.end); // [0] version
+    // serial → signature → issuer → validity → subject
+    for (let i = 0; i < 4; i++) el = _derElement(certDer, el.end);
+    return certDer.subarray(el.start, el.end);
+}
+
+function buildCert({ subjectCN, subjectOrg, issuerCN, issuerDer, serial, notBefore, notAfter,
     pubKeyDer, signerKey, isCA, san, authorityKeyIdBytes }) {
 
     const subject = subjectOrg
         ? SEQ([encodeRDN('550403', subjectCN), encodeRDN('55040a', subjectOrg), encodeRDN('550406', 'US')])
         : SEQ([encodeRDN('550403', subjectCN)]);
 
-    const issuer = issuerCN === subjectCN && subjectOrg
-        ? subject
-        : SEQ([encodeRDN('550403', issuerCN)]);
+    // Leaf issuer must equal the CA subject byte for byte, or verifiers cannot chain leaf → CA.
+    const issuer = issuerDer
+        ? RAW(issuerDer)
+        : issuerCN === subjectCN && subjectOrg
+            ? subject
+            : SEQ([encodeRDN('550403', issuerCN)]);
 
     const extensions = [];
 
@@ -90,8 +119,9 @@ function buildCert({ subjectCN, subjectOrg, issuerCN, serial, notBefore, notAfte
     extensions.push(SEQ([OID(OID_subjectKeyId), OCT(OCT(pubKeyHash))]));
 
     if (authorityKeyIdBytes) {
+        // keyIdentifier is [0] IMPLICIT OCTET STRING — primitive 0x80, not constructed 0xa0.
         extensions.push(SEQ([OID(OID_authorityKeyId),
-            OCT(SEQ([ctx(0, authorityKeyIdBytes)]))]));
+            OCT(SEQ([asn1(0x80, authorityKeyIdBytes)]))]));
     }
 
     if (san) {
@@ -146,6 +176,7 @@ function loadOrGenerateCA(dir) {
                 savedCert.replace(/-----[^-]+-----/g, '').replace(/\s/g, ''), 'base64'
             );
             caCert = certDer;
+            domainCertCache.clear(); // leaves signed by a previous CA would no longer chain
             return { caKeyPem, caCertPem, generated: false };
         }
     } catch {
@@ -196,6 +227,7 @@ function _finishCA(pubKey, privKey) {
     caKeyPem  = privKey.export({ type: 'pkcs8', format: 'pem' });
     caCertPem = derToPem('CERTIFICATE', certDer);
     caCert    = certDer;
+    domainCertCache.clear(); // leaves signed by a previous CA would no longer chain
 }
 
 const CERT_CACHE_MAX = 500;
@@ -258,6 +290,7 @@ function _buildDomainCert(hostname, pubKey, privKey) {
         subjectCN:   hostname,
         subjectOrg:  null,
         issuerCN:    'CupNet MITM CA',
+        issuerDer:   _subjectDerOf(caCert),
         serial:      Date.now() + Math.floor(Math.random() * 1000),
         notBefore:   now,
         notAfter:    then,

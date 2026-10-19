@@ -5,6 +5,19 @@ const fs = require('node:fs');
 const db = require('./db');
 const { networkPolicy } = require('./network-policy');
 const { safeCatch, sysLog } = require('./sys-log');
+const { isDocumentRequest, injectScriptsIntoHtmlResponse } = require('./html-inject');
+
+/** Same-origin path served by the MITM itself (page beacons from injected scripts), never the origin. */
+const CUPNET_LOCAL_PATH_PREFIX = '/__cupnet/';
+
+/**
+ * Optional: async (opts) => response|null for requests to `/__cupnet/*` on any origin. Only set by
+ * hosts that serve that path (CupNet mini); without a handler those requests go to the origin as-is.
+ */
+let _localEndpointHandler = null;
+function setLocalEndpointHandler(fn) {
+    _localEndpointHandler = typeof fn === 'function' ? fn : null;
+}
 
 /**
  * Optional: async (opts, rule, meta) => Promise<{ action?: 'forward'|'block', patch?: object }>
@@ -607,8 +620,33 @@ async function planMitmIntercept(opts, planOptions) {
     const rules = (planOptions && Array.isArray(planOptions.rulesOverride))
         ? planOptions.rulesOverride
         : loadRules();
+    if (_localEndpointHandler) {
+        let pathname = '';
+        try { pathname = new URL(wireUrl).pathname; } catch { /* not a URL */ }
+        if (pathname.startsWith(CUPNET_LOCAL_PATH_PREFIX)) {
+            let response = null;
+            try {
+                response = await _localEndpointHandler(opts);
+            } catch (e) {
+                safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.local_endpoint.failed', context: { url: wireUrl } }, e, 'warn');
+                response = {
+                    statusCode: 500,
+                    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                    bodyBase64: Buffer.from('CupNet local endpoint error', 'utf8').toString('base64'),
+                };
+            }
+            if (response) {
+                return { done: true, response: { ...response, dnsOverride: opts.dnsOverride || null }, responseDelayMs: 0 };
+            }
+        }
+    }
     let mergedModifyPost = null;
     let responseDelayMs = 0;
+    /** `inject` rules matched so far; applied to the HTML response in finalize (see html-inject.js). */
+    const injectScripts = [];
+    const withInject = (post) => (injectScripts.length
+        ? { ...(post || { _responseDelayMs: responseDelayMs }), _inject: injectScripts }
+        : post);
     for (const rule of rules) {
         if (!ruleMatchesUrl(rule.url_pattern, matchUrl)) continue;
         if (bypassInterceptMockBlockForSensitiveUrl(matchUrl)) continue;
@@ -765,7 +803,33 @@ async function planMitmIntercept(opts, planOptions) {
             }
             if (hasResp) mergedModifyPost = mergeModifyHeadersParams(mergedModifyPost, p);
             if (stopOnMatch(rule)) {
-                return { done: false, opts, postProcess: mergedModifyPost, responseDelayMs };
+                return { done: false, opts, postProcess: withInject(mergedModifyPost), responseDelayMs };
+            }
+            continue;
+        }
+
+        if (rule.type === 'inject') {
+            // Only document loads: matching a sub-resource would just disable streaming for nothing.
+            if (!isDocumentRequest(opts.method, opts.headers)) continue;
+            const p = rule.params || {};
+            const source = String(p.source || '');
+            if (!source.trim()) continue;
+            const position = p.position === 'body-end' ? 'body-end' : 'head';
+            injectScripts.push({ source, position, name: rule.name });
+            const detailStr = `inject ${position} (${source.length} chars)`;
+            _bumpRuleHit(rule);
+            _logRuleApplied('mitm', {
+                type: 'inject', ruleName: rule.name, url: matchUrl, tabId: null, detail: detailStr,
+            });
+            if (_onRuleMatch) {
+                try {
+                    _onRuleMatch({ type: 'inject', ruleName: rule.name, url: matchUrl, tabId: null, detail: detailStr, ruleId: rule.id });
+                } catch (err) {
+                    safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'inject', stage: 'mitm' } }, err);
+                }
+            }
+            if (stopOnMatch(rule)) {
+                return { done: false, opts, postProcess: withInject(mergedModifyPost), responseDelayMs };
             }
             continue;
         }
@@ -853,15 +917,32 @@ async function planMitmIntercept(opts, planOptions) {
                     safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'script', stage: 'mitm' } }, err);
                 }
             }
-            return { done: false, opts, postProcess, responseDelayMs };
+            return { done: false, opts, postProcess: withInject(postProcess), responseDelayMs };
         }
     }
-    return { done: false, opts, postProcess: mergedModifyPost, responseDelayMs };
+    return { done: false, opts, postProcess: withInject(mergedModifyPost), responseDelayMs };
+}
+
+/** Apply matched `inject` rules (ruleParams._inject) to an HTML response. */
+function _applyInject(res, ruleParams) {
+    const scripts = ruleParams && ruleParams._inject;
+    if (!res || !Array.isArray(scripts) || !scripts.length) return res;
+    try {
+        // MITM buffered responses: AzureTLS already decoded the body; Content-Encoding is stale here.
+        return injectScriptsIntoHtmlResponse(res, scripts, { bodyDecoded: true });
+    } catch (e) {
+        safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.inject.failed' }, e, 'warn');
+        return res;
+    }
 }
 
 function finalizeMitmInterceptResponse(res, ruleParams) {
     if (!res || !ruleParams) return res;
     if (ruleParams._mitmPost === MITM_POST_SCRIPT_AFTER) return res;
+    return _applyInject(_applyResponseHeaderEdits(res, ruleParams), ruleParams);
+}
+
+function _applyResponseHeaderEdits(res, ruleParams) {
     const toSetResp = ruleParams.responseHeaders || {};
     const toRemoveResp = ruleParams.removeResponseHeaders || [];
     if (!Object.keys(toSetResp).length && !toRemoveResp.length) return res;
@@ -886,7 +967,7 @@ async function finalizeMitmInterceptResponseAsync(res, ruleParams) {
     if (!res || !ruleParams) return res;
     if (ruleParams._mitmPost === MITM_POST_SCRIPT_AFTER) {
         const afterSrc = String(ruleParams.afterSource || '');
-        if (!afterSrc.trim()) return res;
+        if (!afterSrc.trim()) return _applyInject(res, ruleParams);
         const respHeaders = { ...(res.headers || {}) };
         const afterCtx = {
             request: ruleParams.requestSnapshot || {},
@@ -908,19 +989,19 @@ async function finalizeMitmInterceptResponseAsync(res, ruleParams) {
                 'warn',
             );
             if (ruleParams.ruleId != null) db.setInterceptRuleErrorAsync(ruleParams.ruleId, `after: ${err}`).catch(() => {});
-            return res;
+            return _applyInject(res, ruleParams);
         }
         if (ruleParams.ruleId != null) db.setInterceptRuleErrorAsync(ruleParams.ruleId, null).catch(() => {});
         let bodyBase64 = afterCtx.response.bodyBase64;
         if (afterCtx.response.body != null && afterCtx.response.body !== undefined) {
             bodyBase64 = Buffer.from(String(afterCtx.response.body), 'utf8').toString('base64');
         }
-        return {
+        return _applyInject({
             ...res,
             statusCode: Number(afterCtx.response.statusCode) || res.statusCode,
             headers: { ...(afterCtx.response.headers || {}) },
             bodyBase64: bodyBase64 != null ? String(bodyBase64) : (res.bodyBase64 || ''),
-        };
+        }, ruleParams);
     }
     return finalizeMitmInterceptResponse(res, ruleParams);
 }
@@ -930,6 +1011,16 @@ function validateInterceptRuleForSave(rule) {
     if (isStrictInterceptMode()) {
         const v = validateStrictInterceptUrlPattern(rule?.url_pattern);
         if (!v.ok) return v;
+    }
+    if (rule?.type === 'inject') {
+        const p = parseParams(rule.params);
+        const source = String(p.source || '');
+        if (!source.trim()) return { ok: false, error: 'Provide the script to inject' };
+        const err = validateScriptSyntax(source, 'inject');
+        if (err) return { ok: false, error: `Inject script: ${err}` };
+        if (p.position != null && p.position !== 'head' && p.position !== 'body-end') {
+            return { ok: false, error: "Inject position must be 'head' or 'body-end'" };
+        }
     }
     if (rule?.type === 'script') {
         const p = parseParams(rule.params);
@@ -1063,4 +1154,6 @@ module.exports = {
     setOnRuleMatch,
     setResolveTabIdFromDetails,
     setBreakpointHandler,
+    setLocalEndpointHandler,
+    CUPNET_LOCAL_PATH_PREFIX,
 };
