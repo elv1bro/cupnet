@@ -1,10 +1,13 @@
 'use strict';
 
 /**
- * CupNet mini CLI. Run through scripts/run-mini.cjs (`npm run mini -- …`) so better-sqlite3 loads
- * on the Electron Node ABI it was built for.
+ * CupNet mini CLI (plain Node ≥ 20).
  *
- *   start [--chrome] [--url URL]   run the proxy + UI (default command)
+ *   start [--window] [--chrome] [--url URL]
+ *                                  run the proxy + UI (default command). --window opens the CupNet mini
+ *                                  window (UI as a Chrome app window); if mini is already running it
+ *                                  only opens another window. --chrome also launches the proxied Chrome.
+ *   window                         open the CupNet mini window of a running instance
  *   chrome [--url URL]             launch Chrome on the mini profile (proxy must be running)
  *   ca                             print CA path, SHA-256, SPKI and the OS trust commands
  *   seal [SESSION_ID | --all]      encrypt saved session(s) → keys/<id>.cupkey + sealed/<id>.cupsess
@@ -15,6 +18,7 @@
  */
 
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
 const { MiniApp } = require('./mini-app');
 const { SessionLog } = require('./session-log');
@@ -32,6 +36,29 @@ function parseArgs(argv) {
         if (next != null && !next.startsWith('--')) { out[key] = next; i++; } else { out[key] = true; }
     }
     return out;
+}
+
+/** POST/GET to a running instance's UI API with the token from <data>/ui-token. Resolves null when none answers. */
+function callRunning(app, method, apiPath) {
+    let token = '';
+    try { token = fs.readFileSync(app.tokenFile, 'utf8').trim(); } catch { return Promise.resolve(null); }
+    return new Promise((resolve) => {
+        const req = http.request({
+            host: '127.0.0.1', port: app.uiPort, path: apiPath, method, timeout: 1500,
+            headers: { 'X-CupNet-Token': token, 'Content-Type': 'application/json', 'Content-Length': 2 },
+        }, (res) => {
+            const chunks = [];
+            res.on('data', (c) => chunks.push(c));
+            res.on('end', () => {
+                let body = null;
+                try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* not ours */ }
+                resolve(res.statusCode === 200 ? body : null);
+            });
+        });
+        req.on('timeout', () => req.destroy());
+        req.on('error', () => resolve(null));
+        req.end('{}');
+    });
 }
 
 function appFromArgs(a) {
@@ -60,6 +87,13 @@ async function main() {
         console.log(`  install: ${ca.commands.install}`);
         console.log(`  remove:  ${ca.commands.remove}`);
         console.log(`  verify:  ${ca.commands.verify}`);
+        return;
+    }
+
+    if (cmd === 'window') {
+        const r = await callRunning(app, 'POST', '/api/window');
+        if (!r) { console.error(`CupNet mini is not running on 127.0.0.1:${app.uiPort} (start it with: start --window)`); process.exitCode = 1; return; }
+        if (!r.success) { console.error(r.error); process.exitCode = 1; }
         return;
     }
 
@@ -95,11 +129,20 @@ async function main() {
     }
 
     if (cmd !== 'start') {
-        console.error(`Unknown command "${cmd}". Use start | chrome | ca | seal | open.`);
+        console.error(`Unknown command "${cmd}". Use start | window | chrome | ca | seal | open.`);
         process.exitCode = 2;
         return;
     }
 
+    // Already running (e.g. the app launcher clicked twice): just bring up another window.
+    if (a.window && await callRunning(app, 'GET', '/api/status')) {
+        const r = await callRunning(app, 'POST', '/api/window');
+        console.log(r?.success ? 'CupNet mini is already running; opened its window.' : `CupNet mini is already running; window: ${r?.error || 'failed'}`);
+        return;
+    }
+
+    let shutdown = null;
+    app.onQuit = () => shutdown?.();
     await app.start();
     console.log(`CupNet mini — session ${app.log.sessionId}`);
     console.log(`  proxy:    http://127.0.0.1:${app.mitmPort}${app.upstream ? ' → upstream' : ' (direct)'}`);
@@ -107,13 +150,18 @@ async function main() {
     console.log(`  log file: ${app.log.file}`);
     console.log(`  key file: ${app.sessionKey.file} (sealed on stop → sealed/${app.sessionKey.id}.cupsess)`);
     console.log(`  trust:    ${app.trust}${app.trust === 'spki' ? ` (SPKI ${app.ca.spki})` : ''}`);
+    if (app.rulesImported) console.log(`  rules:    imported ${app.rulesImported} from cupnet-mini.db into ${app.rulesFile}`);
+    if (a.window) {
+        const r = app.openWindow();
+        console.log(r.success ? '  window:   opened' : `  window:   ${r.error}`);
+    }
     if (a.chrome) {
         const r = app.launchChrome(typeof a.url === 'string' ? a.url : undefined);
         console.log(r.success ? `  chrome:   pid ${r.pid}` : `  chrome:   ${r.error}`);
     }
 
     let stopping = false;
-    const shutdown = async () => {
+    shutdown = async () => {
         if (stopping) return;
         stopping = true;
         console.log('\nStopping…');
@@ -133,4 +181,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { parseArgs };
+module.exports = { parseArgs, callRunning };

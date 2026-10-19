@@ -60,7 +60,7 @@ function buildChromeArgs(o) {
  */
 function launchChrome(o) {
     const binary = o.binary || findChromeBinary();
-    if (!binary) return { success: false, error: 'Google Chrome was not found. Install it or pass --chrome <path>.' };
+    if (!binary) return { success: false, error: 'Google Chrome was not found. Install it or pass --chrome-bin <path>.' };
     try {
         ensureProfilePrefs(o.profileDir);
         const args = buildChromeArgs(o);
@@ -73,4 +73,30 @@ function launchChrome(o) {
     }
 }
 
-module.exports = { buildChromeArgs, ensureProfilePrefs, launchChrome, WEBRTC_POLICY };
+/** Command line for the CupNet mini window: the UI in a Chrome app window, on its own unproxied profile. */
+function buildAppWindowArgs(o) {
+    return [
+        `--user-data-dir=${o.profileDir}`,
+        `--app=${o.url}`,
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--window-size=1440,900',
+    ];
+}
+
+/** @returns {{ success:boolean, pid?:number, error?:string }} */
+function launchAppWindow(o) {
+    const binary = o.binary || findChromeBinary();
+    if (!binary) return { success: false, error: 'Google Chrome was not found. Install it or pass --chrome-bin <path>.' };
+    try {
+        fs.mkdirSync(o.profileDir, { recursive: true, mode: 0o700 });
+        const child = spawn(binary, buildAppWindowArgs(o), { detached: true, stdio: 'ignore' });
+        child.on('error', () => { /* surfaced by the spawn throw where possible */ });
+        child.unref();
+        return { success: true, pid: child.pid, binary };
+    } catch (e) {
+        return { success: false, error: e?.message || String(e) };
+    }
+}
+
+module.exports = { buildChromeArgs, buildAppWindowArgs, ensureProfilePrefs, launchChrome, launchAppWindow, WEBRTC_POLICY };

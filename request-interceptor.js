@@ -2,7 +2,6 @@
 
 const vm = require('node:vm');
 const fs = require('node:fs');
-const db = require('./db');
 const { networkPolicy } = require('./network-policy');
 const { safeCatch, sysLog } = require('./sys-log');
 const { isDocumentRequest, injectScriptsIntoHtmlResponse } = require('./html-inject');
@@ -86,7 +85,7 @@ function _mirrorStdout(message, data) {
 function _logRulesSnapshot(reason) {
     if (!_interceptLogRulesEnabled()) return;
     try {
-        const rows = db.getAllInterceptRules();
+        const rows = _ruleStore().getAllInterceptRules();
         const rules = rows.map(r => ({
             id: r.id,
             enabled: !!r.enabled,
@@ -157,6 +156,21 @@ function parseParams(raw) {
     try { return JSON.parse(raw); } catch { return {}; }
 }
 
+/**
+ * Rule store: db.js (SQLite) by default, loaded lazily. CupNet mini injects a JSON-file store so the
+ * MITM path runs on plain Node without Electron/better-sqlite3. A store implements
+ * getAllInterceptRules(), incrementInterceptRuleHitAsync(id), setInterceptRuleErrorAsync(id, err).
+ */
+let _injectedRuleStore = null;
+function _ruleStore() {
+    return _injectedRuleStore || require('./db');
+}
+function setRuleStore(store) {
+    _injectedRuleStore = store || null;
+    _cachedRules = null;
+    _cacheTime = 0;
+}
+
 let _cachedRules = null;
 let _cacheTime = 0;
 const RULES_CACHE_TTL = 3000;
@@ -165,7 +179,7 @@ function loadRules() {
     const now = Date.now();
     if (_cachedRules && (now - _cacheTime) < RULES_CACHE_TTL) return _cachedRules;
     try {
-        _cachedRules = db.getAllInterceptRules()
+        _cachedRules = _ruleStore().getAllInterceptRules()
             .filter(r => r.enabled)
             .map(r => ({ ...r, params: parseParams(r.params) }));
         _cacheTime = now;
@@ -184,7 +198,7 @@ function invalidateRulesCache() {
 
 function _bumpRuleHit(rule) {
     if (rule && rule.id != null) {
-        db.incrementInterceptRuleHitAsync(rule.id).catch(() => {});
+        _ruleStore().incrementInterceptRuleHitAsync(rule.id).catch(() => {});
     }
 }
 
@@ -859,10 +873,10 @@ async function planMitmIntercept(opts, planOptions) {
                     new Error(errBefore),
                     'warn',
                 );
-                if (rule.id != null) db.setInterceptRuleErrorAsync(rule.id, errBefore).catch(() => {});
+                if (rule.id != null) _ruleStore().setInterceptRuleErrorAsync(rule.id, errBefore).catch(() => {});
                 continue;
             }
-            if (rule.id != null) db.setInterceptRuleErrorAsync(rule.id, null).catch(() => {});
+            if (rule.id != null) _ruleStore().setInterceptRuleErrorAsync(rule.id, null).catch(() => {});
             const sc = normalizeShortCircuitResponse(
                 beforeCtx.shortCircuit,
                 beforeCtx.dnsOverride != null ? beforeCtx.dnsOverride : opts.dnsOverride,
@@ -988,10 +1002,10 @@ async function finalizeMitmInterceptResponseAsync(res, ruleParams) {
                 new Error(err),
                 'warn',
             );
-            if (ruleParams.ruleId != null) db.setInterceptRuleErrorAsync(ruleParams.ruleId, `after: ${err}`).catch(() => {});
+            if (ruleParams.ruleId != null) _ruleStore().setInterceptRuleErrorAsync(ruleParams.ruleId, `after: ${err}`).catch(() => {});
             return _applyInject(res, ruleParams);
         }
-        if (ruleParams.ruleId != null) db.setInterceptRuleErrorAsync(ruleParams.ruleId, null).catch(() => {});
+        if (ruleParams.ruleId != null) _ruleStore().setInterceptRuleErrorAsync(ruleParams.ruleId, null).catch(() => {});
         let bodyBase64 = afterCtx.response.bodyBase64;
         if (afterCtx.response.body != null && afterCtx.response.body !== undefined) {
             bodyBase64 = Buffer.from(String(afterCtx.response.body), 'utf8').toString('base64');
@@ -1155,5 +1169,6 @@ module.exports = {
     setResolveTabIdFromDetails,
     setBreakpointHandler,
     setLocalEndpointHandler,
+    setRuleStore,
     CUPNET_LOCAL_PATH_PREFIX,
 };

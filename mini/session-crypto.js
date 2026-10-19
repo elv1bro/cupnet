@@ -80,6 +80,21 @@ function findKeyBySessionId(keysDir, sessionId) {
     return null;
 }
 
+/** sessionId → { id, file } for every valid key file in `keysDir`. */
+function listKeys(keysDir) {
+    const out = new Map();
+    let names = [];
+    try { names = fs.readdirSync(keysDir).filter((n) => n.endsWith('.cupkey')); } catch { return out; }
+    for (const n of names) {
+        const file = path.join(keysDir, n);
+        try {
+            const k = readKeyFile(file);
+            if (k.sessionId) out.set(k.sessionId, { id: k.id, file });
+        } catch { /* skip foreign/corrupt files */ }
+    }
+    return out;
+}
+
 /** Split JSONL text into frames of whole lines, each ≤ FRAME_MAX bytes (a longer line is its own frame). */
 function _chunkLines(buf) {
     const chunks = [];
@@ -158,6 +173,7 @@ module.exports = {
     readKeyFile,
     ensureSessionKey,
     findKeyBySessionId,
+    listKeys,
     sealBuffer,
     openBuffer,
     sealSession,

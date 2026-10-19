@@ -6,13 +6,13 @@
  *   Chrome (dedicated profile) ──HTTP proxy──▶ MitmProxy 127.0.0.1:<mitmPort> ──AzureTLS──▶ origin
  *                                                │ intercept rules (block/mock/modifyHeaders/script/inject)
  *                                                │ /__cupnet/* served locally (page events)
- *                                                └▶ SessionLog (ring + sessions/<id>.jsonl) ◀── UI 127.0.0.1:<uiPort>
+ *                                                └▶ SessionLog (sessions/<id>.jsonl + index) ◀── UI 127.0.0.1:<uiPort>
  *
  * Everything listens on loopback only. Data lives in <dataDir> (default ~/.cupnet-mini):
- *   ca/ca-key.pem, ca/ca-cert.pem · cupnet-mini.db (rules) · sessions/*.jsonl · chrome-profile/ · ui-token
+ *   ca/ca-key.pem, ca/ca-cert.pem · rules.json · sessions/*.jsonl · chrome-profile/ · ui-profile/ · ui-token
  *   keys/<id>.cupkey (one key per session) · sealed/<id>.cupsess (encrypted sessions, see session-crypto.js)
  *
- * Must run on the Node ABI better-sqlite3 was built for (Electron's): see scripts/run-mini.cjs.
+ * Plain Node ≥ 20 is enough: no Electron, no native modules (rules live in a JSON file, rule-store.js).
  */
 
 const fs = require('fs');
@@ -23,10 +23,14 @@ const crypto = require('crypto');
 const { SessionLog } = require('./session-log');
 const sessionCrypto = require('./session-crypto');
 const { spkiHashFromCertPem, fingerprintSha256, caInstructions } = require('./ca');
-const { launchChrome } = require('./chrome');
+const { launchChrome, launchAppWindow } = require('./chrome');
 const { createUiServer } = require('./ui-server');
+const { RuleStore } = require('./rule-store');
 
 const PAGE_EVENT_MAX_BYTES = 64 * 1024;
+/** Bodies are logged in full; this only guards V8's string limit (base64 of the body must fit). */
+const DEFAULT_LOG_BODY_MAX_BYTES = 256 * 1024 * 1024;
+const LAUNCH_CODE_TTL_MS = 60 * 1000;
 
 function defaultDataDir() {
     return process.env.CUPNET_MINI_DIR || path.join(os.homedir(), '.cupnet-mini');
@@ -60,6 +64,7 @@ class MiniApp {
      * @param {string} [o.upstream] upstream proxy URL (http://, socks5://), default direct
      * @param {'spki'|'system'} [o.trust='spki']
      * @param {string} [o.chromeBinary]
+     * @param {() => void} [o.onQuit] called when the UI asks to quit
      */
     constructor(o = {}) {
         this.dataDir = path.resolve(o.dataDir || defaultDataDir());
@@ -69,7 +74,10 @@ class MiniApp {
         this.upstream = o.upstream || null;
         this.trust = o.trust === 'system' ? 'system' : 'spki';
         this.chromeBinary = o.chromeBinary || null;
+        this.onQuit = o.onQuit || null;
         this.mitm = null;
+        this.uiWindow = null;
+        this._launchCodes = new Map();
         this.ui = null;
         this.log = null;
     }
@@ -77,6 +85,9 @@ class MiniApp {
     get caDir() { return path.join(this.dataDir, 'ca'); }
     get caCertPath() { return path.join(this.caDir, 'ca-cert.pem'); }
     get profileDir() { return path.join(this.dataDir, 'chrome-profile'); }
+    get uiProfileDir() { return path.join(this.dataDir, 'ui-profile'); }
+    get rulesFile() { return path.join(this.dataDir, 'rules.json'); }
+    get tokenFile() { return path.join(this.dataDir, 'ui-token'); }
     get sessionsDir() { return path.join(this.dataDir, 'sessions'); }
     get keysDir() { return path.join(this.dataDir, 'keys'); }
     get sealedDir() { return path.join(this.dataDir, 'sealed'); }
@@ -106,12 +117,15 @@ class MiniApp {
         this.ca = ca;
         // The Go worker always runs as a child process here (no in-process ffi without Electron).
         process.env.CUPNET_AZURETLS_CHILD_PROCESS = '1';
+        // Log everything: full bodies, media included. Read by mitm-proxy.js at require time.
+        if (!process.env.CUPNET_LOG_BODY_MAX_BYTES) process.env.CUPNET_LOG_BODY_MAX_BYTES = String(DEFAULT_LOG_BODY_MAX_BYTES);
+        if (!process.env.CUPNET_LOG_MEDIA_BODIES) process.env.CUPNET_LOG_MEDIA_BODIES = '1';
 
-        const db = require('../db');
-        db.initWithPath(path.join(this.dataDir, 'cupnet-mini.db'));
-        this.db = db;
+        this.rules = new RuleStore(this.rulesFile);
+        this.rulesImported = this.rules.importFromSqlite(path.join(this.dataDir, 'cupnet-mini.db'));
         const interceptor = require('../request-interceptor');
         this.interceptor = interceptor;
+        interceptor.setRuleStore(this.rules);
         interceptor.setLocalEndpointHandler((req) => this._handleLocalEndpoint(req));
 
         this.log = new SessionLog({ dir: this.sessionsDir });
@@ -132,7 +146,7 @@ class MiniApp {
         if (this.upstream) this.mitm.setUpstream(this.upstream);
         await this.mitm.start();
 
-        this.token = _readOrCreateToken(path.join(this.dataDir, 'ui-token'));
+        this.token = _readOrCreateToken(this.tokenFile);
         this.ui = createUiServer(this);
         await this.ui.listen(this.uiPort);
         this.uiPort = this.ui.port;
@@ -141,6 +155,38 @@ class MiniApp {
 
     get uiUrl() {
         return `http://127.0.0.1:${this.uiPort}/#t=${this.token}`;
+    }
+
+    /**
+     * One-time code for opening the UI without putting the token on a command line (other local users
+     * can read process arguments). The page trades it for the token once: POST /api/auth/exchange.
+     */
+    newLaunchCode() {
+        const code = crypto.randomBytes(18).toString('base64url');
+        this._launchCodes.set(code, Date.now() + LAUNCH_CODE_TTL_MS);
+        return code;
+    }
+
+    /** @returns {boolean} true once per valid, unexpired code */
+    redeemLaunchCode(code) {
+        const now = Date.now();
+        for (const [c, exp] of this._launchCodes) if (exp < now) this._launchCodes.delete(c);
+        if (typeof code !== 'string' || !this._launchCodes.has(code)) return false;
+        this._launchCodes.delete(code);
+        return true;
+    }
+
+    /** The CupNet mini window: the UI as a Chrome app window on its own profile (not proxied). */
+    openWindow() {
+        const url = `http://127.0.0.1:${this.uiPort}/#c=${this.newLaunchCode()}`;
+        const r = launchAppWindow({ binary: this.chromeBinary, profileDir: this.uiProfileDir, url });
+        if (r.success) this.uiWindow = r;
+        return r;
+    }
+
+    requestQuit() {
+        if (this.onQuit) setImmediate(this.onQuit);
+        return !!this.onQuit;
     }
 
     launchChrome(url) {
@@ -182,13 +228,15 @@ class MiniApp {
         try { this.interceptor?.setLocalEndpointHandler(null); } catch { /* ignore */ }
         if (this.ui) { await this.ui.close().catch(() => {}); this.ui = null; }
         if (this.mitm) { this.mitm.stop(); this.mitm = null; }
+        try { this.interceptor?.setRuleStore(null); } catch { /* ignore */ }
+        try { this.rules?.close(); } catch { /* ignore */ }
+        if (this.uiWindow?.pid) { try { process.kill(this.uiWindow.pid); } catch { /* already closed */ } this.uiWindow = null; }
         if (this.log) {
             const { sessionId } = this.log;
             await this.log.close();
             this.log = null;
             try { this.sealed = this.sealSession(sessionId); } catch { /* the plain JSONL is still there */ }
         }
-        try { this.db?.close(); } catch { /* ignore */ }
     }
 }
 

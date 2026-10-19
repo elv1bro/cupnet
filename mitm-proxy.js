@@ -270,8 +270,12 @@ const LOG_BODY_MAX_BYTES = (() => {
     return Number.isFinite(n) && n >= 0 ? n : 10 * 1024 * 1024;
 })();
 
+/** CUPNET_LOG_MEDIA_BODIES=1 logs video/audio bodies too (CupNet mini: "write everything"). */
+const LOG_MEDIA_BODIES = process.env.CUPNET_LOG_MEDIA_BODIES === '1';
+
 /** Media streams (video/audio) are huge and practically never inspected — keep them out of the log. */
 function _isMediaContentType(ct) {
+    if (LOG_MEDIA_BODIES) return false;
     return /^\s*(video|audio)\//i.test(String(ct || ''));
 }
 
@@ -1369,24 +1373,9 @@ class MitmProxy {
             const entry = pipe.newEntry();
             const t0 = Date.now();
 
-            /** Request-log entry; `logBody` is the decoded response body (string, `__b64__:` or null). */
-            const logResponse = (res, resOut, logBody) => {
-                if (!this.onRequestLogged) return;
-                const reqBodyForLog = _reqBodyForLog(req);
-                const dnsCorsMatch = !res.dnsOverride ? this._mitmCorsMatchDetail(url) : null;
-                const requestHeadersForLog = { ...headers };
-                applyIdentityToOutboundHeaders(requestHeadersForLog, null, this._resolveUpstreamForTab(tabId).identity, { url });
-                this.onRequestLogged({
-                    url, method: req.method, tabId, sessionId, requestId,
-                    cupnetRid: cupnetRid || null,
-                    status: resOut.statusCode, requestHeaders: requestHeadersForLog,
-                    responseHeaders: resOut.headers, requestBody: reqBodyForLog,
-                    responseBody: logBody, duration: Date.now() - t0,
-                    type: inferMitmResourceType(url, req.method, requestHeadersForLog, resOut.headers),
-                    dnsOverride: res.dnsOverride || null,
-                    dnsCorsMatch,
-                });
-            };
+            const logResponse = (res, resOut, logBody) => this._logMitmResponse({
+                url, req, headers, tabId, sessionId, requestId, cupnetRid, t0, res, resOut, logBody,
+            });
 
             this._doRequest({ method: req.method, url, headers, orderedHeaders: orderedHeadersStripped, body: req.body, bodyBase64: req.bodyBase64, requestId, tabId, allowStream: true })
                 .then(res  => {
@@ -1600,6 +1589,11 @@ class MitmProxy {
         const pipe = createResponsePipeline(socket, { endWhenDone: true });
         const entry = pipe.newEntry();
         socket.on('close', () => pipe.reset());
+        const requestId = `mitm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const t0 = Date.now();
+        const logResponse = (res, resOut, logBody) => this._logMitmResponse({
+            url, req, headers, tabId, sessionId: null, requestId, cupnetRid, t0, res, resOut, logBody,
+        });
 
         this._doRequest({
             method: req.method,
@@ -1608,7 +1602,7 @@ class MitmProxy {
             orderedHeaders: orderedHeadersPlain,
             body: req.body,
             bodyBase64: req.bodyBase64,
-            requestId: `mitm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            requestId,
             tabId,
             allowStream: true,
         })
@@ -1618,10 +1612,15 @@ class MitmProxy {
                 if (debugMitmLevel >= 4 && !res.stream) mitmUserLog(_fmtBody(null, res.bodyBase64, 'res body'));
                 const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, res);
                 if (res.stream) {
-                    pipeStreamIntoEntry(pipe, entry, socket, { res, resOut, method: req.method, url, tag: ctagPlain });
+                    pipeStreamIntoEntry(pipe, entry, socket, {
+                        res, resOut, method: req.method, url, tag: ctagPlain,
+                        wantLogBody: !!this.onRequestLogged,
+                        onComplete: (logBody) => logResponse(res, resOut, logBody),
+                    });
                     return;
                 }
                 pipe.finish(entry, buildHttpResponse(resOut, url));
+                logResponse(res, resOut, this.onRequestLogged ? _logBodyFromResponse(resOut) : null);
             })
             .catch((e) => {
                 dbg(`[mitm] ✗ ${url} ${e.message}${ctagPlain}\n`);
@@ -1631,6 +1630,24 @@ class MitmProxy {
                 const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
                 pipe.finish(entry, buildHttpResponse(resOut, url));
             });
+    }
+
+    /** Request-log entry (HTTPS inside CONNECT and plain HTTP); `logBody` is the decoded response body (string, `__b64__:` or null). */
+    _logMitmResponse({ url, req, headers, tabId, sessionId, requestId, cupnetRid, t0, res, resOut, logBody }) {
+        if (!this.onRequestLogged) return;
+        const dnsCorsMatch = !res.dnsOverride ? this._mitmCorsMatchDetail(url) : null;
+        const requestHeadersForLog = { ...headers };
+        applyIdentityToOutboundHeaders(requestHeadersForLog, null, this._resolveUpstreamForTab(tabId).identity, { url });
+        this.onRequestLogged({
+            url, method: req.method, tabId, sessionId, requestId,
+            cupnetRid: cupnetRid || null,
+            status: resOut.statusCode, requestHeaders: requestHeadersForLog,
+            responseHeaders: resOut.headers, requestBody: _reqBodyForLog(req),
+            responseBody: logBody, duration: Date.now() - t0,
+            type: inferMitmResourceType(url, req.method, requestHeadersForLog, resOut.headers),
+            dnsOverride: res.dnsOverride || null,
+            dnsCorsMatch,
+        });
     }
 
     // ── HTTP request (AzureTLS worker — disableRedirects preserves Set-Cookie on 302) ─

@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createRequire } from 'module';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import http from 'http';
@@ -26,7 +26,10 @@ process.env.CUPNET_AZURETLS_CHILD_PROCESS = '1';
 const { buildChromeArgs, ensureProfilePrefs, WEBRTC_POLICY } = require('../../mini/chrome.js');
 const { spkiHashFromCertPem, caInstructions } = require('../../mini/ca.js');
 const { parseArgs } = require('../../mini/cupnet-mini.js');
-const { SessionLog, newSessionId } = require('../../mini/session-log.js');
+const { SessionLog, SessionIndex, newSessionId, bodySize } = require('../../mini/session-log.js');
+const { RuleStore } = require('../../mini/rule-store.js');
+const { BODY_PREVIEW_CHARS } = require('../../mini/ui-server.js');
+const hasNodeSqlite = (() => { try { require('node:sqlite'); return true; } catch { return false; } })();
 
 const tmpDirs = [];
 const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'cupnet-mini-')); tmpDirs.push(d); return d; };
@@ -96,22 +99,135 @@ describe('parseArgs', () => {
 });
 
 describe('SessionLog', () => {
-    it('keeps a ring for the UI and a JSONL file per session', async () => {
+    it('writes complete entries to one JSONL file per session and keeps only summaries + offsets in memory', async () => {
         const dir = tmp();
         const log = new SessionLog({ dir });
         expect(log.sessionId).toMatch(/^\d{8}-\d{6}-[0-9a-f]{4}$/);
-        log.logRequest({ method: 'GET', url: 'https://a/', status: 200, duration: 5, responseBody: 'x'.repeat(600 * 1024) });
+        const big = 'x'.repeat(3 * 1024 * 1024);
+        const seen = [];
+        log.on('entry', (e) => seen.push(e));
+        log.logRequest({
+            method: 'POST', url: 'https://a/', status: 200, duration: 5, requestBody: '__b64__:AAEC',
+            responseHeaders: { 'Content-Type': 'text/plain; charset=utf-8' }, responseBody: big,
+        });
         log.logPageEvent('https://a/', { k: 1 });
         const list = log.list(1);
         expect(list.map((e) => e.kind)).toEqual(['request', 'page-event']);
+        expect(list[0]).toMatchObject({ mime: 'text/plain', reqSize: 3, resSize: big.length });
         expect(list[0].responseBody).toBeUndefined(); // summaries only
-        expect(log.get(2).responseBody).toMatch(/…\[truncated \d+ chars\]$/);
-        log.close();
-        await new Promise((r) => setTimeout(r, 50));
+        expect(list[0].off).toBeUndefined();
+        expect(seen.map((e) => e.seq)).toEqual([2, 3]);
+        expect(log.get(2).responseBody).toBe(big); // nothing truncated
+        expect(log.get(3).data).toEqual({ k: 1 });
+        let closed = false;
+        log.on('close', () => { closed = true; });
+        await log.close();
+        expect(closed).toBe(true);
         const lines = readFileSync(log.file, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
         expect(lines.map((e) => e.kind)).toEqual(['session-start', 'request', 'page-event', 'session-end']);
         expect(SessionLog.listSessions(dir).map((s) => s.id)).toEqual([log.sessionId]);
         expect(newSessionId(new Date(2026, 0, 2, 3, 4, 5))).toMatch(/^20260102-030405-/);
+    });
+
+    it('SessionIndex scans a saved file by line heads, reads entries on demand and picks up appended lines', () => {
+        const dir = tmp();
+        const log = new SessionLog({ dir, sessionId: '20260101-000000-test' });
+        const longUrl = `https://a/${'p'.repeat(80 * 1024)}`; // summary itself beyond the 64 KB head
+        log.logRequest({ method: 'GET', url: longUrl, status: 200, responseBody: 'y'.repeat(200 * 1024) });
+        log.logRequest({ method: 'GET', url: 'https://b/', status: 404 });
+        const idx = SessionIndex.open(log.file);
+        expect(idx.count).toBe(3);
+        expect(idx.list(0).map((e) => e.url)).toEqual([undefined, longUrl, 'https://b/']);
+        expect(idx.list(2, 10).map((e) => e.seq)).toEqual([3]);
+        expect(idx.get(2).responseBody).toHaveLength(200 * 1024);
+        expect(idx.get(99)).toBeNull();
+
+        // A half-written last line is left for the next refresh().
+        log.close();
+        expect(idx.refresh()).toBe(1); // session-end
+        appendFileSync(log.file, '{"seq":9,"kind":"request","url":"https://c/"');
+        expect(idx.refresh()).toBe(0);
+        appendFileSync(log.file, '}\n');
+        expect(idx.refresh()).toBe(1);
+        expect(idx.lastSeq).toBe(9);
+    });
+
+    it('bodySize counts base64 bodies as bytes', () => {
+        expect(bodySize(null)).toBe(0);
+        expect(bodySize('ok')).toBe(2);
+        expect(bodySize('ж')).toBe(2);
+        expect(bodySize(`__b64__:${Buffer.alloc(10).toString('base64')}`)).toBe(10);
+        expect(bodySize(`__b64__:${Buffer.alloc(11).toString('base64')}`)).toBe(11);
+    });
+});
+
+describe('RuleStore', () => {
+    it('keeps db.js row shape and order, persists atomically and batches hit counters', async () => {
+        const file = path.join(tmp(), 'rules.json');
+        const s = new RuleStore(file);
+        const a = s.saveInterceptRule({ name: 'a', type: 'block', url_pattern: '*a*', priority: 1, tags: 'x, y' });
+        const b = s.saveInterceptRule({ name: 'b', type: 'mock', url_pattern: '*b*', priority: 5, enabled: false, delay_ms: 1e9 });
+        expect(s.getAllInterceptRules().map((r) => r.name)).toEqual(['b', 'a']); // priority DESC
+        expect(s.getInterceptRules().map((r) => r.id)).toEqual([a]);
+        const ra = s.getAllInterceptRules().find((r) => r.id === a);
+        expect(ra).toMatchObject({ method: '*', tags: ['x', 'y'], stop_on_match: true, hit_count: 0, params: {} });
+        expect(s.getAllInterceptRules().find((r) => r.id === b).delay_ms).toBe(60000);
+        ra.name = 'mutated';
+        expect(s.getAllInterceptRules().find((r) => r.id === a).name).toBe('a'); // copies
+
+        s.incrementInterceptRuleHit(a);
+        s.setInterceptRuleError(b, 'e'.repeat(5000));
+        expect(JSON.parse(readFileSync(file, 'utf8')).rules.find((r) => r.id === a).hit_count).toBe(0); // not yet
+        s.close(); // flushes pending counters
+        const s2 = new RuleStore(file);
+        expect(s2.getAllInterceptRules().find((r) => r.id === a).hit_count).toBe(1);
+        expect(s2.getAllInterceptRules().find((r) => r.id === b).last_error).toHaveLength(2000);
+        expect(s2.saveInterceptRule({ id: a, name: 'a2', type: 'block', url_pattern: '*' })).toBe(a);
+        expect(s2.getAllInterceptRules().find((r) => r.id === a)).toMatchObject({ name: 'a2', hit_count: 1 });
+        s2.deleteInterceptRule(b);
+        expect(s2.saveInterceptRule({ name: 'c', type: 'block', url_pattern: '*' })).toBe(b + 1); // ids not reused
+        expect(new RuleStore(file).getAllInterceptRules().map((r) => r.name)).toEqual(['a2', 'c']);
+    });
+
+    it('is what request-interceptor reads once injected (no db.js / better-sqlite3)', async () => {
+        const interceptor = require('../../request-interceptor.js');
+        const s = new RuleStore(path.join(tmp(), 'rules.json'));
+        s.saveInterceptRule({ name: 'blk', type: 'block', url_pattern: '*blocked.test*' });
+        interceptor.setRuleStore(s);
+        try {
+            const plan = await interceptor.planMitmIntercept({ url: 'https://blocked.test/x', method: 'GET', headers: {} });
+            expect(plan).toMatchObject({ done: true, response: { statusCode: 403 } });
+            expect((await interceptor.planMitmIntercept({ url: 'https://ok.test/', method: 'GET', headers: {} })).done).toBe(false);
+        } finally {
+            interceptor.setRuleStore(null);
+        }
+    });
+
+    it.skipIf(!hasNodeSqlite)('imports rules once from the old SQLite store', () => {
+        const dir = tmp();
+        const { DatabaseSync } = require('node:sqlite');
+        const db = new DatabaseSync(path.join(dir, 'old.db'));
+        db.exec(`CREATE TABLE intercept_rules (id INTEGER PRIMARY KEY, name TEXT, enabled INTEGER, url_pattern TEXT, type TEXT,
+            params TEXT, priority INTEGER, method TEXT, group_name TEXT, hit_count INTEGER, last_hit_at TEXT, delay_ms INTEGER,
+            tags TEXT, last_error TEXT, stop_on_match INTEGER, breakpoint_enabled INTEGER, created_at TEXT)`);
+        db.prepare(`INSERT INTO intercept_rules VALUES (7, 'old', 1, '*', 'inject', '{"source":"1"}', 0, NULL, NULL, 3, NULL, 0,
+            '["t"]', NULL, 0, 0, '2026-01-01')`).run();
+        db.close();
+        const s = new RuleStore(path.join(dir, 'rules.json'));
+        expect(s.importFromSqlite(path.join(dir, 'old.db'))).toBe(1);
+        expect(s.getAllInterceptRules()[0]).toMatchObject({ id: 7, name: 'old', params: { source: '1' }, tags: ['t'], hit_count: 3, stop_on_match: false });
+        expect(s.importFromSqlite(path.join(dir, 'old.db'))).toBe(0); // store not empty any more
+        expect(s.saveInterceptRule({ name: 'n', type: 'block', url_pattern: '*' })).toBe(8);
+    });
+});
+
+describe('pack-mini', () => {
+    it('mini needs no npm packages besides the guarded electron/better-sqlite3 requires', () => {
+        const { walkRequires } = require('../../scripts/pack-mini.cjs');
+        const { files, packages } = walkRequires(path.join(repoRoot, 'mini', 'cupnet-mini.js'));
+        expect([...packages.keys()].sort()).toEqual(['better-sqlite3', 'electron']);
+        expect([...packages.get('better-sqlite3')]).toEqual(['db.js']);
+        expect(files).toEqual(expect.arrayContaining(['mitm-proxy.js', 'request-interceptor.js', 'mini/ui-server.js']));
     });
 });
 
@@ -162,20 +278,21 @@ function viaMitm(mitmPort, targetPort, { method = 'GET', reqPath = '/', headers 
     });
 }
 
-function ui(app, method, p, { token = app.token, host = `127.0.0.1:${app.uiPort}`, json } = {}) {
+function ui(app, method, p, { token = app.token, host = `127.0.0.1:${app.uiPort}`, json, headers = {} } = {}) {
     return new Promise((resolve, reject) => {
         const body = json === undefined ? null : Buffer.from(JSON.stringify(json));
         const req = http.request({
             host: '127.0.0.1', port: app.uiPort, method, path: p,
-            headers: { Host: host, ...(token ? { 'X-CupNet-Token': token } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) },
+            headers: { Host: host, ...(token ? { 'X-CupNet-Token': token } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers },
         }, (res) => {
             const chunks = [];
             res.on('data', (c) => chunks.push(c));
             res.on('end', () => {
-                const text = Buffer.concat(chunks).toString('utf8');
+                const raw = Buffer.concat(chunks);
+                const text = raw.toString('utf8');
                 let data = text;
                 try { data = JSON.parse(text); } catch { /* keep text */ }
-                resolve({ status: res.statusCode, data });
+                resolve({ status: res.statusCode, data, raw, headers: res.headers });
             });
         });
         req.on('error', reject);
@@ -187,6 +304,10 @@ describe.skipIf(!haveBinary)('MiniApp end to end (local HTTPS origin)', () => {
     let app;
     let origin;
     let originPort;
+    let plainOrigin;
+    let plainPort;
+    const BIG = 'z'.repeat(3 * 1024 * 1024); // beyond the 2 MB preview of /api/log/:seq
+    const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
     const PAGE = '<!doctype html><html><head><title>t</title></head><body><p>Привет</p></body></html>';
     const SITE_CSP = "default-src 'self'; script-src 'self' 'nonce-site'";
 
@@ -202,6 +323,12 @@ describe.skipIf(!haveBinary)('MiniApp end to end (local HTTPS origin)', () => {
             if (req.url === '/page') {
                 res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-encoding': 'gzip', 'content-security-policy': SITE_CSP });
                 res.end(zlib.gzipSync(Buffer.from(PAGE)));
+            } else if (req.url === '/big') {
+                res.writeHead(200, { 'content-type': 'text/plain' });
+                res.end(BIG);
+            } else if (req.url === '/img') {
+                res.writeHead(200, { 'content-type': 'image/png' });
+                res.end(PNG);
             } else if (req.url === '/app.js') {
                 res.writeHead(200, { 'content-type': 'application/javascript' });
                 res.end('console.log(1)');
@@ -212,11 +339,15 @@ describe.skipIf(!haveBinary)('MiniApp end to end (local HTTPS origin)', () => {
         });
         await new Promise((r) => origin.listen(0, '127.0.0.1', r));
         originPort = origin.address().port;
+        plainOrigin = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/plain' }); res.end(`plain ${req.url}`); });
+        await new Promise((r) => plainOrigin.listen(0, '127.0.0.1', r));
+        plainPort = plainOrigin.address().port;
     }, 60_000);
 
     afterAll(async () => {
         await app?.stop();
         await new Promise((r) => (origin ? origin.close(() => r()) : r()));
+        await new Promise((r) => (plainOrigin ? plainOrigin.close(() => r()) : r()));
     });
 
     it('presents leaf + CupNet CA, so the CA SPKI is in the chain Chrome checks', async () => {
@@ -287,6 +418,105 @@ describe.skipIf(!haveBinary)('MiniApp end to end (local HTTPS origin)', () => {
         const file = await ui(app, 'GET', `/api/sessions/${sessions.current}`);
         expect(file.status).toBe(200);
         expect(String(file.data)).toContain('"kind":"page-event"');
+    });
+
+    it('logs plain-HTTP proxy requests too (absolute-form, no CONNECT)', async () => {
+        const body = await new Promise((resolve, reject) => {
+            http.get({ host: '127.0.0.1', port: app.mitmPort, path: `http://127.0.0.1:${plainPort}/hello`, headers: { Host: `127.0.0.1:${plainPort}` } }, (res) => {
+                const c = [];
+                res.on('data', (d) => c.push(d));
+                res.on('end', () => resolve(Buffer.concat(c).toString()));
+            }).on('error', reject);
+        });
+        expect(body).toBe('plain /hello');
+        await new Promise((r) => setTimeout(r, 100));
+        const e = (await ui(app, 'GET', '/api/log?limit=50000')).data.find((x) => x.url === `http://127.0.0.1:${plainPort}/hello`);
+        expect(e).toMatchObject({ kind: 'request', status: 200, mime: 'text/plain', resSize: 12 });
+        expect((await ui(app, 'GET', `/api/log/${e.seq}`)).data.responseBody).toBe('plain /hello');
+    });
+
+    it('logs bodies in full: 2 MB preview in /api/log/:seq, raw bytes from the sandboxed body endpoint', async () => {
+        expect((await viaMitm(app.mitmPort, originPort, { reqPath: '/big' })).body).toHaveLength(BIG.length);
+        await viaMitm(app.mitmPort, originPort, { reqPath: '/img' });
+        await new Promise((r) => setTimeout(r, 100));
+        const log = (await ui(app, 'GET', '/api/log?limit=50000')).data;
+        const big = log.find((x) => x.url?.endsWith('/big'));
+        const img = log.find((x) => x.url?.endsWith('/img'));
+        expect(big.resSize).toBe(BIG.length);
+        const one = (await ui(app, 'GET', `/api/log/${big.seq}`)).data;
+        expect(one.responseBodyTruncated).toBe(true);
+        expect(one.responseBody).toHaveLength(BODY_PREVIEW_CHARS);
+        const full = await ui(app, 'GET', `/api/log/${big.seq}/body/response`);
+        expect(full.raw.length).toBe(BIG.length);
+        expect(full.headers['content-type']).toBe('application/octet-stream');
+        expect(full.headers['content-security-policy']).toBe('sandbox');
+        expect(full.headers['content-disposition']).toMatch(/^attachment;/);
+        expect(full.headers['x-cupnet-content-type']).toBe('text/plain');
+        const png = await ui(app, 'GET', `/api/log/${img.seq}/body/response`);
+        expect(png.raw.equals(PNG)).toBe(true);
+        expect(png.headers['x-cupnet-content-type']).toBe('image/png');
+        expect((await ui(app, 'GET', `/api/log/${img.seq}/body/request`)).status).toBe(404);
+        expect((await ui(app, 'GET', `/api/log/${img.seq}/body/response`, { token: null })).status).toBe(401);
+    });
+
+    it('a launch code is exchanged for the token exactly once', async () => {
+        const code = app.newLaunchCode();
+        const ex = (h) => ui(app, 'POST', '/api/auth/exchange', { token: null, headers: h });
+        expect((await ex({})).status).toBe(401);
+        expect((await ex({ 'X-CupNet-Code': 'nope' })).status).toBe(401);
+        const ok = await ex({ 'X-CupNet-Code': code });
+        expect(ok.status).toBe(200);
+        expect(ok.data.token).toBe(app.token);
+        expect((await ex({ 'X-CupNet-Code': code })).status).toBe(401);
+        expect((await ui(app, 'GET', '/', { token: null })).headers['content-security-policy']).toMatch(/frame-ancestors 'none'/);
+    });
+
+    it('/api/log/stream sends the backlog, then live entries as they are logged', async () => {
+        const after = app.log.lastSeq - 1;
+        const lines = [];
+        let req;
+        const gotLive = new Promise((resolve, reject) => {
+            req = http.get({
+                host: '127.0.0.1', port: app.uiPort, path: `/api/log/stream?after=${after}`,
+                headers: { Host: `127.0.0.1:${app.uiPort}`, 'X-CupNet-Token': app.token },
+            }, (res) => {
+                expect(res.headers['content-type']).toMatch(/ndjson/);
+                let buf = '';
+                res.on('data', (d) => {
+                    buf += d;
+                    let i;
+                    while ((i = buf.indexOf('\n')) >= 0) {
+                        const l = buf.slice(0, i); buf = buf.slice(i + 1);
+                        if (l) lines.push(JSON.parse(l));
+                        if (lines.some((e) => e.url?.endsWith('/app.js?live'))) resolve();
+                    }
+                });
+            });
+            req.on('error', reject);
+            setTimeout(() => reject(new Error('no live entry')), 10_000);
+        });
+        await new Promise((r) => setTimeout(r, 100));
+        expect(lines.map((e) => e.seq)).toEqual([after + 1]); // backlog
+        await viaMitm(app.mitmPort, originPort, { reqPath: '/app.js?live' });
+        await gotLive;
+        req.destroy();
+        expect(lines.at(-1).responseBody).toBeUndefined(); // summaries only
+    });
+
+    it('opens saved sessions by id: list + entries + bodies, refreshed when the file grows', async () => {
+        const id = '20250101-000000-past';
+        const past = new SessionLog({ dir: app.sessionsDir, sessionId: id });
+        past.logRequest({ method: 'GET', url: 'https://old/', status: 201, responseBody: 'old body' });
+        const list = (await ui(app, 'GET', `/api/log?session=${id}`)).data;
+        expect(list.map((e) => e.url)).toEqual([undefined, 'https://old/']);
+        expect((await ui(app, 'GET', `/api/log/2?session=${id}`)).data.responseBody).toBe('old body');
+        expect((await ui(app, 'GET', `/api/log/2/body/response?session=${id}`)).raw.toString()).toBe('old body');
+        past.logRequest({ method: 'GET', url: 'https://old/2', status: 200 });
+        expect((await ui(app, 'GET', `/api/log?session=${id}&after=2`)).data.map((e) => e.url)).toEqual(['https://old/2']);
+        await past.close();
+        expect((await ui(app, 'GET', '/api/log?session=nope')).status).toBe(404);
+        expect((await ui(app, 'GET', `/api/log?session=${encodeURIComponent('../x')}`)).status).toBe(404);
+        expect((await ui(app, 'GET', '/api/sessions')).data.sessions.map((s) => s.id)).toContain(id);
     });
 
     it('each session has its own key file from the start; seal via the API; stop seals the session', async () => {

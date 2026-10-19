@@ -5,66 +5,113 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CupNet mini</title>
 <style>
-  :root { --bg:#fff; --fg:#1b1f24; --muted:#6a737d; --line:#e1e4e8; --accent:#0969da; --err:#cf222e; --row:#f6f8fa; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --line:#30363d; --accent:#4493f8; --err:#f85149; --row:#161b22; } }
+  :root { --bg:#fff; --fg:#1b1f24; --muted:#6a737d; --line:#e1e4e8; --accent:#0969da; --err:#cf222e; --warn:#9a6700; --ok:#1a7f37; --row:#f6f8fa; --sel:#ddf4ff; --panel:#fbfbfc; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --line:#30363d; --accent:#4493f8; --err:#f85149; --warn:#d29922; --ok:#3fb950; --row:#161b22; --sel:#1f3a5f; --panel:#11161d; } }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, system-ui, sans-serif; }
-  header { display:flex; gap:12px; align-items:center; padding:8px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  html, body { height:100%; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.4 -apple-system, system-ui, sans-serif; display:flex; flex-direction:column; overflow:hidden; }
+  header { display:flex; gap:10px; align-items:center; padding:7px 12px; border-bottom:1px solid var(--line); flex-wrap:wrap; flex:none; }
   header b { font-size:14px; }
-  nav button, .btn { background:none; border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:4px 10px; cursor:pointer; font:inherit; }
+  nav { display:flex; gap:4px; }
+  nav button, .btn { background:none; border:1px solid var(--line); color:var(--fg); border-radius:6px; padding:3px 10px; cursor:pointer; font:inherit; }
   nav button.on { border-color:var(--accent); color:var(--accent); }
   .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-  #status { color:var(--muted); margin-left:auto; font-size:12px; }
-  main { padding:12px 16px; }
-  section[hidden] { display:none; }
-  table { width:100%; border-collapse:collapse; table-layout:fixed; }
-  th, td { text-align:left; padding:3px 6px; border-bottom:1px solid var(--line); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  tr.sel td { background:var(--row); }
-  tbody tr { cursor:pointer; }
-  .err { color:var(--err); }
-  .muted { color:var(--muted); }
-  #split { display:grid; grid-template-columns: 1fr; gap:12px; }
-  @media (min-width: 1000px) { #split.open { grid-template-columns: 3fr 2fr; } }
-  #detail { border:1px solid var(--line); border-radius:6px; padding:8px; overflow:auto; max-height:80vh; }
-  pre { white-space:pre-wrap; word-break:break-all; margin:4px 0 10px; font:12px ui-monospace, monospace; }
-  input, select, textarea { font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:4px 6px; }
+  .btn:disabled { opacity:.5; cursor:default; }
+  #status { color:var(--muted); margin-left:auto; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:45vw; }
+  main { flex:1; min-height:0; display:flex; flex-direction:column; }
+  section { flex:1; min-height:0; }
+  section[hidden] { display:none !important; }
+  .pad { padding:12px 16px; overflow:auto; }
+  .err { color:var(--err); } .warn { color:var(--warn); } .ok { color:var(--ok); } .muted { color:var(--muted); }
+  input, select, textarea { font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:3px 6px; }
   textarea { width:100%; min-height:160px; font-family:ui-monospace, monospace; font-size:12px; }
-  .form { display:grid; grid-template-columns: 120px 1fr; gap:6px 10px; max-width:900px; align-items:start; margin-bottom:16px; }
-  .toolbar { display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; align-items:center; }
   code { font:12px ui-monospace, monospace; background:var(--row); padding:1px 4px; border-radius:4px; word-break:break-all; }
+  pre { white-space:pre-wrap; word-break:break-all; margin:4px 0 10px; font:12px/1.45 ui-monospace, Menlo, monospace; }
+  .toolbar { display:flex; gap:8px; padding:6px 12px; flex-wrap:wrap; align-items:center; border-bottom:1px solid var(--line); flex:none; }
+  .toolbar input[type=search] { flex:1; min-width:200px; max-width:520px; }
+
+  /* traffic */
+  #tab-traffic { display:flex; flex-direction:column; }
+  #split { flex:1; min-height:0; display:flex; }
+  #gridWrap { flex:1; min-width:0; display:flex; flex-direction:column; }
+  #detail { width:46%; min-width:320px; border-left:1px solid var(--line); display:flex; flex-direction:column; background:var(--panel); }
+  #detail[hidden] { display:none; }
+  .cols { display:grid; grid-template-columns: 58px 92px 58px 50px 70px 120px 70px 56px minmax(120px, 1fr) minmax(160px, 3fr); }
+  .gh { flex:none; font-weight:600; color:var(--muted); border-bottom:1px solid var(--line); font-size:12px; }
+  .gh > div, .r > div { padding:0 6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .gh > div { padding-top:4px; padding-bottom:4px; }
+  #grid { flex:1; overflow:auto; position:relative; outline:none; }
+  #spacer { position:relative; }
+  .r { position:absolute; left:0; right:0; height:22px; line-height:22px; cursor:pointer; border-bottom:1px solid var(--line); font-size:12px; }
+  .r[hidden] { display:none; }
+  .r:hover { background:var(--row); }
+  .r.sel { background:var(--sel); }
+  .r .num { text-align:right; color:var(--muted); }
+  .r.ev { color:var(--accent); }
+  .num { font-variant-numeric: tabular-nums; }
+  #dtabs { display:flex; gap:4px; padding:6px 8px; border-bottom:1px solid var(--line); align-items:center; flex:none; }
+  #dbody { flex:1; overflow:auto; padding:8px 10px; }
+  #dbody h4 { margin:10px 0 4px; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .kv { display:grid; grid-template-columns: minmax(120px, 30%) 1fr; gap:1px 10px; font:12px/1.5 ui-monospace, monospace; }
+  .kv > :nth-child(odd) { color:var(--muted); word-break:break-all; }
+  .kv > :nth-child(even) { word-break:break-all; }
+  .preview img, .preview video, .preview audio { max-width:100%; max-height:60vh; border:1px solid var(--line); border-radius:6px; background:repeating-conic-gradient(#8882 0 25%, transparent 0 50%) 0 0/16px 16px; }
+  .note { padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--row); margin:6px 0; }
+
+  /* tables */
+  table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .form { display:grid; grid-template-columns: 120px 1fr; gap:6px 10px; max-width:900px; align-items:start; margin-bottom:16px; }
+  #login { padding:40px; text-align:center; }
 </style>
 </head>
 <body>
 <header>
   <b>CupNet mini</b>
   <nav>
-    <button data-tab="log" class="on">Log</button>
+    <button data-tab="traffic" class="on">Traffic</button>
     <button data-tab="rules">Rules</button>
     <button data-tab="sessions">Sessions</button>
     <button data-tab="setup">Setup</button>
   </nav>
+  <select id="session" title="Session"></select>
   <button class="btn primary" id="launch">Open Chrome</button>
+  <button class="btn" id="quit" hidden title="Stop the proxy and close CupNet mini">Quit</button>
   <span id="status">connecting…</span>
 </header>
 <main>
-  <section id="tab-log">
+  <div id="login" hidden>Open the URL printed by <code>cupnet-mini</code> (it carries the access token), or run <code>cupnet-mini window</code>.</div>
+
+  <section id="tab-traffic">
     <div class="toolbar">
-      <input id="filter" placeholder="Filter URL…" size="40">
-      <label><input type="checkbox" id="follow" checked> follow</label>
-      <button class="btn" id="clear">Clear view</button>
-      <span class="muted" id="count"></span>
+      <input id="q" type="search" placeholder="Filter: text in URL · -exclude · status:4xx method:POST type:xhr mime:json host:example.com">
+      <select id="fKind"><option value="request">Requests</option><option value="page-event">Page events</option><option value="">All</option></select>
+      <select id="fMethod"><option value="">Any method</option></select>
+      <select id="fStatus"><option value="">Any status</option><option>2xx</option><option>3xx</option><option>4xx</option><option>5xx</option><option value="fail">failed</option></select>
+      <select id="fType"><option value="">Any type</option></select>
+      <label title="Keep the newest row in view"><input type="checkbox" id="follow" checked> follow</label>
+      <span class="muted num" id="count"></span>
     </div>
     <div id="split">
-      <div><table>
-        <colgroup><col style="width:60px"><col style="width:60px"><col style="width:50px"><col><col style="width:70px"></colgroup>
-        <thead><tr><th>#</th><th>Method</th><th>Status</th><th>URL</th><th>ms</th></tr></thead>
-        <tbody id="rows"></tbody>
-      </table></div>
-      <div id="detail" hidden></div>
+      <div id="gridWrap">
+        <div class="gh cols"><div>#</div><div>Time</div><div>Method</div><div>Status</div><div>Type</div><div>MIME</div><div>Size</div><div>ms</div><div>Host</div><div>Path</div></div>
+        <div id="grid" tabindex="0"><div id="spacer"></div></div>
+      </div>
+      <div id="detail" hidden>
+        <div id="dtabs">
+          <button class="btn" data-d="overview">Headers</button>
+          <button class="btn" data-d="request">Request</button>
+          <button class="btn" data-d="response">Response</button>
+          <button class="btn" data-d="raw">JSON</button>
+          <span style="flex:1"></span>
+          <button class="btn" id="dclose" title="Close (Esc)">✕</button>
+        </div>
+        <div id="dbody"></div>
+      </div>
     </div>
   </section>
 
-  <section id="tab-rules" hidden>
+  <section id="tab-rules" class="pad" hidden>
     <div class="form">
       <label>Name</label><input id="r-name" placeholder="My page hook">
       <label>URL pattern</label><input id="r-pattern" placeholder="https://example.com/*  (or *)">
@@ -77,31 +124,28 @@
         <option value="script">script (before/after)</option>
       </select>
       <label>Params (JSON)</label><textarea id="r-params"></textarea>
-      <label></label><div class="toolbar"><button class="btn primary" id="r-save">Save rule</button><span id="r-msg"></span></div>
+      <label></label><div><button class="btn primary" id="r-save">Save rule</button> <button class="btn" id="r-new">New</button> <span id="r-msg"></span></div>
     </div>
     <table>
-      <colgroup><col style="width:40px"><col style="width:200px"><col style="width:110px"><col><col style="width:60px"><col style="width:150px"></colgroup>
-      <thead><tr><th>id</th><th>Name</th><th>Type</th><th>Pattern</th><th>On</th><th></th></tr></thead>
+      <colgroup><col style="width:40px"><col style="width:200px"><col style="width:110px"><col><col style="width:60px"><col style="width:70px"><col style="width:150px"></colgroup>
+      <thead><tr><th>id</th><th>Name</th><th>Type</th><th>Pattern</th><th>On</th><th>Hits</th><th></th></tr></thead>
       <tbody id="rules"></tbody>
     </table>
   </section>
 
-  <section id="tab-sessions" hidden>
-    <p class="muted">Each run writes one JSONL file (requests with headers/bodies, page events). They contain cookies and tokens — treat them as secrets. <b>Seal</b> encrypts a session with its own key: the <code>.cupkey</code> file opens the matching <code>.cupsess</code> (same name) in <code>viewer.html</code>.</p>
+  <section id="tab-sessions" class="pad" hidden>
+    <p class="muted">Each run writes one JSONL file with everything captured: headers and full bodies, plus page events. They contain cookies and tokens, so treat them as secrets. <b>Seal</b> encrypts a session with its own key. The <code>.cupkey</code> file opens the matching <code>.cupsess</code> (same name) in <code>viewer.html</code>.</p>
     <table>
-      <colgroup><col><col style="width:120px"><col style="width:200px"><col style="width:120px"></colgroup>
-      <thead><tr><th>Session</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+      <colgroup><col><col style="width:110px"><col style="width:190px"><col style="width:80px"><col style="width:230px"></colgroup>
+      <thead><tr><th>Session</th><th>Size</th><th>Modified</th><th>Sealed</th><th></th></tr></thead>
       <tbody id="sessions"></tbody>
     </table>
   </section>
 
-  <section id="tab-setup" hidden>
-    <div id="setup"></div>
-  </section>
+  <section id="tab-setup" class="pad" hidden><div id="setup"></div></section>
 </main>
 <script>
 'use strict';
-const TOKEN = new URLSearchParams(location.hash.slice(1)).get('t') || '';
 const $ = (id) => document.getElementById(id);
 const el = (tag, props = {}, ...kids) => {
   const n = document.createElement(tag);
@@ -109,6 +153,22 @@ const el = (tag, props = {}, ...kids) => {
   for (const k of kids) n.append(k instanceof Node ? k : document.createTextNode(String(k ?? '')));
   return n;
 };
+const ROW = 22;
+let TOKEN = '';
+
+// ── auth: #t=<token>, or #c=<one-time launch code> traded for the token; kept per tab ──
+async function auth() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  try { TOKEN = sessionStorage.getItem('cupnet-token') || ''; } catch { /* storage blocked */ }
+  if (h.get('t')) TOKEN = h.get('t');
+  else if (h.get('c')) {
+    const r = await fetch('/api/auth/exchange', { method: 'POST', headers: { 'X-CupNet-Code': h.get('c') } });
+    if (r.ok) TOKEN = (await r.json()).token;
+  }
+  if (location.hash) history.replaceState(null, '', location.pathname);
+  try { if (TOKEN) sessionStorage.setItem('cupnet-token', TOKEN); } catch { /* ignore */ }
+  return !!TOKEN;
+}
 async function api(path, opts = {}) {
   const r = await fetch(path, { ...opts, headers: { 'X-CupNet-Token': TOKEN, 'Content-Type': 'application/json', ...(opts.headers || {}) } });
   const text = await r.text();
@@ -116,86 +176,303 @@ async function api(path, opts = {}) {
   if (!r.ok) throw new Error((data && data.error) || r.statusText);
   return data;
 }
+async function apiBlob(path) {
+  const r = await fetch(path, { headers: { 'X-CupNet-Token': TOKEN } });
+  if (!r.ok) throw new Error(r.statusText);
+  return { blob: await r.blob(), type: r.headers.get('X-CupNet-Content-Type') || '' };
+}
+function download(blob, name) {
+  const a = el('a', { href: URL.createObjectURL(blob), download: name }); a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+const fmtSize = (n) => n == null || n === 0 ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+const fmtTime = (ts) => { if (!ts) return ''; const d = new Date(ts); return d.toLocaleTimeString([], { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0'); };
+const splitUrl = (u) => { const m = /^[a-z]+:\/\/([^/?#]*)([^#]*)/i.exec(u || ''); return m ? [m[1], m[2] || '/'] : ['', u || '']; };
 
 // ── tabs ──
 document.querySelectorAll('nav button').forEach((b) => b.onclick = () => {
   document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('on', x === b));
   document.querySelectorAll('main section').forEach((s) => s.hidden = s.id !== `tab-${b.dataset.tab}`);
+  if (b.dataset.tab === 'traffic') draw();
   if (b.dataset.tab === 'rules') loadRules();
   if (b.dataset.tab === 'sessions') loadSessions();
   if (b.dataset.tab === 'setup') loadSetup();
 });
-
-$('launch').onclick = async () => {
-  try { await api('/api/chrome', { method: 'POST', body: '{}' }); } catch (e) { alert(e.message); }
+$('launch').onclick = async () => { try { await api('/api/chrome', { method: 'POST', body: '{}' }); } catch (e) { alert(e.message); } };
+$('quit').onclick = async () => {
+  if (!confirm('Stop CupNet mini? The session is sealed on exit.')) return;
+  try { await api('/api/quit', { method: 'POST' }); $('status').textContent = 'stopped'; window.close(); } catch (e) { alert(e.message); }
 };
 
-// ── log ──
-let lastSeq = 0; let entries = []; let selected = null;
-function rowFor(e) {
-  const tr = el('tr');
-  tr.dataset.seq = e.seq;
-  const status = e.kind === 'page-event' ? 'event' : (e.status ?? '');
-  tr.append(el('td', {}, e.seq), el('td', {}, e.kind === 'page-event' ? '—' : e.method), el('td', { className: e.status >= 400 ? 'err' : '' }, status),
-    el('td', { title: e.url || '' }, e.url || e.kind), el('td', {}, e.duration ?? ''));
-  tr.onclick = () => showDetail(e.seq, tr);
-  return tr;
+// ── traffic data ──
+// all: every summary of the shown session; view: indexes into all that pass the filter.
+let current = '';       // live session id
+let shown = '';         // session in the viewer ('' = live)
+let all = [], view = [], bySeq = new Map(), selSeq = null;
+let gen = 0;            // bumps on session switch, so stale loads stop
+const methods = new Set(), types = new Set();
+
+function parseQuery(q) {
+  const f = { inc: [], exc: [], status: null, method: null, type: null, mime: null, host: null };
+  for (const t of q.trim().toLowerCase().split(/\s+/).filter(Boolean)) {
+    const m = /^(status|method|type|mime|host):(.+)$/.exec(t);
+    if (m) f[m[1]] = m[2];
+    else if (t.startsWith('-') && t.length > 1) f.exc.push(t.slice(1));
+    else f.inc.push(t);
+  }
+  return f;
+}
+const statusOk = (s, want) => {
+  if (!want) return true;
+  if (want === 'fail') return !s;
+  if (/^\dxx$/.test(want)) return Math.floor((s || 0) / 100) === Number(want[0]);
+  return String(s ?? '').startsWith(want);
+};
+let F = null;
+function buildFilter() {
+  F = parseQuery($('q').value);
+  F.kind = $('fKind').value; F.m = $('fMethod').value; F.st = $('fStatus').value; F.t = $('fType').value;
 }
 function matches(e) {
-  const f = $('filter').value.trim().toLowerCase();
-  return !f || String(e.url || '').toLowerCase().includes(f);
+  if (F.kind && e.kind !== F.kind) return false;
+  if (e.kind === 'session-start' || e.kind === 'session-end') return F.kind === '';
+  if (F.m && e.method !== F.m) return false;
+  if (!statusOk(e.status, F.st) || !statusOk(e.status, F.status)) return false;
+  if (F.t && e.type !== F.t) return false;
+  if (F.method && String(e.method || '').toLowerCase() !== F.method) return false;
+  if (F.type && !String(e.type || '').toLowerCase().includes(F.type)) return false;
+  if (F.mime && !String(e.mime || '').toLowerCase().includes(F.mime)) return false;
+  const url = e._lc || (e._lc = String(e.url || '').toLowerCase());
+  if (F.host && !splitUrl(url)[0].includes(F.host)) return false;
+  for (const t of F.inc) if (!url.includes(t)) return false;
+  for (const t of F.exc) if (url.includes(t)) return false;
+  return true;
 }
-function render() {
-  const tb = $('rows'); tb.textContent = '';
-  const shown = entries.filter(matches);
-  for (const e of shown.slice(-1500)) tb.append(rowFor(e));
-  $('count').textContent = `${shown.length} shown`;
-  if ($('follow').checked) window.scrollTo(0, document.body.scrollHeight);
+function addOption(sel, set, v) {
+  if (!v || set.has(v)) return;
+  set.add(v); sel.append(el('option', { value: v }, v));
 }
-async function poll() {
-  try {
-    const items = await api(`/api/log?after=${lastSeq}`);
-    if (items.length) {
-      lastSeq = items[items.length - 1].seq;
-      entries.push(...items.filter((e) => e.kind === 'request' || e.kind === 'page-event'));
-      if (entries.length > 5000) entries = entries.slice(-5000);
-      render();
+function ingest(items) {
+  const atBottom = isAtBottom();
+  for (const e of items) {
+    if (bySeq.has(e.seq)) continue;
+    bySeq.set(e.seq, all.length);
+    all.push(e);
+    addOption($('fMethod'), methods, e.method); addOption($('fType'), types, e.type);
+    if (matches(e)) view.push(all.length - 1);
+  }
+  scheduleDraw(atBottom && $('follow').checked);
+}
+function refilter() {
+  buildFilter();
+  view = [];
+  for (let i = 0; i < all.length; i++) if (matches(all[i])) view.push(i);
+  scheduleDraw($('follow').checked);
+}
+for (const id of ['q', 'fKind', 'fMethod', 'fStatus', 'fType']) $(id).addEventListener(id === 'q' ? 'input' : 'change', refilter);
+
+// ── virtual grid ──
+const grid = $('grid'), spacer = $('spacer');
+let drawQueued = false, stick = false;
+const pool = [];
+function isAtBottom() { return grid.scrollTop + grid.clientHeight >= grid.scrollHeight - ROW * 2; }
+function scheduleDraw(toBottom) { stick = stick || toBottom; if (!drawQueued) { drawQueued = true; requestAnimationFrame(draw); } }
+function cell(cls) { const d = document.createElement('div'); if (cls) d.className = cls; return d; }
+function rowNode(i) {
+  let r = pool[i];
+  if (!r) {
+    r = document.createElement('div'); r.className = 'r cols';
+    for (const c of ['num', 'num', '', 'num', '', '', 'num', 'num', '', '']) r.append(cell(c));
+    r.onclick = () => select(Number(r.dataset.seq));
+    pool[i] = r; spacer.append(r);
+  }
+  return r;
+}
+function draw() {
+  drawQueued = false;
+  $('count').textContent = `${view.length.toLocaleString()} / ${all.length.toLocaleString()}`;
+  spacer.style.height = `${view.length * ROW}px`;
+  if (stick) { grid.scrollTop = grid.scrollHeight; stick = false; }
+  const first = Math.max(0, Math.floor(grid.scrollTop / ROW) - 10);
+  const n = Math.min(view.length - first, Math.ceil(grid.clientHeight / ROW) + 20);
+  for (let k = 0; k < Math.max(n, 0); k++) {
+    const e = all[view[first + k]];
+    const r = rowNode(k);
+    r.hidden = false;
+    r.style.top = `${(first + k) * ROW}px`;
+    if (r.dataset.seq !== String(e.seq)) {
+      r.dataset.seq = e.seq;
+      const [host, p] = splitUrl(e.url);
+      const ev = e.kind !== 'request';
+      const c = r.children;
+      c[0].textContent = e.seq; c[1].textContent = fmtTime(e.ts);
+      c[2].textContent = ev ? '' : (e.method || '');
+      c[3].textContent = ev ? (e.kind === 'page-event' ? 'event' : '') : (e.status || 'ERR');
+      c[3].className = 'num ' + (ev ? '' : !e.status || e.status >= 500 ? 'err' : e.status >= 400 ? 'warn' : e.status >= 300 ? 'muted' : '');
+      c[4].textContent = e.type || ''; c[5].textContent = e.mime || '';
+      c[6].textContent = fmtSize(e.resSize); c[7].textContent = e.duration ?? '';
+      c[8].textContent = host; c[9].textContent = ev && !e.url ? e.kind : p; c[9].title = e.url || '';
+      r.classList.toggle('ev', ev);
     }
-    const st = await api('/api/status');
-    $('status').textContent = `session ${st.sessionId} · proxy 127.0.0.1:${st.mitmPort} · ${st.stats ? st.stats.requests + ' req' : ''}`;
-  } catch (e) {
-    $('status').textContent = TOKEN ? `error: ${e.message}` : 'open the URL printed by cupnet-mini (with #t=token)';
+    r.classList.toggle('sel', e.seq === selSeq);
+  }
+  for (let k = Math.max(n, 0); k < pool.length; k++) if (pool[k]) { pool[k].hidden = true; pool[k].dataset.seq = ''; }
+}
+grid.addEventListener('scroll', () => scheduleDraw(false), { passive: true });
+window.addEventListener('resize', () => scheduleDraw(false));
+grid.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
+  ev.preventDefault();
+  let pos = view.findIndex((i) => all[i].seq === selSeq);
+  pos = pos < 0 ? 0 : Math.max(0, Math.min(view.length - 1, pos + (ev.key === 'ArrowDown' ? 1 : -1)));
+  if (!view.length) return;
+  select(all[view[pos]].seq);
+  const top = pos * ROW;
+  if (top < grid.scrollTop) grid.scrollTop = top;
+  else if (top + ROW > grid.scrollTop + grid.clientHeight) grid.scrollTop = top + ROW - grid.clientHeight;
+});
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !$('detail').hidden) closeDetail(); });
+
+// ── sessions: live stream (current) or a saved one ──
+function resetView() {
+  gen++; all = []; view = []; bySeq = new Map(); selSeq = null; methods.clear(); types.clear();
+  for (const s of [$('fMethod'), $('fType')]) while (s.options.length > 1) s.remove(1);
+  closeDetail(); buildFilter(); scheduleDraw(true);
+}
+async function streamLive(myGen) {
+  let lastSeq = 0;
+  while (myGen === gen) {
+    try {
+      const r = await fetch(`/api/log/stream?after=${lastSeq}`, { headers: { 'X-CupNet-Token': TOKEN } });
+      if (!r.ok) throw new Error(r.statusText);
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done || myGen !== gen) { if (myGen !== gen) reader.cancel(); break; }
+        buf += dec.decode(value, { stream: true });
+        const cut = buf.lastIndexOf('\n');
+        if (cut < 0) continue;
+        const lines = buf.slice(0, cut).split('\n'); buf = buf.slice(cut + 1);
+        const items = [];
+        for (const l of lines) if (l) { try { items.push(JSON.parse(l)); } catch { /* skip */ } }
+        if (items.length) { lastSeq = items[items.length - 1].seq; ingest(items); }
+      }
+    } catch { /* reconnect below */ }
+    if (myGen !== gen) return;
+    await new Promise((res) => setTimeout(res, 1000));
   }
 }
-$('filter').oninput = render;
-$('clear').onclick = () => { entries = []; render(); };
-function headersBlock(title, h) {
-  const lines = Object.entries(h || {}).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join('\n');
-  return [el('b', {}, title), el('pre', {}, lines || '(none)')];
+async function loadSaved(id, myGen) {
+  let after = 0;
+  for (;;) {
+    const items = await api(`/api/log?session=${encodeURIComponent(id)}&after=${after}&limit=20000`);
+    if (myGen !== gen) return;
+    if (!items.length) break;
+    ingest(items); after = items[items.length - 1].seq;
+  }
 }
-async function showDetail(seq, tr) {
-  document.querySelectorAll('#rows tr.sel').forEach((x) => x.classList.remove('sel'));
-  tr.classList.add('sel');
-  const d = $('detail'); d.hidden = false; $('split').classList.add('open');
-  d.textContent = 'loading…';
+function openSession(id) {
+  shown = id === current ? '' : id;
+  $('session').value = id;
+  resetView();
+  const g = gen;
+  if (shown) loadSaved(shown, g).catch((e) => { $('count').textContent = e.message; });
+  else streamLive(g);
+  document.querySelector('nav button[data-tab="traffic"]').click();
+}
+$('session').onchange = () => openSession($('session').value);
+async function fillSessionSelect() {
+  const { current: cur, sessions } = await api('/api/sessions');
+  current = cur;
+  const sel = $('session'); const keep = sel.value || cur;
+  sel.textContent = '';
+  for (const s of sessions) sel.append(el('option', { value: s.id }, s.id === cur ? `● live — ${s.id}` : `${s.id} (${fmtSize(s.bytes)})`));
+  sel.value = sessions.some((s) => s.id === keep) ? keep : cur;
+  return sessions;
+}
+const qs = () => (shown ? `?session=${encodeURIComponent(shown)}` : '');
+
+// ── detail ──
+let dTab = 'overview', dEntry = null;
+function closeDetail() { $('detail').hidden = true; selSeq = null; dEntry = null; scheduleDraw(false); }
+$('dclose').onclick = closeDetail;
+document.querySelectorAll('#dtabs [data-d]').forEach((b) => b.onclick = () => { dTab = b.dataset.d; renderDetail(); });
+async function select(seq) {
+  selSeq = seq; scheduleDraw(false);
+  $('detail').hidden = false;
+  const myGen = gen;
   try {
-    const e = await api(`/api/log/${seq}`);
-    d.textContent = '';
-    if (e.kind === 'page-event') {
-      d.append(el('b', {}, 'Page event from '), el('code', {}, e.url), el('pre', {}, JSON.stringify(e.data, null, 2)));
-      return;
-    }
-    d.append(el('div', {}, el('b', {}, `${e.method} ${e.status} `), el('code', {}, e.url)));
-    d.append(...headersBlock('Request headers', e.requestHeaders));
-    if (e.requestBody) d.append(el('b', {}, 'Request body'), el('pre', {}, e.requestBody));
-    d.append(...headersBlock('Response headers', e.responseHeaders));
-    if (e.responseBody) d.append(el('b', {}, 'Response body'), el('pre', {}, String(e.responseBody).slice(0, 200000)));
-  } catch (err) { d.textContent = err.message; }
+    const e = await api(`/api/log/${seq}${qs()}`);
+    if (myGen !== gen || selSeq !== seq) return;
+    dEntry = e; renderDetail();
+  } catch (err) { $('dbody').textContent = err.message; }
 }
+function kv(obj) {
+  const g = el('div', { className: 'kv' });
+  const entries = Object.entries(obj || {});
+  if (!entries.length) g.append(el('div', {}, '(none)'), el('div'));
+  for (const [k, v] of entries) for (const one of (Array.isArray(v) ? v : [v])) g.append(el('div', {}, k), el('div', {}, String(one)));
+  return g;
+}
+const headerOf = (h, name) => { const k = Object.keys(h || {}).find((x) => x.toLowerCase() === name); const v = k ? h[k] : ''; return String(Array.isArray(v) ? v[0] : v); };
+function renderDetail() {
+  document.querySelectorAll('#dtabs [data-d]').forEach((b) => b.classList.toggle('on', b.dataset.d === dTab));
+  document.querySelectorAll('#dtabs [data-d]').forEach((b) => { b.style.borderColor = b.dataset.d === dTab ? 'var(--accent)' : ''; });
+  const d = $('dbody'); d.textContent = ''; d.scrollTop = 0;
+  const e = dEntry; if (!e) return;
+  if (dTab === 'raw') { d.append(el('pre', {}, JSON.stringify(e, null, 2))); return; }
+  if (e.kind !== 'request') {
+    d.append(el('h4', {}, e.kind), el('div', {}, el('code', {}, e.url || '')), el('pre', {}, JSON.stringify(e.data ?? e, null, 2)));
+    return;
+  }
+  if (dTab === 'overview') {
+    d.append(el('h4', {}, 'General'), kv({ URL: e.url, Method: e.method, Status: e.status, Type: e.type, Duration: e.duration != null ? `${e.duration} ms` : '', Time: new Date(e.ts).toISOString(), 'Request body': fmtSize(e.reqSize) || '—', 'Response body': fmtSize(e.resSize) || '—' }));
+    d.append(el('h4', {}, 'Response headers'), kv(e.responseHeaders), el('h4', {}, 'Request headers'), kv(e.requestHeaders));
+    return;
+  }
+  const which = dTab;
+  const body = which === 'request' ? e.requestBody : e.responseBody;
+  const truncated = which === 'request' ? e.requestBodyTruncated : e.responseBodyTruncated;
+  const ct = headerOf(which === 'request' ? e.requestHeaders : e.responseHeaders, 'content-type').toLowerCase();
+  const size = which === 'request' ? e.reqSize : e.resSize;
+  const bar = el('div', { className: 'note' }, `${ct || 'no content-type'} · ${fmtSize(size) || '0 B'} `);
+  if (body == null) { d.append(bar, el('div', { className: 'muted' }, 'No body.')); return; }
+  const dl = el('button', { className: 'btn' }, 'Download');
+  dl.onclick = async () => { const { blob } = await apiBlob(`/api/log/${e.seq}/body/${which}${qs()}`); download(blob, `cupnet-${e.seq}-${which}${extFor(ct)}`); };
+  bar.append(dl); d.append(bar);
+  const isB64 = String(body).startsWith('__b64__:');
+  if (isB64 && /^(image|video|audio)\//.test(ct)) {
+    const box = el('div', { className: 'preview' }, 'loading…'); d.append(box);
+    apiBlob(`/api/log/${e.seq}/body/${which}${qs()}`).then(({ blob }) => {
+      const url = URL.createObjectURL(new Blob([blob], { type: ct.split(';')[0] }));
+      const tag = ct.startsWith('image/') ? 'img' : ct.startsWith('video/') ? 'video' : 'audio';
+      const m = el(tag, { src: url, controls: tag !== 'img' }); box.textContent = ''; box.append(m);
+    }).catch((err) => { box.textContent = err.message; });
+    return;
+  }
+  if (isB64) { d.append(el('div', { className: 'muted' }, 'Binary body (base64 in the log). Use Download to get the bytes.')); return; }
+  if (truncated) {
+    const full = el('button', { className: 'btn' }, 'Load full body');
+    full.onclick = async () => { const { blob } = await apiBlob(`/api/log/${e.seq}/body/${which}${qs()}`); showText(d, await blob.text(), ct, true); };
+    d.append(el('div', { className: 'note warn' }, 'Showing the first 2 MB. ', full));
+  }
+  showText(d, String(body), ct, false);
+}
+function showText(d, text, ct, replace) {
+  let out = text;
+  if (/json/.test(ct) || /^\s*[[{]/.test(text.slice(0, 1))) {
+    if (text.length < 20 * 1048576) { try { out = JSON.stringify(JSON.parse(text), null, 2); } catch { /* not JSON */ } }
+  }
+  const pre = el('pre', {}, out);
+  if (replace) { const old = d.querySelector('pre'); if (old) old.replaceWith(pre); else d.append(pre); } else d.append(pre);
+}
+const extFor = (ct) => { const m = /\/([a-z0-9.+-]+)/.exec(ct || ''); if (!m) return '.bin'; const t = m[1].replace(/\+.*$/, ''); return '.' + ({ javascript: 'js', 'x-javascript': 'js', plain: 'txt', 'svg': 'svg', jpeg: 'jpg', 'octet-stream': 'bin' }[t] || t); };
 
 // ── rules ──
 const PARAM_TEMPLATES = {
-  inject: { position: 'head', source: "// Runs in the page before its own scripts (position 'head') or at the end of <body> ('body-end').\n// Report to the CupNet log: fetch('/__cupnet/event', { method: 'POST', body: JSON.stringify({...}) })\nconsole.log('[cupnet] injected into', location.href);" },
+  inject: { position: 'head', source: "// Runs in the page before its own scripts (position 'head') or at the end of <body> ('body-end').\n// Report to the CupNet log: navigator.sendBeacon('/__cupnet/event', JSON.stringify({...}))\nconsole.log('[cupnet] injected into', location.href);" },
   block: {},
   mock: { status: 200, mimeType: 'application/json', body: '{"ok":true}' },
   modifyHeaders: { requestHeaders: { 'X-Example': '1' }, removeRequestHeaders: [], responseHeaders: {}, removeResponseHeaders: [] },
@@ -204,13 +481,14 @@ const PARAM_TEMPLATES = {
 let editingId = null;
 function fillParams() { $('r-params').value = JSON.stringify(PARAM_TEMPLATES[$('r-type').value] || {}, null, 2); }
 $('r-type').onchange = fillParams; fillParams();
+$('r-new').onclick = () => { editingId = null; $('r-name').value = ''; $('r-pattern').value = ''; fillParams(); $('r-msg').textContent = ''; };
 $('r-save').onclick = async () => {
-  $('r-msg').textContent = '';
+  $('r-msg').textContent = ''; $('r-msg').className = '';
   let params;
-  try { params = JSON.parse($('r-params').value || '{}'); } catch (e) { $('r-msg').textContent = `Params: ${e.message}`; return; }
+  try { params = JSON.parse($('r-params').value || '{}'); } catch (e) { $('r-msg').textContent = `Params: ${e.message}`; $('r-msg').className = 'err'; return; }
   const rule = { name: $('r-name').value.trim(), url_pattern: $('r-pattern').value.trim(), type: $('r-type').value, params, enabled: true };
   if (editingId) rule.id = editingId;
-  try { await api('/api/rules', { method: 'POST', body: JSON.stringify(rule) }); $('r-msg').textContent = 'Saved'; editingId = null; loadRules(); }
+  try { await api('/api/rules', { method: 'POST', body: JSON.stringify(rule) }); $('r-msg').textContent = 'Saved'; $('r-msg').className = 'ok'; editingId = null; loadRules(); }
   catch (e) { $('r-msg').textContent = e.message; $('r-msg').className = 'err'; }
 };
 async function loadRules() {
@@ -223,32 +501,28 @@ async function loadRules() {
     del.onclick = async () => { if (confirm(`Delete rule "${r.name}"?`)) { await api(`/api/rules/${r.id}`, { method: 'DELETE' }); loadRules(); } };
     const on = el('input', { type: 'checkbox', checked: !!r.enabled });
     on.onchange = async () => { await api('/api/rules', { method: 'POST', body: JSON.stringify({ ...r, enabled: on.checked }) }); };
-    tb.append(el('tr', {}, el('td', {}, r.id), el('td', { title: r.name }, r.name), el('td', {}, r.type), el('td', { title: r.url_pattern }, r.url_pattern), el('td', {}, on), el('td', {}, edit, ' ', del)));
+    tb.append(el('tr', {}, el('td', {}, r.id), el('td', { title: r.name }, r.name), el('td', {}, r.type), el('td', { title: r.url_pattern }, r.url_pattern), el('td', {}, on),
+      el('td', { title: r.last_error || '', className: r.last_error ? 'err' : '' }, r.hit_count || 0), el('td', {}, edit, ' ', del)));
   }
 }
 
 // ── sessions ──
 async function loadSessions() {
-  const { current, sessions } = await api('/api/sessions');
+  const sessions = await fillSessionSelect();
   const tb = $('sessions'); tb.textContent = '';
   for (const s of sessions) {
-    const dl = el('button', { className: 'btn' }, 'Download');
-    dl.onclick = async () => {
-      const r = await fetch(`/api/sessions/${s.id}`, { headers: { 'X-CupNet-Token': TOKEN } });
-      const blob = await r.blob();
-      const a = el('a', { href: URL.createObjectURL(blob), download: `cupnet-${s.id}.jsonl` }); a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    };
+    const open = el('button', { className: 'btn' }, 'Open');
+    open.onclick = () => openSession(s.id);
+    const dl = el('button', { className: 'btn' }, 'JSONL');
+    dl.onclick = async () => { const { blob } = await apiBlob(`/api/sessions/${s.id}`); download(blob, `cupnet-${s.id}.jsonl`); };
     const sealBtn = el('button', { className: 'btn' }, 'Seal');
     sealBtn.onclick = async () => {
       const r = await api(`/api/sessions/${s.id}/seal`, { method: 'POST' });
-      for (const [what, name] of [['key', `${r.id}.cupkey`], ['sealed', `${r.id}.cupsess`]]) {
-        const f = await fetch(`/api/sessions/${s.id}/${what}`, { headers: { 'X-CupNet-Token': TOKEN } });
-        const a = el('a', { href: URL.createObjectURL(await f.blob()), download: name }); a.click();
-        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      }
+      for (const [what, name] of [['key', `${r.id}.cupkey`], ['sealed', `${r.id}.cupsess`]]) download((await apiBlob(`/api/sessions/${s.id}/${what}`)).blob, name);
+      loadSessions();
     };
-    tb.append(el('tr', {}, el('td', {}, s.id + (s.id === current ? ' (current)' : '')), el('td', {}, `${(s.bytes / 1024).toFixed(1)} KB`), el('td', {}, new Date(s.mtime).toLocaleString()), el('td', {}, dl, ' ', sealBtn)));
+    tb.append(el('tr', {}, el('td', { title: s.keyId ? `key id ${s.keyId}` : '' }, s.id + (s.id === current ? ' (live)' : '')), el('td', {}, fmtSize(s.bytes) || '0 B'),
+      el('td', {}, new Date(s.mtime).toLocaleString()), el('td', {}, s.sealed ? 'yes' : ''), el('td', {}, open, ' ', dl, ' ', sealBtn)));
   }
 }
 
@@ -264,11 +538,29 @@ async function loadSetup() {
     el('p', {}, 'CA SPKI (for --ignore-certificate-errors-spki-list): ', el('code', {}, st.ca.spki)),
     el('p', {}, 'Install the CA system-wide (only for --trust system; run it yourself):'), el('pre', {}, st.ca.commands.install),
     el('p', {}, 'Remove it again:'), el('pre', {}, st.ca.commands.remove),
+    el('p', {}, 'Rules file: ', el('code', {}, st.rulesFile)),
     el('p', {}, 'Data dir: ', el('code', {}, st.dataDir)),
   );
 }
 
-poll(); setInterval(poll, 1000);
+async function pollStatus() {
+  try {
+    const st = await api('/api/status');
+    $('quit').hidden = !st.canQuit;
+    const req = st.stats ? ` · ${st.stats.requests} req` : '';
+    $('status').textContent = `proxy 127.0.0.1:${st.mitmPort} · ${st.entries.toLocaleString()} entries${req}${st.writeErrors ? ` · ${st.writeErrors} write errors` : ''}`;
+    $('status').className = st.writeErrors ? 'err' : '';
+  } catch (e) { $('status').textContent = `disconnected: ${e.message}`; $('status').className = 'err'; }
+}
+
+(async () => {
+  if (!(await auth())) { $('login').hidden = false; document.querySelectorAll('main section').forEach((s) => s.hidden = true); $('status').textContent = 'no access token'; return; }
+  buildFilter();
+  try { await fillSessionSelect(); } catch (e) { $('status').textContent = e.message; }
+  openSession(current);
+  grid.focus();
+  pollStatus(); setInterval(pollStatus, 2000);
+})();
 </script>
 </body>
 </html>

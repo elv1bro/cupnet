@@ -7,25 +7,48 @@ modified with `inject` rules.
 ```
 Chrome ──CONNECT──▶ MITM 127.0.0.1:8877 ──▶ AzureTLS worker ──▶ (upstream proxy) ──▶ site
                        │
-                       └▶ SessionLog (ring + sessions/<id>.jsonl) ◀── UI 127.0.0.1:8878
+                       └▶ SessionLog (sessions/<id>.jsonl + in-memory index) ◀── UI 127.0.0.1:8878
 ```
 
 ## Usage
 
+Plain Node ≥ 20. mini uses only Node built-ins, so it needs no `npm install`, no Electron and no
+better-sqlite3. The Go worker binary must exist in `azuretls-go/bin/` (`npm run build:go:local`).
+
 ```bash
-npm run mini -- ca                      # CA path, SHA-256, SPKI, OS trust commands
-npm run mini -- start --chrome          # proxy + UI, then launch Chrome
+npm run mini -- start --window          # proxy + UI, and open the CupNet mini window
+npm run mini -- start --window --chrome # … and launch the proxied Chrome as well
 npm run mini -- start --url https://example.com --chrome
-npm run mini -- chrome                  # another Chrome window (proxy must be running)
+npm run mini -- window                  # another CupNet mini window (mini must be running)
+npm run mini -- chrome                  # another proxied Chrome window (mini must be running)
+npm run mini -- ca                      # CA path, SHA-256, SPKI, OS trust commands
 ```
+
+The **CupNet mini window** is the UI in a Chrome app window (`--app=`), on its own unproxied
+profile (`<data>/ui-profile`). It is not the proxied browser. `start --window` when mini is
+already running just opens another window. The window's **Quit** button stops mini, the same as
+Ctrl+C.
+
+## Standalone app (separate from the Electron project)
+
+```bash
+npm run pack:mini                  # → dist/CupNet mini.app (macOS) or dist/cupnet-mini/
+npm run pack:mini -- --dir         # plain folder on macOS too
+npm run pack:mini -- --no-node     # don't bundle Node (uses `node` on PATH)
+npm run pack:mini -- --all-platforms   # every worker binary in azuretls-go/bin
+```
+
+The pack holds only what mini requires, about 25 files found by walking `require()` from
+`mini/cupnet-mini.js` (`db.js` is left out). It also holds the Go worker for this platform,
+this Node binary in `runtime/`, and launchers: `cupnet-mini` / `cupnet-mini.cmd`. It doesn't
+need the repo or node_modules. Double-clicking `CupNet mini.app` runs `start --window` and logs
+to `<data>/mini.log`. The app has no Dock icon, so use the window's Quit button. The CLI inside
+it: `"CupNet mini.app/Contents/Resources/cupnet-mini/cupnet-mini" start --chrome`. Data stays in
+`~/.cupnet-mini` (or `CUPNET_MINI_DIR`), outside the bundle.
 
 Options: `--data DIR` (default `~/.cupnet-mini`, or `CUPNET_MINI_DIR`), `--port 8877`,
 `--ui-port 8878`, `--browser chrome_120`, `--upstream URL` (or `CUPNET_MINI_UPSTREAM`),
 `--trust spki|system`, `--chrome-bin PATH`.
-
-`scripts/run-mini.cjs` runs the CLI on Electron's Node (`ELECTRON_RUN_AS_NODE=1`) so
-`better-sqlite3` loads on the ABI it was built for. The Go worker binary must exist in
-`azuretls-go/bin/`.
 
 ## Trust modes
 
@@ -55,19 +78,69 @@ Pages can report back with a same-origin request:
 `navigator.sendBeacon('/__cupnet/event', JSON.stringify({...}))`. The MITM answers it locally
 (204) and never forwards it. The endpoint is write-only, and those requests are not logged as traffic.
 
-## UI / API
+## UI
 
-`http://127.0.0.1:8878/`. The API requires the `X-CupNet-Token` header (the token is in
-`<data>/ui-token`, and the UI page has it embedded). Requests with a non-loopback `Host` get 421,
-which blocks DNS rebinding. Routes: `GET /api/status`, `GET /api/log`, `GET|POST /api/rules`,
-`DELETE /api/rules/:id`, `POST /api/chrome`, `GET /api/sessions`, `GET /api/sessions/:id`,
-`POST /api/sessions/:id/seal`, `GET /api/sessions/:id/key`, `GET /api/sessions/:id/sealed`.
+`http://127.0.0.1:8878/`, or the CupNet mini window.
+
+- **Traffic**: a live, virtualized table (only visible rows are in the DOM). It handles hundreds
+  of thousands of entries: a saved 200k-entry, 120 MB session opens in under a second, and
+  filtering takes about 15 ms.
+  - The live session streams over `/api/log/stream`. Saved sessions are opened from the session
+    picker.
+  - Search syntax: words, `-exclude`, `status:4xx`, `method:post`, `type:fetch`,
+    `mime:json`, `host:example`. There are also kind, method, type and status selects and
+    Follow (auto-scroll). Keyboard: ↑/↓, Esc.
+  - The detail pane has Headers, Request, Response and JSON views. Images, audio and video show a
+    preview. Bodies over 2 MB show a preview with **Load full body**. Every body can be downloaded.
+- **Rules**: intercept rules (`inject`, `block`, `mock`, `modifyHeaders`, …) with hit counters.
+- **Sessions**: open, download JSONL, seal.
+
+## API
+
+Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A non-loopback
+`Host` gets 421, which blocks DNS rebinding. The window is opened with a one-time launch code
+(`#c=…`, valid for 60 s). The page trades it via `POST /api/auth/exchange` with header
+`X-CupNet-Code`, so the token never appears in Chrome's command line.
+
+- `GET /api/status`
+- `GET /api/log/stream?after=SEQ`: NDJSON summaries, the backlog first and then live entries.
+  The connection stays open.
+- `GET /api/log?session=ID&after=SEQ&limit=N`: summaries. Without `session`, the current session.
+- `GET /api/log/:seq?session=ID`: the full entry. Bodies are cut to a 2 MB preview, and
+  `*BodyTruncated` says whether they were.
+- `GET /api/log/:seq/body/request|response?session=ID`: the raw body bytes. They are always
+  served as `application/octet-stream` with `Content-Disposition: attachment` and
+  `CSP: sandbox`. The original type is in `X-CupNet-Content-Type`.
+- `GET|POST /api/rules`, `DELETE /api/rules/:id`
+- `POST /api/chrome`, `POST /api/window`, `POST /api/quit`
+- `GET /api/sessions`, `GET /api/sessions/:id` (JSONL download), `POST /api/sessions/:id/seal`,
+  `GET /api/sessions/:id/key`, `GET /api/sessions/:id/sealed`
 
 ## Data
 
-`<data>/ca/` (CA key + cert), `cupnet-mini.db` (rules), `sessions/<sessionId>.jsonl` (one file per
-run, everything as captured; bodies over 512 KB are truncated), `keys/`, `sealed/`,
-`chrome-profile/`, `ui-token`. The directory is created with mode 0700.
+`<data>/` is created with mode 0700 and holds:
+
+- `ca/`: CA key and cert.
+- `rules.json`: intercept rules. Rules from an old `cupnet-mini.db` are imported once, if
+  `node:sqlite` is available.
+- `sessions/<sessionId>.jsonl`: one file per run, one JSON line per entry.
+- `keys/`, `sealed/`
+- `chrome-profile/`: the proxied Chrome.
+- `ui-profile/`: the CupNet mini window.
+- `ui-token`, and `mini.log` when started from the .app.
+
+Every request is written **in full**: headers, and request and response bodies, binary ones as
+`__b64__:` base64, video and audio included. Nothing is truncated. The only limits are these
+guards against a runaway response, both set before `start`:
+
+- `CUPNET_LOG_BODY_MAX_BYTES`: the largest body kept in memory for the log. The default is
+  256 MB.
+- `CUPNET_LOG_MEDIA_BODIES=0`: skip video and audio bodies.
+
+Each line begins with its summary fields (seq, ts, kind, method, url, status, type, duration,
+mime, reqSize, resSize). Memory holds only those, plus each line's file offset. A saved session
+is indexed by reading just the first 64 KB of each line, and entries are read back from the
+file on demand.
 
 ## Sealed sessions (one key per session)
 

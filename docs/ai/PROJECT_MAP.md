@@ -1862,7 +1862,15 @@ npm run test:go          # Go worker unit tests
 npm test                 # tests/run-all.sh — node integration suites; test-db needs the Electron binary
 npm run test:e2e:smoke   # Playwright + Electron (CUPNET_SKIP_E2E=1 to skip)
 npm run build:go:local   # build the Go AzureTLS worker for the current platform
+
+# CupNet mini (mini/README.md): MITM + Go worker for the real Google Chrome, plain Node, no Electron
+npm run mini -- start --window --chrome
+npm run pack:mini        # standalone dist/CupNet mini.app (or dist/cupnet-mini/): required files only + Go worker + Node
 ```
+
+**CupNet mini notes:**
+- mini reuses `mitm-proxy.js` and `request-interceptor.js`, and injects its JSON rule store (`mini/rule-store.js`) through `setRuleStore`. Never `require('./db')` on mini's path: `scripts/pack-mini.cjs` leaves db.js out, and its `walkRequires` test fails if a new npm package shows up.
+- mini logs every body in full (`CUPNET_LOG_BODY_MAX_BYTES` defaults to 256 MB; `CUPNET_LOG_MEDIA_BODIES=1`).
 
 **Gotchas:** 6 unit files under `tests/unit/` still `import { describe, it } from 'node:test'` — Vitest reports "No test suite found" and PR checks stay red (see AUDIT). `npm run test:go` needs Go on PATH. The azuretls-go worker test hits the network; the concurrency case flakes on a slow link.
 
