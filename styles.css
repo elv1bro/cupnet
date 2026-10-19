@@ -397,17 +397,17 @@ code {
 }
 #browser-tools-subbar {
     position: fixed;
-    top: var(--shell-chrome-top, 95px);
+    top: var(--shell-chrome-top, 83px);
     left: 0;
     right: 0;
-    height: var(--shell-tools-bar-height, 34px);
+    height: var(--shell-tools-bar-height, 24px);
 }
 .browser-tools-bar--bottom {
     position: fixed;
     left: 0;
     right: 0;
     bottom: var(--shell-status-height, 26px);
-    height: var(--shell-tools-bar-height, 34px);
+    height: var(--shell-tools-bar-height, 24px);
     border-bottom: none;
     border-top: 1px solid var(--border, #30363d);
     z-index: 55;
@@ -423,16 +423,16 @@ code {
     flex-direction: row;
     align-items: center;
     justify-content: flex-start;
-    gap: 5px;
+    gap: 4px;
     min-width: 0;
     width: auto;
-    height: 28px;
-    padding: 0 8px;
-    border-radius: 6px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 5px;
 }
 .tool-dock--mini .tool-btn svg {
-    width: 13px;
-    height: 13px;
+    width: 12px;
+    height: 12px;
     flex-shrink: 0;
 }
 .tool-dock--mini .tool-label {
@@ -443,7 +443,7 @@ code {
     line-height: 1;
 }
 .tool-dock--mini .tool-log-pill {
-    height: 28px;
+    height: 20px;
     flex-shrink: 0;
 }
 .tool-dock--mini .log-rec-toggle-area {
@@ -466,7 +466,7 @@ code {
 .browser-tools-side {
     display: none;
     position: fixed;
-    top: var(--shell-chrome-top, 95px);
+    top: var(--shell-chrome-top, 83px);
     right: 0;
     bottom: var(--shell-status-height, 26px);
     width: var(--shell-tools-side-width, 58px);
@@ -823,6 +823,7 @@ legend {
 .proxy-pill-btn.env-direct   { border-color: #9ca3af; }
 .proxy-pill-btn.env-proxy    { border-color: #a855f7; }
 .proxy-pill-btn.env-isolated { border-color: #f59e0b; }
+.proxy-pill-btn.env-blocked  { border-color: #ef4444; }
 
 .proxy-dot {
     width: 7px; height: 7px;
@@ -929,7 +930,7 @@ legend {
 /* ── Settings panel ─────────────────────────────────────────────────────────── */
 #settings-panel {
     position: absolute;
-    top: 95px; /* tab-bar(35) + toolbar(60) */
+    top: 83px; /* tab-bar(35) + toolbar(48) */
     left: 0; right: 0;
     background: #f4f5f9;
     border-bottom: 2px solid #c4c8d4;
@@ -1270,6 +1271,16 @@ legend {
     flex-shrink: 0;
     -webkit-app-region: no-drag;
 }
+/* macOS hiddenInset: traffic lights sit in the tab strip. */
+html.platform-darwin #tab-bar {
+    padding-left: 78px;
+    -webkit-app-region: drag;
+}
+html.platform-darwin #tab-bar .tab-item,
+html.platform-darwin #tab-bar button,
+html.platform-darwin #tab-bar input {
+    -webkit-app-region: no-drag;
+}
 
 #tab-list {
     display: flex;
@@ -1378,7 +1389,7 @@ legend {
     display: flex;
     align-items: center;
     padding: 0 8px;
-    height: 60px;
+    height: 48px;
     gap: 2px;
     background-color: #f0f2f5;
     border-bottom: 1px solid #d1d1d1;
@@ -3140,6 +3151,7 @@ a#copy-url:hover {
     .proxy-pill-btn:hover { background: #252838; border-color: #4b5563; }
     .proxy-pill-btn.env-direct   { border-color: #4b5563; }
     .proxy-pill-btn.env-proxy    { border-color: #a855f7; }
+    .proxy-pill-btn.env-blocked  { border-color: #f87171; }
     .proxy-pill-btn.env-isolated { border-color: #f59e0b; }
     .proxy-dot { background: #4b5563; }
     .pb-detail { color: #6b7280; }

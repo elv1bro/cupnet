@@ -561,7 +561,8 @@ async function ensureLoggingStartedNoModal(mainWindowPage) {
  * @returns {Promise<object>}
  */
 async function exportHarViaMain(electronApp, sessionId) {
-    return electronApp.evaluate((sid) => {
+    // Playwright Electron: the first argument is require('electron') in main, the payload is second.
+    return electronApp.evaluate((_electron, sid) => {
         const exp = globalThis.__cupnetAppContext?.modules?.harExporter;
         if (!exp || typeof exp.exportHar !== 'function') throw new Error('harExporter.exportHar missing');
         return exp.exportHar(sid);

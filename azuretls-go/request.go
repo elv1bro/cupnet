@@ -26,6 +26,10 @@ func createPooledSession(browser, proxy *string, ja3 *string) (*azuretls.Session
 	}
 	s := azuretls.NewSession()
 	s.Browser = sessionBrowserName(prof)
+	// Chrome 153-shaped ClientHello (see profiles.go); ApplyJa3 below overrides it when a JA3 is set.
+	if fn := clientHelloSpecForBrowser(s.Browser); fn != nil {
+		s.GetClientHelloSpec = fn
+	}
 	s.UserAgent = defaultUserAgentForBrowser(prof)
 	s.InsecureSkipVerify = true
 	s.SetTimeout(time.Duration(upstreamTimeoutMs()) * time.Millisecond)
@@ -55,19 +59,26 @@ func createPooledSession(browser, proxy *string, ja3 *string) (*azuretls.Session
 	return s, nil
 }
 
-func headersToMap(h http.Header) map[string]string {
+// headersToMap flattens response headers for the NDJSON reply. Repeated headers are joined with ", "
+// (valid for list-valued headers) — except Set-Cookie, which must never be comma-joined (its Expires
+// attribute contains commas, so a browser cannot split it back and every cookie after the first is
+// lost). Repeated Set-Cookie values are sent as a JSON array; Node writes one header line per value.
+func headersToMap(h http.Header) map[string]any {
 	if h == nil {
-		return map[string]string{}
+		return map[string]any{}
 	}
-	out := make(map[string]string)
+	out := make(map[string]any, len(h))
 	for k, vals := range h {
 		if len(vals) == 0 {
 			continue
 		}
 		// Preserve canonical-ish keys as returned by server
-		if len(vals) == 1 {
+		switch {
+		case len(vals) == 1:
 			out[k] = vals[0]
-		} else {
+		case strings.EqualFold(k, "Set-Cookie"):
+			out[k] = append([]string(nil), vals...)
+		default:
 			out[k] = strings.Join(vals, ", ")
 		}
 	}
@@ -88,6 +99,7 @@ type incomingLine struct {
 	Ja3              *string             `json:"ja3"`
 	DisableRedirects *bool               `json:"disableRedirects"`
 	ForceHTTP1       *bool               `json:"forceHttp1"`
+	Stream           *bool               `json:"stream"` // stream the body as frames (stream.go)
 	TabID            *string             `json:"tabId"`
 	MaxRetries       *float64            `json:"maxRetries"`
 	Timeout          *float64            `json:"timeout"`
@@ -97,7 +109,7 @@ type outgoingLine struct {
 	ID         string            `json:"id"`
 	StatusCode int               `json:"statusCode"`
 	BodyBase64 string            `json:"bodyBase64,omitempty"`
-	Headers    map[string]string `json:"headers,omitempty"`
+	Headers    map[string]any    `json:"headers,omitempty"`
 	Error      any               `json:"error"` // string or nil (matches Node worker)
 	Body       interface{}       `json:"body,omitempty"`
 	Status     string            `json:"status,omitempty"`
@@ -142,6 +154,10 @@ func buildAzureRequest(in *incomingLine, bare bool) (*azuretls.Request, error) {
 	req := &azuretls.Request{
 		Method: method,
 		Url:    in.URL,
+		// Chromium owns cookies: it sends them in the Cookie header and stores Set-Cookie itself.
+		// The session's own jar would otherwise record upstream cookies and append them to every
+		// later request — clearing cookies in the browser would not stop them being sent (A-014).
+		NoCookie: true,
 	}
 	ms := upstreamTimeoutMs()
 	if in.Timeout != nil && *in.Timeout > 0 {
@@ -244,7 +260,7 @@ func handleHTTPRequest(in *incomingLine) outgoingLine {
 	sess, pkey, err := borrowSession(in.Browser, in.Proxy, in.Ja3, in.TabID, factory)
 	if err != nil {
 		e := err.Error()
-		return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]string{}, Error: e}
+		return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]any{}, Error: e}
 	}
 
 	if in.Ja3 != nil && strings.TrimSpace(*in.Ja3) != "" {
@@ -257,7 +273,7 @@ func handleHTTPRequest(in *incomingLine) outgoingLine {
 	req, err := buildAzureRequest(in, false)
 	if err != nil {
 		releaseSession(pkey, sess)
-		return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]string{}, Error: err.Error()}
+		return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]any{}, Error: err.Error()}
 	}
 
 	resp, err := doRequest(sess, req)
@@ -294,17 +310,17 @@ func handleHTTPRequest(in *incomingLine) outgoingLine {
 		// Bare fallback
 		bare, errBare := createPooledSession(in.Browser, in.Proxy, in.Ja3)
 		if errBare != nil {
-			return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]string{}, Error: errBare.Error()}
+			return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]any{}, Error: errBare.Error()}
 		}
 		reqBare, rerr := buildAzureRequest(in, true)
 		if rerr != nil {
 			bare.Close()
-			return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]string{}, Error: rerr.Error()}
+			return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]any{}, Error: rerr.Error()}
 		}
 		resp3, err3 := doRequest(bare, reqBare)
 		bare.Close()
 		if err3 != nil {
-			return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]string{}, Error: err3.Error()}
+			return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]any{}, Error: err3.Error()}
 		}
 		out := responseToOutgoing(resp3)
 		out.ID = id
@@ -313,7 +329,7 @@ func handleHTTPRequest(in *incomingLine) outgoingLine {
 
 	if err != nil {
 		releaseSession(pkey, sess)
-		return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]string{}, Error: err.Error()}
+		return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]any{}, Error: err.Error()}
 	}
 
 	out := responseToOutgoing(resp)

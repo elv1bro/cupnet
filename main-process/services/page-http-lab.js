@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { Menu } = require('electron');
+const { Menu, shell } = require('electron');
 
 const INJECT_SRC = fs.readFileSync(
     path.join(__dirname, '../injected/page-http-lab.inject.js'),
@@ -124,7 +124,19 @@ function attachTabWebRequestToolsContextMenu(tab, getMainWindow, onOpenLinkInNew
             ...extra,
         });
 
-        const template = [
+        // Fallback for sites CupNet cannot render like Chrome (e.g. commercial anti-bot challenges):
+        // hand the current URL to the user's real default browser. This is a plain "open URL externally"
+        // (shell.openExternal) — it opens the page in the user's own Chrome for them to use; it does NOT
+        // move any session/cookies between browsers.
+        const template = [];
+        if (/^https?:\/\//i.test(pageUrl)) {
+            template.push({
+                label: 'Open in system browser (Chrome)',
+                click: () => { void shell.openExternal(pageUrl).catch(() => {}); },
+            });
+            template.push({ type: 'separator' });
+        }
+        template.push(
             {
                 label: 'Web Request Tools',
                 submenu: [
@@ -147,7 +159,7 @@ function attachTabWebRequestToolsContextMenu(tab, getMainWindow, onOpenLinkInNew
                 ],
             },
             { type: 'separator' },
-        ];
+        );
 
         if (params.linkURL && typeof onOpenLinkInNewTab === 'function') {
             template.push({

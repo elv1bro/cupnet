@@ -101,7 +101,15 @@ function registerIdentityIpc(ctx) {
         try {
             const s = svc();
             const tabId = ctx.tabManager?.getTabIdByWebContentsId?.(event.sender?.id) || null;
-            event.returnValue = { script: s ? s.getNavigatorPatchScript(tabId) : null };
+            let permissionDecisions = null;
+            try {
+                const frameUrl = event.senderFrame?.url || event.sender?.getURL?.() || '';
+                const origin = new URL(frameUrl).origin;
+                if (origin && origin !== 'null' && typeof ctx.tabManager?.permissionDecisionsFor === 'function') {
+                    permissionDecisions = ctx.tabManager.permissionDecisionsFor(tabId, origin);
+                }
+            } catch { /* about:blank and internal pages have no http origin */ }
+            event.returnValue = { script: s ? s.getNavigatorPatchScript(tabId, { permissionDecisions }) : null };
         } catch {
             event.returnValue = { script: null };
         }

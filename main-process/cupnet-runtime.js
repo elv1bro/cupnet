@@ -260,6 +260,7 @@ const proxyNotify = createProxyNotifyBroadcast({
     getMitmReady: () => mitmReady,
     getMitmState: () => mitmState,
     getMitmError: () => mitmError,
+    getMitmProxy: () => mitmProxy,
 });
 const { notifyProxyStatus, notifyMitmReady, notifyProxyProfilesList } = proxyNotify;
 const proxyResilience = new ProxyResilienceManager(networkPolicy.breaker);
@@ -986,6 +987,9 @@ app.whenReady().then(async () => {
         return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
+    // Per-tab upstreams + fail-closed block must survive a MITM restart (A-027).
+    const { snapshotMitmRuntimeState: _snapshotMitmRuntimeState, restoreMitmRuntimeState: _restoreMitmRuntimeState } = require('./services/mitm-runtime-state.js');
+
     async function wireMitmAfterStart(proxy) {
         const { session: electronSession } = require('electron');
 
@@ -1139,7 +1143,11 @@ app.whenReady().then(async () => {
         notifyMitmReady();
     }
 
-    async function startMitmWithRetry(maxAttempts = 3) {
+    const { createSingleFlight } = require('./services/mitm-lifecycle.js');
+    const _mitmSingleFlight = createSingleFlight();
+
+    function startMitmWithRetry(maxAttempts = 3) {
+        return _mitmSingleFlight.run(async () => {
         let lastErr = null;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
@@ -1160,9 +1168,20 @@ app.whenReady().then(async () => {
             }
         }
         throw lastErr || new Error('MITM failed to start');
+        });
     }
 
-    async function restartMitmProxy() {
+    function restartMitmProxy() {
+        const existing = _mitmSingleFlight.inFlight();
+        if (existing) {
+            return existing.then(
+                (result) => (result && typeof result === 'object' && Object.prototype.hasOwnProperty.call(result, 'success')
+                    ? result
+                    : { success: true }),
+                (e) => ({ success: false, error: String(e?.message || e) }),
+            );
+        }
+        const p = _mitmSingleFlight.run(async () => {
         try {
             mitmState = 'starting';
             mitmReady = false;
@@ -1170,10 +1189,18 @@ app.whenReady().then(async () => {
             syncAppContextSnapshot();
             notifyMitmReady();
 
+            const carried = _snapshotMitmRuntimeState(mitmProxy);
             _clearMitmProxyInstance();
             await _delayMs(300);
 
             const proxy = await startMitmProxy();
+            // Before wiring: wiring re-applies the global upstream (which lifts the block only when a
+            // working upstream exists) and per-tab identities on top of the restored tab upstreams.
+            _restoreMitmRuntimeState(proxy, carried);
+            // External proxy ports route through `parent`; point them at the new instance (A-106).
+            for (const { instance } of activeExtPorts.values()) {
+                if (instance) instance.parent = proxy;
+            }
             await wireMitmAfterStart(proxy);
             _markMitmReady();
             startMitmMonitoringIntervals();
@@ -1196,6 +1223,9 @@ app.whenReady().then(async () => {
             _markMitmFailed(e);
             return { success: false, error: mitmError };
         }
+        });
+        mitmStartPromise = p;
+        return p;
     }
 
     if (STEALTH >= 5) {

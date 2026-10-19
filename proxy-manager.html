@@ -869,6 +869,9 @@ body[data-editor-mode="simple"] .editor-tabs { display: none !important; }
 .se-direct-desc { margin: 0 0 12px; color: var(--dim); font-size: 12px; }
 .se-direct-state { font-size: 12px; color: var(--green); font-weight: 600; }
 .se-hint { color: var(--dim); padding: 0 2px; }
+.se-more { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.se-more-link { align-self: flex-start; background: none; border: 0; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; padding: 2px 0; }
+.se-more-link:hover { text-decoration: underline; }
 .simple-editor .simple-identity-line { margin-top: 2px; }
 .pm-modal {
     width: 100%; max-width: 380px;
@@ -930,10 +933,6 @@ body[data-editor-mode="simple"] .editor-tabs { display: none !important; }
         <svg class="icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
         Proxy Manager
     </span>
-    <div class="conn-mode-switch editor-mode-seg" id="editor-mode-seg" role="tablist" aria-label="Editor mode" title="Simple: provider, credentials, country and session. Advanced: manual URLs, static lists, template variables, identity override and tuning.">
-        <button type="button" class="conn-mode-btn" data-editor-mode="simple" id="editor-mode-simple">Simple</button>
-        <button type="button" class="conn-mode-btn" data-editor-mode="advanced" id="editor-mode-advanced">Advanced</button>
-    </div>
     <div class="spacer"></div>
     <div class="topbar-rail">
         <button type="button" class="status-pill-btn" id="status-pill-btn" title="Click to refresh IP / geo">
@@ -947,7 +946,7 @@ body[data-editor-mode="simple"] .editor-tabs { display: none !important; }
             </div>
         </button>
         <span class="topbar-divider" aria-hidden="true"></span>
-        <div class="metrics-inline adv-only" id="mitm-stats" title="AzureTLS MITM proxy statistics">
+        <div class="metrics-inline" id="mitm-stats" title="AzureTLS MITM proxy statistics">
             <span class="mitm-stat-dot" id="mitm-dot" title="Worker status"></span>
             <span class="metric-item"><span class="metric-item-val" id="ms-rps">—</span><span class="metric-item-unit">/s</span></span>
             <span class="metric-item"><span class="metric-item-val" id="ms-avg">—</span></span>
@@ -980,14 +979,14 @@ body[data-editor-mode="simple"] .editor-tabs { display: none !important; }
                 <span>My profiles</span>
                 <span class="sidebar-label-actions">
                     <button type="button" class="btn sm primary" id="btn-simple-new" title="New proxy profile (⌘N)">+ New</button>
-                    <button type="button" class="btn sm adv-only" id="btn-bulk-import" title="Import a list of static proxies (one per line)">Import list…</button>
+                    <button type="button" class="btn sm" id="btn-bulk-import" title="Import a list of static proxies (one per line)">Import list…</button>
                 </span>
             </div>
             <div class="sidebar-filters">
                 <div class="left-search">
                     <input type="text" id="search-profiles" placeholder="Search by name…" autocomplete="off">
                 </div>
-                <div class="sidebar-filters-row adv-only">
+                <div class="sidebar-filters-row">
                     <select id="filter-provider" title="Filter by provider">
                         <option value="">All providers</option>
                     </select>
@@ -1087,7 +1086,10 @@ body[data-editor-mode="simple"] .editor-tabs { display: none !important; }
                     </div>
                 </div>
 
-                <div class="form-hint se-hint">Static proxies and URL templates live in <b>Advanced</b>. Browser identity (User-Agent, TLS, timezone, language) is global — set it in <b>Browser ID</b>.</div>
+                <div class="se-more">
+                    <button type="button" class="se-more-link" id="se-advanced-new" title="Paste a proxy URL, use a URL template, or import a list of proxies">Have a proxy URL or a list to import? Open advanced editor →</button>
+                    <div class="form-hint se-hint">Browser identity (User-Agent, TLS, timezone, language) is global — set it in <b>Browser ID</b>.</div>
+                </div>
             </div>
         </div>
 

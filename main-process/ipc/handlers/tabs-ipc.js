@@ -2,6 +2,7 @@
 
 const { confirmOpenAnotherTab } = require('../../services/tab-open-confirm');
 const { resolveInternalAlias } = require('../../../omnibox-input.js');
+const { guardIpcHandlerAllowInternal, guardIpcListenerAllowInternal } = require('../ipc-trusted-sender.js');
 
 /**
  * Вкладки и навигация.
@@ -55,12 +56,12 @@ function registerTabsIpc(ctx) {
         return ctx.tabManager.switchTab(tabId);
     });
 
-    ctx.ipcMain.handle('get-tabs', async () => {
+    ctx.ipcMain.handle('get-tabs', guardIpcHandlerAllowInternal('get-tabs', async () => {
         return ctx.tabManager.getTabList();
-    });
+    }));
 
     // ── Navigation ───────────────────────────────────────────────────────────
-    ctx.ipcMain.on('navigate-to', (event, rawInput) => {
+    ctx.ipcMain.on('navigate-to', guardIpcListenerAllowInternal('navigate-to', (event, rawInput) => {
         const raw = String(rawInput || '').trim();
         // Internal aliases share one map with the omnibox classifier (omnibox-input.js, A-203).
         const internal = resolveInternalAlias(raw);
@@ -91,7 +92,7 @@ function registerTabsIpc(ctx) {
         if (!url) return;
         // Always load in active tab — avoids sender-id confusion (URL bar vs new-tab)
         ctx.tabManager.navigate(url, undefined, { omniboxTyped: true, typedText: raw });
-    });
+    }));
     ctx.ipcMain.on('nav-back', () => {
         ctx.tabManager.ensureActiveTabViewVisible?.();
         const tab = ctx.tabManager.getActiveTab();

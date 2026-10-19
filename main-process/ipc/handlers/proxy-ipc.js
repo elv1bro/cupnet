@@ -2,7 +2,7 @@
 
 const { insertCupnetTrafficSnapshot, insertCupnetTrafficSnapshotWithGeo } = require('../../services/cupnet-network-meta-log');
 const { connectGlobalProxyProfile, disconnectGlobalProxy } = require('../../services/global-proxy-connect');
-const { guardIpcHandler } = require('../ipc-trusted-sender.js');
+const { guardIpcHandler, guardIpcHandlerAllowInternal } = require('../ipc-trusted-sender.js');
 
 /**
  * Текущий прокси, connect/disconnect, профили, тесты.
@@ -19,7 +19,7 @@ function parseProxyVariablesJson(raw, ctx) {
 }
 
 function registerProxyIpc(ctx) {
-    ctx.ipcMain.handle('get-current-proxy', async () => {
+    ctx.ipcMain.handle('get-current-proxy', guardIpcHandlerAllowInternal('get-current-proxy', async () => {
         const isDirect = !ctx.persistentAnonymizedProxyUrl && ctx.actProxy === '';
         const globalName = ctx.connectedProfileName || ctx.actProxy || '';
         const at = ctx.tabManager?.getActiveTab?.();
@@ -34,23 +34,29 @@ function registerProxyIpc(ctx) {
             if (!tabProxyName) tabProxyName = `#${at.proxyProfileId}`;
         }
         const displayProxyName = tabProxyName || globalName;
+        const egressBlocked = !!(ctx.mitmProxy && typeof ctx.mitmProxy.isEgressBlocked === 'function' && ctx.mitmProxy.isEgressBlocked());
+        const egressBlockReason = egressBlocked && typeof ctx.mitmProxy.getEgressBlockReason === 'function'
+            ? String(ctx.mitmProxy.getEgressBlockReason() || '')
+            : '';
         return {
             active:    !!ctx.persistentAnonymizedProxyUrl,
             proxyName: globalName,
             tabProxyProfileId,
             tabProxyName,
             displayProxyName,
-            mode:      isDirect ? 'direct' : (ctx.persistentAnonymizedProxyUrl ? 'proxy' : 'none'),
+            mode:      egressBlocked ? 'blocked' : (isDirect ? 'direct' : (ctx.persistentAnonymizedProxyUrl ? 'proxy' : 'none')),
+            egressBlocked,
+            egressBlockReason,
             trafficMode: ctx.getCurrentTrafficMode(),
             effectiveMode: ctx.getCurrentTrafficMode(),
             profileId: ctx.connectedProfileId || null,
             resolvedVars: ctx.connectedResolvedVars || {},
         };
-    });
+    }));
 
-    ctx.ipcMain.handle('connect-proxy-template', async (_, profileId, ephemeralVars) => {
+    ctx.ipcMain.handle('connect-proxy-template', guardIpcHandlerAllowInternal('connect-proxy-template', async (_, profileId, ephemeralVars) => {
         return connectGlobalProxyProfile(ctx, profileId, ephemeralVars);
-    });
+    }));
 
     ctx.ipcMain.handle('apply-quick-proxy-change', async (_, proxyUrl) => {
         try {
@@ -168,7 +174,7 @@ function registerProxyIpc(ctx) {
     });
 
     // ── Proxy profiles ───────────────────────────────────────────────────────
-    ctx.ipcMain.handle('get-proxy-profiles', async () => {
+    ctx.ipcMain.handle('get-proxy-profiles', guardIpcHandlerAllowInternal('get-proxy-profiles', async () => {
         try {
             if (!ctx.db || typeof ctx.db.getProxyProfiles !== 'function') {
                 ctx.sysLog?.('error', 'proxy', 'get-proxy-profiles: database not ready');
@@ -179,7 +185,7 @@ function registerProxyIpc(ctx) {
             ctx.safeCatch({ module: 'main', eventCode: 'proxy.profiles.load.failed', context: { op: 'get-proxy-profiles' } }, err);
             return [];
         }
-    });
+    }));
 
     ctx.ipcMain.handle('save-proxy-profile', async (_, name, url, country) => {
         if (!ctx.safeStorage.isEncryptionAvailable()) {

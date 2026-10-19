@@ -1,6 +1,24 @@
 'use strict';
 
 /**
+ * The language codes Chrome puts in Accept-Language for a navigator.languages list: after each run of
+ * same-base languages the base language is appended if missing (net::HttpUtil::ExpandLanguageList).
+ * ["ru","ru-BY","en-BY","pl-BY"] → ["ru","ru-by","en-by","en","pl-by","pl"] (lower-cased for comparison).
+ */
+function chromeExpandedLanguages(languages) {
+    const list = (languages || []).map((l) => String(l).toLowerCase()).filter(Boolean);
+    const base = (c) => c.split('-')[0];
+    const out = [];
+    const add = (c) => { if (!out.includes(c)) out.push(c); };
+    list.forEach((c, i) => {
+        add(c);
+        if (i + 1 >= list.length || base(list[i + 1]) !== base(c)) add(base(c));
+    });
+    return out;
+}
+
+
+/**
  * cupnet://identity-check — compares the JavaScript-visible identity of this tab with what the MITM
  * puts on the wire. The wire side comes from https://identity-check.cupnet/echo, a host served by the
  * MITM itself (mitm-proxy.js _buildIdentityCheckResponse) so the check is fully offline.
@@ -130,24 +148,32 @@ function compare(js, wire) {
 
     const wireLang = h['accept-language'] || null;
     const wireCodes = wireLang ? wireLang.split(',').map((t) => t.split(';')[0].trim().toLowerCase()).filter(Boolean) : [];
-    const jsCodes = js.languages.map((l) => String(l).toLowerCase());
+    const jsCodes = chromeExpandedLanguages(js.languages);
     const langOk = wireLang ? JSON.stringify(wireCodes) === JSON.stringify(jsCodes) : null;
     checks.push({ key: 'language', ok: langOk !== false });
     row('Accept-Language / navigator.languages', js.languages.join(', '), wireLang, langOk, 'not sent');
 
     row('navigator.platform', js.platform, null, null, 'JS only');
 
-    // window.chrome — Electron leaves it empty ({}); a page claiming to be Chrome expects app/runtime/loadTimes/csi.
+    // window.chrome — Electron leaves it empty ({}). Real Chrome on an ordinary web page exposes
+    // { loadTimes, csi, app } and NO chrome.runtime (that appears only in extension contexts), so a
+    // runtime on a plain page is itself a tell (measured against Chrome 153, 2026-09-27).
     const wc = js.windowChrome || { present: false, keys: [], hasRuntime: false };
     const wcExpected = /Chrome|Chromium|Edg|OPR/i.test(js.userAgent) && !/Firefox|FxiOS/i.test(js.userAgent);
-    const wcOk = wcExpected ? (wc.present && wc.hasRuntime) : !wc.present;
+    const wcKeys = Array.isArray(wc.keys) ? wc.keys : [];
+    const wcOk = wcExpected
+        ? (wc.present && !wc.hasRuntime && ['loadTimes', 'csi', 'app'].every((k) => wcKeys.includes(k)))
+        : !wc.present;
     checks.push({ key: 'window.chrome', ok: wcOk });
-    row('window.chrome', wc.present ? `{${wc.keys.join(', ')}}${wc.hasRuntime ? '' : ' — no runtime'}` : 'absent', wcExpected ? 'Chrome expects app/runtime/loadTimes/csi' : 'non-Chromium expects none', wcOk, wcExpected ? 'must look like Chrome' : 'must be absent');
+    row('window.chrome', wc.present ? `{${wcKeys.join(', ')}}${wc.hasRuntime ? ' — has runtime' : ''}` : 'absent', wcExpected ? 'Chrome page: loadTimes/csi/app, no runtime' : 'non-Chromium expects none', wcOk, wcExpected ? 'must look like Chrome' : 'must be absent');
 
-    // navigator hardware fields — real Chrome caps deviceMemory at 8; a raw host value (e.g. 16) is a tell.
-    const dmOk = js.deviceMemory == null ? null : js.deviceMemory <= 8;
+    // navigator hardware fields — Chrome reports RAM rounded to a power of two (current Chrome, e.g. 153,
+    // reports 16 on a 16 GB Mac; the old "≤ 8" cap no longer holds). A value that is not a power of two
+    // could not come from Chrome.
+    const dm = Number(js.deviceMemory);
+    const dmOk = js.deviceMemory == null ? null : (dm >= 0.25 && dm <= 64 && Number.isInteger(Math.log2(dm)));
     checks.push({ key: 'deviceMemory', ok: dmOk !== false });
-    row('navigator.deviceMemory / hardwareConcurrency', `${js.deviceMemory ?? '—'} GB · ${js.hardwareConcurrency ?? '—'} cores`, 'Chrome caps deviceMemory ≤ 8', dmOk, dmOk === false ? '> 8 leaks host RAM' : 'JS only');
+    row('navigator.deviceMemory / hardwareConcurrency', `${js.deviceMemory ?? '—'} GB · ${js.hardwareConcurrency ?? '—'} cores`, 'Chrome: power of two (rounded RAM)', dmOk, dmOk === false ? 'not a Chrome value' : 'JS only');
 
     // Canvas fingerprint — farbled per identity (stable across reads, not the host's raw hash).
     row('Canvas fingerprint', js.canvasStable === true ? 'stable per identity (farbled)' : js.canvasStable === false ? 'unstable' : '—', null, js.canvasStable === false ? false : null, js.canvasStable === false ? 'must be stable' : 'JS only');
@@ -282,7 +308,7 @@ async function externalCheck() {
         extRow('sec-ch-ua-platform', platGot, jsPlat, (platGot == null && jsPlat == null) ? null : platGot === jsPlat);
         const jsMobile = js.userAgentData ? (js.userAgentData.mobile ? '?1' : '?0') : null;
         extRow('sec-ch-ua-mobile', gotMobile, jsMobile, (gotMobile == null && jsMobile == null) ? null : gotMobile === jsMobile);
-        const jsCodes = js.languages.map((l) => String(l).toLowerCase());
+        const jsCodes = chromeExpandedLanguages(js.languages);
         const gotCodes = gotLang ? gotLang.split(',').map((t) => t.split(';')[0].trim().toLowerCase()).filter(Boolean) : [];
         extRow('Accept-Language', gotLang, js.languages.join(', '), gotLang ? JSON.stringify(gotCodes) === JSON.stringify(jsCodes) : null, gotLang ? undefined : 'not sent');
     } else {

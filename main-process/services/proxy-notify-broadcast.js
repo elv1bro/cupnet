@@ -19,6 +19,7 @@ function createProxyNotifyBroadcast({
     getMitmReady,
     getMitmState,
     getMitmError,
+    getMitmProxy,
 }) {
     let _lastProxyStatusSig = '';
 
@@ -30,10 +31,17 @@ function createProxyNotifyBroadcast({
         const isDirect = !persistentAnonymizedProxyUrl && actProxy === '';
         const trafficMode = typeof getCurrentTrafficMode === 'function' ? getCurrentTrafficMode() : 'mitm';
         const globalName = (typeof getConnectedProfileName === 'function' ? getConnectedProfileName() : null) || actProxy || '';
+        const mitm = typeof getMitmProxy === 'function' ? getMitmProxy() : null;
+        const egressBlocked = !!(mitm && typeof mitm.isEgressBlocked === 'function' && mitm.isEgressBlocked());
+        const egressBlockReason = egressBlocked && typeof mitm.getEgressBlockReason === 'function'
+            ? String(mitm.getEgressBlockReason() || '')
+            : '';
         return {
             active: !!persistentAnonymizedProxyUrl,
             proxyName: globalName,
-            mode: isDirect ? 'direct' : (persistentAnonymizedProxyUrl ? 'proxy' : 'none'),
+            mode: egressBlocked ? 'blocked' : (isDirect ? 'direct' : (persistentAnonymizedProxyUrl ? 'proxy' : 'none')),
+            egressBlocked,
+            egressBlockReason,
             trafficMode,
             effectiveMode: trafficMode,
             profileId: typeof getConnectedProfileId === 'function' ? getConnectedProfileId() : null,

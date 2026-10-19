@@ -20,12 +20,28 @@ func TestHeadersToMap(t *testing.T) {
 	if m["Content-Type"] != "text/plain" {
 		t.Fatalf("Content-Type: %v", m)
 	}
-	multi := m["X-Multi"]
+	multi, _ := m["X-Multi"].(string)
 	if multi == "" || !strings.Contains(multi, "a") || !strings.Contains(multi, "b") {
 		t.Fatalf("X-Multi: %q", multi)
 	}
 	if len(headersToMap(nil)) != 0 {
 		t.Fatal("nil header")
+	}
+}
+
+func TestHeadersToMapKeepsSetCookieValuesApart(t *testing.T) {
+	h := http.Header{}
+	h.Add("Set-Cookie", "sid=abc; Path=/; Expires=Wed, 21 Oct 2030 07:28:00 GMT")
+	h.Add("Set-Cookie", "csrf=xyz; Path=/; Secure")
+	m := headersToMap(h)
+	got, ok := m["Set-Cookie"].([]string)
+	if !ok || len(got) != 2 || got[0] != "sid=abc; Path=/; Expires=Wed, 21 Oct 2030 07:28:00 GMT" || got[1] != "csrf=xyz; Path=/; Secure" {
+		t.Fatalf("Set-Cookie must stay separate values, got %#v", m["Set-Cookie"])
+	}
+	one := http.Header{}
+	one.Set("Set-Cookie", "a=1")
+	if headersToMap(one)["Set-Cookie"] != "a=1" {
+		t.Fatalf("single Set-Cookie stays a string, got %#v", headersToMap(one)["Set-Cookie"])
 	}
 }
 
@@ -285,5 +301,17 @@ func TestHandleHTTPRequestMissingID(t *testing.T) {
 	out := handleHTTPRequest(&incomingLine{ID: ""})
 	if out.Error != "missing id" {
 		t.Fatalf("got %#v", out.Error)
+	}
+}
+
+func TestBuildAzureRequestNeverUsesSessionCookieJar(t *testing.T) {
+	for _, bare := range []bool{false, true} {
+		req, err := buildAzureRequest(&incomingLine{ID: "x", Method: "GET", URL: "https://example.com/"}, bare)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !req.NoCookie {
+			t.Fatalf("bare=%v: NoCookie must be set so the worker never replays upstream cookies", bare)
+		}
 	}
 }

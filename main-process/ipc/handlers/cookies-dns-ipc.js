@@ -24,7 +24,7 @@ const {
  * @param {object} ctx
  */
 function registerCookiesDnsIpc(ctx) {
-    const { guardIpcHandler } = require('../ipc-trusted-sender.js');
+    const { guardIpcHandler, guardIpcHandlerAllowInternal } = require('../ipc-trusted-sender.js');
 
     function _tabForCookieAccess(event, tabId) {
         const tab = tabId ? ctx.tabManager.getTab(tabId) : ctx.tabManager.getActiveTab();
@@ -67,13 +67,13 @@ function registerCookiesDnsIpc(ctx) {
         });
         if (ctx.identityService) await ctx.identityService.setTabOverride(tid, overrides ? profile : null);
     }
-    ctx.ipcMain.handle('get-cookies', async (event, tabId, filter) => {
+    ctx.ipcMain.handle('get-cookies', guardIpcHandlerAllowInternal('get-cookies', async (event, tabId, filter) => {
         const tab = _cookieSessionTab(event, tabId);
         if (!tab) return [];
         return tab.tabSession.cookies.get(filter || {});
-    });
+    }));
 
-    ctx.ipcMain.handle('set-cookie', async (event, tabId, details) => {
+    ctx.ipcMain.handle('set-cookie', guardIpcHandlerAllowInternal('set-cookie', async (event, tabId, details) => {
         const tab = _cookieSessionTab(event, tabId);
         if (!tab) return { success: false, error: 'Tab not found' };
         try {
@@ -81,9 +81,9 @@ function registerCookiesDnsIpc(ctx) {
             await tab.tabSession.cookies.flushStore();
             return { success: true };
         } catch (e) { return { success: false, error: e.message }; }
-    });
+    }));
 
-    ctx.ipcMain.handle('remove-cookie', async (_, tabId, cookieOrUrl, name) => {
+    ctx.ipcMain.handle('remove-cookie', guardIpcHandlerAllowInternal('remove-cookie', async (_, tabId, cookieOrUrl, name) => {
         const tab = tabId ? ctx.tabManager.getTab(tabId) : ctx.tabManager.getActiveTab();
         if (!tab) return { success: false, error: 'Tab not found' };
         try {
@@ -98,9 +98,9 @@ function registerCookiesDnsIpc(ctx) {
         } catch (e) {
             return { success: false, error: e.message };
         }
-    });
+    }));
 
-    ctx.ipcMain.handle('clear-cookies', async (_, tabId, domain) => {
+    ctx.ipcMain.handle('clear-cookies', guardIpcHandlerAllowInternal('clear-cookies', async (_, tabId, domain) => {
         const tab = tabId ? ctx.tabManager.getTab(tabId) : ctx.tabManager.getActiveTab();
         if (!tab) return { success: false, error: 'Tab not found' };
         try {
@@ -138,7 +138,7 @@ function registerCookiesDnsIpc(ctx) {
                 error: remaining > 0 ? `${remaining} cookie(s) still in jar` : undefined,
             };
         } catch (e) { return { success: false, error: e.message }; }
-    });
+    }));
 
     ctx.ipcMain.handle('consolidate-cookies', async (_, tabId, anchorHost) => {
         const tab = tabId ? ctx.tabManager.getTab(tabId) : ctx.tabManager.getActiveTab();
@@ -244,7 +244,7 @@ function registerCookiesDnsIpc(ctx) {
         }
     });
 
-    ctx.ipcMain.handle('isolate-tab', async (_, tabId) => {
+    ctx.ipcMain.handle('isolate-tab', guardIpcHandlerAllowInternal('isolate-tab', async (_, tabId) => {
         const tid = tabId || ctx.tabManager.getActiveTabId();
         const result = await ctx.tabManager.isolateTab(tid);
         // Mirror set-tab-cookie-group: new WebContentsView/session loses MITM upstream + logging unless re-applied.
@@ -265,7 +265,7 @@ function registerCookiesDnsIpc(ctx) {
             if (typeof ctx.notifyProxyStatus === 'function') ctx.notifyProxyStatus();
         }
         return result;
-    });
+    }));
 
     ctx.ipcMain.handle('new-isolated-tab', async () => {
         if (!(await confirmOpenAnotherTab(ctx))) return null;
@@ -287,14 +287,14 @@ function registerCookiesDnsIpc(ctx) {
         return tabId;
     });
 
-    ctx.ipcMain.handle('open-cookie-manager', async (_, tabId) => {
+    ctx.ipcMain.handle('open-cookie-manager', guardIpcHandlerAllowInternal('open-cookie-manager', async (_, tabId) => {
         ctx.createCookieManagerWindow(tabId || ctx.tabManager.getActiveTabId());
         return true;
-    });
+    }));
 
     // ── Per-tab controls ────────────────────────────────────────────────────
 
-    ctx.ipcMain.handle('set-tab-proxy', async (_, tabId, proxyProfileId, ephemeralVars) => {
+    ctx.ipcMain.handle('set-tab-proxy', guardIpcHandlerAllowInternal('set-tab-proxy', async (_, tabId, proxyProfileId, ephemeralVars) => {
         const tid = tabId || ctx.tabManager.getActiveTabId();
         const result = await ctx.tabManager.setTabProxy(tid, proxyProfileId);
         if (!result?.success) return result;
@@ -320,9 +320,9 @@ function registerCookiesDnsIpc(ctx) {
             }).catch(() => {});
         } catch (_) { /* ignore */ }
         return result;
-    });
+    }));
 
-    ctx.ipcMain.handle('set-tab-cookie-group', async (_, tabId, cookieGroupId) => {
+    ctx.ipcMain.handle('set-tab-cookie-group', guardIpcHandlerAllowInternal('set-tab-cookie-group', async (_, tabId, cookieGroupId) => {
         const tid = tabId || ctx.tabManager.getActiveTabId();
         const result = await ctx.tabManager.setTabCookieGroup(tid, cookieGroupId);
         if (result?.success) {
@@ -339,7 +339,7 @@ function registerCookiesDnsIpc(ctx) {
             ctx.notifyCookieManagerTabs();
         }
         return result;
-    });
+    }));
 
     // ── Cookie Groups ───────────────────────────────────────────────────────
 

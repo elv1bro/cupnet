@@ -41,13 +41,13 @@ func TestPoolKey(t *testing.T) {
 }
 
 func TestWorkerFfiConcurrencyEnv(t *testing.T) {
-	t.Setenv("CUPNET_WORKER_FFI_CONCURRENCY", "12")
-	if got := workerFfiConcurrency(); got != 12 {
-		t.Fatalf("got %d want 12", got)
+	t.Setenv("CUPNET_WORKER_FFI_CONCURRENCY", "7")
+	if got := workerFfiConcurrency(); got != 7 {
+		t.Fatalf("got %d want 7", got)
 	}
 	t.Setenv("CUPNET_WORKER_FFI_CONCURRENCY", "")
-	if got := workerFfiConcurrency(); got != 4 {
-		t.Fatalf("default: got %d want 4", got)
+	if got := workerFfiConcurrency(); got != 12 {
+		t.Fatalf("default: got %d want 12", got)
 	}
 }
 

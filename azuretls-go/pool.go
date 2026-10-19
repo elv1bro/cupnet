@@ -47,8 +47,12 @@ func envInt(name string, def int, min, max int) int {
 	return n
 }
 
+// Max concurrent upstream requests per pool (browser::proxy::ja3::tab). Chrome fans out dozens of asset
+// requests in parallel; the old default of 4 throttled a whole page to 4 in-flight fetches at a time.
+// Raised to 12 after measuring ~2x faster page loads (bbc.com/news loadEvent 11.3s→5.5s). Override with
+// CUPNET_WORKER_FFI_CONCURRENCY.
 func workerFfiConcurrency() int {
-	return envInt("CUPNET_WORKER_FFI_CONCURRENCY", 4, 1, 32)
+	return envInt("CUPNET_WORKER_FFI_CONCURRENCY", 12, 1, 32)
 }
 
 func workerClientCacheMax() int {
@@ -220,6 +224,31 @@ func releaseSession(key string, sess *azuretls.Session) {
 	pool.inUse--
 	pool.idle = append(pool.idle, sess)
 	poolsMu.Unlock()
+}
+
+// borrowRetry wakes a waiter so it re-checks the pool (a slot was freed without handing it a session).
+const borrowRetry = "cupnet.worker.borrow_retry"
+
+// releasePoolSlot gives up a borrowed slot while the caller keeps using its session outside the
+// pool's concurrency budget (a long streamed body). The session must later come back through
+// reinsertFreshSession (which re-counts it) or be closed.
+func releasePoolSlot(key string) {
+	poolsMu.Lock()
+	pool := pools[key]
+	if pool == nil {
+		poolsMu.Unlock()
+		return
+	}
+	pool.inUse--
+	var ch chan any
+	if len(pool.waiters) > 0 {
+		ch = pool.waiters[0]
+		pool.waiters = pool.waiters[1:]
+	}
+	poolsMu.Unlock()
+	if ch != nil {
+		ch <- borrowRetry
+	}
 }
 
 // reinsertFreshSession returns an out-of-pool session (created during a conn-error

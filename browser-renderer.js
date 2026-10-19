@@ -789,9 +789,9 @@ const PROFILE_DRAWER_HEIGHT_PX = 240;
 let _resourcesPopoverOpen = false;
 let _profileDrawerOpen = false;
 let _activeProfileVaultId = null;
-const TOOLS_MINI_BAR_HEIGHT_PX = 34;
+const TOOLS_MINI_BAR_HEIGHT_PX = 24;
 const TOOLS_SIDE_WIDTH_PX = 58;
-const CHROME_TOP_BASE_PX = 95;
+const CHROME_TOP_BASE_PX = 83; // tab bar 35 + toolbar 48 (tab-manager TOOLBAR_HEIGHT)
 
 const toolDockEl = document.querySelector('.tool-dock');
 const toolDockMountInline = document.getElementById('tool-dock-mount-inline');
@@ -929,7 +929,7 @@ let _isNewTabPage      = false;
 let _lastPillTabSig    = '';
 let _lastIpGeoSig      = '';
 
-const ENV_CLASSES = ['env-direct', 'env-proxy', 'env-isolated', 'env-newtab'];
+const ENV_CLASSES = ['env-direct', 'env-proxy', 'env-isolated', 'env-newtab', 'env-blocked'];
 
 function _setEnvClass(el, cls) {
     if (!el) return;
@@ -937,7 +937,12 @@ function _setEnvClass(el, cls) {
     if (cls) el.classList.add(cls);
 }
 
+function _egressBlocked(info) {
+    return !!(info && (info.egressBlocked || info.mode === 'blocked'));
+}
+
 function _currentEnvClass() {
+    if (_egressBlocked(_lastProxyInfo)) return 'env-blocked';
     if (_isIsolatedTab) return 'env-isolated';
     if (_isNewTabPage) return 'env-newtab';
     if (_lastProxyInfo?.active) return 'env-proxy';
@@ -958,6 +963,7 @@ function _renderPill() {
         return;
     }
     const active = !!info.active;
+    const blocked = _egressBlocked(info);
     const label  = (info.displayProxyName || info.proxyName || 'Proxy');
 
     if (_isIsolatedTab) {
@@ -966,9 +972,11 @@ function _renderPill() {
         pbDot.classList.add('active');
     }
 
-    pbName.textContent = active ? label : 'Direct';
+    pbName.textContent = blocked ? 'Blocked' : (active ? label : 'Direct');
 
-    if (active && _proxyIpGeo && _proxyIpGeo.ip) {
+    if (blocked) {
+        pbDetail.textContent = info.egressBlockReason || 'Proxy failed — traffic is not sent';
+    } else if (active && _proxyIpGeo && _proxyIpGeo.ip) {
         const loc = [_proxyIpGeo.city, _proxyIpGeo.country].filter(Boolean).join(', ');
         pbDetail.textContent = _proxyIpGeo.ip + (loc ? ' · ' + loc : '');
     } else if (!active && _directIpGeo && _directIpGeo.ip) {
@@ -983,9 +991,11 @@ function _renderPill() {
         pbDetail.textContent = '';
     }
 
-    pbStatusBtn.title = active
-        ? `${label} — click to manage`
-        : 'No proxy — click to set up';
+    pbStatusBtn.title = blocked
+        ? (info.egressBlockReason || 'Egress blocked — click to set up a proxy')
+        : (active
+            ? `${label} — click to manage`
+            : 'No proxy — click to set up');
 
     _renderModeBadge(info);
     refreshBrowserStatusBar();
@@ -1305,7 +1315,8 @@ async function refreshBrowserStatusBar() {
             statusProxy.textContent = 'Proxy: —';
         } else {
             const active = !!info.active;
-            const label = active ? (info.displayProxyName || info.proxyName || 'Proxy') : 'Direct';
+            const blocked = _egressBlocked(info);
+            const label = blocked ? 'Blocked' : (active ? (info.displayProxyName || info.proxyName || 'Proxy') : 'Direct');
             statusProxy.textContent = `Proxy: ${label}`;
         }
     }
@@ -1315,6 +1326,8 @@ async function refreshBrowserStatusBar() {
         if (info?.active && _proxyIpGeo && _proxyIpGeo.ip) {
             const loc = [_proxyIpGeo.city, _proxyIpGeo.country].filter(Boolean).join(', ');
             txt = _proxyIpGeo.ip + (loc ? ' · ' + loc : '');
+        } else if (_egressBlocked(info)) {
+            txt = 'blocked';
         } else if (info && !info.active && _directIpGeo && _directIpGeo.ip) {
             const loc = [_directIpGeo.city, _directIpGeo.country].filter(Boolean).join(', ');
             txt = _directIpGeo.ip + (loc ? ' · ' + loc : '');

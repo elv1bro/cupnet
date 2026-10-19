@@ -212,6 +212,23 @@ describe('browser-identity-catalog: engine (unbranded Chromium) hints', () => {
         expect(catalog.engineClientHints({ chromiumMajor: 146, nodePlatform: 'linux' }).platform).toBe('Linux');
         expect(catalog.buildClientHintHeaders(h)['sec-ch-ua']).toMatch(/"Chromium";v="146"/);
     });
+    it('engineClientHints branded: Google Chrome 3-brand list, real full version in fullVersionList', () => {
+        const h = catalog.engineClientHints({ chromiumMajor: 152, nodePlatform: 'darwin', arch: 'arm64', branded: true, fullVersion: '152.0.7977.130' });
+        expect(h.brands.map((b) => b.brand).sort()).toEqual(['Chromium', 'Google Chrome', 'Not?A_Brand'].sort());
+        expect(h.brands.find((b) => b.brand === 'Google Chrome').version).toBe('152');
+        expect(h.fullVersionList.find((b) => b.brand === 'Google Chrome').version).toBe('152.0.7977.130');
+        expect(h.fullVersionList.find((b) => b.brand === 'Chromium').version).toBe('152.0.7977.130');
+        expect(h.fullVersionList.find((b) => /^Not/.test(b.brand)).version).toMatch(/^\d+\.0\.0\.0$/);
+        // a fullVersion of another major is ignored (never mix versions)
+        const other = catalog.engineClientHints({ chromiumMajor: 152, nodePlatform: 'darwin', branded: true, fullVersion: '151.0.1.2' });
+        expect(other.fullVersionList.find((b) => b.brand === 'Google Chrome').version).toBe('152.0.0.0');
+        expect(catalog.buildClientHintHeaders(h)['sec-ch-ua']).toMatch(/"Google Chrome";v="152"/);
+    });
+    it("normalizeIdentitySettings: engineBrand defaults to 'chrome', accepts 'chromium'", () => {
+        expect(catalog.normalizeIdentitySettings({}).engineBrand).toBe('chrome');
+        expect(catalog.normalizeIdentitySettings({ engineBrand: 'chromium' }).engineBrand).toBe('chromium');
+        expect(catalog.normalizeIdentitySettings({ engineBrand: 'bogus' }).engineBrand).toBe('chrome');
+    });
     it('normalizeIdentitySettings: engineHints defaults on, followProxyGeo defaults off', () => {
         const n = catalog.normalizeIdentitySettings({});
         expect(n.engineHints).toBe(true);

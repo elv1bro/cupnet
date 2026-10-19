@@ -107,8 +107,12 @@ describe('identity-service: settings and resolution', () => {
         expect(w.mitm.identity.engineSynthesized).toBe(true);
         expect(w.mitm.identity.userAgent).not.toMatch(/Windows|Firefox/);
         expect(w.activeFp).toBeNull();
+        // Default engine brand = Google Chrome: the override keeps the engine UA and swaps in branded
+        // userAgentMetadata so navigator.userAgentData matches the wire (owner decision 2026-09-27).
         const ua = w.cdpCalls.find((c) => c.cmd === 'Emulation.setUserAgentOverride');
-        expect(ua.params.userAgent).toBe('');
+        expect(ua.params.userAgent).toMatch(/Chrome\/\d+\.0\.0\.0/);
+        expect(ua.params.userAgent).not.toMatch(/Windows|Firefox|Electron/);
+        expect(ua.params.userAgentMetadata.brands.map((b) => b.brand)).toContain('Google Chrome');
         expect(w.cdpCalls.find((c) => c.cmd === 'Emulation.setTimezoneOverride').params.timezoneId).toBe('');
         expect(w.cdpCalls.find((c) => c.cmd === 'Emulation.setLocaleOverride').params).toEqual({});
         // Outside Electron the engine UA falls back to the default Chrome UA (never the old Firefox one).
@@ -138,8 +142,12 @@ describe('identity-service: settings and resolution', () => {
         await w.svc.setSettings({ language: '' });
         const def = w.svc.defaultAcceptLanguage();
         expect(def).toMatch(/^[a-z]{2}(-[A-Z]{2})?,/);
-        for (const t of w.tabs.values()) expect(t.view.webContents.session.lang).toBe(catalog.acceptLanguageCodes(def).join(','));
-        expect(w.svc.getIdentityForNewTab('tX').language).toBe(def);
+        // Chromium side keeps the engine's own language list (same in page, iframes and workers);
+        // the wire header is Chrome's expansion of that list.
+        const native = w.svc.nativeLanguageList().join(',');
+        for (const t of w.tabs.values()) expect(t.view.webContents.session.lang).toBe(native);
+        expect(w.svc.getIdentityForNewTab('tX').language).toBe(native);
+        expect(def).toBe(catalog.chromeAcceptLanguageHeader(w.svc.nativeLanguageList()));
     });
 
     it('does not re-send identical CDP overrides for the same tab', async () => {
@@ -150,11 +158,28 @@ describe('identity-service: settings and resolution', () => {
         expect(w.cdpCalls.length).toBe(n);
     });
 
-    it('engine mode without tz/lang never attaches CDP', async () => {
+    it("engine mode with engineBrand 'chromium' and no tz/lang never attaches CDP", async () => {
         const w = makeWorld({ attached: false });
+        await w.svc.setSettings({ mode: 'engine', engineBrand: 'chromium' });
+        w.cdpCalls.length = 0;
         await w.svc.applyEffective({ reason: 'startup' });
         expect(w.cdpCalls.length).toBe(0);
         for (const t of w.tabs.values()) expect(t.view.webContents.debugger.isAttached()).toBe(false);
+    });
+
+    it('engine mode as Google Chrome (default) sets branded userAgentMetadata via CDP', async () => {
+        const w = makeWorld({ attached: false });
+        await w.svc.applyEffective({ reason: 'startup' });
+        const ua = w.cdpCalls.find((c) => c.cmd === 'Emulation.setUserAgentOverride');
+        expect(ua).toBeTruthy();
+        const md = ua.params.userAgentMetadata;
+        expect(md.brands.map((b) => b.brand)).toContain('Google Chrome');
+        expect(md.brands).toHaveLength(3);
+        // brands carry the major; fullVersionList carries a real full version, never "N.0.0.0" for Chrome
+        const chromeFull = md.fullVersionList.find((b) => b.brand === 'Google Chrome');
+        if (process.versions.chrome) expect(chromeFull.version).toBe(process.versions.chrome);
+        // the wire says the same
+        expect(w.mitm.identity.clientHints.brands).toEqual(md.brands);
     });
 
     it('non-engine identity attaches CDP through ensureCdpAttached', async () => {
@@ -213,13 +238,15 @@ describe('identity-service: proxy profile overrides', () => {
         expect(s1).toContain('window.chrome');
         expect(s1).toContain('loadTimes');
         expect(s1).not.toContain('delete window.chrome');
+        // Template identity (another machine): hardware fields are pinned.
+        expect(s1).toContain('deviceMemory');
         w.svc.clearTabOverride('t2');
         expect(w.mitm.tabIdentity.has('t2')).toBe(false);
         expect(w.svc.getEffectiveForTab('t2').userAgent).toBe(catalog.UA.chromeWin);
     });
 
     it('getIdentityForNewTab / onTabCreated / status / preview', async () => {
-        expect(w.svc.getIdentityForNewTab('tX')).toEqual({ userAgent: catalog.UA.chromeWin, language: w.svc.defaultAcceptLanguage() });
+        expect(w.svc.getIdentityForNewTab('tX')).toEqual({ userAgent: catalog.UA.chromeWin, language: w.svc.nativeLanguageList().join(',') });
         const st = w.svc.getStatus();
         expect(st.effective.description).toBe(`Chrome ${catalog.VERSIONS.chrome} · Windows`);
         expect(st.effective.headers['sec-ch-ua-platform']).toBe('"Windows"');
@@ -238,20 +265,40 @@ describe('identity-service: proxy profile overrides', () => {
 });
 
 describe('identity-service: engine wire identity + proxy geo hint', () => {
-    it('engine mode puts a synthesized engine identity on the MITM (2-brand Chromium hints)', async () => {
+    it('engine mode puts a synthesized engine identity on the MITM (Google Chrome brands by default)', async () => {
         const w = makeWorld({ attached: false });
         await w.svc.applyEffective({ reason: 'startup' });
         expect(w.mitm.identity).toBeTruthy();
         expect(w.mitm.identity.mode).toBe('engine');
         expect(w.mitm.identity.engineSynthesized).toBe(true);
         expect(w.mitm.identity.userAgent).toMatch(/Chrome\/\d+\.0\.0\.0/);
-        expect(w.mitm.identity.clientHints.brands.map((b) => b.brand)).toContain('Chromium');
-        expect(w.mitm.identity.clientHints.brands.length).toBe(2);
+        const brands = w.mitm.identity.clientHints.brands.map((b) => b.brand);
+        expect(brands).toContain('Google Chrome');
+        expect(brands).toContain('Chromium');
+        expect(brands).toHaveLength(3);
         // status/preview expose the wire headers for engine mode
-        expect(w.svc.getStatus().effective.headers['sec-ch-ua']).toMatch(/Chromium/);
-        expect(w.svc.preview({ mode: 'engine' }).headers['sec-ch-ua']).toMatch(/Chromium/);
-        // no CDP work for plain engine mode
-        expect(w.cdpCalls.length).toBe(0);
+        expect(w.svc.getStatus().effective.headers['sec-ch-ua']).toMatch(/"Google Chrome"/);
+        expect(w.svc.preview({ mode: 'engine' }).headers['sec-ch-ua']).toMatch(/"Google Chrome"/);
+    });
+
+    it('engine mode keeps the genuine deviceMemory / hardwareConcurrency (no pinning)', async () => {
+        const w = makeWorld({ attached: false });
+        await w.svc.applyEffective({ reason: 'startup' });
+        const script = w.svc.getNavigatorPatchScript([...w.tabs.keys()][0]) || '';
+        expect(script).not.toContain('deviceMemory');
+        expect(script).not.toContain('hardwareConcurrency');
+        expect(script).toContain('loadTimes'); // still looks like Chrome
+    });
+
+    it("engineBrand 'chromium' keeps the unbranded 2-brand engine hints", async () => {
+        const w = makeWorld({ attached: false });
+        await w.svc.setSettings({ mode: 'engine', engineBrand: 'chromium' });
+        await w.svc.applyEffective({ reason: 'startup' });
+        const brands = w.mitm.identity.clientHints.brands.map((b) => b.brand);
+        expect(brands).toContain('Chromium');
+        expect(brands).not.toContain('Google Chrome');
+        expect(brands).toHaveLength(2);
+        expect(w.svc.preview({ mode: 'engine', engineBrand: 'chromium' }).headers['sec-ch-ua']).not.toMatch(/Google Chrome/);
     });
     it('engineHints off → legacy sanitize (null wire identity)', async () => {
         const w = makeWorld();

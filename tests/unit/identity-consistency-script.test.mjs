@@ -57,34 +57,152 @@ describe('identity-consistency-script: osFromNavigatorPlatform', () => {
 });
 
 describe('identity-consistency-script: Chromium identity', () => {
-    it('fills window.chrome with app/csi/loadTimes/runtime and native-looking functions', () => {
+    it('fills window.chrome with loadTimes/csi/app (NO runtime) and native-looking functions', () => {
+        // Real Google Chrome exposes only { loadTimes, csi, app } on an ordinary web page; chrome.runtime
+        // appears exclusively in extension contexts. Synthesizing runtime was an over-spoof detectable as
+        // "chrome.runtime present on a plain site" → not Chrome. Key order mirrors real Chrome.
         const script = buildConsistencyScript({ chromium: true, navigatorPlatform: 'MacIntel', hostNodePlatform: 'darwin' });
         expect(script).toBeTruthy();
         const r = runAndProbe(script, `JSON.stringify({
-            keys: Object.keys(window.chrome).sort(),
+            keys: Object.keys(window.chrome),
+            hasRuntime: 'runtime' in window.chrome,
             loadTimesType: typeof window.chrome.loadTimes,
             csiType: typeof window.chrome.csi,
-            winEnum: window.chrome.runtime.PlatformOs.WIN,
-            sendMsgType: typeof window.chrome.runtime.sendMessage,
             isInstalled: window.chrome.app.isInstalled,
             loadTimesStr: window.chrome.loadTimes.toString(),
-            connectStr: window.chrome.runtime.connect.toString(),
             csiStrViaProto: Function.prototype.toString.call(window.chrome.csi),
+            ltName: window.chrome.loadTimes.name,
+            ltOwn: Reflect.ownKeys(window.chrome.loadTimes).join(','),
+            ltProtoCtor: window.chrome.loadTimes.prototype.constructor === window.chrome.loadTimes,
+            ltNew: typeof new window.chrome.loadTimes(),
+            appKeys: Object.keys(window.chrome.app).join(','),
+            getDetailsStr: Function.prototype.toString.call(window.chrome.app.getDetails),
+            getDetailsProto: 'prototype' in window.chrome.app.getDetails,
+            getDetailsNew: (() => { try { new window.chrome.app.getDetails(); return 'constructed'; } catch (e) { return e.name; } })(),
+            runningState: window.chrome.app.runningState(),
+            installStateSync: window.chrome.app.installState(function () {}),
             connInfo: window.chrome.loadTimes().connectionInfo,
             spdy: window.chrome.loadTimes().wasFetchedViaSpdy,
+            ltKeys: Object.keys(window.chrome.loadTimes()).join(','),
+            csiKeys: Object.keys(window.chrome.csi()).join(','),
         })`);
         const o = JSON.parse(r);
-        expect(o.keys).toEqual(['app', 'csi', 'loadTimes', 'runtime']);
+        expect(o.keys).toEqual(['loadTimes', 'csi', 'app']);
+        expect(o.hasRuntime).toBe(false);
         expect(o.loadTimesType).toBe('function');
         expect(o.csiType).toBe('function');
-        expect(o.winEnum).toBe('win');
-        expect(o.sendMsgType).toBe('function');
         expect(o.isInstalled).toBe(false);
-        expect(o.loadTimesStr).toBe('function loadTimes() { [native code] }');
-        expect(o.connectStr).toBe('function connect() { [native code] }');
-        expect(o.csiStrViaProto).toBe('function csi() { [native code] }');
-        expect(o.connInfo).toBe('h2');
-        expect(o.spdy).toBe(true);
+        // Measured on Chrome 153: anonymous, own keys length,name,prototype, constructible, native source.
+        expect(o.loadTimesStr).toBe('function () { [native code] }');
+        expect(o.csiStrViaProto).toBe('function () { [native code] }');
+        expect(o.ltName).toBe('');
+        expect(o.ltOwn).toBe('length,name,prototype');
+        expect(o.ltProtoCtor).toBe(true);
+        expect(o.ltNew).toBe('object');
+        // chrome.app: Chrome's own-key order; named non-constructible native methods.
+        expect(o.appKeys).toBe('isInstalled,getDetails,getIsInstalled,installState,runningState,InstallState,RunningState');
+        expect(o.getDetailsStr).toBe('function getDetails() { [native code] }');
+        expect(o.getDetailsProto).toBe(false);
+        expect(o.getDetailsNew).toBe('TypeError');
+        expect(o.runningState).toBe('cannot_run');
+        expect(o.installStateSync).toBe(undefined);
+        // No navigation entry in the sandbox → no invented protocol.
+        expect(o.connInfo).toBe('unknown');
+        expect(o.spdy).toBe(false);
+        expect(o.ltKeys).toBe('requestTime,startLoadTime,commitLoadTime,finishDocumentLoadTime,finishLoadTime,firstPaintTime,firstPaintAfterLoadTime,navigationType,wasFetchedViaSpdy,wasNpnNegotiated,npnNegotiatedProtocol,wasAlternateProtocolAvailable,connectionInfo');
+        expect(o.csiKeys).toBe('startE,onloadT,pageT,tran');
+    });
+
+    it('loadTimes / csi values come from Navigation Timing (h2 over https), not constants', () => {
+        const script = buildConsistencyScript({ chromium: true, navigatorPlatform: null, hostNodePlatform: 'darwin' });
+        const ctx = makeContext();
+        vm.runInContext(`
+            globalThis.location = { protocol: 'https:' };
+            globalThis.performance = {
+                timeOrigin: 1790552646803.1, now: function () { return 3383; },
+                getEntriesByType: function (t) {
+                    if (t === 'navigation') return [{ type: 'reload', nextHopProtocol: 'h2', responseStart: 1933.4, domContentLoadedEventEnd: 1969.6, loadEventEnd: 1970.1 }];
+                    if (t === 'paint') return [{ name: 'first-paint', startTime: 2020 }];
+                    return [];
+                },
+            };`, ctx);
+        vm.runInContext(script, ctx);
+        const lt = JSON.parse(vm.runInContext('JSON.stringify(window.chrome.loadTimes())', ctx));
+        const csi = JSON.parse(vm.runInContext('JSON.stringify(window.chrome.csi())', ctx));
+        expect(lt.requestTime).toBe(1790552646.803);
+        expect(lt.commitLoadTime).toBe(1790552648.736);
+        expect(lt.finishDocumentLoadTime).toBe(1790552648.772);
+        expect(lt.finishLoadTime).toBe(1790552648.773);
+        expect(lt.firstPaintTime).toBe(1790552648.823);
+        expect(lt.navigationType).toBe('Reload');
+        expect(lt.connectionInfo).toBe('h2');
+        expect(lt.npnNegotiatedProtocol).toBe('h2');
+        expect(lt.wasFetchedViaSpdy).toBe(true);
+        expect(lt.wasNpnNegotiated).toBe(true);
+        expect(csi).toEqual({ startE: 1790552646803, onloadT: 1790552648772, pageT: 3383, tran: 16 });
+    });
+
+    it('a toString that throws does not leave an injected frame in the stack', () => {
+        const script = buildConsistencyScript({ chromium: true, navigatorPlatform: null, hostNodePlatform: 'darwin' });
+        const stack = runAndProbe(script, `(() => { try { Function.prototype.toString.call({}); } catch (e) { return String(e.stack); } })()`);
+        expect(stack).toMatch(/requires that 'this' be a Function/);
+        expect(stack).not.toMatch(/toString \(<anonymous>:\d+:\d+\)/);
+    });
+
+    it('fakes stay native-looking through a toString from ANOTHER realm running the same patch', () => {
+        const script = buildConsistencyScript({ chromium: true, navigatorPlatform: null, hostNodePlatform: 'darwin' });
+        const a = makeContext(); vm.runInContext(script, a);
+        const b = makeContext(); vm.runInContext(script, b);
+        b.foreignGetDetails = vm.runInContext('window.chrome.app.getDetails', a);
+        expect(vm.runInContext('Function.prototype.toString.call(foreignGetDetails)', b)).toBe('function getDetails() { [native code] }');
+    });
+
+    it('does not patch colorDepth for an identity of the host OS', () => {
+        const script = buildConsistencyScript({ chromium: true, navigatorPlatform: 'MacIntel', hostNodePlatform: 'darwin' });
+        expect(script).not.toMatch(/colorDepth/);
+        const other = buildConsistencyScript({ chromium: true, navigatorPlatform: 'Win32', hostNodePlatform: 'darwin' });
+        expect(other).toMatch(/colorDepth/);
+    });
+
+    it('undecided Notification.permission and permissions.query look like Chrome prompt/default', async () => {
+        const script = buildConsistencyScript({ chromium: true, navigatorPlatform: 'MacIntel', hostNodePlatform: 'darwin' });
+        const ctx = makeContext();
+        vm.runInContext(`
+            function Notification() {}
+            Object.defineProperty(Notification, 'permission', { get: function () { return 'denied'; }, configurable: true, enumerable: true });
+            function Permissions() {}
+            Permissions.prototype.query = function (desc) { return Promise.resolve({ state: 'denied', name: desc && desc.name }); };
+            globalThis.Notification = Notification;
+            globalThis.Permissions = Permissions;
+            globalThis.navigator = new Navigator();
+        `, ctx);
+        vm.runInContext(script, ctx);
+        const undecided = vm.runInContext(`({
+            notification: Notification.permission,
+            share: typeof navigator.share,
+            canShare: navigator.canShare({ title: 't' }),
+            canShareEmpty: navigator.canShare(),
+        })`, ctx);
+        expect(undecided.notification).toBe('default');
+        expect(undecided.share).toBe('function');
+        expect(undecided.canShare).toBe(true);
+        expect(undecided.canShareEmpty).toBe(false);
+        const state = await vm.runInContext(`navigator.permissions ? null : Permissions.prototype.query.call(new Permissions(), { name: 'notifications' }).then(s => s.state)`, ctx);
+        // Permissions is a constructor; query lives on the prototype. The page uses navigator.permissions.
+        const q = await vm.runInContext(`Permissions.prototype.query.call(new Permissions(), { name: 'notifications' }).then(s => s.state)`, ctx);
+        expect(q).toBe('prompt');
+        const deniedScript = buildConsistencyScript({
+            chromium: true, navigatorPlatform: 'MacIntel', hostNodePlatform: 'darwin',
+            permissionDecisions: { notifications: false },
+        });
+        const ctx2 = makeContext();
+        vm.runInContext(`
+            function Notification() {}
+            Object.defineProperty(Notification, 'permission', { get: function () { return 'denied'; }, configurable: true, enumerable: true });
+            globalThis.Notification = Notification;
+        `, ctx2);
+        vm.runInContext(deniedScript, ctx2);
+        expect(vm.runInContext('Notification.permission', ctx2)).toBe('denied');
     });
 
     it('the toString shim itself reports native source (not detectable via toString.toString)', () => {
@@ -118,13 +236,15 @@ describe('identity-consistency-script: Chromium identity', () => {
         expect(r.gpLen).toBe(1);
     });
 
-    it('engine mode fills window.chrome but never spoofs WebGL', () => {
+    it('engine mode fills window.chrome (no runtime) but never spoofs WebGL', () => {
         const script = buildConsistencyScript({ chromium: true, navigatorPlatform: null, hostNodePlatform: 'darwin', fillChrome: true });
         const r = JSON.parse(runAndProbe(script, `JSON.stringify({
             runtimeType: typeof window.chrome.runtime,
+            hasApp: 'app' in window.chrome,
             renderer: WebGLRenderingContext.prototype.getParameter(37446),
         })`));
-        expect(r.runtimeType).toBe('object');
+        expect(r.runtimeType).toBe('undefined');
+        expect(r.hasApp).toBe(true);
         expect(r.renderer).toContain('Apple M2');
     });
 });
@@ -266,5 +386,72 @@ describe('identity-consistency-script: farble (canvas + audio)', () => {
         })()`, ctx));
         expect(r.stable).toBe(true);
         expect(r.changed).toBe(true);
+    });
+});
+
+describe('identity-consistency-script: about:blank iframe', () => {
+    it('stamps window.chrome.loadTimes into a script-created about:blank iframe', () => {
+        const script = buildConsistencyScript({ chromium: true, navigatorPlatform: 'MacIntel', hostNodePlatform: 'darwin' });
+        const child = vm.createContext({});
+        vm.runInContext(`
+            globalThis.window = globalThis;
+            globalThis.chrome = {};
+            globalThis.location = { href: 'about:blank', protocol: 'about:' };
+            globalThis.performance = {
+                now: function () { return 5; },
+                timeOrigin: 10,
+                getEntriesByType: function () { return []; },
+            };
+            function Navigator() {}
+            globalThis.Navigator = Navigator;
+            // vm hides built-ins from other realms; a same-origin iframe exposes contentWindow.Function.
+            globalThis.Function = Function;
+        `, child);
+
+        const parentSrc = `
+            globalThis.window = globalThis;
+            globalThis.chrome = {};
+            globalThis.location = { href: 'https://example.test/', protocol: 'https:' };
+            globalThis.performance = {
+                now: function () { return 5; },
+                timeOrigin: 10,
+                getEntriesByType: function () { return []; },
+            };
+            function Navigator() {}
+            globalThis.Navigator = Navigator;
+            function Node() {}
+            Node.prototype.appendChild = function (node) { return node; };
+            Node.prototype.insertBefore = function (node) { return node; };
+            Node.prototype.replaceChild = function (node) { return node; };
+            function Element() {}
+            Element.prototype = Object.create(Node.prototype);
+            Element.prototype.append = function () {};
+            Element.prototype.prepend = function () {};
+            Element.prototype.before = function () {};
+            Element.prototype.after = function () {};
+            Element.prototype.replaceChildren = function () {};
+            Element.prototype.insertAdjacentElement = function () {};
+            globalThis.Node = Node;
+            globalThis.Element = Element;
+            globalThis.document = { querySelectorAll: function () { return []; } };
+            globalThis.__child = null;
+        `;
+        const parent = vm.createContext({});
+        vm.runInContext(parentSrc, parent);
+        parent.__child = child;
+        vm.runInContext(script, parent);
+        vm.runInContext(`
+            var iframe = { nodeType: 1, tagName: 'IFRAME', contentWindow: __child };
+            document.body = {};
+            Node.prototype.appendChild.call(document.body, iframe);
+            // appendChild wrapper is on the prototype; call it directly.
+            Node.prototype.appendChild(iframe);
+        `, parent);
+        const stamped = vm.runInContext(`({
+            type: typeof window.chrome.loadTimes,
+            keys: Object.keys(window.chrome).join(','),
+        })`, child);
+        expect(stamped.type).toBe('function');
+        expect(stamped.keys).toBe('loadTimes,csi,app');
     });
 });

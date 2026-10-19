@@ -29,15 +29,19 @@ const GREASE_ORDERS = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2
  * @param {number} chromiumMajor
  * @param {{ brand: string, version: string }|null} primary - e.g. Google Chrome / Microsoft Edge / Opera
  * @param {boolean} [full] - full-version strings instead of majors
+ * @param {string} [fullVersion] - real full version (e.g. "152.0.7977.130") for the Chromium entry and a
+ *        primary of the same major; real Chrome never reports "N.0.0.0" in fullVersionList
  * @returns {{ brand: string, version: string }[]}
  */
-function greasedBrandList(chromiumMajor, primary, full = false) {
+function greasedBrandList(chromiumMajor, primary, full = false, fullVersion = '') {
     const seed = Number(chromiumMajor) || 0;
     const greaseBrand = `Not${GREASE_CHARS[seed % GREASE_CHARS.length]}A${GREASE_CHARS[(seed + 1) % GREASE_CHARS.length]}Brand`;
     const greaseVersion = GREASE_VERSIONS[seed % GREASE_VERSIONS.length];
     const majorStr = String(seed);
     const grease = { brand: greaseBrand, version: full ? `${greaseVersion}.0.0.0` : greaseVersion };
-    const chromium = { brand: 'Chromium', version: full ? `${majorStr}.0.0.0` : majorStr };
+    const realFull = fullVersion && String(fullVersion).split('.')[0] === majorStr ? String(fullVersion) : '';
+    const fullOf = (major) => (realFull && String(major) === majorStr ? realFull : `${major}.0.0.0`);
+    const chromium = { brand: 'Chromium', version: full ? fullOf(majorStr) : majorStr };
     if (!primary) {
         // Unbranded Chromium (Electron, Chromium builds): a 2-entry list, order = seed % 2.
         // Verified against Electron 34 (Chromium 132: "Not A(Brand";v="8", "Chromium";v="132").
@@ -47,7 +51,7 @@ function greasedBrandList(chromiumMajor, primary, full = false) {
     const list = new Array(3);
     list[order[0]] = grease;
     list[order[1]] = chromium;
-    list[order[2]] = { brand: primary.brand, version: full ? `${primary.version}.0.0.0` : primary.version };
+    list[order[2]] = { brand: primary.brand, version: full ? fullOf(primary.version) : primary.version };
     return list;
 }
 
@@ -62,16 +66,25 @@ function hostPlatformName(nodePlatform) {
 }
 
 /**
- * Client hints that describe the REAL engine (unbranded Chromium of the running Electron): what
- * `navigator.userAgentData` already reports in engine mode, so the wire can say the same.
- * @param {{ chromiumMajor: number, nodePlatform?: string, arch?: string }} o
+ * Client hints for engine mode, describing the running engine (its real Chromium version, OS, arch).
+ * `branded` (the default, owner decision 2026-09-27) presents it as Google Chrome — the 3-brand list a
+ * real Chrome of that version sends — instead of the unbranded 2-brand Chromium list, which marks the
+ * client as "Chromium/Electron, not Chrome". The same hints drive navigator.userAgentData (CDP) so the
+ * wire and JavaScript agree.
+ * @param {{ chromiumMajor: number, nodePlatform?: string, arch?: string, branded?: boolean, fullVersion?: string }} o
  * @returns {ClientHints}
  */
-function engineClientHints({ chromiumMajor, nodePlatform, arch } = {}) {
+function engineClientHints({ chromiumMajor, nodePlatform, arch, branded = false, fullVersion = '', platformVersion: hostPlatformVersion = '' } = {}) {
+    const major = Number(chromiumMajor) || 0;
     const platform = hostPlatformName(nodePlatform);
-    const platformVersion = platform === 'Windows' ? '15.0.0' : platform === 'macOS' ? '15.6.1' : '6.8.0';
+    // The host's real OS version when known (Chrome on macOS reports the macOS version, e.g. "15.7.9");
+    // otherwise a plausible default for the platform.
+    const platformVersion = /^\d+(\.\d+){0,3}$/.test(String(hostPlatformVersion || ''))
+        ? String(hostPlatformVersion).split('.').concat(['0', '0']).slice(0, 3).join('.')
+        : platform === 'Windows' ? '15.0.0' : platform === 'macOS' ? '15.6.1' : '6.8.0';
     const architecture = String(arch || '') === 'arm64' ? 'arm' : 'x86';
-    return _hints({ chromiumMajor: Number(chromiumMajor) || 0, primary: null, platform, platformVersion, architecture, bitness: '64' });
+    const primary = branded ? { brand: 'Google Chrome', version: String(major) } : null;
+    return _hints({ chromiumMajor: major, primary, platform, platformVersion, architecture, bitness: '64', fullVersion });
 }
 
 /**
@@ -88,10 +101,10 @@ function engineClientHints({ chromiumMajor, nodePlatform, arch } = {}) {
  * @property {string[]} formFactors
  */
 
-function _hints({ chromiumMajor, primary, platform, platformVersion, architecture, bitness, model, mobile }) {
+function _hints({ chromiumMajor, primary, platform, platformVersion, architecture, bitness, model, mobile, fullVersion }) {
     return {
         brands: greasedBrandList(chromiumMajor, primary, false),
-        fullVersionList: greasedBrandList(chromiumMajor, primary, true),
+        fullVersionList: greasedBrandList(chromiumMajor, primary, true, fullVersion),
         platform,
         platformVersion,
         architecture: architecture || '',
@@ -311,6 +324,26 @@ function acceptLanguageCodes(value) {
     return out;
 }
 
+/**
+ * Accept-Language exactly as Chrome builds it from a language list (net::HttpUtil::ExpandLanguageList +
+ * GenerateAcceptLanguageHeader): after each run of same-base languages the base language is appended
+ * if not already present, then q-values fall by 0.1 (min 0.1).
+ * ["ru","ru-BY","en-BY","pl-BY"] → "ru,ru-BY;q=0.9,en-BY;q=0.8,en;q=0.7,pl-BY;q=0.6,pl;q=0.5"
+ * ["ru-RU","ru","en-US","en"]    → "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7" (matches Chrome 153 on the wire)
+ * @param {string[]} codes
+ */
+function chromeAcceptLanguageHeader(codes) {
+    const list = acceptLanguageCodes((codes || []).join(','));
+    const base = (c) => c.split('-')[0].toLowerCase();
+    const out = [];
+    const add = (c) => { if (!out.some((x) => x.toLowerCase() === c.toLowerCase())) out.push(c); };
+    list.forEach((c, i) => {
+        add(c);
+        if (i + 1 >= list.length || base(list[i + 1]) !== base(c)) add(base(c));
+    });
+    return formatAcceptLanguageHeader(out);
+}
+
 function formatAcceptLanguageHeader(codesOrValue) {
     const codes = Array.isArray(codesOrValue) ? codesOrValue.filter(Boolean) : acceptLanguageCodes(codesOrValue);
     if (!codes.length) return '';
@@ -413,6 +446,9 @@ function normalizeIdentitySettings(raw) {
         language: String(o.language || '').trim().slice(0, 128),
         /** Engine mode: synthesize the real engine's low-entropy client hints on the wire (Electron sends none). */
         engineHints: o.engineHints !== false,
+        /** Engine mode brand: 'chrome' (default) presents the engine as Google Chrome on the wire and in
+         *  navigator.userAgentData; 'chromium' keeps the unbranded 2-brand list. */
+        engineBrand: o.engineBrand === 'chromium' ? 'chromium' : 'chrome',
         /** Template / custom Chromium identities: send sec-ch-ua* + navigator.userAgentData (off = behave like a DevTools UA override: no hints, empty brands). */
         clientHints: o.clientHints !== false,
         /** Timezone + Accept-Language follow the connected proxy's egress country. */
@@ -538,6 +574,7 @@ const cupnetBrowserIdentityCatalog = {
     deriveTlsProfileFromUserAgent,
     acceptLanguageCodes,
     formatAcceptLanguageHeader,
+    chromeAcceptLanguageHeader,
     buildBrandListHeaderValue,
     buildClientHintHeaders,
     buildCdpUserAgentMetadata,

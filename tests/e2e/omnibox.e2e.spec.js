@@ -129,6 +129,13 @@ test('omni-2c) localhost:3000 is offered as an http URL, not a web search', asyn
 });
 
 test('omni-3) Ctrl/Cmd+K opens command palette with >', async () => {
+    // Quiet e2e keeps windows hidden; before-input-event does not see the shortcut until the
+    // window is shown. showInactive avoids stealing focus from the user.
+    await electronApp.evaluate(({ BrowserWindow }) => {
+        for (const w of BrowserWindow.getAllWindows()) {
+            if (!w.isDestroyed() && !w.isVisible()) w.showInactive();
+        }
+    });
     const urlInput = mainWindow.locator('#url-input');
     await urlInput.click();
     await mainWindow.keyboard.press(`${MOD}+KeyK`);

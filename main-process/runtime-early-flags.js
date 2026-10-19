@@ -39,6 +39,21 @@ function applyCupnetEarlyChromiumFlags(app, _deps) {
         try { app.setActivationPolicy('prohibited'); } catch { /* ignore */ }
     }
     app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
+    // Chrome on this machine does not expose Shared Storage / Protected Audience
+    // (no sharedStorage, no join-ad-interest-group in the permissions policy).
+    // CUPNET_PRIVACY_SANDBOX=1 leaves Chromium's defaults on.
+    if (process.env.CUPNET_PRIVACY_SANDBOX !== '1') {
+        app.commandLine.appendSwitch('disable-features', [
+            'PrivacySandboxAdsAPIs',
+            'SharedStorageAPI',
+            'FencedFrames',
+            'PrivateAggregationApi',
+            'Fledge',
+            'InterestGroupStorage',
+            'AdInterestGroupAPI',
+            'Parakeet',
+        ].join(','));
+    }
     // e2e only (not packaged): macOS Keychain prompts for a fresh/unsigned Electron binary block the
     // main process inside safeStorage.encryptString (proxy profile saves). Chromium's mock keychain
     // keeps safeStorage working without the system dialog.

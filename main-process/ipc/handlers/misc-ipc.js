@@ -1,6 +1,7 @@
 'use strict';
 
 const { BrowserWindow } = require('electron');
+const { guardIpcHandlerAllowInternal } = require('../ipc-trusted-sender.js');
 
 /**
  * Shared TLS / site payload for get-tab-tls-info and site-info popover window.
@@ -98,12 +99,12 @@ function registerMiscIpc(ctx) {
     ctx.ipcMain.handle('consume-startup-splash', () => consumeStartupSplashState());
     ctx.ipcMain.handle('get-app-version', () => ctx.app.getVersion());
 
-    ctx.ipcMain.handle('get-ui-pref', (_, key, def) => {
+    ctx.ipcMain.handle('get-ui-pref', guardIpcHandlerAllowInternal('get-ui-pref', (_, key, def) => {
         if (typeof key !== 'string' || key.length > 128) return def !== undefined ? def : null;
         const v = ctx.uiPrefsStore.loadUiPrefs()[key];
         return v !== undefined ? v : (def !== undefined ? def : null);
-    });
-    ctx.ipcMain.handle('set-ui-pref', (_, key, value) => {
+    }));
+    ctx.ipcMain.handle('set-ui-pref', guardIpcHandlerAllowInternal('set-ui-pref', (_, key, value) => {
         // Bound key and value size so a renderer cannot force multi-MB fsync writes or
         // fill the disk with a loop of set-ui-pref calls. (A-110)
         if (typeof key !== 'string' || key.length === 0 || key.length > 128) return false;
@@ -112,9 +113,9 @@ function registerMiscIpc(ctx) {
         } catch { return false; }
         ctx.uiPrefsStore.saveUiPref(key, value);
         return true;
-    });
+    }));
 
-    ctx.ipcMain.handle('check-ip-geo', async (_, tabId) => ctx.checkCurrentIpGeo(tabId));
+    ctx.ipcMain.handle('check-ip-geo', guardIpcHandlerAllowInternal('check-ip-geo', async (_, tabId) => ctx.checkCurrentIpGeo(tabId)));
 
     ctx.ipcMain.handle('get-homepage', async () => ctx.settingsStore.getCached()?.homepage || '');
     ctx.ipcMain.handle('set-homepage', async (_, url) => {
@@ -224,24 +225,36 @@ function registerMiscIpc(ctx) {
 
     ctx.ipcMain.handle('get-cors-bypass-status', () => !!ctx.loadSettings().corsBypassEnabled);
 
-    ctx.ipcMain.handle('get-direct-ip', async () => {
-        try {
-            const directSess = ctx.session.fromPartition('direct-ip-check');
-            await directSess.setProxy({ mode: 'direct' });
-            const win = new ctx.BrowserWindow({ show: false, webPreferences: { session: directSess } });
+    let _directIpInflight = null;
+    const DIRECT_IP_TIMEOUT_MS = 20000;
+    ctx.ipcMain.handle('get-direct-ip', guardIpcHandlerAllowInternal('get-direct-ip', () => {
+        if (_directIpInflight) return _directIpInflight;
+        _directIpInflight = (async () => {
+            let win = null;
+            let timer = null;
             try {
-                await win.loadURL('https://ipinfo.io/json');
-                const text = await win.webContents.executeJavaScript('document.body.innerText');
+                const directSess = ctx.session.fromPartition('direct-ip-check');
+                await directSess.setProxy({ mode: 'direct' });
+                win = new ctx.BrowserWindow({ show: false, webPreferences: { session: directSess } });
+                const text = await new Promise((resolve, reject) => {
+                    timer = setTimeout(() => reject(new Error('direct IP check timed out')), DIRECT_IP_TIMEOUT_MS);
+                    win.loadURL('https://ipinfo.io/json')
+                        .then(() => win.webContents.executeJavaScript('document.body.innerText'))
+                        .then(resolve, reject);
+                });
                 const d = JSON.parse(text);
                 return { ip: d.ip || '', city: d.city || '', country: d.country || '', country_name: d.country || '', region: d.region || '', org: d.org || '' };
+            } catch (e) {
+                ctx.sysLog('warn', 'direct-ip', 'Failed to get direct IP: ' + (e?.message || e));
+                return { ip: '', city: '', country: '', country_name: '' };
             } finally {
-                win.destroy();
+                if (timer) clearTimeout(timer);
+                try { win?.destroy(); } catch { /* ignore */ }
+                _directIpInflight = null;
             }
-        } catch (e) {
-            ctx.sysLog('warn', 'direct-ip', 'Failed to get direct IP: ' + (e?.message || e));
-            return { ip: '', city: '', country: '', country_name: '' };
-        }
-    });
+        })();
+        return _directIpInflight;
+    }));
 
     // ── Window switcher (overlay in browser shell) ─────────────────────────
     const { getManagedDevToolsWindowIds, getManagedDevToolsSwitcherEntries } = require('./cookies-dns-ipc');

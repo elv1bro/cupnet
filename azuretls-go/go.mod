@@ -7,13 +7,13 @@ toolchain go1.24.3
 require (
 	github.com/Noooste/azuretls-client v1.13.2
 	github.com/Noooste/fhttp v1.0.15
+	github.com/Noooste/utls v1.3.20
 	golang.org/x/sys v0.39.0
 )
 
 require (
 	github.com/Noooste/go-socks4 v0.0.2 // indirect
 	github.com/Noooste/uquic-go v1.0.5 // indirect
-	github.com/Noooste/utls v1.3.20 // indirect
 	github.com/Noooste/websocket v1.0.3 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/bdandy/go-errors v1.2.2 // indirect

@@ -270,7 +270,10 @@ function createCdpNetworkLogging({
         const identitySvc = typeof getIdentityService === 'function' ? getIdentityService() : null;
         if (identitySvc) {
             const eff = identitySvc.getEffectiveForTab(tabId);
-            if (eff.mode !== 'engine' || eff.timezone || eff.language) {
+            const needs = typeof identitySvc.needsCdpEmulation === 'function'
+                ? identitySvc.needsCdpEmulation(eff)
+                : (eff.mode !== 'engine' || eff.timezone || eff.language);
+            if (needs) {
                 await identitySvc.applyCdpEmulation(cdp, eff, { tabId }).catch((err) => {
                     safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'identity.emulation', tabId: state.tabId } }, err, 'info');
                 });

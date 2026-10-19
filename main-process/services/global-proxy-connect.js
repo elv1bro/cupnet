@@ -168,9 +168,13 @@ async function connectGlobalProxyProfile(ctx, profileId, ephemeralVars = {}) {
             ctx.connectedResolvedVars = {};
             // Keep MITM sessions consistent (no upstream) but refuse to route until a proxy works.
             ctx.mitmProxy?.setEgressBlocked?.(true, `Proxy profile "${row.name || profileId}" failed to connect`);
+            // force: persistentAnonymizedProxyUrl is already null here, so without it the apply sees
+            // "same mode, same proxy" and returns early, leaving the MITM upstream on the old proxy (or a
+            // closed local port) (A-037). setUpstream(null) inside the apply keeps the block in place.
             await ctx.applyEffectiveTrafficMode?.(profileTrafficMode, null, {
                 source: 'connect-proxy-template.failclosed',
                 profileId,
+                force: true,
             });
             ctx.buildMenu?.();
             ctx.notifyProxyStatus?.();

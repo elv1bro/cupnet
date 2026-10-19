@@ -1606,6 +1606,12 @@
                             <p class="epw-session-meta" id="epw-meta"></p>
                         </div>
 
+                        <button type="button" class="epw-start-btn" id="epw-open-browser"
+                            style="width:100%;margin-top:2px"
+                            title="Launch your real Google Chrome routed through this proxy, on a persistent profile. For sites CupNet can't render like Chrome (e.g. anti-bot challenges). Traffic is still captured/logged; cookies are NOT moved between browsers.">
+                            Open in Chrome
+                        </button>
+
                         <div class="epw-url-sheet">
                             <div class="epw-url-bar">
                                 <button type="button" class="epw-url-toggle" id="epw-url-toggle" aria-expanded="false">
@@ -2245,10 +2251,20 @@ function _updateModeBadge(info) {
     pwModeBadge.style.display = '';
 }
 
+let _egressBlocked = false;
+
 function setProxyWidgetStatus(active, name, info) {
+    _egressBlocked = !!(info && (info.egressBlocked || info.mode === 'blocked'));
     widget.classList.remove('direct-mode', 'proxy-active');
     pwDot.className = `pw-dot ${active ? 'on' : 'off'}`;
     pwStatus.className = `pw-status ${active ? 'on' : 'off'}`;
+    if (_egressBlocked) {
+        pwStatus.textContent = 'Blocked';
+        pwIp.textContent = '—';
+        pwGeo.textContent = info.egressBlockReason || 'Proxy failed — traffic is not sent';
+        _updateModeBadge(info);
+        return;
+    }
     pwStatus.textContent = active ? (name || 'Proxy Active') : 'No upstream proxy';
     if (active) widget.classList.add('proxy-active');
     _updateModeBadge(info);
@@ -2260,6 +2276,7 @@ const _IP_MAX_RETRIES = 5;
 
 async function refreshIpWidget() {
     if (!window.electronAPI) return;
+    if (_egressBlocked) return;
     let ok = false;
     try {
         let tid;
@@ -2332,11 +2349,13 @@ if (window.electronAPI) {
         _effectiveTrafficMode = info?.effectiveMode || info?.trafficMode || '';
         window.electronAPI.getMitmReady?.().then(s => setMitmBanner(!!s?.ready)).catch(() => {});
         setProxyWidgetStatus(info?.active, info?.displayProxyName || info?.proxyName, info);
-        pwIp.textContent  = '…';
-        pwGeo.textContent = 'Checking…';
-        _ipRetryCount = 0;
-        clearTimeout(_ipRetryTimer);
-        setTimeout(refreshIpWidget, 1200);
+        if (!_egressBlocked) {
+            pwIp.textContent  = '…';
+            pwGeo.textContent = 'Checking…';
+            _ipRetryCount = 0;
+            clearTimeout(_ipRetryTimer);
+            setTimeout(refreshIpWidget, 1200);
+        }
         applyGlow(_resolveGlowMode());
         window.dispatchEvent(new CustomEvent('cupnet-refresh-cookie-bar'));
         window.dispatchEvent(new CustomEvent('cupnet-resync-nt-from-tabs'));
@@ -2457,7 +2476,8 @@ if (window.electronAPI) {
                 _lastProxyActive = !!info?.active;
                 setProxyWidgetStatus(info?.active, info?.displayProxyName || info?.proxyName, info);
                 applyGlow(_resolveGlowMode());
-                const ipSig = `${active?.proxyProfileId ?? 'global'}|${!!info?.active}`;
+                const ipSig = `${active?.proxyProfileId ?? 'global'}|${!!info?.active}|${!!info?.egressBlocked}`;
+                if (_egressBlocked) return;
                 if (ipSig !== _lastNtIpSig) {
                     _lastNtIpSig = ipSig;
                     pwIp.textContent  = '…';
@@ -2807,6 +2827,42 @@ if (window.electronAPI) {
 
     startBtn.addEventListener('click', doStart);
     stopBtn?.addEventListener('click', doStop);
+
+    const openBrowserBtn = document.getElementById('epw-open-browser');
+    async function doOpenBrowser() {
+        if (busy || !openBrowserBtn) return;
+        const port = epEndpoints.port;
+        if (!port) return;
+        busy = true;
+        const prev = openBrowserBtn.textContent;
+        openBrowserBtn.disabled = true;
+        openBrowserBtn.textContent = 'Opening…';
+        if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+        try {
+            const res = await window.electronAPI.extProxyOpenBrowser?.(port);
+            if (res && !res.success) {
+                if (errEl) { errEl.textContent = res.error || 'Could not open Chrome'; errEl.style.display = ''; }
+            } else {
+                // The port needs Basic auth and Chrome can't take proxy creds on the CLI, so Chrome shows
+                // a proxy sign-in once (the persistent profile remembers it afterwards). Copy the password
+                // to the clipboard and show the login so that first prompt is trivial.
+                let hint = 'Chrome opened';
+                if (res && res.login) {
+                    try { await navigator.clipboard.writeText(String(res.password || '')); } catch { /* ignore */ }
+                    hint = `Opened · proxy login "${res.login}" · password copied`;
+                }
+                openBrowserBtn.textContent = hint;
+                setTimeout(() => { openBrowserBtn.textContent = prev; }, 4000);
+            }
+        } catch (e) {
+            if (errEl) { errEl.textContent = String(e?.message || e); errEl.style.display = ''; }
+        } finally {
+            busy = false;
+            openBrowserBtn.disabled = false;
+            if (openBrowserBtn.textContent === 'Opening…') openBrowserBtn.textContent = prev;
+        }
+    }
+    openBrowserBtn?.addEventListener('click', doOpenBrowser);
 
     sel.addEventListener('change', async () => {
         try {

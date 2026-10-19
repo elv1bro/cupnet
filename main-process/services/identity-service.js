@@ -14,8 +14,10 @@
  * Precedence: per-tab proxy profile override > connected global proxy profile override
  *             > proxy geo hint (timezone / language only, when identity.followProxyGeo)
  *             > global identity (settings.identity) > engine (no override).
- * Engine mode still gets an "engine wire identity" on the MITM path (sanitized engine UA + the real
- * engine's 2-brand Chromium client hints) when identity.engineHints is on, so wire == navigator.userAgentData.
+ * Engine mode still gets an "engine wire identity" on the MITM path (sanitized engine UA + client hints of
+ * the running engine) when identity.engineHints is on. By default (identity.engineBrand = 'chrome') the
+ * hints present the engine as Google Chrome, and a CDP UA-metadata override makes navigator.userAgentData
+ * say the same; engineBrand = 'chromium' keeps the unbranded 2-brand list and no override.
  *
  * `ctx.activeFingerprint` is kept as a derived mirror `{user_agent, timezone, language}` for
  * legacy readers; nothing else should write it.
@@ -139,33 +141,55 @@ function createIdentityService(d) {
 
     function _sig(resolved) {
         return JSON.stringify([resolved.mode, resolved.userAgent, resolved.timezone, resolved.language, resolved.navigatorPlatform,
-            resolved.clientHints ? resolved.clientHints.brands : null]);
+            resolved.clientHints ? resolved.clientHints.brands : null, _engineNeedsUaMetadata(resolved)]);
     }
 
     /** Chromium major of the running engine: from the engine UA (what goes on the wire), else process.versions. */
+    let _nativeLanguages = null;
     /**
-     * Accept-Language to use when the identity does not set one. Electron never resets the session
-     * Accept-Language (setUserAgent(ua, '') keeps the previous value — A-059), so clearing an identity
-     * language must restore an explicit default; deriving it from the app locale keeps the wire and
-     * `navigator.languages` (which Chromium derives from the same pref) consistent.
+     * The language list the engine itself exposes as `navigator.languages` in EVERY realm (page, iframes,
+     * workers): Electron builds it from the app locale + the OS preferred languages
+     * (e.g. ["ru","ru-BY","en-BY","pl-BY"]) and there is no switch to change it for workers. So without an
+     * explicit identity language we keep this list everywhere and derive the wire Accept-Language from it
+     * the way Chrome does, instead of overriding the page only (which made page ≠ worker ≠ wire).
+     * @returns {string[]}
+     */
+    function nativeLanguageList() {
+        if (_nativeLanguages) return _nativeLanguages.slice();
+        let list = [];
+        try {
+            const electron = require('electron');
+            const app = electron && typeof electron === 'object' ? electron.app : null;
+            const locale = app && typeof app.getLocale === 'function' ? String(app.getLocale() || '') : '';
+            const pref = app && typeof app.getPreferredSystemLanguages === 'function' ? app.getPreferredSystemLanguages() : [];
+            list = [locale, ...(Array.isArray(pref) ? pref : [])];
+        } catch { list = []; }
+        const out = [];
+        for (const raw of list) {
+            const code = String(raw || '').replace(/_/g, '-').trim();
+            if (!code || !/^[A-Za-z]{1,8}(-[A-Za-z0-9]{1,8})*$/.test(code)) continue;
+            if (!out.some((c) => c.toLowerCase() === code.toLowerCase())) out.push(code);
+        }
+        _nativeLanguages = out.length ? out : ['en-US'];
+        return _nativeLanguages.slice();
+    }
+
+    /**
+     * Accept-Language when the identity has no explicit language: Chrome's header for the engine's own
+     * language list (see nativeLanguageList), so the wire agrees with navigator.languages everywhere.
+     * An explicit default is still required because the session keeps its previous Accept-Language
+     * (setUserAgent(ua, '') keeps the previous value — A-059).
      */
     let _defaultAcceptLanguage = null;
     function defaultAcceptLanguage() {
         if (_defaultAcceptLanguage) return _defaultAcceptLanguage;
-        let locale = '';
-        try {
-            const electron = require('electron');
-            const app = electron && typeof electron === 'object' ? electron.app : null;
-            locale = app && typeof app.getLocale === 'function' ? String(app.getLocale() || '') : '';
-        } catch { locale = ''; }
-        locale = locale.replace('_', '-').trim();
-        const base = locale.split('-')[0].toLowerCase();
-        let value;
-        if (!locale || locale.toLowerCase() === 'en-us') value = 'en-US,en;q=0.9';
-        else if (base === 'en') value = `${locale},en;q=0.9`;
-        else value = `${locale},${base !== locale.toLowerCase() ? base + ';q=0.9,' : ''}en-US;q=0.8,en;q=0.7`;
-        _defaultAcceptLanguage = value;
-        return value;
+        _defaultAcceptLanguage = catalog.chromeAcceptLanguageHeader(nativeLanguageList()) || 'en-US,en;q=0.9';
+        return _defaultAcceptLanguage;
+    }
+
+    /** Language codes for the Chromium side: the explicit identity language, else the engine's own list. */
+    function _languageCodes(resolved) {
+        return resolved && resolved.language ? catalog.acceptLanguageCodes(resolved.language) : nativeLanguageList();
     }
 
     function _engineChromiumMajor(ua) {
@@ -188,17 +212,54 @@ function createIdentityService(d) {
         const language = catalog.formatAcceptLanguageHeader(resolved.language || defaultAcceptLanguage()) || null;
         if (resolved.mode !== 'engine') return resolved.userAgent ? { ...resolved, language } : null;
         if (!getSettings().engineHints) return null;
+        const eng = _engineHints();
+        if (!eng) return null;
+        return {
+            ...resolved,
+            userAgent: eng.ua,
+            language,
+            clientHints: eng.hints,
+            navigatorPlatform: null,
+            engineSynthesized: true,
+        };
+    }
+
+    /**
+     * Engine-mode client hints: the running engine's version/OS/arch, presented as Google Chrome unless
+     * identity.engineBrand === 'chromium' (owner decision 2026-09-27). fullVersionList carries the real
+     * engine version (process.versions.chrome), as a real Chrome build does.
+     * @returns {{ ua: string, hints: object }|null}
+     */
+    function _engineHints(settings = getSettings()) {
         const ua = resolveRendererUserAgent(null);
         const major = _engineChromiumMajor(ua);
         if (!ua || !major) return null;
         return {
-            ...resolved,
-            userAgent: ua,
-            language,
-            clientHints: catalog.engineClientHints({ chromiumMajor: major, nodePlatform: process.platform, arch: process.arch }),
-            navigatorPlatform: null,
-            engineSynthesized: true,
+            ua,
+            hints: catalog.engineClientHints({
+                chromiumMajor: major,
+                nodePlatform: process.platform,
+                arch: process.arch,
+                branded: settings.engineBrand !== 'chromium',
+                fullVersion: (process.versions && process.versions.chrome) || '',
+                // Real OS version (Chrome on macOS reports e.g. "15.7.9"); Windows/Linux keep the defaults.
+                platformVersion: process.platform === 'darwin' && typeof process.getSystemVersion === 'function' ? process.getSystemVersion() : '',
+            }),
         };
+    }
+
+    /**
+     * Engine mode presenting as Google Chrome must also override navigator.userAgentData (CDP),
+     * otherwise JavaScript keeps reporting Electron's unbranded Chromium list while the wire says Chrome.
+     */
+    function _engineNeedsUaMetadata(resolved, settings = getSettings()) {
+        return !!resolved && resolved.mode === 'engine' && settings.engineHints !== false && settings.engineBrand !== 'chromium';
+    }
+
+    /** Whether a tab needs CDP Emulation.* for this identity (UA/metadata, timezone or locale). */
+    function needsCdpEmulation(resolved) {
+        if (!resolved) return false;
+        return resolved.mode !== 'engine' || !!resolved.timezone || !!resolved.language || _engineNeedsUaMetadata(resolved);
     }
 
     // ── application ─────────────────────────────────────────────────────────────
@@ -233,7 +294,7 @@ function createIdentityService(d) {
         const sig = _sig(resolved);
         try {
             // Session level: Accept-Language for the whole partition + UA for WebContents created later.
-            applyRendererUserAgentToSession(wc.session, resolved.userAgent || null, catalog.acceptLanguageCodes(resolved.language || defaultAcceptLanguage()).join(','));
+            applyRendererUserAgentToSession(wc.session, resolved.userAgent || null, _languageCodes(resolved).join(','));
             // WebContents level: Electron snapshots the session UA into each WebContents at creation
             // (webContents.getUserAgent()), so an existing tab keeps its old UA unless set here.
             if (typeof wc.setUserAgent === 'function') {
@@ -244,7 +305,7 @@ function createIdentityService(d) {
             sysLog('warn', 'identity', 'setUserAgent failed: ' + (e?.message || e));
         }
         if (!_cdpEnabled()) return;
-        const needsCdp = resolved.mode !== 'engine' || !!resolved.timezone || !!resolved.language;
+        const needsCdp = needsCdpEmulation(resolved);
         const dbg = wc.debugger;
         if (!dbg) return;
         if (!dbg.isAttached()) {
@@ -286,12 +347,25 @@ function createIdentityService(d) {
             // (the wire header itself is rewritten by the MITM from the identity language).
             const params = {
                 userAgent: resolved.userAgent,
-                acceptLanguage: catalog.acceptLanguageCodes(resolved.language || defaultAcceptLanguage()).join(',') || undefined,
+                // Only an explicit identity language overrides navigator.languages: CDP reaches the page's
+                // frames but not its workers, so the engine's own list is kept otherwise (consistent everywhere).
+                acceptLanguage: resolved.language ? _languageCodes(resolved).join(',') : undefined,
                 platform: resolved.navigatorPlatform || undefined,
             };
             const md = catalog.buildCdpUserAgentMetadata(resolved.clientHints);
             if (md) params.userAgentMetadata = md;
             pending.push(send('Emulation.setUserAgentOverride', params));
+        } else if (_engineNeedsUaMetadata(resolved) && _engineHints()) {
+            // Engine as Google Chrome: same UA the session already has, plus the branded metadata, so
+            // navigator.userAgentData matches the sec-ch-ua the MITM puts on the wire.
+            const eng = _engineHints();
+            pending.push(send('Emulation.setUserAgentOverride', {
+                userAgent: eng.ua,
+                // Only an explicit identity language overrides navigator.languages: CDP reaches the page's
+                // frames but not its workers, so the engine's own list is kept otherwise (consistent everywhere).
+                acceptLanguage: resolved.language ? _languageCodes(resolved).join(',') : undefined,
+                userAgentMetadata: catalog.buildCdpUserAgentMetadata(eng.hints),
+            }));
         } else {
             // Clear a previous override (empty userAgent = no override).
             pending.push(send('Emulation.setUserAgentOverride', { userAgent: '' }));
@@ -383,7 +457,7 @@ function createIdentityService(d) {
     /** UA + Accept-Language for a freshly created tab session (before any navigation). */
     function getIdentityForNewTab(tabId) {
         const eff = getEffectiveForTab(tabId);
-        return { userAgent: eff.userAgent || null, language: eff.language || defaultAcceptLanguage() };
+        return { userAgent: eff.userAgent || null, language: _languageCodes(eff).join(',') };
     }
 
     /** Called by the runtime once a tab exists: CDP emulation for non-engine identities. */
@@ -391,7 +465,7 @@ function createIdentityService(d) {
         const wc = tab?.view?.webContents;
         if (!wc || wc.isDestroyed()) return;
         const eff = getEffectiveForTab(tab.id);
-        if (eff.mode === 'engine' && !eff.timezone && !eff.language) return;
+        if (!needsCdpEmulation(eff)) return;
         await applyToWebContents(wc, eff, { tabId: tab.id }).catch(() => {});
     }
 
@@ -400,7 +474,7 @@ function createIdentityService(d) {
      * `navigator.userAgentData` even when the UA override describes Firefox/Safari; those browsers
      * do not have it at all, so hide it. Returns null when nothing needs patching.
      */
-    function getNavigatorPatchScript(tabId) {
+    function getNavigatorPatchScript(tabId, extra = {}) {
         if (process.env.CUPNET_DISABLE_FINGERPRINT === '1') return null;
         const eff = getEffectiveForTab(tabId);
         // Chromium-family identity ⟺ client hints resolved. Engine mode has no UA override but still
@@ -408,21 +482,32 @@ function createIdentityService(d) {
         const chromium = eff.mode === 'engine' || !!eff.clientHints;
         if (eff.mode !== 'engine' && !eff.userAgent) return null;
         const mobile = !!eff.mobile;
+        // navigator.languages must match the wire Accept-Language. Parse the identity's language
+        // ("ru,en-US;q=0.9,en" → ["ru","en-US","en"]); empty for engine mode with no explicit
+        // language, where the genuine device values are kept (honest).
+        const languages = String(eff.language || '')
+            .split(',')
+            .map((t) => t.split(';')[0].trim())
+            .filter(Boolean);
         return buildConsistencyScript({
             chromium,
             navigatorPlatform: eff.navigatorPlatform,
             hostNodePlatform: process.platform,
             fillChrome: true,
+            languages,
             removeUserAgentData: !chromium, // non-Chromium: Chromium still leaks navigator.userAgentData
-            // Hardware fields: cap deviceMemory (real Chrome maxes at 8; Electron leaks the raw host RAM)
-            // and pin hardwareConcurrency so it does not vary by host. Applies to every Chromium identity.
-            hardware: chromium,
+            // Hardware fields: a template/custom identity claims another machine, so pin plausible values.
+            // Engine mode is the genuine device and keeps the real values — current Chrome (153) reports
+            // the real rounded RAM (e.g. 16), so the old "cap at 8" made CupNet differ from Chrome on the
+            // same machine (owner decision 2026-09-27).
+            hardware: chromium && eff.mode !== 'engine',
             deviceMemory: 8,
             hardwareConcurrency: mobile ? 8 : 8,
             // Canvas/audio farbling only for a spoofing identity (template/custom), keyed off the identity
             // so it is stable per identity; engine mode stays the genuine device.
             farble: chromium && eff.mode !== 'engine',
             seed: seedFromString(eff.userAgent || eff.templateId || 'engine'),
+            permissionDecisions: extra && extra.permissionDecisions ? extra.permissionDecisions : null,
         });
     }
 
@@ -451,11 +536,8 @@ function createIdentityService(d) {
         const resolved = catalog.resolveIdentity(norm);
         let wire = resolved;
         if (resolved.mode === 'engine') {
-            const ua = resolveRendererUserAgent(null);
-            const major = _engineChromiumMajor(ua);
-            wire = norm.engineHints && ua && major
-                ? { ...resolved, userAgent: ua, clientHints: catalog.engineClientHints({ chromiumMajor: major, nodePlatform: process.platform, arch: process.arch }) }
-                : null;
+            const eng = norm.engineHints ? _engineHints(norm) : null;
+            wire = eng ? { ...resolved, userAgent: eng.ua, clientHints: eng.hints } : null;
         }
         if (wire) wire = { ...wire, language: catalog.formatAcceptLanguageHeader(resolved.language || defaultAcceptLanguage()) || null };
         return { ...resolved, description: catalog.describeIdentity(resolved), headers: previewIdentityHeaders(wire) };
@@ -471,6 +553,7 @@ function createIdentityService(d) {
         getSource,
         getStatus,
         preview,
+        needsCdpEmulation,
         applyEffective,
         applyToWebContents,
         applyCdpEmulation,
@@ -482,6 +565,7 @@ function createIdentityService(d) {
         getWireIdentity,
         getIdentityForNewTab,
         defaultAcceptLanguage,
+        nativeLanguageList,
         onTabCreated,
         getNavigatorPatchScript,
         listTemplates: catalog.listTemplates,

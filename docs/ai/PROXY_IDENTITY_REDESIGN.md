@@ -307,6 +307,16 @@ window.chrome filled, deviceMemory 8). Unit tests updated (a Chromium identity a
 non-Chromium one never does). Also made the external check resilient: httpbin/ipinfo/tls.peet.ws are fetched independently,
 so an httpbin 502 no longer kills the whole external check — egress IP + UA + TLS still render from the others.
 
+Progress 2026-09-27: **Proxy Manager UX — removed the confusing Simple/Advanced toggle** (owner: toggling
+showed no visible difference — "как дурка"). The global mode switch is gone. The editor is now content-driven: a provider
+profile opens the guided card (chips + creds + country + session); a manual / static / option-rich profile opens the full
+form automatically (`openEditor` picks the mode from `editorModeForProfile`). A new profile opens the guided card, with an
+explicit in-card link **"Have a proxy URL or a list to import? Open advanced editor →"** (`#se-advanced-new` →
+`openNewEditor({advanced:true})`, no save prompt). Profile-manager chrome (import list, provider/country filters, MITM stats)
+is no longer `.adv-only` — always available. `applyEditorMode`/`#editor-mode-seg`/the persisted `proxyManager.editorMode`
+pref are gone; `setEditorMode` just flips the body class + provider select. e2e pm1/pm5/pm7 rewritten; all 7 proxy-manager-ui
+tests pass; full vitest green.
+
 ### Deferred / follow-ups
 - `azuretls-go/profiles.go` is the only remaining copy of the UA strings outside the catalog; `tests/unit/browser-identity-catalog.test.mjs` guards it.
 - Chrome template major (154) vs Electron 44 engine (152; Chrome stable is 155 on 2026-09-25): consider deriving the Chrome template major from `process.versions.chrome + N` if the mismatch ever matters.

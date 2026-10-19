@@ -177,10 +177,15 @@ test('id6) back to engine mode restores the real engine identity', async () => {
     expect(body.headers['user-agent']).toMatch(/Chrome\/\d+\.0\.0\.0/);
     expect(body.headers['user-agent']).not.toMatch(/Android|Firefox/);
     expect(body.headers['sec-ch-ua-platform']).not.toBe('"Android"');
-    expect(body.headers['sec-ch-ua']).not.toMatch(/Google Chrome/);
+    // Engine mode presents as Google Chrome (owner decision 2026-09-27) — on the wire and in JS alike.
+    const major = body.headers['user-agent'].match(/Chrome\/(\d+)/)[1];
+    expect(body.headers['sec-ch-ua']).toContain(`"Google Chrome";v="${major}"`);
+    expect(body.headers['sec-ch-ua']).toContain(`"Chromium";v="${major}"`);
     const js = await tabJs();
     expect(js.ua).not.toMatch(/Android|Firefox/);
     expect(js.uad).toBeTruthy();
+    expect(js.uad.brands).toContain(`Google Chrome/${major}`);
+    expect(js.uad.brands).toContain(`Chromium/${major}`);
     expect(js.uad.mobile).toBe(false);
     expect(js.platform).not.toBe('Linux armv8l');
 });

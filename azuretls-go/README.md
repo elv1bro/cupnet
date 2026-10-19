@@ -22,16 +22,22 @@ Requires **Go 1.24+** (toolchain auto-download is fine: `GOTOOLCHAIN=auto`). Out
 
 | Variable | Effect |
 |----------|--------|
-| `CUPNET_USE_GO_WORKER=1` | Optional explicit signal to use Go when a binary is present (default is already: use Go if `azuretls-go/bin/*` exists) |
-| `CUPNET_USE_GO_WORKER=0` | Force Node `azure-tls-worker.js` (FFI) |
-| `CUPNET_USE_NODE_WORKER=1` | Same as above |
+| `CUPNET_TLS_CHROME_UPSTREAM_PRESET=1` | Kill switch: the `chrome` profile uses the azuretls-client Chrome preset instead of CupNet's own Chrome 153 ClientHello (see below) |
+| `CUPNET_WORKER_FFI_CONCURRENCY`, `CUPNET_WORKER_CLIENT_CACHE_MAX`, `CUPNET_TIMEOUT_UPSTREAM_REQUEST_MS` | Pool / timeout limits (shared names with `network-policy.js`) |
+| `CUPNET_WORKER_NO_WATCHDOG=1` | Do not exit when the parent process dies (tests) |
 
-If no Go binary is found, the app falls back to the Node worker (unchanged).
+The Go worker is the only upstream TLS backend since 2026-09-24 (the Node/FFI worker was removed).
 
-## FFI / optionalDependencies
+## TLS fingerprint
 
-The Node+FFI path (`azure-tls-worker.js`, `azuretls/lib/*.dylib`) is **kept** for `CUPNET_AZURETLS_IN_PROCESS=1` and when no Go binary is packaged. Removing `@2060.io/ffi-napi` etc. is deferred until in-process AzureTLS is dropped.
+`profiles.go` → `chromeClientHelloSpec()` is the ClientHello for the `chrome` profile: the azuretls-client
+Chrome preset plus the two things real Chrome 153 adds — the trust-anchor-IDs extension 51764 (payload
+captured byte-for-byte from Chrome 153.0.8010.53) and a GREASE + ML-DSA-first `signature_algorithms`.
+JA4 through the MITM equals real Chrome 153 (`t13d1517h2_8daaf6152771_cb7bf5808d99`). Verify with
+`go test ./...` (offline), `CUPNET_GO_NET_TESTS=1 go test -run TestChromeSpecJA4Live ./...` (live) and
+`node scripts/tls-fingerprint-compare.mjs` from the repo root. Re-capture the constants after every Chrome
+major. Other profiles (edge/opera/firefox/safari/ios) still use the library presets.
 
 ## Module
 
-- `go.mod` pins `azuretls-client` v1.11.x (compatible with Go 1.24 toolchain in CI).
+- `go.mod` pins `azuretls-client` v1.13.2 and `utls` v1.3.20 (Go 1.24 toolchain in CI).

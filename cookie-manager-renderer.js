@@ -639,7 +639,57 @@ function downloadFile(name, content, mime) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+// ─── Copy (export to clipboard) ─────────────────────────────────────────────────
+document.getElementById('btn-copy-json').addEventListener('click', () => {
+    if (!filteredCookies.length) { setStatus('No cookies to copy', 'err'); return; }
+    copyToClipboard(JSON.stringify(filteredCookies, null, 2));
+    setStatus(`Copied ${filteredCookies.length} cookies (JSON) to clipboard`, 'ok');
+});
+
 // ─── Import ───────────────────────────────────────────────────────────────────
+/**
+ * Parse a cookie dump. Auto-detects JSON (array) vs Netscape (tab-separated) unless `preferJson`.
+ * Throws on malformed JSON. Returns an array of cookie objects (possibly empty).
+ */
+function parseCookiesText(text, preferJson) {
+    const s = String(text || '').trim();
+    if (!s) return [];
+    if (preferJson || s[0] === '[' || s[0] === '{') {
+        let arr;
+        try { arr = JSON.parse(s); } catch { throw new Error('Invalid JSON'); }
+        if (!Array.isArray(arr)) throw new Error('Expected a JSON array of cookies');
+        return arr;
+    }
+    // Netscape cookies.txt
+    const cookies = [];
+    for (const line of s.split('\n')) {
+        if (line.startsWith('#') || !line.trim()) continue;
+        const parts = line.split('\t');
+        if (parts.length < 7) continue;
+        cookies.push({
+            domain: parts[0], path: parts[2],
+            secure: parts[3] === 'TRUE',
+            expirationDate: Number(parts[4]) || undefined,
+            name: parts[5], value: parts[6],
+        });
+    }
+    return cookies;
+}
+
+/** Write parsed cookies into the active tab's jar and refresh. */
+async function applyImportedCookies(cookies) {
+    if (!activeTabId) { setStatus('No active tab', 'err'); return; }
+    if (!cookies.length) { setStatus('No cookies found to import', 'err'); return; }
+    let ok = 0, fail = 0;
+    for (const c of cookies) {
+        const url = `${c.secure === false ? 'http' : 'https'}://${(c.domain || '').replace(/^\./, '')}${c.path || '/'}`;
+        const result = await api.setCookie(activeTabId, { ...c, url });
+        result.success ? ok++ : fail++;
+    }
+    setStatus(`Imported: ${ok} ok, ${fail} failed`, ok > 0 ? 'ok' : 'err');
+    await loadCookies();
+}
+
 document.getElementById('btn-import').addEventListener('click', () => {
     importFileInput.value = '';
     importFileInput.click();
@@ -651,34 +701,25 @@ importFileInput.addEventListener('change', async () => {
     const MAX_IMPORT_SIZE = 10 * 1024 * 1024; // 10 MB
     if (file.size > MAX_IMPORT_SIZE) { setStatus('File too large (max 10 MB)', 'err'); return; }
     const text = await file.text();
-    let cookies = [];
+    let cookies;
+    try { cookies = parseCookiesText(text, file.name.endsWith('.json')); }
+    catch (e) { setStatus(e.message || 'Invalid file', 'err'); return; }
+    await applyImportedCookies(cookies);
+});
 
-    if (file.name.endsWith('.json')) {
-        try { cookies = JSON.parse(text); } catch { setStatus('Invalid JSON file', 'err'); return; }
-        if (!Array.isArray(cookies)) { setStatus('Expected a JSON array of cookies', 'err'); return; }
-    } else {
-        // Netscape format
-        for (const line of text.split('\n')) {
-            if (line.startsWith('#') || !line.trim()) continue;
-            const parts = line.split('\t');
-            if (parts.length < 7) continue;
-            cookies.push({
-                domain: parts[0], path: parts[2],
-                secure: parts[3] === 'TRUE',
-                expirationDate: Number(parts[4]) || undefined,
-                name: parts[5], value: parts[6]
-            });
-        }
+// Import from clipboard / pasted text (JSON or Netscape) — no file round-trip.
+document.getElementById('btn-import-clip').addEventListener('click', async () => {
+    if (!activeTabId) { setStatus('No active tab', 'err'); return; }
+    let text = '';
+    try { text = await navigator.clipboard.readText(); } catch { /* blocked → fall back to prompt */ }
+    if (!text || !text.trim()) {
+        text = window.prompt('Paste cookies (JSON array or Netscape cookies.txt):') || '';
     }
-
-    let ok = 0, fail = 0;
-    for (const c of cookies) {
-        const url = `${c.secure === false ? 'http' : 'https'}://${(c.domain || '').replace(/^\./, '')}${c.path || '/'}`;
-        const result = await api.setCookie(activeTabId, { ...c, url });
-        result.success ? ok++ : fail++;
-    }
-    setStatus(`Imported: ${ok} ok, ${fail} failed`, ok > 0 ? 'ok' : 'err');
-    await loadCookies();
+    if (!text.trim()) { setStatus('Nothing to import (clipboard/paste empty)', 'err'); return; }
+    let cookies;
+    try { cookies = parseCookiesText(text); }
+    catch (e) { setStatus(e.message || 'Invalid cookie text', 'err'); return; }
+    await applyImportedCookies(cookies);
 });
 
 // ─── Share modal ──────────────────────────────────────────────────────────────

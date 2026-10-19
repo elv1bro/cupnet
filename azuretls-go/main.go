@@ -139,6 +139,16 @@ func main() {
 			finishClearing()
 			sendLine(map[string]any{"id": "__clear_sessions__", "status": "ok", "cleared": true})
 			continue
+		case "__stream_ctl__":
+			// Per-stream control from Node (cancel / pause / resume); no reply.
+			var ctl struct {
+				Target string `json:"target"`
+				Op     string `json:"op"`
+			}
+			if err := json.Unmarshal(line, &ctl); err == nil && ctl.Target != "" {
+				handleStreamCtl(ctl.Target, ctl.Op)
+			}
+			continue
 		case "__get_profiles__":
 			prof := make(map[string]any)
 			for k, v := range browserProfiles {
@@ -161,7 +171,11 @@ func main() {
 
 			var in incomingLine
 			if err := json.Unmarshal(payload, &in); err != nil {
-				sendLine(map[string]any{"id": id, "statusCode": 0, "bodyBase64": "", "headers": map[string]string{}, "error": err.Error()})
+				sendLine(map[string]any{"id": id, "statusCode": 0, "bodyBase64": "", "headers": map[string]any{}, "error": err.Error()})
+				return
+			}
+			if in.Stream != nil && *in.Stream {
+				handleHTTPStream(&in)
 				return
 			}
 			out := handleHTTPRequest(&in)

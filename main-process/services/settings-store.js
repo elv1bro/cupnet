@@ -98,6 +98,7 @@ const SETTINGS_DEFAULTS = {
         forceHttp1: false,
         timezone: '',
         language: '',
+        engineBrand: 'chrome',
         engineHints: true,
         followProxyGeo: false,
     },

@@ -47,9 +47,33 @@ Proxy Manager manages proxies only — connecting a proxy never changes identity
 `identity-consistency-script.js` builds a main-world IIFE injected before page scripts. For a
 **Chromium-family** identity it makes the JS environment match a real Chrome:
 
-- `window.chrome` populated with `app` / `csi` / `loadTimes` / `runtime` (Electron leaves it `{}`).
-- `navigator.deviceMemory` capped at 8 (real Chrome's max; Electron leaked the raw host RAM),
-  `hardwareConcurrency` pinned.
+- `window.chrome` populated with `loadTimes` / `csi` / `app` and **no** `runtime`, in the exact shape
+  measured on Chrome 153 (2026-09-28): `loadTimes`/`csi` are bound functions (so the engine's own
+  `toString` prints `function () { [native code] }` in every realm), name `""`, own keys
+  `length,name,prototype`, constructible; values come from Navigation Timing (protocol from
+  `nextHopProtocol`, never a constant `h2`). `chrome.app` methods are named, non-constructible, in
+  Chrome's own-key order; `installState(cb)` answers asynchronously.
+- The `Function.prototype.toString` shim (needed only for named fakes) is a method (no `prototype`),
+  recognises fakes by source text so a toString from another realm still says native, and removes its
+  own frame from the stack when the native method throws.
+- The tab preload also runs in child frames (`nodeIntegrationInSubFrames`, Node stays off), so frames
+  that load a document get the same patch. Known gap: an `about:blank` iframe created by script
+  (`document.createElement('iframe')`) gets no preload — `iframe.contentWindow.chrome` is `{}` there.
+- `screen.colorDepth` is genuine (headed Chrome 153 on this Mac reports 30; the earlier "24" came from
+  headless Chrome). Pinned to 24 only for a template claiming another OS.
+- `Notification.permission` / `permissions.query` are no longer patched: the session permission policy
+  answers them natively (A-188) — "denied" until the user allows (Chrome says "prompt"; Electron's check
+  handler is boolean).
+- `navigator.languages`: engine mode keeps the engine's own list (`app.getLocale()` + OS preferred
+  languages, e.g. `ru,ru-BY,en-BY,pl-BY`) in page, iframes and workers alike — Electron has no switch to
+  change it for workers — and the wire Accept-Language is Chrome's expansion of that list
+  (`chromeAcceptLanguageHeader`). An explicit identity language still overrides the page via CDP.
+- Engine `sec-ch-ua-platform-version` is the real macOS version (`process.getSystemVersion()`).
+- No page-visible `window.__cupnet*` marker globals (paste unlock no longer sets one).
+- Template/custom identities only: `navigator.deviceMemory` capped at 8 and `hardwareConcurrency`
+  pinned. **Engine mode keeps the genuine values** (owner decision 2026-09-27): Chrome 153 on the same
+  Mac reports the real rounded RAM (e.g. 16), so a cap of 8 would itself differ from the installed Chrome.
+  The identity-check page accepts any power of two in 0.25–64.
 - WebGL `UNMASKED_VENDOR/RENDERER` rewritten to a GPU consistent with the claimed OS **only when the
   claimed OS differs from the host** (e.g. a Windows identity on a Mac).
 - Deterministic per-identity canvas/audio perturbation ("farble"): stable for a given identity, not the
@@ -61,6 +85,11 @@ For a **non-Chromium** identity (Firefox/Safari/iOS): removes `window.chrome` an
 **Client hints follow the browser family, not a toggle.** A Chromium identity always sends
 `sec-ch-ua*` and exposes `navigator.userAgentData` (real Chrome always does); a hint-less Chrome is an
 inconsistency and was a bug (fixed 2026-09-25).
+
+**Engine mode presents as Google Chrome** (owner decision 2026-09-27, `identity.engineBrand`, default
+`chrome`; `chromium` restores the old 2-brand Electron list). The wire `sec-ch-ua` and
+`navigator.userAgentData` (via CDP `Emulation.setUserAgentOverride` + `userAgentMetadata`) both carry the
+greased 3-brand list `Chromium` / `Google Chrome` / GREASE with the engine's real major and full version.
 
 Disable the whole patch with `CUPNET_DISABLE_FINGERPRINT=1`.
 
@@ -134,10 +163,29 @@ module object as their first arg (`({ app, BrowserWindow }) => …`), not `requi
    non-mainstream/instrumented browsers even with a clean, consistent fingerprint. Passing it would mean
    reverse-engineering and defeating the vendor's protection — do not do this. If a specific site is
    required for real work, get access through its owner (official API / agreement).
-2. **TLS version vs UA.** The Go worker's AzureTLS Chrome preset is ~Chrome 133-shaped while templates
-   claim Chrome 154. JA4 is still Chrome-family (the self-check's shape test passes), but exact
-   per-version matching is a deferred item.
-   **Measured 2026-09-25** (headless real Chrome 153 vs our worker, both against `tls.peet.ws/api/all`):
+2. **TLS version vs UA — RESOLVED 2026-09-25 (option b).** The `chrome` TLS profile now uses our own
+   `ClientHelloSpec` (`azuretls-go/profiles.go` → `chromeClientHelloSpec`, wired in
+   `request.go` `createPooledSession`, replaced by `ApplyJa3` when a JA3 override is set): the
+   azuretls preset plus the trust-anchor-IDs extension 51764 with the payload captured byte-for-byte
+   from Chrome 153.0.8010.53 (186 bytes, a constant per Chrome version — it lists the Chrome Root
+   Store anchors participating in TAI), and `signature_algorithms` = GREASE, mldsa44/65/87
+   (0x0904–0x0906), then the classical list. A raw ClientHello capture also showed Chrome sends a
+   GREASE signature scheme first, which `tls.peet.ws` filters out — utls does not re-GREASE sigalgs,
+   so the worker draws one per ClientHello itself. Result through the MITM (`node
+   scripts/tls-fingerprint-compare.mjs`, 2026-09-25): JA4 `t13d1517h2_8daaf6152771_cb7bf5808d99`
+   == real Chrome 153, JA4_r identical, HTTP/2 identical, no cipher/extension/sigalg/group diff.
+   Tests: `azuretls-go/profiles_clienthello_test.go` marshals the spec through utls offline and
+   checks ciphers, the 17-extension set, the 51764 payload, sigalg order, groups, versions, key-share
+   size, ALPN/ALPS/compress_certificate, per-connection shuffle + fresh GREASE, the session hook and
+   the kill switch; `TestChromeSpecJA4Live` (opt-in `CUPNET_GO_NET_TESTS=1`) asserts the JA4 on
+   tls.peet.ws. Kill switch: `CUPNET_TLS_CHROME_UPSTREAM_PRESET=1` (MITM passes `process.env` to the
+   worker) restores the library preset — use it if a server ever selects an ML-DSA scheme for
+   CertificateVerify, which utls cannot verify yet (real Chrome can; ML-DSA server certs are still
+   rare). Edge/Opera/Firefox/Safari/iOS keep the library presets (not re-measured). Remaining drift:
+   templates claim Chrome 154 while the shape is measured from 153 (the TAI list may change per
+   version) — re-capture per the upgrade cadence. Rebuild the worker after this change
+   (`npm run build:go:local`; both darwin binaries rebuilt 2026-09-25).
+   **Measured 2026-09-25, before the fix** (headless real Chrome 153 vs our worker, both against `tls.peet.ws/api/all`):
    HTTP/2 Akamai fingerprint identical (`52d84b11…`), JA4_b cipher list identical (`8daaf6152771`),
    supported groups identical (X25519MLKEM768, X25519, P-256, P-384). Differences: real Chrome sends 17
    extensions vs our 16 (JA4 `t13d1517h2` vs `t13d1516h2`) — the extra one is `51764` (0xca34, TLS
@@ -146,12 +194,9 @@ module object as their first arg (`({ app, BrowserWindow }) => …`), not `requi
    JA3 differs run to run for real Chrome too and is not a useful target. Reproduce with
    `node scripts/tls-fingerprint-compare.mjs` (§3b).
    `azuretls-client` v1.13.2 is the **latest published release** and its `GetLastChromeVersion` preset is
-   annotated "Current Chrome version: 133", so a library bump cannot close this. Options: (a) wait for an
-   upstream preset refresh; (b) our own `ClientHelloSpec` in `azuretls-go/profiles.go` (utls
-   `GenericExtension` for 51764 with the captured payload + the three ML-DSA sigalgs), validated against
-   tls.peet.ws by a Go test; (c) accept. Recommendation: (b) as a small, testable Go change; shipping with
-   (c) is acceptable meanwhile because the shape is still a valid Chrome shape and HTTP/2 + ciphers match.
-   Decision belongs to the owner.
+   annotated "Current Chrome version: 133", so a library bump could not close this. Options were: (a) wait
+   for an upstream preset refresh; (b) our own `ClientHelloSpec`; (c) accept. **The owner chose (b) on
+   2026-09-25 — implemented as described above.**
 3. **Engine is Electron/Chromium.** Electron 44.4.5 (the latest release) = Chromium **152**
    (`process.versions.chrome`; earlier notes said 146 — corrected 2026-09-25); Chrome stable is **155**
    (2026-09-25), templates claim 154. Feature-probing can tell an Electron build from stable Chrome
@@ -173,8 +218,9 @@ Status 2026-09-25 (owner asked to continue this section):
   with zero claimed-vs-real mismatch: real engine TLS, UA and 2-brand hints derived from
   `process.versions.chrome`, no JS patching of natives. Templates stay an opt-in for testing how a site
   treats another browser. **Awaiting owner confirmation.**
-- **TLS preset vs template Chrome major** — gap measured in §4 (2). Recommendation: (b) a custom
-  ClientHelloSpec in the Go worker; acceptable to ship with (c) meanwhile. **Awaiting owner decision.**
+- **TLS preset vs template Chrome major** — **done 2026-09-25** (owner chose option b): custom
+  `chromeClientHelloSpec` in the Go worker, JA4 identical to real Chrome 153 (§4 (2)). Re-capture the
+  51764 payload / sigalgs with every Chrome major per the upgrade cadence.
 - **Electron/Chromium upgrade cadence** — written as policy in `PRODUCTION_PLAN.md` ("Electron/Chromium
   upgrade cadence", 2026-09-25). Done.
 - **Normal-site smoke coverage** — `tests/e2e/site-smoke.e2e.spec.js` added (§3c/§3d). Not yet executed

@@ -21,6 +21,9 @@ import { fileURLToPath } from 'url';
 
 process.env.CUPNET_AZURETLS_CHILD_PROCESS = '1';
 process.env.CUPNET_DEBUG_MITM = process.env.CUPNET_DEBUG_MITM || '0';
+// This suite checks request headers on the wire; its client frames responses by Content-Length, so it
+// pins the buffered path (streaming has its own suite: mitm-stream.test.mjs).
+process.env.CUPNET_MITM_STREAM = '0';
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

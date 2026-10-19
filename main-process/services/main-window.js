@@ -87,6 +87,10 @@ function createMainWindowApi(d) {
             show: false,
             backgroundColor: '#0f1117',
             icon: d.iconPath,
+            ...(process.platform === 'darwin' ? {
+                titleBarStyle: 'hiddenInset',
+                trafficLightPosition: { x: 12, y: 10 },
+            } : {}),
             webPreferences: { preload: d.path.join(d.cupnetRoot, 'preload.js') },
         });
         registerTrustedShell(d.mainWindow.webContents);

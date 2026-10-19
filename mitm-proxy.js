@@ -249,10 +249,146 @@ function mitmPreferGoWorkerBinary() {
     return _resolveGoWorkerBinary() != null;
 }
 
+/**
+ * Response streaming: eligible upstream bodies go to the client as they arrive (azuretls-go/stream.go)
+ * instead of waiting for the whole body and shipping it base64 in one NDJSON line. On by default since
+ * 2026-09-27; CUPNET_MITM_STREAM=0 is the kill switch (fully buffered path). Read when a worker starts,
+ * so the stdout framing mode and the per-request mode of one worker always agree.
+ */
+function mitmStreamEnabled() {
+    return process.env.CUPNET_MITM_STREAM !== '0';
+}
+/** Per-stream bytes queued toward the browser before the worker is asked to pause the upstream read. */
+const STREAM_HIGH_WATER = 1024 * 1024;
+const STREAM_LOW_WATER = 256 * 1024;
+/**
+ * Largest response body kept in the request log (buffered and streamed alike); bigger bodies are
+ * logged without a body instead of being base64'd in memory and truncated by the DB.
+ */
+const LOG_BODY_MAX_BYTES = (() => {
+    const n = parseInt(process.env.CUPNET_LOG_BODY_MAX_BYTES || '', 10);
+    return Number.isFinite(n) && n >= 0 ? n : 10 * 1024 * 1024;
+})();
+
+/** Media streams (video/audio) are huge and practically never inspected — keep them out of the log. */
+function _isMediaContentType(ct) {
+    return /^\s*(video|audio)\//i.test(String(ct || ''));
+}
+
+/**
+ * Incremental decoder for the Go worker's stdout: NDJSON lines, where a line carrying `"chunk": N`
+ * is followed by exactly N raw body bytes (streaming frames). Handles frames split at any byte.
+ */
+class WorkerFrameDecoder {
+    /** @param {(hdr: object, body: Buffer|null) => void} onFrame */
+    constructor(onFrame) {
+        this._onFrame = onFrame;
+        this._buf = null;
+        this._pendingHdr = null;
+        this._need = 0;
+    }
+
+    /** @param {Buffer} chunk */
+    push(chunk) {
+        this._buf = this._buf && this._buf.length ? Buffer.concat([this._buf, chunk]) : chunk;
+        for (;;) {
+            if (this._pendingHdr) {
+                if (this._buf.length < this._need) return;
+                const body = this._buf.subarray(0, this._need);
+                this._buf = this._buf.subarray(this._need);
+                const hdr = this._pendingHdr;
+                this._pendingHdr = null;
+                this._need = 0;
+                this._onFrame(hdr, body);
+                continue;
+            }
+            const nl = this._buf.indexOf(0x0a);
+            if (nl < 0) return;
+            const line = this._buf.toString('utf8', 0, nl);
+            this._buf = this._buf.subarray(nl + 1);
+            if (!line.trim()) continue;
+            let hdr;
+            try { hdr = JSON.parse(line); } catch { continue; /* ignore malformed lines */ }
+            const n = Number(hdr && hdr.chunk);
+            if (Number.isInteger(n) && n > 0) {
+                this._pendingHdr = hdr;
+                this._need = n;
+                continue;
+            }
+            this._onFrame(hdr, null);
+        }
+    }
+}
+
+/**
+ * Body of one streamed upstream response. Chunks that arrive before a consumer attaches are queued
+ * (the head frame resolves a promise, so the consumer only attaches a microtask later while chunk
+ * frames of the same stdout read may already have been decoded).
+ */
+class WorkerBodyStream {
+    constructor(worker, id, onFinish) {
+        this._w = worker;
+        this.id = id;
+        this._onFinish = onFinish;
+        this._queue = [];
+        this._sink = null;
+        this._paused = false;
+        this.ended = false;
+        this.error = null;
+        this.bytes = 0;
+    }
+
+    _push(buf) {
+        if (this.ended) return;
+        this.bytes += buf.length;
+        if (this._sink) this._sink.onData(buf);
+        else this._queue.push(buf);
+    }
+
+    _end(err) {
+        if (this.ended) return;
+        this.ended = true;
+        this.error = err ? String(err) : null;
+        this._w._streams.delete(this.id);
+        try { this._onFinish && this._onFinish(); } catch { /* ignore */ }
+        if (this._sink) this._sink.onEnd(this.error);
+    }
+
+    /** @param {{ onData: (buf: Buffer) => void, onEnd: (err: string|null) => void }} sink */
+    attach(sink) {
+        this._sink = sink;
+        const queued = this._queue;
+        this._queue = [];
+        for (const b of queued) sink.onData(b);
+        if (this.ended) sink.onEnd(this.error);
+    }
+
+    pause() {
+        if (this._paused || this.ended) return;
+        this._paused = true;
+        this._w.streamCtl(this.id, 'pause');
+    }
+
+    resume() {
+        if (!this._paused || this.ended) return;
+        this._paused = false;
+        this._w.streamCtl(this.id, 'resume');
+    }
+
+    /** Stop the upstream download (browser went away / response no longer wanted). */
+    cancel() {
+        if (this.ended) return;
+        this._w.streamCtl(this.id, 'cancel');
+        this._end('cancelled');
+    }
+}
+
 class AzureTLSWorker extends EventEmitter {
     constructor() {
         super();
         this.pending    = new Map();
+        /** Live streamed response bodies by request id (CUPNET_MITM_STREAM). */
+        this._streams   = new Map();
         this.ready      = false;
         this._stopped   = false;
         this._bufParts  = [];
@@ -331,35 +467,28 @@ class AzureTLSWorker extends EventEmitter {
         // Redirect worker stderr only in debug mode (very noisy in production)
         this.proc.stderr.on('data', d => { if (debugMitmLevel) process.stderr.write('[azure-worker] ' + d); });
 
-        this.proc.stdout.setEncoding('utf8');
-        this.proc.stdout.on('data', chunk => {
-            this._bufParts.push(chunk);
-            const joined = this._bufParts.join('');
-            this._bufParts.length = 0;
-            const lines = joined.split('\n');
-            const remainder = lines.pop();
-            if (remainder) this._bufParts.push(remainder);
-            for (const line of lines) {
-                if (!line.trim()) continue;
-                try {
-                    const msg = JSON.parse(line);
-                    if (msg.id === '__init__') {
-                        this.ready = true;
-                        this._restartDelay = 1000;
-                        this.emit('worker-ready');
-                        this.emit('ready');
-                    } else {
-                        const entry = this.pending.get(msg.id);
-                        if (entry) {
-                            this.pending.delete(msg.id);
-                            const cb = typeof entry === 'function' ? entry : entry.cb;
-                            if (entry.timer) clearTimeout(entry.timer);
-                            cb(null, msg);
-                        }
-                    }
-                } catch (e) { /* ignore malformed lines */ }
-            }
-        });
+        this._streaming = mitmStreamEnabled();
+        if (this._streaming) {
+            // Binary-safe framing: streamed bodies carry raw bytes after their header line.
+            const decoder = new WorkerFrameDecoder((hdr, body) => this._onWorkerFrame(hdr, body));
+            this.proc.stdout.on('data', chunk => decoder.push(chunk));
+        } else {
+            this.proc.stdout.setEncoding('utf8');
+            this.proc.stdout.on('data', chunk => {
+                this._bufParts.push(chunk);
+                const joined = this._bufParts.join('');
+                this._bufParts.length = 0;
+                const lines = joined.split('\n');
+                const remainder = lines.pop();
+                if (remainder) this._bufParts.push(remainder);
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    let msg;
+                    try { msg = JSON.parse(line); } catch { continue; /* ignore malformed lines */ }
+                    this._onWorkerMessage(msg);
+                }
+            });
+        }
 
         this.proc.on('exit', (code) => {
             this.ready = false;
@@ -377,6 +506,8 @@ class AzureTLSWorker extends EventEmitter {
                 }
             }
             this.pending.clear();
+            for (const s of [...this._streams.values()]) s._end(`Worker exited (${code})`);
+            this._streams.clear();
             this._inflightRequests = 0;
             if (this._stopped) return;
             const delay = this._restartDelay;
@@ -420,6 +551,62 @@ class AzureTLSWorker extends EventEmitter {
         } finally {
             finish();
         }
+    }
+
+    /** One complete (non-chunk) message from the worker: ready signal or a reply to a pending id. */
+    _onWorkerMessage(msg) {
+        try {
+            if (!msg) return;
+            if (msg.id === '__init__') {
+                this.ready = true;
+                this._restartDelay = 1000;
+                this.emit('worker-ready');
+                this.emit('ready');
+                return;
+            }
+            const entry = this.pending.get(msg.id);
+            if (entry) {
+                this.pending.delete(msg.id);
+                const cb = typeof entry === 'function' ? entry : entry.cb;
+                if (entry.timer) clearTimeout(entry.timer);
+                cb(null, msg);
+            }
+        } catch { /* a failing callback must not take down the stdout reader */ }
+    }
+
+    /** Frame from the binary-safe decoder (CUPNET_MITM_STREAM): stream head / chunk / end or a message. */
+    _onWorkerFrame(hdr, body) {
+        if (!hdr) return;
+        try {
+            if (body) {
+                const s = this._streams.get(hdr.id);
+                if (s) s._push(body);
+                return;
+            }
+            if (hdr.stream === 'head') {
+                const entry = this.pending.get(hdr.id);
+                if (entry && entry.onHead) {
+                    this.pending.delete(hdr.id);
+                    entry.onHead(hdr);
+                } else {
+                    // Nobody is waiting (timed out / gone) — stop the upstream download.
+                    this.streamCtl(hdr.id, 'cancel');
+                }
+                return;
+            }
+            if (hdr.stream === 'end') {
+                const s = this._streams.get(hdr.id);
+                if (s) s._end(hdr.error || null);
+                return;
+            }
+        } catch { /* a failing consumer must not take down the stdout reader */ }
+        this._onWorkerMessage(hdr);
+    }
+
+    /** Send a per-stream control op (cancel / pause / resume) to the worker; best effort. */
+    streamCtl(id, op) {
+        if (!this.proc?.stdin?.writable) return;
+        this._writeToWorker(JSON.stringify({ id: '__stream_ctl__', target: id, op }) + '\n').catch(() => {});
     }
 
     _writeToWorker(payload) {
@@ -469,6 +656,69 @@ class AzureTLSWorker extends EventEmitter {
             this._writeToWorker(JSON.stringify({ id, ...opts }) + '\n').catch((e) => {
                 this.pending.delete(id);
                 this._inflightRequests = Math.max(0, this._inflightRequests - 1);
+                clearTimeout(timer);
+                reject(e);
+            });
+        });
+    }
+
+    /**
+     * Like request(), but asks the worker to stream the body. Resolves when headers arrive with
+     * `{ statusCode, headers, stream }` (a WorkerBodyStream), or — if the worker fell back to the
+     * buffered path (e.g. a connection-error retry) — with a normal `{ statusCode, headers, bodyBase64 }`.
+     * The in-flight slot is held until the body ends.
+     */
+    requestStream(opts) {
+        return new Promise((resolve, reject) => {
+            if (!this.ready) return reject(new Error('Worker not ready'));
+            if (this.pending.size >= networkPolicy.concurrency.workerMaxPending) {
+                this.emit('worker-overloaded', { reason: 'pending_overflow', pending: this.pending.size });
+                return reject(new Error('Worker pending overflow'));
+            }
+            if (this._inflightRequests >= networkPolicy.concurrency.workerMaxInflight) {
+                this.emit('worker-overloaded', { reason: 'inflight_overflow', inflight: this._inflightRequests });
+                return reject(new Error('Worker in-flight overflow'));
+            }
+            const id = `r_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+            let released = false;
+            const releaseSlot = () => {
+                if (released) return;
+                released = true;
+                this._inflightRequests = Math.max(0, this._inflightRequests - 1);
+            };
+            const timer = setTimeout(() => {
+                this.pending.delete(id);
+                releaseSlot();
+                this.streamCtl(id, 'cancel'); // headers may still arrive later — don't let it download
+                this.emit('worker-request-timeout', { id, timeoutMs: networkPolicy.timeouts.workerRequestMs });
+                reject(new Error(`Worker request timeout (${networkPolicy.timeouts.workerRequestMs}ms)`));
+            }, networkPolicy.timeouts.workerRequestMs);
+            this._inflightRequests++;
+            this.pending.set(id, {
+                timer,
+                cb: (err, res) => { // buffered reply (fallback or error before headers)
+                    clearTimeout(timer);
+                    releaseSlot();
+                    if (err) return reject(err);
+                    if (res.error) return reject(new Error(res.error));
+                    resolve(res);
+                },
+                onHead: (hdr) => {
+                    clearTimeout(timer);
+                    const stream = new WorkerBodyStream(this, id, releaseSlot);
+                    this._streams.set(id, stream);
+                    resolve({ statusCode: hdr.statusCode, headers: hdr.headers || {}, stream });
+                },
+            });
+            if (!this.proc?.stdin?.writable) {
+                this.pending.delete(id);
+                releaseSlot();
+                clearTimeout(timer);
+                return reject(new Error('Worker stdin not writable'));
+            }
+            this._writeToWorker(JSON.stringify({ id, ...opts, stream: true }) + '\n').catch((e) => {
+                this.pending.delete(id);
+                releaseSlot();
                 clearTimeout(timer);
                 reject(e);
             });
@@ -755,6 +1005,14 @@ class MitmProxy {
     setEgressBlocked(blocked, reason = '') {
         this._egressBlocked = !!blocked;
         this._egressBlockReason = blocked ? String(reason || 'Proxy required but unavailable') : '';
+    }
+
+    isEgressBlocked() {
+        return !!this._egressBlocked;
+    }
+
+    getEgressBlockReason() {
+        return this._egressBlocked ? String(this._egressBlockReason || '') : '';
     }
 
     /** Force HTTP/1.1 for all upstream AzureTLS requests (global profile setting). */
@@ -1056,7 +1314,7 @@ class MitmProxy {
         const port = parseInt(portStr) || 443;
 
         if (this._shouldTlsPassthrough(hostname)) {
-            this._handleConnectPassthrough(socket, hostname, port);
+            this._handleConnectPassthrough(socket, hostname, port, connectTabId);
             return;
         }
 
@@ -1079,24 +1337,9 @@ class MitmProxy {
         socket.resume();
 
         // Parallel pipeline: fire requests as they arrive, write responses in order
+        // (createResponsePipeline — buffered responses and CUPNET_MITM_STREAM streams alike).
         let inBuf = Buffer.alloc(0);
-        // Each entry: { promise, written: false }
-        const pipeline = [];
-        let writing = false;
-
-        const flushPipeline = () => {
-            if (writing) return;
-            writing = true;
-            while (pipeline.length > 0 && pipeline[0].done) {
-                const entry = pipeline.shift();
-                if (tlsSocket.writable) {
-                    try { tlsSocket.write(entry.data); } catch {}
-                }
-            }
-            writing = false;
-            // If more entries finished while we were flushing, loop again
-            if (pipeline.length > 0 && pipeline[0].done) flushPipeline();
-        };
+        const pipe = createResponsePipeline(tlsSocket);
 
         const dispatchRequest = (req) => {
             const url = `https://${hostname}${port !== 443 ? ':' + port : ''}${req.path}`;
@@ -1117,41 +1360,44 @@ class MitmProxy {
             if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(headers));
             if (debugMitmLevel >= 3) mitmUserLog(_fmtBody(req.body, req.bodyBase64, 'req body'));
 
-            const entry = { done: false, data: null };
-            pipeline.push(entry);
+            const entry = pipe.newEntry();
             const t0 = Date.now();
-            this._doRequest({ method: req.method, url, headers, orderedHeaders: orderedHeadersStripped, body: req.body, bodyBase64: req.bodyBase64, requestId, tabId })
+
+            /** Request-log entry; `logBody` is the decoded response body (string, `__b64__:` or null). */
+            const logResponse = (res, resOut, logBody) => {
+                if (!this.onRequestLogged) return;
+                const reqBodyForLog = _reqBodyForLog(req);
+                const dnsCorsMatch = !res.dnsOverride ? this._mitmCorsMatchDetail(url) : null;
+                const requestHeadersForLog = { ...headers };
+                applyIdentityToOutboundHeaders(requestHeadersForLog, null, this._resolveUpstreamForTab(tabId).identity, { url });
+                this.onRequestLogged({
+                    url, method: req.method, tabId, sessionId, requestId,
+                    cupnetRid: cupnetRid || null,
+                    status: resOut.statusCode, requestHeaders: requestHeadersForLog,
+                    responseHeaders: resOut.headers, requestBody: reqBodyForLog,
+                    responseBody: logBody, duration: Date.now() - t0,
+                    type: inferMitmResourceType(url, req.method, requestHeadersForLog, resOut.headers),
+                    dnsOverride: res.dnsOverride || null,
+                    dnsCorsMatch,
+                });
+            };
+
+            this._doRequest({ method: req.method, url, headers, orderedHeaders: orderedHeadersStripped, body: req.body, bodyBase64: req.bodyBase64, requestId, tabId, allowStream: true })
                 .then(res  => {
-                    dbg(`[mitm] ← ${url} status=${res.statusCode}${ctag}\n`);
+                    dbg(`[mitm] ← ${url} status=${res.statusCode}${res.stream ? ' (stream)' : ''}${ctag}\n`);
                     if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(res.headers));
-                    if (debugMitmLevel >= 4) mitmUserLog(_fmtBody(null, res.bodyBase64, 'res body'));
+                    if (debugMitmLevel >= 4 && !res.stream) mitmUserLog(_fmtBody(null, res.bodyBase64, 'res body'));
                     const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, res);
-                    entry.data = buildHttpResponse(resOut, url);
-                    if (this.onRequestLogged) {
-                        let logBody = null;
-                        if (resOut.bodyBase64) {
-                            const ct = _headerVal(resOut.headers, 'content-type');
-                            if (_isBinaryContentType(ct)) {
-                                logBody = '__b64__:' + resOut.bodyBase64;
-                            } else {
-                                try { logBody = Buffer.from(resOut.bodyBase64, 'base64').toString('utf8'); } catch {}
-                            }
-                        }
-                        const reqBodyForLog = _reqBodyForLog(req);
-                        const dnsCorsMatch = !res.dnsOverride ? this._mitmCorsMatchDetail(url) : null;
-                        const requestHeadersForLog = { ...headers };
-                        applyIdentityToOutboundHeaders(requestHeadersForLog, null, this._resolveUpstreamForTab(tabId).identity, { url });
-                        this.onRequestLogged({
-                            url, method: req.method, tabId, sessionId, requestId,
-                            cupnetRid: cupnetRid || null,
-                            status: resOut.statusCode, requestHeaders: requestHeadersForLog,
-                            responseHeaders: resOut.headers, requestBody: reqBodyForLog,
-                            responseBody: logBody, duration: Date.now() - t0,
-                            type: inferMitmResourceType(url, req.method, requestHeadersForLog, resOut.headers),
-                            dnsOverride: res.dnsOverride || null,
-                            dnsCorsMatch,
+                    if (res.stream) {
+                        pipeStreamIntoEntry(pipe, entry, tlsSocket, {
+                            res, resOut, method: req.method, url, tag: ctag,
+                            wantLogBody: !!this.onRequestLogged,
+                            onComplete: (logBody) => logResponse(res, resOut, logBody),
                         });
+                        return;
                     }
+                    pipe.finish(entry, buildHttpResponse(resOut, url));
+                    logResponse(res, resOut, this.onRequestLogged ? _logBodyFromResponse(resOut) : null);
                 })
                 .catch((e) => {
                     dbg(`[mitm] ✗ ${url} ${e.message}${ctag}\n`);
@@ -1159,9 +1405,8 @@ class MitmProxy {
                         req, tabId, dnsOverride: e.mitmDnsOverride || null,
                     });
                     const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
-                    entry.data = buildHttpResponse(resOut, url);
-                })
-                .finally(() => { entry.done = true; flushPipeline(); });
+                    pipe.finish(entry, buildHttpResponse(resOut, url));
+                });
         };
 
         const MAX_INBUF = 10 * 1024 * 1024; // 10 MB
@@ -1207,7 +1452,8 @@ class MitmProxy {
                     tlsSocket.removeAllListeners('data');
                     tlsSocket.removeAllListeners('close');
                     tlsSocket.removeAllListeners('error');
-                    pipeline.length = 0;
+                    tlsSocket.removeAllListeners('drain');
+                    pipe.reset();
                     chunks.length = 0;
                     chunksLen = 0;
                     const hdrWs = { ...req.headers };
@@ -1231,11 +1477,11 @@ class MitmProxy {
             else { chunksLen = 0; }
         });
         tlsSocket.on('error', () => { clearTimeout(hsTimer); try { tlsSocket.destroy(); } catch {} });
-        tlsSocket.on('close', () => { chunks.length = 0; chunksLen = 0; pipeline.length = 0; });
+        tlsSocket.on('close', () => { chunks.length = 0; chunksLen = 0; pipe.reset(); });
         }).catch((e) => { clearTimeout(hsTimer); dbg(`[mitm] cert error ${hostname}: ${e?.message}${ctag}\n`); socket.destroy(); });
     }
 
-    _handleConnectPassthrough(clientSocket, hostname, port) {
+    _handleConnectPassthrough(clientSocket, hostname, port, tabId = null) {
         const target = `${hostname}:${port}`;
         const fail = (err) => {
             safeCatch({ module: 'mitm-proxy', eventCode: 'tls.passthrough.failed', context: { target } }, err, 'warn');
@@ -1253,7 +1499,15 @@ class MitmProxy {
             upstreamSocket.on('error', () => { try { clientSocket.destroy(); } catch {} });
         };
 
-        if (!this.upstream) {
+        // Honour the tab's proxy and the fail-closed block like the MITM path does (A-042): a blocked
+        // egress with no proxy must not open a direct connection (real IP).
+        const proxyUrl = this._resolveUpstreamForTab(tabId).proxy || null;
+        if (this._egressBlocked && !proxyUrl) {
+            fail(new Error(`Egress blocked: ${this._egressBlockReason || 'proxy required'}`));
+            return;
+        }
+
+        if (!proxyUrl) {
             const upstreamSocket = net.connect(port, hostname);
             upstreamSocket.setTimeout(networkPolicy.timeouts.upstreamRequestMs, () => upstreamSocket.destroy());
             upstreamSocket.once('connect', () => attachTunnel(upstreamSocket));
@@ -1263,7 +1517,7 @@ class MitmProxy {
 
         let upstreamUrl;
         try {
-            upstreamUrl = new URL(this.upstream);
+            upstreamUrl = new URL(proxyUrl);
         } catch (err) {
             fail(err);
             return;
@@ -1336,6 +1590,11 @@ class MitmProxy {
         if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(headers));
         if (debugMitmLevel >= 3) mitmUserLog(_fmtBody(req.body, req.bodyBase64, 'req body'));
 
+        // One request per plain-HTTP proxy connection: end the socket once the response is written.
+        const pipe = createResponsePipeline(socket, { endWhenDone: true });
+        const entry = pipe.newEntry();
+        socket.on('close', () => pipe.reset());
+
         this._doRequest({
             method: req.method,
             url,
@@ -1345,15 +1604,18 @@ class MitmProxy {
             bodyBase64: req.bodyBase64,
             requestId: `mitm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             tabId,
+            allowStream: true,
         })
             .then(res => {
-                dbg(`[mitm] ← ${url} status=${res.statusCode}${ctagPlain}\n`);
+                dbg(`[mitm] ← ${url} status=${res.statusCode}${res.stream ? ' (stream)' : ''}${ctagPlain}\n`);
                 if (debugMitmLevel >= 2) mitmUserLog(_fmtHeaders(res.headers));
-                if (debugMitmLevel >= 4) mitmUserLog(_fmtBody(null, res.bodyBase64, 'res body'));
+                if (debugMitmLevel >= 4 && !res.stream) mitmUserLog(_fmtBody(null, res.bodyBase64, 'res body'));
                 const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, res);
-                const resp = buildHttpResponse(resOut, url);
-                socket.write(resp);
-                socket.end();
+                if (res.stream) {
+                    pipeStreamIntoEntry(pipe, entry, socket, { res, resOut, method: req.method, url, tag: ctagPlain });
+                    return;
+                }
+                pipe.finish(entry, buildHttpResponse(resOut, url));
             })
             .catch((e) => {
                 dbg(`[mitm] ✗ ${url} ${e.message}${ctagPlain}\n`);
@@ -1361,8 +1623,7 @@ class MitmProxy {
                     req, tabId, dnsOverride: e.mitmDnsOverride || null,
                 });
                 const resOut = applyMitmCorsToResponse(this._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
-                socket.write(buildHttpResponse(resOut, url));
-                socket.end();
+                pipe.finish(entry, buildHttpResponse(resOut, url));
             });
     }
 
@@ -1458,9 +1719,19 @@ class MitmProxy {
                 timeout:           networkPolicy.timeouts.upstreamRequestMs,
                 disableRedirects:  opts.disableRedirects !== false,
             };
-            const runWorker = (useHttp1) => this.worker.request({ ...workerReqBase, forceHttp1: !!useHttp1 });
+            // Stream the body (CUPNET_MITM_STREAM) only when nothing needs the whole response first:
+            // no response-rewriting intercept rule (postProcess) and not HEAD (no body). The Critical-CH
+            // retry below only needs headers, and a superseded stream is cancelled before the browser
+            // has seen any of it, so document navigations stream too.
+            const wantStream = this.worker?._streaming === true && opts.allowStream === true && !plan.postProcess
+                && !/^HEAD$/i.test(up.method || '');
+            const runWorker = (useHttp1) => (wantStream
+                ? this.worker.requestStream({ ...workerReqBase, forceHttp1: !!useHttp1 })
+                : this.worker.request({ ...workerReqBase, forceHttp1: !!useHttp1 }));
 
             let workerError = null;
+            /** Set once a streamed head is received; cancelled if we fail before handing it back. */
+            let streamedBody = null;
             try {
                 let res;
                 try {
@@ -1473,7 +1744,8 @@ class MitmProxy {
                         throw e;
                     }
                 }
-                if (!forceHttp1 && _responseSuggestsHttp1Retry(res)) {
+                if (res.stream) streamedBody = res.stream;
+                if (!forceHttp1 && !res.stream && _responseSuggestsHttp1Retry(res)) {
                     dbg(`[mitm] ↻ http/1.1 retry after gateway body ${url}\n`);
                     res = await runWorker(true);
                 }
@@ -1483,6 +1755,7 @@ class MitmProxy {
                     const ch = this._clientHintsCache.observeResponse(up.url, up.headers, res.headers || {});
                     if (ch.retryWith.length) {
                         dbg(`[mitm] ↻ Critical-CH retry ${url} (+${ch.retryWith.join(',')})\n`);
+                        if (res.stream) res.stream.cancel(); // superseded by the buffered retry below
                         applyIdentityToOutboundHeaders(up.headers, up.orderedHeaders, tabUpstream.identity, { url: up.url, requestedHints: ch.retryWith });
                         res = await this.worker.request({ ...workerReqBase, headers: up.headers, orderedHeaders: up.orderedHeaders || undefined, forceHttp1: !!forceHttp1 });
                     }
@@ -1497,6 +1770,9 @@ class MitmProxy {
                     bodyBase64: res.bodyBase64 || '',
                     dnsOverride: dnsAdjusted.dnsOverride || null,
                 };
+                // Streamed body: the caller writes the head now and pipes the body as it arrives.
+                // (Never combined with postProcess — see wantStream.)
+                if (res.stream) out.stream = res.stream;
                 if (plan.postProcess) {
                     out = await finalizeMitmInterceptResponseAsync(out, plan.postProcess);
                 }
@@ -1504,8 +1780,13 @@ class MitmProxy {
                 if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
                 return out;
             } catch (e) {
+                if (streamedBody) streamedBody.cancel();
                 workerError = e;
-                if (!isIdempotent || !CONN_ERR.test(String(e.message || ''))) throw e;
+                // The native fallback below is a direct Node https request: never use it when traffic must
+                // go through an upstream proxy or egress is blocked — it would reach the origin from the
+                // real IP (A-008). Only a direct (no-proxy) tab may fall back.
+                if (!isIdempotent || tabUpstream.proxy || this._egressBlocked
+                    || !CONN_ERR.test(String(e.message || ''))) throw e;
             }
 
             // Worker failed with connection error — native Node.js https fallback
@@ -1805,6 +2086,12 @@ class MitmProxy {
             } catch {}
             try { clientTls.end(); } catch {}
         };
+
+        // Fail closed like the MITM path (A-042): no proxy while egress is blocked → no direct socket.
+        if (this._egressBlocked && !proxyUrl) {
+            fail(new Error(`Egress blocked: ${this._egressBlockReason || 'proxy required'}`));
+            return;
+        }
 
         this._openRawTlsToUpstream({
             connectHost,
@@ -2141,6 +2428,192 @@ function applyMitmCorsToResponse(enabled, url, requestHeaders, requestMethod, re
 const HOP_BY_HOP_HEADERS = new Set(['transfer-encoding', 'connection', 'keep-alive', 'content-length', 'content-encoding']);
 
 const STATUS_TEXT = { 301: 'Moved Permanently', 302: 'Found', 303: 'See Other', 307: 'Temporary Redirect', 308: 'Permanent Redirect' };
+
+// Streamed responses (CUPNET_MITM_STREAM): the body length is unknown up front, so the head carries
+// Transfer-Encoding: chunked. The worker decodes known encodings (like the buffered path) and drops
+// Content-Encoding; if one is still present it is an unknown encoding passed through raw, so keep it.
+const STREAM_SKIP_HEADERS = new Set(['transfer-encoding', 'connection', 'keep-alive', 'content-length']);
+const CRLF_BUF = Buffer.from('\r\n', 'latin1');
+const CHUNK_TERMINATOR_BUF = Buffer.from('0\r\n\r\n', 'latin1');
+
+/**
+ * Status line + headers for a streamed response.
+ * @param {{ statusCode?: number, headers?: object }} res
+ * @param {string} requestUrl
+ * @param {{ chunked: boolean }} opts - false for bodiless responses (HEAD / 1xx / 204 / 304)
+ */
+function buildHttpResponseHead(res, requestUrl, { chunked }) {
+    const payload = requestUrl ? absolutizeMitmRedirectResponse(res, requestUrl) : res;
+    const statusCode = payload.statusCode || 200;
+    const statusText = STATUS_TEXT[statusCode] || 'OK';
+    let headerStr = `HTTP/1.1 ${statusCode} ${statusText}\r\n`;
+    headerStr += chunked ? 'Transfer-Encoding: chunked\r\n' : 'Content-Length: 0\r\n';
+    for (const [k, v] of Object.entries(payload.headers || {})) {
+        if (STREAM_SKIP_HEADERS.has(k.toLowerCase())) continue;
+        const vals = Array.isArray(v) ? v : [v];
+        for (const val of vals) headerStr += `${k}: ${val}\r\n`;
+    }
+    headerStr += '\r\n';
+    return Buffer.from(headerStr, 'latin1');
+}
+
+/** Request-log body for a buffered response: text, `__b64__:` for binary types, or null. */
+function _logBodyFromResponse(resOut) {
+    if (!resOut || !resOut.bodyBase64) return null;
+    const ct = _headerVal(resOut.headers, 'content-type');
+    if (_isMediaContentType(ct)) return null;
+    if (Math.floor(resOut.bodyBase64.length * 3 / 4) > LOG_BODY_MAX_BYTES) return null;
+    if (_isBinaryContentType(ct)) return '__b64__:' + resOut.bodyBase64;
+    try { return Buffer.from(resOut.bodyBase64, 'base64').toString('utf8'); } catch { return null; }
+}
+
+/**
+ * In-order HTTP/1.1 response writer for one client connection (a browser tab or an External Proxy
+ * client). Responses are written strictly in request order; each entry holds queued output. A buffered
+ * response is one buffer + done; a streamed one (CUPNET_MITM_STREAM) grows as chunks arrive. Honours
+ * sock.write() backpressure ('drain') and pauses/resumes the worker stream by queued size.
+ * @param {import('net').Socket|import('tls').TLSSocket} sock
+ * @param {{ endWhenDone?: boolean }} [opts] - end the socket once a response is fully written
+ *        (plain-HTTP proxy requests are one request per connection)
+ */
+function createResponsePipeline(sock, { endWhenDone = false } = {}) {
+    const entries = [];
+    let writing = false;
+    let blocked = false; // sock.write() returned false — wait for 'drain'
+    let completed = 0;
+    let ended = false;
+
+    const applyBackpressure = (entry) => {
+        if (!entry.stream || entry.done) return;
+        if (entry.queued > STREAM_HIGH_WATER) entry.stream.pause();
+        else if (entry.queued <= STREAM_LOW_WATER) entry.stream.resume();
+    };
+
+    const flush = () => {
+        if (writing) return;
+        writing = true;
+        try {
+            while (entries.length > 0 && !blocked) {
+                const head = entries[0];
+                while (head.out.length > 0) {
+                    const buf = head.out.shift();
+                    head.queued -= buf.length;
+                    if (!sock.writable) continue; // connection gone — drop output
+                    let ok = true;
+                    try { ok = sock.write(buf); } catch { /* socket error handled by 'error' */ }
+                    if (ok === false) { blocked = true; break; }
+                }
+                applyBackpressure(head);
+                if (blocked || !head.done || head.out.length > 0) break;
+                entries.shift();
+                completed++;
+            }
+            if (endWhenDone && !ended && completed > 0 && entries.length === 0) {
+                ended = true;
+                try { sock.end(); } catch { /* ignore */ }
+            }
+        } finally {
+            writing = false;
+        }
+    };
+    sock.on('drain', () => { blocked = false; flush(); });
+
+    const cancelStreams = () => {
+        for (const e of entries) {
+            if (e.stream && !e.done) {
+                try { e.stream.cancel(); } catch { /* ignore */ }
+            }
+        }
+    };
+
+    return {
+        newEntry() {
+            const e = { out: [], queued: 0, done: false, stream: null };
+            entries.push(e);
+            return e;
+        },
+        enqueue(entry, buf) {
+            entry.out.push(buf);
+            entry.queued += buf.length;
+        },
+        /** Complete an entry with one whole response (replacing any partial/streamed output). */
+        finish(entry, buf) {
+            if (entry.stream && !entry.done) {
+                try { entry.stream.cancel(); } catch { /* ignore */ }
+            }
+            entry.stream = null;
+            entry.out.length = 0;
+            entry.queued = 0;
+            if (buf) { entry.out.push(buf); entry.queued = buf.length; }
+            entry.done = true;
+            flush();
+        },
+        flush,
+        applyBackpressure,
+        /** Connection closed / taken over: stop upstream downloads nobody will read. */
+        reset() {
+            cancelStreams();
+            entries.length = 0;
+        },
+    };
+}
+
+/**
+ * Write a streamed response (CUPNET_MITM_STREAM) into a pipeline entry: the head now, the chunked body
+ * as it arrives, the terminator at the end. `onComplete(logBody)` fires after a successful body with the
+ * body for the request log (null when not wanted, a media type, or bigger than LOG_BODY_MAX_BYTES). A body that
+ * fails after the head was sent aborts the connection — the only honest signal left to the client.
+ */
+function pipeStreamIntoEntry(pipe, entry, sock, { res, resOut, method, url, wantLogBody = false, onComplete = null, tag = '' }) {
+    const stream = res.stream;
+    if (!sock.writable) {
+        stream.cancel();
+        pipe.finish(entry, null);
+        return;
+    }
+    const status = Number(resOut.statusCode) || 200;
+    const noBody = /^HEAD$/i.test(method || '') || status === 204 || status === 304 || (status >= 100 && status < 200);
+    if (_isMediaContentType(_headerVal(resOut.headers, 'content-type'))) wantLogBody = false;
+    entry.stream = stream;
+    pipe.enqueue(entry, buildHttpResponseHead(resOut, url, { chunked: !noBody }));
+    const logParts = [];
+    let logBytes = 0;
+    let logOverflow = false;
+    stream.attach({
+        onData: (buf) => {
+            if (noBody) return;
+            if (wantLogBody && !logOverflow) {
+                if (logBytes + buf.length <= LOG_BODY_MAX_BYTES) { logParts.push(buf); logBytes += buf.length; }
+                else { logOverflow = true; logParts.length = 0; }
+            }
+            pipe.enqueue(entry, Buffer.concat([Buffer.from(`${buf.length.toString(16)}\r\n`, 'latin1'), buf, CRLF_BUF]));
+            pipe.applyBackpressure(entry);
+            pipe.flush();
+        },
+        onEnd: (err) => {
+            if (err) {
+                dbg(`[mitm] ✗ stream ${url} ${err}${tag}\n`);
+                entry.done = true;
+                entry.out.length = 0;
+                entry.queued = 0;
+                if (err !== 'cancelled') { try { sock.destroy(); } catch { /* ignore */ } }
+                return;
+            }
+            if (!noBody) pipe.enqueue(entry, CHUNK_TERMINATOR_BUF);
+            entry.done = true;
+            dbg(`[mitm] ⇣ ${url} streamed ${stream.bytes}B${tag}\n`);
+            pipe.flush();
+            if (!onComplete) return;
+            let logBody = null;
+            if (wantLogBody && !logOverflow && logBytes > 0) {
+                const body = Buffer.concat(logParts);
+                const ct = _headerVal(resOut.headers, 'content-type');
+                logBody = _isBinaryContentType(ct) ? '__b64__:' + body.toString('base64') : body.toString('utf8');
+            }
+            try { onComplete(logBody); } catch { /* logging must not break the response */ }
+        },
+    });
+}
 function buildHttpResponse(res, requestUrl) {
     const payload = requestUrl ? absolutizeMitmRedirectResponse(res, requestUrl) : res;
     const statusCode = payload.statusCode || 200;
@@ -2208,7 +2681,18 @@ class ExternalProxyPort {
         return { port: this.port, name: this.name, connections: this._connCount, requests: this._reqCount, sessionId: this.sessionId };
     }
 
-    _checkAuth(headers) {
+    _isLoopbackAddress(addr) {
+        const a = String(addr || '').replace(/^::ffff:/i, '').toLowerCase();
+        return a === '127.0.0.1' || a === '::1';
+    }
+
+    /**
+     * Loopback clients (the port is bound to 127.0.0.1) skip Basic auth so a local
+     * browser can use the port without a password. Any other remote address still
+     * needs the configured login and password.
+     */
+    _checkAuth(headers, remoteAddress) {
+        if (this._isLoopbackAddress(remoteAddress)) return true;
         const auth = headers['proxy-authorization'] || '';
         if (!auth) return false;
         const match = auth.match(/^Basic\s+(.+)$/i);
@@ -2237,6 +2721,12 @@ class ExternalProxyPort {
         socket.end();
     }
 
+    /** MITM not running (restart window) — answer instead of throwing on a null parent (A-106). */
+    _rejectUnavailable(socket) {
+        socket.write('HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+        socket.end();
+    }
+
     _logRequest(entry) {
         this._reqCount++;
         if (this.onRequestLogged) {
@@ -2254,7 +2744,8 @@ class ExternalProxyPort {
     _handleConnect(socket, head) {
         const req = parseHttpRequest(head);
         if (!req) { socket.destroy(); return; }
-        if (!this._checkAuth(req.headers)) { this._rejectAuth(socket); return; }
+        if (!this._checkAuth(req.headers, socket.remoteAddress)) { this._rejectAuth(socket); return; }
+        if (!this.parent) { this._rejectUnavailable(socket); return; }
 
         const line     = head.split('\r\n')[0];
         const hostport = line.split(' ')[1] || '';
@@ -2276,19 +2767,8 @@ class ExternalProxyPort {
             tlsSocket.once('secure', () => clearTimeout(hsTimer));
             socket.resume();
 
-            const pipeline = [];
-            let writing = false;
-
-            const flushPipeline = () => {
-                if (writing) return;
-                writing = true;
-                while (pipeline.length > 0 && pipeline[0].done) {
-                    const entry = pipeline.shift();
-                    if (tlsSocket.writable) { try { tlsSocket.write(entry.data); } catch {} }
-                }
-                writing = false;
-                if (pipeline.length > 0 && pipeline[0].done) flushPipeline();
-            };
+            // In-order responses; streams eligible bodies when CUPNET_MITM_STREAM is on.
+            const pipe = createResponsePipeline(tlsSocket);
 
             const dispatchRequest = (r) => {
                 const url = `https://${hostname}${port !== 443 ? ':' + port : ''}${r.path}`;
@@ -2301,30 +2781,33 @@ class ExternalProxyPort {
                     return kl !== 'proxy-authorization' && !(hasBody && SKIP_WHEN_BODY.includes(kl));
                 });
 
-                const entry = { done: false, data: null };
-                pipeline.push(entry);
+                const entry = pipe.newEntry();
                 const t0 = Date.now();
-                this.parent._doRequest({ method: r.method, url, headers, orderedHeaders, body: r.body, bodyBase64: r.bodyBase64, disableRedirects: !this.followRedirects, tabId })
+                const log = (res, resOut, logBody) => {
+                    const dnsCorsMatch = !res.dnsOverride ? this.parent._mitmCorsMatchDetail(url) : null;
+                    this._logRequest({
+                        url, method: r.method, status: resOut.statusCode,
+                        requestHeaders: headers, responseHeaders: resOut.headers,
+                        requestBody: _reqBodyForLog(r), responseBody: logBody,
+                        duration: Date.now() - t0,
+                        type: inferMitmResourceType(url, r.method, headers, resOut.headers),
+                        dnsOverride: res.dnsOverride || null,
+                        dnsCorsMatch,
+                    });
+                };
+                this.parent._doRequest({ method: r.method, url, headers, orderedHeaders, body: r.body, bodyBase64: r.bodyBase64, disableRedirects: !this.followRedirects, tabId, allowStream: true })
                     .then(res => {
                         const resOut = applyMitmCorsToResponse(this.parent._mitmCorsEnabledForUrl(url), url, headers, r.method, res);
-                        entry.data = buildHttpResponse(resOut, url);
-                        let logBody = null;
-                        if (resOut.bodyBase64) {
-                            const ct = _headerVal(resOut.headers, 'content-type');
-                            if (_isBinaryContentType(ct)) logBody = '__b64__:' + resOut.bodyBase64;
-                            else { try { logBody = Buffer.from(resOut.bodyBase64, 'base64').toString('utf8'); } catch {} }
+                        if (res.stream) {
+                            pipeStreamIntoEntry(pipe, entry, tlsSocket, {
+                                res, resOut, method: r.method, url, tag: ctagExt,
+                                wantLogBody: !!this.onRequestLogged,
+                                onComplete: (logBody) => log(res, resOut, logBody),
+                            });
+                            return;
                         }
-                        const reqBody = _reqBodyForLog(r);
-                        const dnsCorsMatch = !res.dnsOverride ? this.parent._mitmCorsMatchDetail(url) : null;
-                        this._logRequest({
-                            url, method: r.method, status: resOut.statusCode,
-                            requestHeaders: headers, responseHeaders: resOut.headers,
-                            requestBody: reqBody, responseBody: logBody,
-                            duration: Date.now() - t0,
-                            type: inferMitmResourceType(url, r.method, headers, resOut.headers),
-                            dnsOverride: res.dnsOverride || null,
-                            dnsCorsMatch,
-                        });
+                        pipe.finish(entry, buildHttpResponse(resOut, url));
+                        log(res, resOut, _logBodyFromResponse(resOut));
                     })
                     .catch((e) => {
                         dbg(`[mitm] ✗ ${url} ${e.message}${ctagExt}\n`);
@@ -2332,9 +2815,8 @@ class ExternalProxyPort {
                             req: r, tabId, dnsOverride: e.mitmDnsOverride || null,
                         });
                         const resOut = applyMitmCorsToResponse(this.parent._mitmCorsEnabledForUrl(url), url, headers, r.method, errRes);
-                        entry.data = buildHttpResponse(resOut, url);
-                    })
-                    .finally(() => { entry.done = true; flushPipeline(); });
+                        pipe.finish(entry, buildHttpResponse(resOut, url));
+                    });
             };
 
             const MAX_INBUF = 10 * 1024 * 1024;
@@ -2374,14 +2856,15 @@ class ExternalProxyPort {
                 else chunksLen = 0;
             });
             tlsSocket.on('error', () => { clearTimeout(hsTimer); try { tlsSocket.destroy(); } catch {} });
-            tlsSocket.on('close', () => { chunks.length = 0; chunksLen = 0; pipeline.length = 0; });
+            tlsSocket.on('close', () => { chunks.length = 0; chunksLen = 0; pipe.reset(); });
         }).catch(() => { clearTimeout(hsTimer); socket.destroy(); });
     }
 
     _handleHttp(socket, head) {
         const req = parseHttpRequest(head);
         if (!req) { socket.destroy(); return; }
-        if (!this._checkAuth(req.headers)) { this._rejectAuth(socket); return; }
+        if (!this._checkAuth(req.headers, socket.remoteAddress)) { this._rejectAuth(socket); return; }
+        if (!this.parent) { this._rejectUnavailable(socket); return; }
 
         const tabId = null;
         const hostHeader = (req.headers['host'] || req.headers['Host'] || '');
@@ -2396,27 +2879,35 @@ class ExternalProxyPort {
 
         const ctagExtHttp = _clientTag(socket);
         const t0 = Date.now();
-        this.parent._doRequest({ method: req.method, url, headers, orderedHeaders, body: req.body, bodyBase64: req.bodyBase64, disableRedirects: !this.followRedirects, tabId })
+        // One request per plain-HTTP proxy connection: end the socket once the response is written.
+        const pipe = createResponsePipeline(socket, { endWhenDone: true });
+        const entry = pipe.newEntry();
+        socket.on('close', () => pipe.reset());
+        const log = (res, resOut, logBody) => {
+            const dnsCorsMatch = !res.dnsOverride ? this.parent._mitmCorsMatchDetail(url) : null;
+            this._logRequest({
+                url, method: req.method, status: resOut.statusCode,
+                requestHeaders: headers, responseHeaders: resOut.headers,
+                requestBody: _reqBodyForLog(req), responseBody: logBody,
+                duration: Date.now() - t0,
+                type: inferMitmResourceType(url, req.method, headers, resOut.headers),
+                dnsOverride: res.dnsOverride || null,
+                dnsCorsMatch,
+            });
+        };
+        this.parent._doRequest({ method: req.method, url, headers, orderedHeaders, body: req.body, bodyBase64: req.bodyBase64, disableRedirects: !this.followRedirects, tabId, allowStream: true })
             .then(res => {
                 const resOut = applyMitmCorsToResponse(this.parent._mitmCorsEnabledForUrl(url), url, headers, req.method, res);
-                socket.write(buildHttpResponse(resOut, url));
-                socket.end();
-                let logBody = null;
-                if (resOut.bodyBase64) {
-                    const ct = _headerVal(resOut.headers, 'content-type');
-                    if (_isBinaryContentType(ct)) logBody = '__b64__:' + resOut.bodyBase64;
-                    else { try { logBody = Buffer.from(resOut.bodyBase64, 'base64').toString('utf8'); } catch {} }
+                if (res.stream) {
+                    pipeStreamIntoEntry(pipe, entry, socket, {
+                        res, resOut, method: req.method, url, tag: ctagExtHttp,
+                        wantLogBody: !!this.onRequestLogged,
+                        onComplete: (logBody) => log(res, resOut, logBody),
+                    });
+                    return;
                 }
-                const dnsCorsMatch = !res.dnsOverride ? this.parent._mitmCorsMatchDetail(url) : null;
-                this._logRequest({
-                    url, method: req.method, status: resOut.statusCode,
-                    requestHeaders: headers, responseHeaders: resOut.headers,
-                    requestBody: _reqBodyForLog(req), responseBody: logBody,
-                    duration: Date.now() - t0,
-                    type: inferMitmResourceType(url, req.method, headers, resOut.headers),
-                    dnsOverride: res.dnsOverride || null,
-                    dnsCorsMatch,
-                });
+                pipe.finish(entry, buildHttpResponse(resOut, url));
+                log(res, resOut, _logBodyFromResponse(resOut));
             })
             .catch((e) => {
                 dbg(`[mitm] ✗ ${url} ${e.message}${ctagExtHttp}\n`);
@@ -2424,8 +2915,7 @@ class ExternalProxyPort {
                     req, tabId: null, dnsOverride: e.mitmDnsOverride || null,
                 });
                 const resOut = applyMitmCorsToResponse(this.parent._mitmCorsEnabledForUrl(url), url, headers, req.method, errRes);
-                socket.write(buildHttpResponse(resOut, url));
-                socket.end();
+                pipe.finish(entry, buildHttpResponse(resOut, url));
             });
     }
 }
@@ -2451,6 +2941,12 @@ module.exports = {
     _shouldAutoRetryHttp1,
     _responseSuggestsHttp1Retry,
     IDENTITY_CHECK_HOST,
+    /** @internal streaming (CUPNET_MITM_STREAM) — tests/unit/mitm-stream.test.mjs */
+    _testWorkerFrameDecoder: WorkerFrameDecoder,
+    _testWorkerBodyStream: WorkerBodyStream,
+    _testBuildHttpResponseHead: buildHttpResponseHead,
+    _testLogBodyFromResponse: _logBodyFromResponse,
+    _testLogBodyMaxBytes: LOG_BODY_MAX_BYTES,
 };
 
 if (require.main === module) {

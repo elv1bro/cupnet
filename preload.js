@@ -2,6 +2,17 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+try {
+    if (process.platform === 'darwin') {
+        const markDarwin = () => {
+            try { document.documentElement.classList.add('platform-darwin'); } catch { /* ignore */ }
+        };
+        if (typeof document !== 'undefined' && document.readyState !== 'loading') markDarwin();
+        else window.addEventListener('DOMContentLoaded', markDarwin);
+    }
+} catch { /* ignore */ }
+
+
 let _requestEditorCmCache = null;
 function getRequestEditorCodeMirrorModules() {
     if (_requestEditorCmCache) return _requestEditorCmCache;

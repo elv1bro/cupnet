@@ -1,5 +1,8 @@
 'use strict';
 
+const path = require('path');
+const { pathToFileURL } = require('url');
+
 /** @type {Set<number>} Trusted BrowserWindow webContents ids (shell + tool windows). */
 const _trustedShellIds = new Set();
 
@@ -60,6 +63,66 @@ function guardIpcListener(channel, handler) {
     };
 }
 
+
+/** file: URL of the app directory (no trailing slash). Internal pages live under it. */
+function appFileRoot() {
+    return pathToFileURL(path.join(__dirname, '..', '..')).href.replace(/\/+$/, '');
+}
+
+function senderUrl(event) {
+    try {
+        const frameUrl = event?.senderFrame?.url;
+        if (frameUrl) return String(frameUrl);
+    } catch { /* ignore */ }
+    try {
+        return String(event?.sender?.getURL?.() || '');
+    } catch {
+        return '';
+    }
+}
+
+/**
+ * CupNet file: page under the app directory (new-tab, settings, error page).
+ * about:blank and https pages are not internal, even when they share a tab WebContentsView.
+ */
+function isInternalFileSender(event) {
+    const url = senderUrl(event);
+    if (!url.startsWith('file:')) return false;
+    const root = appFileRoot();
+    return url === root || url.startsWith(root + '/');
+}
+
+function assertTrustedOrInternal(event, channel) {
+    if (isTrustedShell(event) || isInternalFileSender(event)) return true;
+    const err = new Error(`IPC channel "${channel}" is restricted to trusted application windows`);
+    err.code = 'IPC_UNTRUSTED_SENDER';
+    throw err;
+}
+
+/**
+ * Trusted shell OR an internal file: page (new-tab widget). Web content is rejected.
+ * @param {string} channel
+ * @param {(event: Electron.IpcMainInvokeEvent, ...args: any[]) => any} handler
+ */
+function guardIpcHandlerAllowInternal(channel, handler) {
+    return async (event, ...args) => {
+        assertTrustedOrInternal(event, channel);
+        return handler(event, ...args);
+    };
+}
+
+/** ipcMain.on variant: untrusted senders are ignored. */
+function guardIpcListenerAllowInternal(channel, handler) {
+    return (event, ...args) => {
+        try {
+            assertTrustedOrInternal(event, channel);
+        } catch {
+            return;
+        }
+        return handler(event, ...args);
+    };
+}
+
 function _resetForTests() {
     _trustedShellIds.clear();
     _tabViewIds.clear();
@@ -69,8 +132,12 @@ module.exports = {
     registerTrustedShell,
     registerTabView,
     isTrustedShell,
+    isInternalFileSender,
     assertTrustedShell,
+    assertTrustedOrInternal,
     guardIpcHandler,
     guardIpcListener,
+    guardIpcHandlerAllowInternal,
+    guardIpcListenerAllowInternal,
     _resetForTests,
 };

@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * E2E: Proxy Manager window — Simple (one card) vs Advanced (full editor) modes, inline provider
+ * E2E: Proxy Manager window — content-driven editor (guided provider card vs full form), inline provider
  * credentials, Direct entry and the static list import (identity lives only in Browser ID). No external network
  * needed (profiles are only saved, never connected).
  */
@@ -35,7 +35,7 @@ test.beforeAll(async () => {
     // window.confirm() (discard unsaved changes) is a native dialog: accept it, Playwright dismisses by default.
     pm.on('dialog', (d) => d.accept().catch(() => {}));
     await pm.waitForLoadState('domcontentloaded');
-    await pm.locator('#editor-mode-seg').waitFor({ timeout: 15_000 });
+    await pm.locator('#btn-simple-new').waitFor({ timeout: 15_000 });
 });
 
 test.afterAll(async () => {
@@ -45,11 +45,10 @@ test.afterAll(async () => {
     if (electronApp) await electronApp.close();
 });
 
-test('pm1) Simple mode is a separate one-card editor: provider chips, no tabs / templates / MITM stats', async () => {
-    await expect(pm.locator('body')).toHaveAttribute('data-editor-mode', 'simple');
-    await expect(pm.locator('#mitm-stats')).toBeHidden();
-    await expect(pm.locator('.sidebar-filters-row')).toBeHidden();
+test('pm1) New profile opens the guided provider card (no global Simple/Advanced toggle)', async () => {
+    await expect(pm.locator('#editor-mode-seg')).toHaveCount(0); // the confusing global toggle is gone
     await pm.click('#btn-simple-new');
+    await expect(pm.locator('body')).toHaveAttribute('data-editor-mode', 'simple');
     await expect(pm.locator('#simple-editor')).toBeVisible();
     await expect(pm.locator('#editor-wrap')).toBeHidden();
     await expect(pm.locator('#tab-btn-identity')).toHaveCount(0); // identity lives only in Browser ID
@@ -59,6 +58,8 @@ test('pm1) Simple mode is a separate one-card editor: provider chips, no tabs / 
     expect(chips).toContain('decodo');
     expect(chips.length).toBeGreaterThanOrEqual(4);
     await expect(pm.locator('#se-save-connect')).toBeVisible();
+    // the escape hatch to the full form is present in the card
+    await expect(pm.locator('#se-advanced-new')).toBeVisible();
     await expect(pm.locator('#simple-identity-text')).toHaveCount(0); // no identity control in the proxy manager
 });
 
@@ -108,33 +109,28 @@ test('pm4) a new Simple profile for the same provider pre-fills the last used cr
     await expect(pm.locator('#simple-editor')).toBeHidden();
 });
 
-test('pm5) Advanced mode persists and shows the full editor; the proxy manager has NO identity tab (identity is Browser ID only)', async () => {
-    await pm.click('#editor-mode-advanced');
+test('pm5) the in-card entry opens the full form; the proxy manager has NO identity tab (identity is Browser ID only)', async () => {
+    // "Open advanced editor" in the card reaches the full form for a new manual profile.
+    await pm.click('#btn-simple-new');
+    await pm.click('#se-advanced-new');
     await expect(pm.locator('body')).toHaveAttribute('data-editor-mode', 'advanced');
-    const pref = await mainWindow.evaluate(() => window.electronAPI.getUiPref('proxyManager.editorMode', 'simple'));
-    expect(pref).toBe('advanced');
-    await pm.click(`.profile-item:has-text("NodeMaven")`);
     await expect(pm.locator('#editor-wrap')).toBeVisible();
     await expect(pm.locator('#simple-editor')).toBeHidden();
-    await expect(pm.locator('#f-provider-pass')).toHaveValue(PASS, { timeout: 10_000 }); // profile fully loaded
     // identity moved out of the proxy manager entirely
     await expect(pm.locator('#tab-btn-identity')).toHaveCount(0);
     await expect(pm.locator('#f-identity-override')).toHaveCount(0);
     await expect(pm.locator('#fp-section')).toHaveCount(0);
+    // profile-manager chrome is always available (not gated by any mode)
     await expect(pm.locator('#mitm-stats')).toBeVisible();
+    await expect(pm.locator('#btn-bulk-import')).toBeVisible();
     const values = await pm.locator('#f-provider option').evaluateAll((opts) => opts.map((o) => o.value));
     expect(values).toContain('__custom__');
-    // Direct in Advanced
+    // Direct entry
     await pm.click('.profile-item-direct');
-    await expect(pm.locator('#editor-title')).toHaveText('MITM (no upstream)');
-    await expect(pm.locator('body')).toHaveAttribute('data-direct', '1');
-    await expect(pm.locator('#tab-btn-identity')).toHaveCount(0);
-    // Direct in Simple: a plain card with "Use Direct"
-    await pm.click('#editor-mode-simple');
     await expect(pm.locator('#se-card-direct')).toBeVisible();
-    await expect(pm.locator('#se-card-profile')).toBeHidden();
+    await expect(pm.locator('#tab-btn-identity')).toHaveCount(0);
+    await expect(pm.locator('#se-card-direct')).toBeVisible();
     await expect(pm.locator('#se-use-direct')).toBeVisible();
-    await pm.click('#editor-mode-advanced');
 });
 
 test('pm6) Advanced: static list import creates one profile per line', async () => {
@@ -160,12 +156,14 @@ test('pm6) Advanced: static list import creates one profile per line', async () 
     expect(bUrl).toBe('http://u2:p2@10.0.0.2:8081');
 });
 
-test('pm7) a manual profile opened in Simple mode switches the editor to Advanced', async () => {
-    await pm.click('#editor-mode-simple');
-    await expect(pm.locator('body')).toHaveAttribute('data-editor-mode', 'simple');
+test('pm7) a manual profile opens directly in the full form (chosen by the profile, no toggle)', async () => {
     await pm.click('.profile-item:has-text("E2E DC 01")');
     await expect(pm.locator('body')).toHaveAttribute('data-editor-mode', 'advanced');
     await expect(pm.locator('#editor-wrap')).toBeVisible();
     await expect(pm.locator('#manual-panel')).toHaveClass(/active/);
     await expect(pm.locator('#f-template')).toHaveValue(/10\.0\.0\.1:8080/);
+    // opening a provider profile afterwards returns to the guided card automatically
+    await pm.click('.profile-item:has-text("NodeMaven")');
+    await expect(pm.locator('body')).toHaveAttribute('data-editor-mode', 'simple');
+    await expect(pm.locator('#simple-editor')).toBeVisible();
 });

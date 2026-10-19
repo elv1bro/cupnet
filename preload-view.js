@@ -54,7 +54,30 @@ ipcRenderer.on('paste-unlock-update', (_, payload) => {
     } catch { /* ignore */ }
 });
 
+// Expose the internal bridge ONLY to CupNet's own pages (new-tab.html, error-page.html,
+// settings.html, …), never to untrusted web content. On an external site `window.electronAPI`
+// would be (1) a unique, always-present "this is CupNet, not Chrome" fingerprint that anti-bot
+// challenges enumerate, and (2) a privileged-IPC surface (setTabProxy, connectProxyTemplate,
+// createCookieGroup, clearCookies, ext-proxy control, …) reachable from the page. Real Chrome
+// exposes no such global. CupNet's internal pages are loaded from the app directory with
+// loadFile(); tab-manager passes that directory as `--cupnet-internal-root=<file URL>`. Only a
+// file: page under it gets the bridge — not about:blank (a site can window.open('about:blank') and
+// script the same-origin popup) and not arbitrary local files. (A-009 / A-004; CLAUDE.md: keep this
+// preload minimal for untrusted sites.)
+function isInternalCupnetPage() {
+    try {
+        if (location.protocol !== 'file:') return false;
+        const arg = (process.argv || []).find((a) => typeof a === 'string' && a.startsWith('--cupnet-internal-root='));
+        if (!arg) return false;
+        const root = arg.slice('--cupnet-internal-root='.length).replace(/\/+$/, '');
+        return !!root && location.href.startsWith(root + '/');
+    } catch {
+        return false;
+    }
+}
+
 // Preload for tab WebContentsView pages (including new-tab.html)
+if (isInternalCupnetPage()) {
 contextBridge.exposeInMainWorld('electronAPI', {
     // Mouse activity tracking
     reportMouseActivity: () => ipcRenderer.send('report-mouse-activity'),
@@ -125,6 +148,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // External Proxy — status widget on new-tab.html
     extProxyList:      ()        => ipcRenderer.invoke('ext-proxy:list'),
     extProxyStart:     (port)    => ipcRenderer.invoke('ext-proxy:start', port),
+    extProxyOpenBrowser: (port, url) => ipcRenderer.invoke('ext-proxy:open-browser', port, url),
     extProxyStop:      (port)    => ipcRenderer.invoke('ext-proxy:stop', port),
     extProxySetPort:   (oldPort, newPort) => ipcRenderer.invoke('ext-proxy:set-port', oldPort, newPort),
     extProxySetRedirects: (port, follow) => ipcRenderer.invoke('ext-proxy:set-redirects', port, follow),
@@ -142,6 +166,7 @@ contextBridge.exposeInMainWorld('cupnetStorageActivity', {
         } catch (_) { /* ignore */ }
     },
 });
+} // end isInternalCupnetPage() bridge guard
 
 let _lastPointerReportTs = 0;
 let _lastPointerPayload = { xNorm: 0.5, yNorm: 0.5, ts: Date.now(), button: 0 };

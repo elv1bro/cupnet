@@ -255,10 +255,13 @@ function safeParseObj(str) {
 
 function objToHarHeaders(obj) {
     if (!obj || typeof obj !== 'object') return [];
-    return Object.entries(obj).map(([name, value]) => ({
-        name,
-        value: Array.isArray(value) ? value.join(', ') : String(value)
-    }));
+    const out = [];
+    for (const [name, value] of Object.entries(obj)) {
+        // One HAR entry per value: repeated headers (notably Set-Cookie) must not be comma-joined.
+        if (Array.isArray(value)) for (const v of value) out.push({ name, value: String(v) });
+        else out.push({ name, value: String(value) });
+    }
+    return out;
 }
 
 function parseQueryString(url) {

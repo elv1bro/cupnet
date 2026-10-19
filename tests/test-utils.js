@@ -49,8 +49,10 @@ test('resolveNavigationUrl: single word without dot → search', () => {
     assert.ok(url.startsWith(SEARCH_ENGINE));
 });
 
-test('resolveNavigationUrl: IP address → prepend https', () => {
-    assert.equal(resolveNavigationUrl('192.168.1.1'), 'https://192.168.1.1');
+test('resolveNavigationUrl: private IP → http (like Chrome), public IP → https', () => {
+    // omnibox-input.hostPrefersHttp: LAN/router addresses are plain HTTP in practice.
+    assert.equal(resolveNavigationUrl('192.168.1.1'), 'http://192.168.1.1');
+    assert.equal(resolveNavigationUrl('8.8.8.8'), 'https://8.8.8.8');
 });
 
 // ─── parseProxyTemplate ───────────────────────────────────────────────────────

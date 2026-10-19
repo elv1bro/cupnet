@@ -3,7 +3,8 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
-const { WebContentsView, session } = require('electron');
+const { WebContentsView, session, dialog, BrowserWindow } = require('electron');
+const { createPermissionPolicy, createDialogPrompt } = require('./main-process/services/permission-policy.js');
 const { registerTabView } = require('./main-process/ipc/ipc-trusted-sender.js');
 const path = require('path');
 const { attachWindowSwitcherHotkeyToTabWebContents } = require('./main-process/services/window-switcher-hotkey.js');
@@ -21,6 +22,7 @@ const {
     notePendingGetNavigation,
 } = require('./main-process/services/tab-error-page.js');
 const { getPasteUnlockScript } = require('./main-process/services/paste-unlock.js');
+const { getStorageActivityScript } = require('./main-process/services/storage-activity.js');
 const db = require('./db');
 const { networkPolicy } = require('./network-policy');
 const { resolveNavigationUrlWithBase } = require('./utils');
@@ -173,6 +175,9 @@ let _pasteUnlockEnabled = true;
 /** Script injected into every page when paste-unlock is active. */
 const PASTE_UNLOCK_SCRIPT = getPasteUnlockScript();
 
+/** Storage-activity monitor: patches Storage.prototype to report writes with stack traces. */
+const STORAGE_ACTIVITY_SCRIPT = getStorageActivityScript();
+
 function setPasteUnlock(enabled) {
     _pasteUnlockEnabled = !!enabled;
     reinjectPasteUnlockAllTabs();
@@ -195,7 +200,16 @@ function buildTabViewWebPreferences(tabSession) {
         session: tabSession,
         webSecurity: true,
     };
-    if (_STEALTH < 6) prefs.preload = path.join(__dirname, 'preload-view.js');
+    if (_STEALTH < 6) {
+        prefs.preload = path.join(__dirname, 'preload-view.js');
+        // preload-view exposes its privileged bridge only to file: pages under this directory (A-009).
+        prefs.additionalArguments = [`--cupnet-internal-root=${pathToFileURL(__dirname).href}`];
+        // Run the (sandboxed, Node-less) preload in child frames too, so same-origin and script-created
+        // iframes get the same identity patch as the top document — in real Chrome window.chrome.loadTimes
+        // exists in every frame, and a patched top + empty iframe is a tell. nodeIntegration stays false;
+        // the privileged bridge is still exposed only to CupNet's own file: pages (isInternalCupnetPage).
+        prefs.nodeIntegrationInSubFrames = true;
+    }
     return prefs;
 }
 
@@ -278,7 +292,7 @@ function setExtraRightOffset(px) {
     resizeActiveView();
 }
 
-const TOOLBAR_HEIGHT = 95;
+const TOOLBAR_HEIGHT = 83; // tab bar 35 + toolbar 48
 /** Reserved height at bottom of main window for HTML status bar (see browser.html). */
 const STATUS_BAR_HEIGHT = 26;
 
@@ -564,39 +578,18 @@ function setMitmTabUpstreamCleanup(fn) {
     _mitmTabUpstreamCleanup = typeof fn === 'function' ? fn : null;
 }
 
-function _wantsVideoInMediaPermission(details) {
-    try {
-        return details && Array.isArray(details.mediaTypes) && details.mediaTypes.includes('video');
-    } catch {
-        return false;
-    }
-}
+// Chrome-like permission policy for tab sessions (A-188): nothing sensitive is granted without the
+// user's consent; see main-process/services/permission-policy.js.
+const _permissionPolicy = createPermissionPolicy({ prompt: createDialogPrompt({ dialog, BrowserWindow }) });
 
 /**
- * Stealth: only session permission handlers — no page Media API patches.
- * cameraMode "none" denies video like a normal Chrome block; "all" / "custom" → default Chromium.
+ * Install the tab-session permission policy. cameraMode "none" additionally blocks video like a normal
+ * Chrome block; "all" / "custom" leave camera access to the user's prompt decision.
  */
 function installMediaPermissionHandlers(sess, cameraMode) {
     if (!sess) return;
     try {
-        if (cameraMode === 'none') {
-            sess.setPermissionRequestHandler((webContents, permission, callback, details) => {
-                if (permission === 'media' && _wantsVideoInMediaPermission(details)) {
-                    callback(false);
-                    return;
-                }
-                callback(true);
-            });
-            sess.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
-                if (permission === 'media' && _wantsVideoInMediaPermission(details)) {
-                    return false;
-                }
-                return true;
-            });
-        } else {
-            sess.setPermissionRequestHandler(null);
-            sess.setPermissionCheckHandler(null);
-        }
+        _permissionPolicy.install(sess, { denyVideo: cameraMode === 'none' });
     } catch { /* ignore */ }
 }
 
@@ -1420,6 +1413,13 @@ function setTrafficOpts(opts) {
     }
 }
 
+function permissionDecisionsFor(tabId, origin) {
+    const tab = tabId ? tabs.get(tabId) : null;
+    const sess = tab?.tabSession;
+    if (!sess || typeof _permissionPolicy.snapshot !== 'function') return {};
+    try { return _permissionPolicy.snapshot(sess, origin) || {}; } catch { return {}; }
+}
+
 module.exports = {
     init, createTab, isolateTab, switchTab, closeTab, navigate, ensureActiveTabViewVisible,
     getTabList, getActiveTabId, getTab, getActiveTab, getAllTabs, getTabIdByWebContentsId,
@@ -1432,6 +1432,7 @@ module.exports = {
     setPasteUnlock, getPasteUnlock,
     injectStorageActivityMonitor,
     setTrafficOpts,
+    permissionDecisionsFor,
     applyWebRtcPolicy, resetWebRtcPolicy,
     // New per-tab controls
     setTabProxy, setTabCookieGroup,

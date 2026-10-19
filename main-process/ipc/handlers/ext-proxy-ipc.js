@@ -1,5 +1,9 @@
 'use strict';
 
+const { app } = require('electron');
+const { launchExternalChrome } = require('../../services/external-browser-launcher.js');
+const { guardIpcHandlerAllowInternal } = require('../ipc-trusted-sender.js');
+
 /**
  * Внешние прокси-порты.
  * @param {object} ctx
@@ -9,6 +13,8 @@ function registerExtProxyIpc(ctx) {
 
     async function startExtPort(config) {
         if (ctx.activeExtPorts.has(config.port)) return ctx.activeExtPorts.get(config.port);
+        // Ports route through the MITM; without one they could only fail every request (A-106).
+        if (!ctx.mitmProxy) throw new Error('MITM proxy is not running');
         const sess = await ctx.db.createExternalSessionAsync(`ext:${config.port}`, `ext_${config.port}`, config.port);
         const instance = new ctx.ExternalProxyPort(ctx.mitmProxy, {
             port: config.port,
@@ -103,9 +109,9 @@ function registerExtProxyIpc(ctx) {
         return list;
     }
 
-    ctx.ipcMain.handle('ext-proxy:list', () => getExtPortsList());
+    ctx.ipcMain.handle('ext-proxy:list', guardIpcHandlerAllowInternal('ext-proxy:list', () => getExtPortsList()));
 
-    ctx.ipcMain.handle('ext-proxy:create', async (_, opts) => {
+    ctx.ipcMain.handle('ext-proxy:create', guardIpcHandlerAllowInternal('ext-proxy:create', async (_, opts) => {
         try {
             const port = parseInt(opts.port, 10);
             if (!port || port < 1024 || port > 65535) return { success: false, error: 'Port must be 1024-65535' };
@@ -123,9 +129,9 @@ function registerExtProxyIpc(ctx) {
             await startExtPort(entry);
             return { success: true, port, password: entry.password };
         } catch (e) { return { success: false, error: e.message }; }
-    });
+    }));
 
-    ctx.ipcMain.handle('ext-proxy:start', async (_, port) => {
+    ctx.ipcMain.handle('ext-proxy:start', guardIpcHandlerAllowInternal('ext-proxy:start', async (_, port) => {
         try {
             const config = ctx.extPortsStore.loadExtPortsConfig();
             const entry = config.ports.find(p => p.port === port);
@@ -134,16 +140,16 @@ function registerExtProxyIpc(ctx) {
             await startExtPort(entry);
             return { success: true };
         } catch (e) { return { success: false, error: e.message }; }
-    });
+    }));
 
-    ctx.ipcMain.handle('ext-proxy:stop', async (_, port) => {
+    ctx.ipcMain.handle('ext-proxy:stop', guardIpcHandlerAllowInternal('ext-proxy:stop', async (_, port) => {
         try {
             await stopExtPort(port);
             return { success: true };
         } catch (e) { return { success: false, error: e.message }; }
-    });
+    }));
 
-    ctx.ipcMain.handle('ext-proxy:delete', async (_, port) => {
+    ctx.ipcMain.handle('ext-proxy:delete', guardIpcHandlerAllowInternal('ext-proxy:delete', async (_, port) => {
         try {
             await stopExtPort(port);
             const config = ctx.extPortsStore.loadExtPortsConfig();
@@ -151,9 +157,9 @@ function registerExtProxyIpc(ctx) {
             ctx.extPortsStore.saveExtPortsConfig(config);
             return { success: true };
         } catch (e) { return { success: false, error: e.message }; }
-    });
+    }));
 
-    ctx.ipcMain.handle('ext-proxy:reset-session', async (_, port) => {
+    ctx.ipcMain.handle('ext-proxy:reset-session', guardIpcHandlerAllowInternal('ext-proxy:reset-session', async (_, port) => {
         try {
             const entry = ctx.activeExtPorts.get(port);
             if (!entry) return { success: false, error: 'Port not active' };
@@ -165,11 +171,38 @@ function registerExtProxyIpc(ctx) {
             ctx.sysLog('info', 'ext-proxy', `Reset session for port ${port} → new session #${sess.id}`);
             return { success: true, sessionId: sess.id };
         } catch (e) { return { success: false, error: e.message }; }
-    });
+    }));
 
-    ctx.ipcMain.handle('ext-proxy:get-local-ip', () => ctx.getLocalIp());
+    ctx.ipcMain.handle('ext-proxy:get-local-ip', guardIpcHandlerAllowInternal('ext-proxy:get-local-ip', () => ctx.getLocalIp()));
 
-    ctx.ipcMain.handle('ext-proxy:set-port', async (_, oldPort, newPort) => {
+    // Launch the user's real Chrome routed through this External Proxy port, on a persistent profile.
+    // For sites CupNet can't render like Chrome (e.g. anti-bot challenges): the traffic still flows
+    // through the MITM (captured/logged, same TLS profile). Does NOT move cookies between browsers.
+    ctx.ipcMain.handle('ext-proxy:open-browser', guardIpcHandlerAllowInternal('ext-proxy:open-browser', async (_, port, url) => {
+        try {
+            const p = parseInt(port, 10);
+            const config = ctx.extPortsStore.loadExtPortsConfig();
+            const entry = config.ports.find((x) => x.port === p);
+            if (!entry) return { success: false, error: 'Port not found' };
+            if (!ctx.activeExtPorts.has(p)) await startExtPort(entry); // ensure it is listening
+            const res = launchExternalChrome({
+                port: p,
+                url: typeof url === 'string' ? url : undefined,
+                userDataRoot: app.getPath('userData'),
+            });
+            if (res.success) {
+                ctx.sysLog('info', 'ext-proxy', `Launched external Chrome via port ${p} (pid ${res.pid})`);
+                // Chrome cannot take proxy credentials on the command line and the port needs Basic auth,
+                // so the browser will show a proxy sign-in once. Return the creds so the UI can help the
+                // user (persistent profile remembers them afterwards).
+                return { ...res, login: entry.login, password: entry.password, port: p, authPrompt: true };
+            }
+            ctx.sysLog('warn', 'ext-proxy', `Open-browser failed for port ${p}: ${res.error}`);
+            return res;
+        } catch (e) { return { success: false, error: e.message }; }
+    }));
+
+    ctx.ipcMain.handle('ext-proxy:set-port', guardIpcHandlerAllowInternal('ext-proxy:set-port', async (_, oldPort, newPort) => {
         try {
             const port = parseInt(newPort, 10);
             if (!port || port < 1024 || port > 65535) return { success: false, error: 'Port must be 1024-65535' };
@@ -182,9 +215,9 @@ function registerExtProxyIpc(ctx) {
             ctx.extPortsStore.saveExtPortsConfig(config);
             return { success: true };
         } catch (e) { return { success: false, error: e.message }; }
-    });
+    }));
 
-    ctx.ipcMain.handle('ext-proxy:set-redirects', async (_, port, follow) => {
+    ctx.ipcMain.handle('ext-proxy:set-redirects', guardIpcHandlerAllowInternal('ext-proxy:set-redirects', async (_, port, follow) => {
         try {
             const config = ctx.extPortsStore.loadExtPortsConfig();
             const entry = config.ports.find(p => p.port === port);
@@ -195,7 +228,7 @@ function registerExtProxyIpc(ctx) {
             if (active?.instance) active.instance.followRedirects = !!follow;
             return { success: true };
         } catch (e) { return { success: false, error: e.message }; }
-    });
+    }));
 }
 
 module.exports = { registerExtProxyIpc };

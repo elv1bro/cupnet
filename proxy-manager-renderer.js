@@ -108,51 +108,24 @@ const fIdentityOverride = document.getElementById('f-identity-override');
 const btnOpenIdentity   = document.getElementById('btn-open-identity');
 const simpleIdentityLine = document.getElementById('simple-identity-line');
 const simpleIdentityText = document.getElementById('simple-identity-text');
-const editorModeSeg      = document.getElementById('editor-mode-seg');
 const providerCredsFields = document.getElementById('provider-creds-fields');
 
 // ─── Editor mode: simple | advanced ──────────────────────────────────────────
 let editorMode = pmModel.DEFAULT_EDITOR_MODE || 'simple';
-function applyEditorMode(mode, { persist = true } = {}) {
-    const next = pmModel.normalizeEditorMode ? pmModel.normalizeEditorMode(mode) : (mode === 'advanced' ? 'advanced' : 'simple');
-    const wasOpen = isEditorPanelVisible();
-    if (next !== editorMode && wasOpen && editorDirty && !confirmDiscardIfDirty()) {
-        editorModeSeg?.querySelectorAll('[data-editor-mode]').forEach((b) => b.classList.toggle('active', b.dataset.editorMode === editorMode));
-        return;
-    }
-    const changed = next !== editorMode;
-    editorMode = next;
+// The editor has no global Simple/Advanced toggle. Which editor shows is decided by WHAT you edit:
+// a provider profile → the guided provider card (simple); a manual / static / option-rich profile →
+// the full form (advanced). openEditor picks the mode from the profile; "Open advanced editor" in the
+// provider card reaches the full form for a new manual profile. setEditorMode only flips the body
+// class + the provider <select>; it never re-opens the current selection.
+function setEditorMode(mode) {
+    editorMode = pmModel.normalizeEditorMode ? pmModel.normalizeEditorMode(mode) : (mode === 'advanced' ? 'advanced' : 'simple');
     document.body.dataset.editorMode = editorMode;
-    editorModeSeg?.querySelectorAll('[data-editor-mode]').forEach((b) => b.classList.toggle('active', b.dataset.editorMode === editorMode));
-    if (editorMode === 'simple') {
-        // Simple mode is provider-only; manual profiles switch the editor to Advanced (see openEditor).
-        if (connectionMode === 'manual' && (selectedId == null || isNew)) setConnectionMode('provider');
-        document.getElementById('tab-btn-connection')?.click();
-    }
     if (typeof populateProfileProviderSelect === 'function' && fProvider) {
         populateProfileProviderSelect(fProvider);
         updateProviderCredsFieldsVisibility();
     }
-    if (persist && api.setUiPref) api.setUiPref(pmModel.EDITOR_MODE_PREF_KEY || 'proxyManager.editorMode', editorMode).catch(() => {});
-    // Re-open the current selection in the editor that belongs to the new mode.
-    if (changed && wasOpen) {
-        setEditorDirty(false);
-        if (selectedId === DIRECT_ID) openDirectEditor();
-        else if (selectedId != null) openEditor(selectedId);
-        else openNewEditor();
-    }
 }
-editorModeSeg?.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-editor-mode]');
-    if (b) applyEditorMode(b.dataset.editorMode);
-});
-// Default synchronously (so the layout is right on first paint), then the persisted preference.
 document.body.dataset.editorMode = editorMode;
-if (api.getUiPref) {
-    api.getUiPref(pmModel.EDITOR_MODE_PREF_KEY || 'proxyManager.editorMode', editorMode)
-        .then((m) => applyEditorMode(m, { persist: false }))
-        .catch(() => applyEditorMode(editorMode, { persist: false }));
-}
 
 /** Inline provider credentials are shown whenever a plain provider (not a saved account / custom URL) is selected. */
 function updateProviderCredsFieldsVisibility() {
@@ -1344,9 +1317,9 @@ function tryOpenEditor(id) {
     openEditor(id);
 }
 
-function tryOpenNewEditor() {
-    if (isNew && isEditorPanelVisible()) return;
-    ensureSavedBeforeAction('New Profile', () => openNewEditor());
+function tryOpenNewEditor(opts = {}) {
+    if (isNew && isEditorPanelVisible() && !opts.advanced) return;
+    ensureSavedBeforeAction('New Profile', () => openNewEditor(opts));
 }
 
 // ─── Direct profile editor ────────────────────────────────────────────────────
@@ -1355,7 +1328,10 @@ function openDirectEditor() {
     isNew         = false;
     ephemeralVars = {};
     lastResolvedVars = {};
-    if (editorMode === 'simple') { seOpenDirect(); return; }
+    setEditorMode('simple');
+    seOpenDirect();
+    return;
+    // (advanced Direct view retired — Direct has no upstream URL to edit)
     seHide();
 
     // Direct = MITM without upstream. Identity is global (Browser Identity window), nothing to edit here.
@@ -1405,15 +1381,10 @@ function openEditor(id) {
     const profile = profiles.find(p => p.id === id);
     if (!profile) return;
 
-    // Manual / option-rich / identity-override profiles cannot be edited in Simple mode.
-    if (editorMode === 'simple') {
-        if (pmModel.editorModeForProfile && pmModel.editorModeForProfile(profile, 'simple', pp) === 'simple') {
-            seOpenProfile(profile);
-            return;
-        }
-        applyEditorMode('advanced');
-        showToast('Switched to Advanced: this profile uses features not shown in Simple mode');
-    }
+    // The profile decides the editor: provider profiles use the guided card, everything else the full form.
+    const naturalMode = pmModel.editorModeForProfile ? pmModel.editorModeForProfile(profile, 'simple', pp) : 'advanced';
+    setEditorMode(naturalMode);
+    if (naturalMode === 'simple') { seOpenProfile(profile); return; }
     seHide();
 
     // Restore proxy URL row if was hidden by Direct editor
@@ -1459,12 +1430,13 @@ function openEditor(id) {
     renderProfileList();
 }
 
-function openNewEditor() {
+function openNewEditor({ advanced = false } = {}) {
     selectedId = null;
     isNew      = true;
     ephemeralVars = {};
     lastResolvedVars = {};
-    if (editorMode === 'simple') { seOpenNew(); return; }
+    setEditorMode(advanced ? 'advanced' : 'simple');
+    if (!advanced) { seOpenNew(); return; }
     seHide();
 
     const fTemplateRow = document.getElementById('f-template-row');
@@ -2011,6 +1983,9 @@ statusPillBtn?.addEventListener('click', () => runCheckIp());
 
 btnEmptyNew?.addEventListener('click', () => tryOpenNewEditor());
 document.getElementById('btn-simple-new')?.addEventListener('click', () => tryOpenNewEditor());
+// "Open advanced editor" switches a NEW profile straight to the full form. No save prompt: the
+// provider card was never saved, and the intent (open the full editor) is explicit.
+document.getElementById('se-advanced-new')?.addEventListener('click', () => openNewEditor({ advanced: true }));
 
 // ─── Search ───────────────────────────────────────────────────────────────────
 searchInput.addEventListener('input', () => { searchQuery = searchInput.value; renderProfileList(); });
