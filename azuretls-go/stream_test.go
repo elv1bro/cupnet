@@ -282,7 +282,7 @@ func TestLongStreamReleasesPoolSlot(t *testing.T) {
 	started := time.Now()
 	got := make(chan error, 1)
 	go func() {
-		s, key, err := borrowSession(nil, nil, nil, nil, func() (*azuretls.Session, error) {
+		s, key, err := borrowSessionFor(nil, nil, nil, nil, srv.URL+"/other", func() (*azuretls.Session, error) {
 			return createPooledSession(nil, nil, nil)
 		})
 		if err == nil {

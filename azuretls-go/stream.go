@@ -283,7 +283,7 @@ func handleHTTPStream(in *incomingLine) {
 		return createPooledSession(in.Browser, in.Proxy, in.Ja3)
 	}
 
-	sess, pkey, err := borrowSession(in.Browser, in.Proxy, in.Ja3, in.TabID, factory)
+	sess, pkey, err := borrowSessionFor(in.Browser, in.Proxy, in.Ja3, in.TabID, in.URL, factory)
 	if err != nil {
 		sendLine(outgoingLine{ID: id, Headers: map[string]any{}, Error: err.Error()})
 		return

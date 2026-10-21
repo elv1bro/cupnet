@@ -257,7 +257,7 @@ func handleHTTPRequest(in *incomingLine) outgoingLine {
 		return createPooledSession(in.Browser, in.Proxy, in.Ja3)
 	}
 
-	sess, pkey, err := borrowSession(in.Browser, in.Proxy, in.Ja3, in.TabID, factory)
+	sess, pkey, err := borrowSessionFor(in.Browser, in.Proxy, in.Ja3, in.TabID, in.URL, factory)
 	if err != nil {
 		e := err.Error()
 		return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]any{}, Error: e}

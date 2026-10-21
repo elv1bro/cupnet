@@ -23,7 +23,7 @@ Requires **Go 1.24+** (toolchain auto-download is fine: `GOTOOLCHAIN=auto`). Out
 | Variable | Effect |
 |----------|--------|
 | `CUPNET_TLS_CHROME_UPSTREAM_PRESET=1` | Kill switch: the `chrome` profile uses the azuretls-client Chrome preset instead of CupNet's own Chrome 153 ClientHello (see below) |
-| `CUPNET_WORKER_FFI_CONCURRENCY`, `CUPNET_WORKER_CLIENT_CACHE_MAX`, `CUPNET_TIMEOUT_UPSTREAM_REQUEST_MS` | Pool / timeout limits (shared names with `network-policy.js`) |
+| `CUPNET_WORKER_FFI_CONCURRENCY`, `CUPNET_WORKER_CLIENT_CACHE_MAX`, `CUPNET_TIMEOUT_UPSTREAM_REQUEST_MS` | Pool / timeout limits (shared names with `network-policy.js`). Pools are per browser+proxy+ja3+tab+origin: the concurrency budget (default 12) is per origin, the cache max (default 512) caps idle pools |
 | `CUPNET_WORKER_NO_WATCHDOG=1` | Do not exit when the parent process dies (tests) |
 
 The Go worker is the only upstream TLS backend since 2026-09-24 (the Node/FFI worker was removed).

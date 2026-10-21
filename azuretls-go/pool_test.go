@@ -40,6 +40,45 @@ func TestPoolKey(t *testing.T) {
 	}
 }
 
+func TestPoolKeyForOrigin(t *testing.T) {
+	b := "chrome"
+	base := poolKey(&b, nil, nil, nil)
+	if got := poolKeyFor(&b, nil, nil, nil, "https://CDN.Example.com:8443/a.js?x=1"); got != base+"::o:https://cdn.example.com:8443" {
+		t.Fatalf("got %q", got)
+	}
+	if got := poolKeyFor(&b, nil, nil, nil, "not a url"); got != base {
+		t.Fatalf("unparseable URL should use the base key, got %q", got)
+	}
+}
+
+// A full pool for one origin (slow third-party host) must not block requests to another origin.
+func TestBorrowLimitIsPerOrigin(t *testing.T) {
+	closeAllPoolClients()
+	t.Setenv("CUPNET_WORKER_FFI_CONCURRENCY", "1")
+	b := "chrome"
+	s1, k1, err := borrowSessionFor(&b, nil, nil, nil, "https://slow.example/sync", testFactory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan string, 1)
+	go func() {
+		s, k, err := borrowSessionFor(&b, nil, nil, nil, "https://site.example/app.css", testFactory())
+		if err == nil {
+			releaseSession(k, s)
+		}
+		done <- k
+	}()
+	select {
+	case k2 := <-done:
+		if k2 == k1 {
+			t.Fatal("different origins share a pool")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("borrow for another origin blocked behind a full pool")
+	}
+	releaseSession(k1, s1)
+}
+
 func TestWorkerFfiConcurrencyEnv(t *testing.T) {
 	t.Setenv("CUPNET_WORKER_FFI_CONCURRENCY", "7")
 	if got := workerFfiConcurrency(); got != 7 {

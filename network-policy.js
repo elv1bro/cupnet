@@ -43,7 +43,7 @@ const networkPolicy = {
         workerMaxPending: envInt('CUPNET_WORKER_MAX_PENDING', 1000),
         workerMaxInflight: envInt('CUPNET_WORKER_MAX_INFLIGHT', 200),
         workerStdinQueueMax: envInt('CUPNET_WORKER_STDIN_QUEUE_MAX', 2000),
-        workerClientCacheMax: envInt('CUPNET_WORKER_CLIENT_CACHE_MAX', 20),
+        workerClientCacheMax: envInt('CUPNET_WORKER_CLIENT_CACHE_MAX', 512),
         /** Параллельных FFI-запросов на пару (browser, proxy) в azure-tls-worker. 1 = старый режим «всё по очереди». */
         workerFfiConcurrency: envInt('CUPNET_WORKER_FFI_CONCURRENCY', 4, 1, 32),
     },

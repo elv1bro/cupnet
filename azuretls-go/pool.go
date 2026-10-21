@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -47,16 +48,19 @@ func envInt(name string, def int, min, max int) int {
 	return n
 }
 
-// Max concurrent upstream requests per pool (browser::proxy::ja3::tab). Chrome fans out dozens of asset
-// requests in parallel; the old default of 4 throttled a whole page to 4 in-flight fetches at a time.
-// Raised to 12 after measuring ~2x faster page loads (bbc.com/news loadEvent 11.3s→5.5s). Override with
-// CUPNET_WORKER_FFI_CONCURRENCY.
+// Max concurrent upstream requests per pool (browser::proxy::ja3::tab::origin). Chrome fans out dozens of
+// asset requests in parallel; the old default of 4 throttled a whole page to 4 in-flight fetches at a time.
+// Raised to 12 after measuring ~2x faster page loads (bbc.com/news loadEvent 11.3s→5.5s). The budget is
+// per origin (like Chrome's per-host connection limit), so slow third-party hosts cannot starve the page's
+// own requests. Override with CUPNET_WORKER_FFI_CONCURRENCY.
 func workerFfiConcurrency() int {
 	return envInt("CUPNET_WORKER_FFI_CONCURRENCY", 12, 1, 32)
 }
 
+// Max pools kept (one per browser/proxy/ja3/tab/origin). A news page alone touches 100+ origins, so this
+// is a ceiling on idle pools, not on concurrency; idle pools are also dropped after idleTTL.
 func workerClientCacheMax() int {
-	return envInt("CUPNET_WORKER_CLIENT_CACHE_MAX", 20, 1, 256)
+	return envInt("CUPNET_WORKER_CLIENT_CACHE_MAX", 512, 1, 4096)
 }
 
 func poolJa3Segment(ja3 *string) string {
@@ -84,6 +88,23 @@ func poolKey(browser, proxy, ja3 *string, tabID *string) string {
 		tabSeg = "tab:" + strings.TrimSpace(*tabID)
 	}
 	return fmt.Sprintf("%s::%s::%s::%s", prof, px, poolJa3Segment(ja3), tabSeg)
+}
+
+// poolOrigin is the scheme://host[:port] a request goes to ("" when the URL does not parse).
+func poolOrigin(rawURL string) string {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+}
+
+func poolKeyFor(browser, proxy, ja3 *string, tabID *string, rawURL string) string {
+	key := poolKey(browser, proxy, ja3, tabID)
+	if o := poolOrigin(rawURL); o != "" {
+		key += "::o:" + o
+	}
+	return key
 }
 
 func touchPoolKey(key string) {
@@ -152,7 +173,12 @@ func evictIdleClients() {
 }
 
 func borrowSession(browser, proxy, ja3 *string, tabID *string, factory func() (*azuretls.Session, error)) (*azuretls.Session, string, error) {
-	key := poolKey(browser, proxy, ja3, tabID)
+	return borrowSessionFor(browser, proxy, ja3, tabID, "", factory)
+}
+
+// borrowSessionFor borrows from the pool of the request's origin (see workerFfiConcurrency).
+func borrowSessionFor(browser, proxy, ja3 *string, tabID *string, rawURL string, factory func() (*azuretls.Session, error)) (*azuretls.Session, string, error) {
+	key := poolKeyFor(browser, proxy, ja3, tabID, rawURL)
 	max := workerFfiConcurrency()
 	touchPoolKey(key)
 	evictPoolsIfNeeded()
