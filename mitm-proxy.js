@@ -938,6 +938,10 @@ class MitmProxy {
         this._egressBlockReason = '';
         this.onRequestLogged = opts.onRequestLogged || null;
         this.onGatewayError = opts.onGatewayError || null;
+        // Optional embedder hooks (CupNet mini cookie manager): edit the outgoing request after identity
+        // rewriting, and the response head before Chrome sees it. Both may mutate their arguments.
+        this.onBeforeUpstream = opts.onBeforeUpstream || null;
+        this.onResponseHead = opts.onResponseHead || null;
         /**
          * Present the CupNet CA after the leaf in the TLS chain. Lets an external Chrome trust the MITM
          * via --ignore-certificate-errors-spki-list=<CA SPKI> (matched against any cert in the chain)
@@ -1659,6 +1663,7 @@ class MitmProxy {
             if (!up.headers) up.headers = {};
             const requestedHints = tabUpstream.identity?.clientHints ? this._clientHintsCache.requestedFor(up.url) : [];
             applyIdentityToOutboundHeaders(up.headers, up.orderedHeaders, tabUpstream.identity, { url: up.url, requestedHints });
+            this._hookBeforeUpstream(up);
             const noBodyUp = /^(GET|HEAD)$/i.test(up.method || '');
             const retryCountUp = /^(GET|HEAD|OPTIONS)$/i.test(up.method || '')
                 ? networkPolicy.retry.maxRetries
@@ -1752,6 +1757,7 @@ class MitmProxy {
                 if (plan.postProcess) {
                     out = await finalizeMitmInterceptResponseAsync(out, plan.postProcess);
                 }
+                out = this._hookResponseHead(up, out);
                 const delayMs = Number(plan.responseDelayMs) || Number(plan.postProcess || {}._responseDelayMs) || 0;
                 if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
                 return out;
@@ -1787,6 +1793,7 @@ class MitmProxy {
                 if (plan.postProcess) {
                     out = await finalizeMitmInterceptResponseAsync(out, plan.postProcess);
                 }
+                out = this._hookResponseHead(up, out);
                 const delayMs = Number(plan.responseDelayMs) || Number(plan.postProcess || {}._responseDelayMs) || 0;
                 if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
                 return out;
@@ -1969,12 +1976,28 @@ class MitmProxy {
         return;
     }
 
+    _hookBeforeUpstream(up) {
+        if (!this.onBeforeUpstream) return;
+        try { this.onBeforeUpstream(up); } catch (e) {
+            safeCatch({ module: 'mitm-proxy', eventCode: 'mitm.hook.beforeUpstream.failed', context: { url: up.url } }, e, 'warn');
+        }
+    }
+
+    _hookResponseHead(up, out) {
+        if (!this.onResponseHead) return out;
+        try { return this.onResponseHead(up, out) || out; } catch (e) {
+            safeCatch({ module: 'mitm-proxy', eventCode: 'mitm.hook.responseHead.failed', context: { url: up.url } }, e, 'warn');
+            return out;
+        }
+    }
+
     _continueWsTunnelAfterPlan(ctx) {
         const { plan, mitmOpts, url, headers, req, clientTls, tabId, hsTimer, orderedHeaders, clientRemainder } = ctx;
         const up = plan.opts;
         if (!up.headers) up.headers = {};
         const tabUpstream = this._resolveUpstreamForTab(tabId);
         applyIdentityToOutboundHeaders(up.headers, up.orderedHeaders, tabUpstream.identity, { url: up.url });
+        this._hookBeforeUpstream(up);
         const wire = _buildWireHttpRequest(up);
         const t0 = Date.now();
         const requestId = `mitm_ws_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

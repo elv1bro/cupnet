@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="/ui.css">
 <script src="/lib/codegen.js" defer></script>
 <script src="/lib/curl.js" defer></script>
+<script src="/lib/diff.js" defer></script>
 <script src="/ui.js" defer></script>
 </head>
 <body>
@@ -16,6 +17,8 @@
     <button data-page="traffic" class="on"><svg viewBox="0 0 16 16"><path d="M2 3h12M2 8h12M2 13h8"/></svg><span>Traffic</span></button>
     <button data-page="proxies"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/></svg><span>Proxies</span></button>
     <button data-page="ipwatch"><svg viewBox="0 0 16 16"><path d="M1.5 9h3l2-5 3 9 2-4h3"/></svg><span>IP monitor</span><i class="count accent" id="ipCount" hidden></i></button>
+    <button data-page="compare"><svg viewBox="0 0 16 16"><path d="M2 3h5v10H2zM9 3h5v10H9z"/><path d="M4 6h1M4 9h1M11 7h1M11 10h1"/></svg><span>Compare</span></button>
+    <button data-page="cookies"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><circle cx="6" cy="6.5" r=".6"/><circle cx="10" cy="7" r=".6"/><circle cx="7" cy="10.5" r=".6"/></svg><span>Cookies</span><i class="count accent" id="ckCount" hidden title="Cookie changes waiting for the next page load"></i></button>
     <button data-page="repeater"><svg viewBox="0 0 16 16"><path d="M3 6h9l-3-3M13 10H4l3 3"/></svg><span>Repeater</span></button>
     <button data-page="rules"><svg viewBox="0 0 16 16"><path d="M3 3h10v3H3zM3 10h6v3H3z"/></svg><span>Rules</span></button>
     <button data-page="paused"><svg viewBox="0 0 16 16"><path d="M5 3v10M11 3v10"/></svg><span>Breakpoints</span><i class="count" id="pausedCount" hidden></i></button>
@@ -55,6 +58,7 @@
         <label class="chk" title="Hide CORS preflight requests"><input type="checkbox" id="hideOptions" checked> no OPTIONS</label>
         <label class="chk" title="Keep the newest row in view"><input type="checkbox" id="follow" checked> follow</label>
         <span class="spacer"></span>
+        <span class="pin-chip" id="pinChip" hidden></span>
         <span class="muted mono" id="count"></span>
         <button class="btn" id="harBtn" title="Export the filtered rows as HAR 1.2">HAR</button>
       </div>
@@ -74,6 +78,8 @@
               <button class="btn sm" id="aResend" title="Send again through AzureTLS now">Resend</button>
               <button class="btn sm" id="aMock" title="Create a mock rule that serves this response">Mock from response</button>
               <button class="btn sm" id="aBreak" title="Create a rule that pauses this URL">Break on URL</button>
+              <button class="btn sm" id="aPin" title="Keep this request as side A of a comparison">Pin as A</button>
+              <button class="btn sm" id="aCompare" title="Compare with the pinned request, or with the previous request to the same URL (Cmd/Ctrl-click a row to compare it with the selected one)">Compare</button>
             </div>
             <div class="tabs" id="dtabs">
               <button data-d="headers" class="on">Headers</button>
@@ -170,6 +176,52 @@
         <div class="empty" id="ipwEmpty" hidden>No IP history yet — the first check runs a few seconds after start.</div>
       </div>
       <p class="muted ipw-foot">Each check is one small HTTPS request through the current connection on a fresh tunnel (HTTP/1.1, <code>Connection: close</code>), so a rotating proxy shows its rotation. Location is looked up once per new IP through the same connection. History is kept in <code>ip-history.jsonl</code> in the data folder; changes are also written to the session log (kind <code>ip</code>).</p>
+    </section>
+
+    <!-- ── Compare ── -->
+    <section id="page-compare" class="page" hidden>
+      <div class="toolbar">
+        <span class="muted">A</span><input id="cmpA" type="number" min="1" class="w-num" title="Request # of side A">
+        <button class="icon" id="cmpSwap" title="Swap A and B">⇄</button>
+        <span class="muted">B</span><input id="cmpB" type="number" min="1" class="w-num" title="Request # of side B">
+        <button class="btn sm" id="cmpLoad" title="Compare these two requests of the session shown in Traffic">Compare</button>
+        <span class="spacer"></span>
+        <span id="cmpOpts"></span>
+      </div>
+      <div id="cmpBody" class="cmp-body">
+        <div class="empty">Pick two requests: <b>Pin as A</b> on one and <b>Compare</b> on another in Traffic, Cmd/Ctrl-click a second row, or type two request numbers above.</div>
+      </div>
+    </section>
+
+    <!-- ── Cookies ── -->
+    <section id="page-cookies" class="page" hidden>
+      <div class="split2">
+        <div class="list-pane ck-sites">
+          <div class="toolbar"><input id="ckSiteQ" type="search" placeholder="Filter sites…"></div>
+          <div id="ckSites" class="plist"></div>
+        </div>
+        <div class="ck-main">
+          <div class="toolbar">
+            <input id="ckQ" type="search" placeholder="Filter name or value…">
+            <select id="ckShow" title="Which cookies"><option value="live">Live</option><option value="all">All, with deleted</option><option value="deleted">Deleted</option><option value="inferred">Seen in requests only</option><option value="overridden">With wire rules</option></select>
+            <button class="btn primary sm" id="ckAdd" title="Write a new cookie into Chrome">+ Add cookie</button>
+            <button class="btn sm" id="ckRule" title="Pin, strip or block cookies on the wire">+ Wire rule</button>
+            <button class="btn sm" id="ckImport">Import</button>
+            <button class="btn sm" id="ckExport">Export</button>
+            <span class="spacer"></span>
+            <span class="muted" id="ckShown"></span>
+          </div>
+          <div class="toolbar sub" id="ckBulk" hidden></div>
+          <div class="ck-scroll" id="ckScroll">
+            <div id="ckCards"></div>
+            <table class="tbl ck-tbl">
+              <thead><tr><th class="w-28"><input type="checkbox" id="ckAll" title="Select all shown"></th><th class="w-180">Name</th><th>Value</th><th class="w-180">Domain · path</th><th class="w-130">Expires</th><th class="w-180">Flags</th><th class="w-90 r-al">Seen</th><th class="w-110"></th></tr></thead>
+              <tbody id="ckRows"></tbody>
+            </table>
+            <div class="empty" id="ckEmpty" hidden></div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- ── Repeater ── -->

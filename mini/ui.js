@@ -163,7 +163,7 @@ function confirmBox(text, okLabel = 'OK', danger = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Navigation
 // ─────────────────────────────────────────────────────────────────────────────
-const TITLES = { traffic: 'Traffic', proxies: 'Proxies', ipwatch: 'IP monitor', repeater: 'Repeater', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
+const TITLES = { traffic: 'Traffic', proxies: 'Proxies', ipwatch: 'IP monitor', compare: 'Compare', cookies: 'Cookies', repeater: 'Repeater', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
 let PAGE = 'traffic';
 function go(page) {
   if (!TITLES[page]) page = 'traffic';
@@ -171,7 +171,7 @@ function go(page) {
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.page === page));
   document.querySelectorAll('#pages > section').forEach((s) => { s.hidden = s.id !== `page-${page}`; });
   $('pageTitle').textContent = TITLES[page];
-  const load = { traffic: () => scheduleDraw(false), proxies: loadProxies, ipwatch: loadIpw, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode }[page];
+  const load = { traffic: () => scheduleDraw(false), proxies: loadProxies, ipwatch: loadIpw, compare: loadCompare, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode }[page];
   if (load) guard(load)();
 }
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.page)));
@@ -261,6 +261,7 @@ async function pollStatus() {
     } else if (key !== EG.key) { EG.key = key; EG.data = st.proxy?.egress || null; EG.at = EG.data ? Date.now() : 0; if (!EG.data) checkEgress(); }
     else if (Date.now() - EG.at > EGRESS_RECHECK_MS) checkEgress();
     onIpStatus(w || null);
+    onCookieStatus(st.cookies);
     renderEgress();
     if (PAGE === 'proxies') { P.status = st.proxy; renderConn(); }
   } catch (e) {
@@ -345,7 +346,12 @@ function rowNode(i) {
   let r = pool[i];
   if (!r) {
     r = h('div', { class: 'r cols' }, CELLS.map((c) => h('div', { class: c })));
-    r.addEventListener('click', () => select(Number(r.dataset.seq)));
+    r.addEventListener('click', (ev) => {
+      const seq = Number(r.dataset.seq);
+      // Cmd/Ctrl-click a second row: compare it with the selected one.
+      if ((ev.metaKey || ev.ctrlKey) && selSeq != null && selSeq !== seq) { const sid = shown || current; openCompare({ seq: selSeq, sid }, { seq, sid }); return; }
+      select(seq);
+    });
     pool[i] = r; spacer.append(r);
   }
   return r;
@@ -1555,7 +1561,7 @@ function renderRList() {
         h('div', { class: 'title' }, h('b', { title: r.name }, r.name), tag((RULE_TYPES.find((x) => x[0] === t) || [, t])[1], t === 'pause' ? 'warn' : 'accent'),
           r.breakpoint_enabled && t !== 'pause' ? tag('pause', 'warn') : null, r.method && r.method !== '*' ? tag(r.method) : null, r.group_name ? tag(r.group_name) : null),
         h('div', { class: 'meta' }, h('span', { class: 'mono', title: r.url_pattern }, r.url_pattern), r.last_error ? h('span', { class: 'err', title: r.last_error }, r.last_error) : null)),
-      h('div', { class: 'acts muted mono', title: r.last_hit_at ? `last hit ${new Date(r.last_hit_at).toLocaleString()}` : 'never matched' }, `${r.hit_count || 0} hits`)));
+      h('div', { class: 'acts muted mono', title: r.last_hit_at ? `last hit ${new Date(r.last_hit_at).toLocaleString()}` : 'never matched' }, `${r.hit_count || 0} hit${r.hit_count === 1 ? '' : 's'}`)));
   }
   if (!list.length) box.append(h('div', { class: 'empty' }, 'Nothing matches.'));
 }
@@ -1821,6 +1827,699 @@ $('sSave').addEventListener('click', guard(async () => {
   $('sPass').value = (S.data.tlsPassthrough || []).join('\n');
   toast('Settings saved — they apply to new connections', 'ok');
 }));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Compare two requests
+// ─────────────────────────────────────────────────────────────────────────────
+// A side is { seq, sid }: sid is the session id, so a pin survives switching sessions in Traffic.
+const CMP = { a: null, b: null, ea: null, eb: null, key: '', gen: 0, only: store.get('cmp-only', true), vol: store.get('cmp-vol', true), modes: {} };
+let PIN = null;
+const CMP_TEXT_MAX = 8 * 1048576;
+const sideLabel = (e) => `#${e.seq} ${e.method || ''} ${splitUrl(e.url)[1]}`;
+const sideKey = (s) => `${s.sid}:${s.seq}`;
+function renderPinChip() {
+  const c = clear($('pinChip'));
+  c.hidden = !PIN;
+  if (!PIN) return;
+  c.title = `Side A of the next comparison (session ${PIN.sid})`;
+  c.append(h('b', null, 'A'), h('span', { class: 'mono ell' }, PIN.label),
+    h('button', { class: 'icon', title: 'Unpin', onclick: () => { PIN = null; renderPinChip(); } }, '✕'));
+}
+function openCompare(a, b) {
+  CMP.a = a; CMP.b = b; CMP.modes = {};
+  go('compare');
+}
+function previousSame(e) {
+  const key = originPath(e.url);
+  for (let i = Math.min(bySeq.get(e.seq) ?? all.length, all.length) - 1; i >= 0; i--) {
+    const x = all[i];
+    if (x.kind === 'request' && x.seq < e.seq && x.method === e.method && originPath(x.url) === key) return x;
+  }
+  return null;
+}
+$('aPin').addEventListener('click', () => {
+  const e = dEntry; if (!e) return;
+  PIN = { seq: e.seq, sid: shown || current, label: sideLabel(e) };
+  renderPinChip();
+  toast(`#${e.seq} pinned as A — select another request and click Compare`, 'ok');
+});
+$('aCompare').addEventListener('click', () => {
+  const e = dEntry; if (!e) return;
+  const sid = shown || current;
+  if (PIN && !(PIN.seq === e.seq && PIN.sid === sid)) { openCompare({ seq: PIN.seq, sid: PIN.sid }, { seq: e.seq, sid }); return; }
+  const prev = previousSame(e);
+  if (!prev) { toast('Nothing to compare with: pin a request as A first, or Cmd/Ctrl-click a second row', 'warn'); return; }
+  openCompare({ seq: prev.seq, sid }, { seq: e.seq, sid });
+});
+$('cmpSwap').addEventListener('click', () => {
+  if (!CMP.a || !CMP.b) return;
+  [CMP.a, CMP.b, CMP.ea, CMP.eb] = [CMP.b, CMP.a, CMP.eb, CMP.ea];
+  CMP.key = CMP.ea && CMP.eb ? `${sideKey(CMP.a)}|${sideKey(CMP.b)}` : '';
+  CMP.modes = {};
+  guard(loadCompare)();
+});
+const cmpFromInputs = () => {
+  const a = Number($('cmpA').value), b = Number($('cmpB').value);
+  if (!(a > 0 && b > 0)) { toast('Type two request numbers', 'warn'); return; }
+  const sid = shown || current;
+  openCompare({ seq: a, sid }, { seq: b, sid });
+};
+$('cmpLoad').addEventListener('click', cmpFromInputs);
+for (const id of ['cmpA', 'cmpB']) $(id).addEventListener('keydown', (ev) => { if (ev.key === 'Enter') cmpFromInputs(); });
+
+function renderCmpOpts() {
+  clear($('cmpOpts')).append(
+    sw(CMP.only, 'Only differences', (v) => { CMP.only = v; store.set('cmp-only', v); renderCompare(); }, 'Hide identical rows and unchanged body lines'),
+    ' ',
+    sw(CMP.vol, 'Ignore volatile headers', (v) => { CMP.vol = v; store.set('cmp-vol', v); renderCompare(); }, 'Date, ETag, CF-Ray, request ids, Content-Length and other headers that change every time'));
+}
+async function loadCompare() {
+  renderCmpOpts();
+  $('cmpA').value = CMP.a?.seq ?? ''; $('cmpB').value = CMP.b?.seq ?? '';
+  if (!CMP.a || !CMP.b) return;
+  const key = `${sideKey(CMP.a)}|${sideKey(CMP.b)}`;
+  if (key === CMP.key && CMP.ea && CMP.eb) { renderCompare(); return; }
+  const my = ++CMP.gen;
+  clear($('cmpBody')).append(h('div', { class: 'empty' }, 'Loading…'));
+  const get = (s) => api(`/api/log/${s.seq}?session=${encodeURIComponent(s.sid)}`);
+  try {
+    const [ea, eb] = await Promise.all([get(CMP.a), get(CMP.b)]);
+    if (my !== CMP.gen) return;
+    if (ea.kind !== 'request' || eb.kind !== 'request') throw new Error('Only requests can be compared — one of these is an event');
+    CMP.ea = ea; CMP.eb = eb; CMP.key = key;
+    renderCompare();
+  } catch (err) {
+    if (my !== CMP.gen) return;
+    CMP.key = '';
+    clear($('cmpBody')).append(h('div', { class: 'note warn' }, err.message));
+  }
+}
+
+/** Common head and tail of two strings → nodes with the differing middle marked (long text is cut around it). */
+function inlineDiff(x, y, ctx = 160, midMax = 4000) {
+  x = String(x); y = String(y);
+  const n = Math.min(x.length, y.length);
+  let p = 0;
+  while (p < n && x[p] === y[p]) p++;
+  let s = 0;
+  while (s < n - p && x[x.length - 1 - s] === y[y.length - 1 - s]) s++;
+  const side = (t) => {
+    const from = Math.max(0, p - ctx), end = t.length - s, to = Math.min(t.length, end + ctx);
+    const mid = t.slice(p, end);
+    return [from > 0 ? h('span', { class: 'muted' }, `…${from.toLocaleString()} chars… `) : null, t.slice(from, p),
+      mid ? h('span', { class: 'ihl' }, mid.length > midMax ? `${mid.slice(0, midMax)}… [${(mid.length - midMax).toLocaleString()} more]` : mid) : null,
+      t.slice(end, to), to < t.length ? h('span', { class: 'muted' }, ` …${(t.length - to).toLocaleString()} chars…`) : null];
+  };
+  return [side(x), side(y)];
+}
+const cutText = (t, max = 4000) => (t.length > max ? [t.slice(0, max), h('span', { class: 'muted' }, ` … [${(t.length - max).toLocaleString()} more chars]`)] : t);
+const DMARK = { same: '', changed: '~', added: '+', removed: '−', info: '' };
+
+/** Name / A / B table of diffPairs-style rows ({name, a: string[]|null, b: string[]|null, state}). */
+function diffTable(rows, o = {}) {
+  const vis = CMP.only ? rows.filter((r) => r.state !== 'same' && r.state !== 'info') : rows;
+  const box = h('div');
+  const cell = (v, other, state) => {
+    if (v == null) return h('span', { class: 'muted' }, '—');
+    if (state === 'changed' && other && v.length === 1 && other.length === 1) return null;
+    return v.map((x) => h('div', { class: 'dv' }, x === '' ? h('span', { class: 'muted' }, '(empty)') : cutText(x)));
+  };
+  if (vis.length) {
+    box.append(h('table', { class: 'tbl dtbl' },
+      h('colgroup', null, h('col', { class: 'w-18' }), h('col', { class: o.wide ? 'w-300' : 'w-180' }), h('col'), h('col')),
+      h('thead', null, h('tr', null, h('th'), h('th', null, o.name || 'Name'), h('th', null, 'A'), h('th', null, 'B'))),
+      h('tbody', null, vis.map((r) => {
+        let ca = cell(r.a, r.b, r.state), cb = cell(r.b, r.a, r.state);
+        if (ca === null) { const [x, y] = inlineDiff(r.a[0], r.b[0]); ca = h('div', { class: 'dv' }, x); cb = h('div', { class: 'dv' }, y); }
+        return h('tr', { class: `d-${r.state}` }, h('td', { class: 'dm' }, DMARK[r.state] || ''), h('td', { class: 'mono dn', title: r.name }, r.name), h('td', { class: 'mono' }, ca), h('td', { class: 'mono' }, cb));
+      }))));
+  }
+  const hidden = rows.length - vis.length;
+  if (!rows.length) box.append(h('div', { class: 'muted pad' }, o.empty || 'None on either side'));
+  else if (!vis.length) box.append(h('div', { class: 'muted pad' }, `All ${rows.length} identical`));
+  else if (hidden) box.append(h('div', { class: 'muted pad' }, `${hidden} identical not shown`));
+  return box;
+}
+const toRows = (r) => r.rows;
+const cntTag = (n) => (n == null ? tag('…') : n ? tag(`${n} diff${n > 1 ? 's' : ''}`, 'warn') : tag('same', 'ok'));
+
+function renderCompare() {
+  const a = CMP.ea, b = CMP.eb, D = window.CupNetDiff;
+  if (!a || !b) return;
+  const root = clear($('cmpBody'));
+  if (!D) { root.append(h('div', { class: 'note warn' }, 'The diff library did not load (/lib/diff.js)')); return; }
+  const vol = (extra) => new Set([...(CMP.vol ? D.VOLATILE : []), ...extra]);
+
+  // ── both sides ──
+  const sideCard = (e, s, letter) => h('div', { class: 'cmp-side' },
+    h('div', { class: 'cmp-line' }, h('b', { class: `cmp-k k-${letter}` }, letter), badge(e.method, `m-${e.method}`), badge(String(e.status || 'ERR'), stCls(e.status)),
+      h('span', { class: 'muted mono' }, `#${e.seq}`), h('span', { class: 'muted' }, fmtTime(e.ts)), e.duration != null ? h('span', { class: 'muted' }, `${e.duration} ms`) : null,
+      s.sid !== (shown || current) ? tag(s.sid === current ? 'live session' : s.sid, 'accent') : null,
+      h('span', { class: 'spacer' }),
+      h('button', { class: 'btn sm', title: 'Show this request in Traffic', onclick: () => cmpShowInTraffic(s) }, 'Traffic'),
+      h('button', { class: 'btn sm', title: 'Open this request in Repeater', onclick: guard(async () => {
+        rpLoad({ method: e.method, url: e.url, headers: sendableHeaders(e.requestHeaders), body: isB64Body(e.requestBody) ? '' : await cmpBodyText(e, 'request', s.sid) });
+        go('repeater');
+      }) }, 'Repeater')),
+    h('div', { class: 'mono cmp-url', title: e.url }, e.url));
+  root.append(h('div', { class: 'cmp-sides' }, sideCard(a, CMP.a, 'A'), sideCard(b, CMP.b, 'B')));
+  const nav = h('div', { class: 'cmp-nav' });
+  root.append(nav);
+
+  const sections = [];
+  const section = (id, title, n, content, note = null) => {
+    const t = cntTag(n);
+    const el = h('div', { class: 'card cmp-sec', id: `cmp-${id}` }, h('div', { class: 'card-head' }, h('h2', null, title), t, note ? h('span', { class: 'muted' }, note) : null), content);
+    const chip = h('button', { class: `cmp-chip${n ? ' is-diff' : n === 0 ? ' is-same' : ''}`, onclick: () => el.scrollIntoView({ block: 'start', behavior: 'smooth' }) }, title, n ? h('i', null, n) : null);
+    nav.append(chip);
+    sections.push(el);
+    root.append(el);
+    let tagNode = t;
+    return (m) => {
+      const nt = cntTag(m); tagNode.replaceWith(nt); tagNode = nt;
+      chip.className = `cmp-chip${m ? ' is-diff' : m === 0 ? ' is-same' : ''}`;
+      append(clear(chip), [title, m ? h('i', null, m) : null]);
+    };
+  };
+
+  // Overview: sizes as sizes; duration and size only inform.
+  const ov = D.summaryRows(a, b).map((r) => {
+    const size = /body$/.test(r.name);
+    const row = { name: r.name, a: [size ? fmtSize(Number(r.a)) || '0 B' : r.a], b: [size ? fmtSize(Number(r.b)) || '0 B' : r.b], state: r.state };
+    if ((size || r.name === 'Duration') && r.state === 'changed') row.state = 'info';
+    return row;
+  });
+  if (a.error || b.error) ov.push({ name: 'Error', a: [String(a.error || '')], b: [String(b.error || '')], state: String(a.error || '') === String(b.error || '') ? 'same' : 'changed' });
+  section('overview', 'Overview', ov.filter((r) => r.state === 'changed').length, diffTable(ov, { name: 'Field' }));
+
+  const q = D.diffPairs(D.queryPairs(a.url), D.queryPairs(b.url), { caseless: false });
+  section('query', 'Query string', q.differences, diffTable(q.rows, { name: 'Parameter', empty: 'No query string on either side' }));
+
+  const rh = D.diffPairs(D.pairsOf(a.requestHeaders), D.pairsOf(b.requestHeaders), { ignore: vol(['cookie']) });
+  const ord = D.orderDiff(D.pairsOf(a.requestHeaders).map(([k]) => k), D.pairsOf(b.requestHeaders).map(([k]) => k));
+  const rhBox = h('div', null, diffTable(rh.rows, { empty: 'No request headers' }), orderView(ord));
+  section('reqh', 'Request headers', rh.differences + (ord.same ? 0 : 1), rhBox, 'Cookie is compared below');
+
+  const ck = D.diffPairs(D.cookiePairs(a.requestHeaders), D.cookiePairs(b.requestHeaders), { caseless: false });
+  section('cookies', 'Request cookies', ck.differences, diffTable(ck.rows, { name: 'Cookie', empty: 'No Cookie header on either side' }));
+
+  const setReqBody = section('reqb', 'Request body', null, bodyDiff(a, b, 'request', (n) => setReqBody(n)));
+
+  const sh = D.diffPairs(D.pairsOf(a.responseHeaders), D.pairsOf(b.responseHeaders), { ignore: vol(['set-cookie']) });
+  section('resh', 'Response headers', sh.differences, diffTable(sh.rows, { empty: 'No response headers' }), CMP.vol ? 'volatile headers ignored' : null);
+
+  const sc = D.diffPairs(D.setCookiePairs(a.responseHeaders), D.setCookiePairs(b.responseHeaders), { caseless: false });
+  section('setc', 'Set-Cookie', sc.differences, diffTable(sc.rows, { name: 'Cookie', empty: 'No Set-Cookie on either side' }));
+
+  const setResBody = section('resb', 'Response body', null, bodyDiff(a, b, 'response', (n) => setResBody(n)));
+}
+function cmpShowInTraffic(s) {
+  if (s.sid !== (shown || current)) openSession(s.sid);
+  go('traffic');
+  select(s.seq);
+}
+function orderView(o) {
+  if (o.same) return h('div', { class: 'muted pad' }, 'Header order: same for the headers both requests send');
+  const list = (names, other) => {
+    const inOther = new Set(other);
+    return h('ol', { class: 'ord mono' }, names.map((n) => h('li', { class: o.moved.has(n) ? 'moved' : inOther.has(n) ? '' : 'only' }, n)));
+  };
+  return h('details', { class: 'sect ord-wrap', open: true }, h('summary', null, 'Header order differs ', tag(`${o.moved.size} moved`, 'warn')),
+    h('p', { class: 'muted' }, 'Anti-bot systems fingerprint header order. Moved headers are marked; dimmed ones exist on one side only.'),
+    h('div', { class: 'ord-cols' }, h('div', null, h('b', null, 'A'), list(o.a, o.b)), h('div', null, h('b', null, 'B'), list(o.b, o.a))));
+}
+
+async function cmpBodyText(e, which, sid) {
+  const body = which === 'request' ? e.requestBody : e.responseBody;
+  if (body == null || body === '') return '';
+  if (!(which === 'request' ? e.requestBodyTruncated : e.responseBodyTruncated)) return String(body);
+  return (await apiBlob(`/api/log/${e.seq}/body/${which}?session=${encodeURIComponent(sid)}`)).blob.text();
+}
+async function cmpBodyHash(e, which, sid) {
+  const { blob } = await apiBlob(`/api/log/${e.seq}/body/${which}?session=${encodeURIComponent(sid)}`);
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
+  return [...d].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+function bodyDiff(a, b, which, setCount) {
+  const box = h('div', null, h('div', { class: 'muted pad' }, 'Loading bodies…'));
+  const sa = CMP.a.sid, sb = CMP.b.sid;
+  const size = (e) => (which === 'request' ? e.reqSize : e.resSize) || 0;
+  const ct = (e) => headerOf(which === 'request' ? e.requestHeaders : e.responseHeaders, 'content-type').toLowerCase();
+  const raw = (e) => (which === 'request' ? e.requestBody : e.responseBody);
+  const meta = h('div', { class: 'bodybar' },
+    h('b', { class: 'cmp-k k-A' }, 'A'), tag(ct(a).split(';')[0] || 'no content-type'), h('span', { class: 'muted' }, fmtSize(size(a)) || '0 B'),
+    h('b', { class: 'cmp-k k-B' }, 'B'), tag(ct(b).split(';')[0] || 'no content-type'), h('span', { class: 'muted' }, fmtSize(size(b)) || '0 B'));
+  const done = (n, ...nodes) => { clear(box).append(meta, ...nodes); setCount(n); };
+  (async () => {
+    await null; // let the caller keep the section's setter before the first count arrives
+    const ra = raw(a), rb = raw(b);
+    const emptyA = ra == null || ra === '', emptyB = rb == null || rb === '';
+    if (emptyA && emptyB) return done(0, h('div', { class: 'muted pad' }, 'No body on either side'));
+    if (isB64Body(ra) || isB64Body(rb)) {
+      if (emptyA || emptyB) return done(1, h('div', { class: 'note' }, `Only ${emptyA ? 'B' : 'A'} has a body (binary).`));
+      const [ha, hb] = await Promise.all([cmpBodyHash(a, which, sa), cmpBodyHash(b, which, sb)]);
+      return done(ha === hb ? 0 : 1, h('div', { class: `note ${ha === hb ? '' : 'warn'}` }, ha === hb ? 'Binary bodies are identical' : 'Binary bodies differ',
+        h('div', { class: 'mono muted' }, `A sha256 ${ha.slice(0, 16)}…  B sha256 ${hb.slice(0, 16)}…`)));
+    }
+    if (size(a) > CMP_TEXT_MAX || size(b) > CMP_TEXT_MAX) {
+      const [ha, hb] = await Promise.all([cmpBodyHash(a, which, sa), cmpBodyHash(b, which, sb)]);
+      return done(ha === hb ? 0 : 1, h('div', { class: 'note' }, `Too large to diff in the page (over ${fmtSize(CMP_TEXT_MAX)}). Bodies are ${ha === hb ? 'identical' : 'different'}.`));
+    }
+    const [ta, tb] = await Promise.all([cmpBodyText(a, which, sa), cmpBodyText(b, which, sb)]);
+    if (ta === tb) return done(0, h('div', { class: 'muted pad' }, `Identical (${fmtSize(ta.length) || '0 B'})`));
+    const D = window.CupNetDiff;
+    const ja = D.tryJson(ta), jb = D.tryJson(tb);
+    const isJson = ja !== undefined && jb !== undefined;
+    const isForm = /x-www-form-urlencoded/.test(ct(a)) && /x-www-form-urlencoded/.test(ct(b));
+    const modes = isJson ? [['struct', 'Structure'], ['lines', 'Lines']] : isForm ? [['fields', 'Fields'], ['lines', 'Lines']] : [];
+    const mk = `${which}`;
+    let mode = CMP.modes[mk] || (modes[0]?.[0] ?? 'lines');
+    const content = h('div');
+    const segBox = h('span');
+    const paint = () => {
+      clear(content);
+      if (mode === 'struct') {
+        const r = D.jsonDiff(ja, jb);
+        const rows = r.rows.map((x) => ({ name: x.path, a: x.a === undefined ? null : [x.a], b: x.b === undefined ? null : [x.b], state: x.kind === 'type' ? 'changed' : x.kind }));
+        content.append(diffTable(rows, { name: 'Path', wide: true, empty: 'Same JSON' }));
+        if (r.truncated) content.append(h('div', { class: 'note warn' }, `Showing the first ${rows.length.toLocaleString()} differences`));
+        return rows.length;
+      }
+      if (mode === 'fields') {
+        const r = D.diffPairs([...new URLSearchParams(ta)], [...new URLSearchParams(tb)], { caseless: false });
+        content.append(diffTable(r.rows, { name: 'Field' }));
+        return r.differences;
+      }
+      const pa = isJson ? JSON.stringify(ja, null, 2) : ta, pb = isJson ? JSON.stringify(jb, null, 2) : tb;
+      const r = D.lineDiff(pa, pb);
+      if (r.tooBig) {
+        content.append(h('div', { class: 'note' }, 'Too different to diff line by line.'));
+        return 1;
+      }
+      content.append(h('div', { class: 'muted pad' }, h('span', { class: 'ok' }, `+${r.added}`), ' ', h('span', { class: 'err' }, `−${r.removed}`), ' lines', isJson ? ' (pretty-printed JSON)' : ''),
+        lineDiffView(r.ops));
+      return r.added + r.removed;
+    };
+    const renderSeg = () => { clear(segBox); if (modes.length) segBox.append(seg(modes, mode, (v) => { mode = v; CMP.modes[mk] = v; renderSeg(); setCount(paint()); })); };
+    meta.append(h('span', { class: 'spacer' }), segBox);
+    renderSeg();
+    done(paint(), content);
+  })().catch((err) => done(null, h('div', { class: 'note warn' }, err.message)));
+  return box;
+}
+function lineDiffView(ops) {
+  const D = window.CupNetDiff;
+  const MAX = 6000;
+  const view = h('div', { class: 'ldiff mono' });
+  const line = (o, nodes) => h('div', { class: `ln ln-${o.t === '+' ? 'add' : o.t === '-' ? 'del' : 'eq'}` },
+    h('span', { class: 'g' }, o.a ?? ''), h('span', { class: 'g' }, o.b ?? ''), h('span', { class: 'gs' }, o.t === '=' ? '' : o.t === '-' ? '−' : '+'),
+    h('span', { class: 'tx' }, nodes || cutText(o.text, 2000)));
+  // A run of removed lines followed by added ones: pair them up and mark what changed inside each.
+  const run = (dels, adds) => {
+    const out = [];
+    const pair = Math.min(dels.length, adds.length);
+    const marks = [];
+    for (let i = 0; i < pair; i++) marks.push(dels[i].text.length + adds[i].text.length < 400000 ? inlineDiff(dels[i].text, adds[i].text) : null);
+    dels.forEach((o, i) => out.push(line(o, marks[i]?.[0])));
+    adds.forEach((o, i) => out.push(line(o, marks[i]?.[1])));
+    return out;
+  };
+  const emit = (list, into) => {
+    let dels = [], adds = [], n = 0;
+    const flush = () => { if (dels.length || adds.length) { into.append(...run(dels, adds)); dels = []; adds = []; } };
+    for (const o of list) {
+      if (++n > MAX) { flush(); into.append(h('div', { class: 'ln ln-skip' }, `… ${(list.length - MAX).toLocaleString()} more lines not shown`)); return; }
+      if (o.t === '-') { if (adds.length) flush(); dels.push(o); continue; }
+      if (o.t === '+') { adds.push(o); continue; }
+      flush();
+      if (o.t === 'skip') {
+        const sk = h('div', { class: 'ln ln-skip', title: 'Show these lines' }, `⋯ ${o.count.toLocaleString()} unchanged line${o.count > 1 ? 's' : ''}`);
+        sk.addEventListener('click', () => { const f = document.createDocumentFragment(); emit(ops.slice(o.from, o.from + o.count), f); sk.replaceWith(f); });
+        into.append(sk);
+      } else into.append(line(o));
+    }
+    flush();
+  };
+  emit(CMP.only ? D.hunks(ops, 3) : ops, view);
+  return view;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cookies
+// ─────────────────────────────────────────────────────────────────────────────
+// Everything goes over the MITM path: changes for Chrome are queued and ride on the next
+// first-party response from the site, wire rules rewrite cookies in flight.
+const CK = { data: null, rev: -1, epoch: '', site: store.get('ck-site', ''), checked: new Set(), loading: false, loadedAt: 0 };
+const CK_ROWS_MAX = 1500;
+const ckDomainMatch = (host, domain) => !!domain && (host === domain || host.endsWith(`.${domain}`));
+const ckSiteKey = (d) => d.split('.').reverse().join('.');
+const ckExpired = (c) => c.expires != null && c.expires < Date.now();
+const ckPendingFor = (c) => (CK.data?.ops || []).filter((o) => o.state === 'pending' && o.key === c.id);
+const ckRulesFor = (c) => (CK.data?.overrides || []).filter((o) => (o.name === '*' || o.name === c.name) && (o.domain === '*' || ckDomainMatch(c.domain, o.domain) || ckDomainMatch(o.domain, c.domain)));
+const ckOpenSite = guard(async (domain) => { await post('/api/chrome', { url: `https://${domain}/` }); toast(`Opening ${domain} in Chrome`, 'ok'); });
+const ckQueued = (domain, what = 'Queued') => toast(`${what} — lands in Chrome on the next page load from ${domain}`, 'ok', { action: { label: 'Open site', fn: () => ckOpenSite(domain) }, ms: 6000 });
+
+async function loadCookies() {
+  CK.loading = true;
+  try { applyCookies(await api('/api/cookies')); } finally { CK.loading = false; CK.loadedAt = Date.now(); }
+}
+function applyCookies(s) {
+  CK.data = s; CK.rev = s.rev; CK.epoch = s.epoch;
+  const ids = new Set(s.list.map((c) => c.id));
+  for (const id of CK.checked) if (!ids.has(id)) CK.checked.delete(id);
+  onCookieStatus(s);
+  if (PAGE === 'cookies') renderCookies();
+}
+function onCookieStatus(c) {
+  const b = $('ckCount');
+  b.hidden = !c?.pending; b.textContent = c?.pending || '';
+  b.title = c?.pending ? `${c.pending} cookie change(s) waiting for the next page load` : '';
+  // The jar changes with every logged request; refresh the open page at most every few seconds.
+  if (PAGE === 'cookies' && c && !CK.loading && (c.rev !== CK.rev || c.epoch !== CK.epoch) && Date.now() - CK.loadedAt > 3000 && $('modalWrap').hidden) guard(loadCookies)();
+}
+const ckCall = async (p, body, method = 'POST') => { const s = await api(p, { method, body }); applyCookies(s); return s; };
+
+function ckSites() {
+  const map = new Map();
+  for (const c of CK.data.list) {
+    let s = map.get(c.domain);
+    if (!s) map.set(c.domain, s = { domain: c.domain, live: 0, deleted: 0, lastSeen: 0, pending: 0 });
+    if (c.deleted) s.deleted++; else s.live++;
+    s.lastSeen = Math.max(s.lastSeen, c.lastSeen || 0);
+  }
+  for (const o of CK.data.ops) {
+    if (o.state !== 'pending') continue;
+    let s = map.get(o.domain);
+    if (!s) map.set(o.domain, s = { domain: o.domain, live: 0, deleted: 0, lastSeen: 0, pending: 0 });
+    s.pending++;
+  }
+  return [...map.values()].sort((a, b) => ckSiteKey(a.domain).localeCompare(ckSiteKey(b.domain)));
+}
+/** Cookies of the selected site: its own, plus domain cookies of parent domains that Chrome sends there too. */
+function ckVisible() {
+  const site = CK.site, show = $('ckShow').value, q = $('ckQ').value.trim().toLowerCase();
+  return CK.data.list.filter((c) => {
+    if (site && c.domain !== site && (c.hostOnly || !ckDomainMatch(site, c.domain))) return false;
+    if (show === 'live' && c.deleted) return false;
+    if (show === 'deleted' && !c.deleted) return false;
+    if (show === 'inferred' && !(c.inferred && !c.deleted)) return false;
+    if (show === 'overridden' && !ckRulesFor(c).length) return false;
+    return !q || c.name.toLowerCase().includes(q) || String(c.value).toLowerCase().includes(q);
+  });
+}
+
+function renderCookies() {
+  if (!CK.data) return;
+  renderCkSites();
+  renderCkCards();
+  renderCkRows();
+}
+function renderCkSites() {
+  const q = $('ckSiteQ').value.trim().toLowerCase();
+  const sites = ckSites();
+  if (CK.site && !sites.some((s) => s.domain === CK.site)) { CK.site = ''; store.set('ck-site', ''); }
+  const row = (key, title, meta, extra = null) => h('div', { class: `prow ck-prow${CK.site === key ? ' sel' : ''}`, title: key || 'Every tracked cookie', onclick: () => { CK.site = key; store.set('ck-site', key); CK.checked.clear(); renderCookies(); $('ckScroll').scrollTop = 0; } },
+    h('div', { class: 'ell' }, h('div', { class: 'title' }, h('b', null, title)), h('div', { class: 'meta' }, meta)), extra);
+  const live = CK.data.list.reduce((n, c) => n + (c.deleted ? 0 : 1), 0);
+  const box = clear($('ckSites'));
+  box.append(row('', 'All sites', [h('span', null, `${live.toLocaleString()} cookies`), h('span', null, `${sites.length} sites`)]));
+  for (const s of sites) {
+    if (q && !s.domain.includes(q)) continue;
+    box.append(row(s.domain, s.domain,
+      [h('span', null, `${s.live} live`), s.deleted ? h('span', null, `${s.deleted} deleted`) : null, s.lastSeen ? h('span', null, fmtAgo(s.lastSeen)) : null],
+      s.pending ? tag(`${s.pending} pending`, 'accent') : null));
+  }
+}
+function renderCkCards() {
+  const box = clear($('ckCards'));
+  const site = CK.site, d = CK.data;
+  if (site) {
+    const own = d.list.filter((c) => c.domain === site && !c.deleted);
+    box.append(h('div', { class: 'card ck-card' }, h('div', { class: 'card-head' }, h('h2', { class: 'mono' }, site), tag(`${own.length} live`), h('span', { class: 'spacer' }),
+      h('button', { class: 'btn sm', onclick: () => ckOpenSite(site) }, 'Open site'),
+      h('button', { class: 'btn sm', disabled: !own.length, title: 'Queue deleting every live cookie of this domain in Chrome', onclick: guard(async () => {
+        if (!(await confirmBox(`Delete ${own.length} cookie(s) of ${site} in Chrome? It happens on the next page load from the site.`, 'Delete', true))) return;
+        await ckCall('/api/cookies/ops', { op: 'delete', ids: own.map((c) => c.id) }); ckQueued(site, `${own.length} deletion(s) queued`);
+      }) }, 'Delete these in Chrome'),
+      h('button', { class: 'btn sm', title: 'Clear-Site-Data: "cookies" — Chrome drops every cookie of the site, including ones CupNet never saw (HTTPS only)', onclick: guard(async () => {
+        if (!(await confirmBox(`Clear all cookies of ${site} in Chrome (Clear-Site-Data)? Works on HTTPS pages only.`, 'Clear', true))) return;
+        await ckCall('/api/cookies/ops', { op: 'clear', domain: site }); ckQueued(site, 'Site clear queued');
+      }) }, 'Clear site data'),
+      h('button', { class: 'btn sm ghost', title: 'Drop the tracked copies from CupNet; Chrome keeps the cookies', onclick: guard(async () => {
+        const r = await ckCall('/api/cookies', { domain: site }, 'DELETE'); toast(`Forgot ${r.forgotten} cookie(s)`, 'ok');
+      }) }, 'Forget')),
+    ));
+  }
+  const rules = d.overrides.filter((o) => !site || o.domain === '*' || ckDomainMatch(site, o.domain) || ckDomainMatch(o.domain, site));
+  if (rules.length) {
+    box.append(h('div', { class: 'card ck-card' }, h('div', { class: 'card-head' }, h('h2', null, 'Wire rules'), h('span', { class: 'muted' }, 'rewrite cookies between Chrome and the site; Chrome\'s own store is untouched')),
+      h('table', { class: 'tbl' }, h('tbody', null, rules.map((o) => h('tr', { class: o.enabled ? '' : 'off' },
+        h('td', { class: 'ck-c-sw' }, sw(o.enabled, '', guard(async (v) => { await ckCall(`/api/cookies/overrides/${o.id}`, { enabled: v }); }))),
+        h('td', { class: 'ck-c-tag' }, tag(o.action, o.action === 'pin' ? 'accent' : 'warn')),
+        h('td', { class: 'mono ell', title: ckRuleText(o) }, ckRuleText(o), o.note ? h('span', { class: 'muted' }, ` — ${o.note}`) : null),
+        h('td', { class: 'ck-c-hits muted', title: o.lastHitAt ? `last ${fmtStamp(o.lastHitAt)}` : 'never used yet' }, `${(o.hits || 0).toLocaleString()} hit${o.hits === 1 ? '' : 's'}`),
+        h('td', { class: 'ck-c-edit r-al' }, h('button', { class: 'btn sm', onclick: () => ckRuleModal(o) }, 'Edit'))))))));
+  }
+  const ops = d.ops.filter((o) => !site || ckDomainMatch(o.domain, site) || ckDomainMatch(site, o.domain)).slice(0, 50);
+  if (ops.length) {
+    const opText = (o) => (o.op === 'clear' ? `clear all cookies of ${o.domain}` : `${o.op} ${o.cookie.name}${o.op === 'set' ? `=${o.cookie.value.length > 60 ? `${o.cookie.value.slice(0, 60)}…` : o.cookie.value}` : ''} · ${o.cookie.hostOnly ? '' : '.'}${o.cookie.domain}${o.cookie.path}`);
+    const stCls2 = { pending: 'accent', applied: 'ok', cancelled: '', expired: 'warn', replaced: '' };
+    const pending = ops.filter((o) => o.state === 'pending').length;
+    box.append(h('div', { class: 'card ck-card' }, h('div', { class: 'card-head' }, h('h2', null, 'Changes for Chrome'),
+      pending ? h('span', { class: 'muted' }, 'they land on the next page load from the site — open or reload it') : null, h('span', { class: 'spacer' }),
+      ops.length > pending ? h('button', { class: 'btn sm ghost', onclick: guard(() => ckCall('/api/cookies/ops', { op: 'clear-done' })) }, 'Clear finished') : null),
+      h('table', { class: 'tbl' }, h('tbody', null, ops.map((o) => h('tr', null,
+        h('td', { class: 'ck-c-tag' }, tag(o.state, stCls2[o.state])),
+        h('td', { class: 'mono ell', title: opText(o) }, opText(o)),
+        h('td', { class: 'ck-c-when muted ell', title: o.appliedUrl || '' }, o.appliedAt ? `applied ${fmtAgo(o.appliedAt)}` : `queued ${fmtAgo(o.createdAt)}`),
+        h('td', { class: 'ck-c-acts r-al' }, o.state === 'pending' ? [h('button', { class: 'btn sm', onclick: () => ckOpenSite(o.domain) }, 'Open'), h('button', { class: 'btn sm ghost', onclick: guard(() => ckCall(`/api/cookies/ops/${o.id}`, undefined, 'DELETE')) }, 'Cancel')] : null)))))));
+  }
+}
+const ckRuleText = (o) => (o.action === 'pin' ? `${o.name}=${o.value} → ${o.domain}` : `${o.name} ${o.action === 'strip' ? 'not sent to' : 'not stored from'} ${o.domain}`);
+
+function renderCkRows() {
+  const list = ckVisible();
+  const tb = clear($('ckRows'));
+  const shownList = list.slice(0, CK_ROWS_MAX);
+  for (const c of shownList) {
+    const rules = ckRulesFor(c), pend = ckPendingFor(c);
+    const parent = CK.site && c.domain !== CK.site;
+    const chk = h('input', { type: 'checkbox', checked: CK.checked.has(c.id), onclick: (ev) => ev.stopPropagation(), onchange: (ev) => { if (ev.target.checked) CK.checked.add(c.id); else CK.checked.delete(c.id); renderCkBulk(); } });
+    const exp = c.expires == null ? h('span', { class: 'muted' }, 'Session') : h('span', { title: new Date(c.expires).toString() }, fmtStamp(c.expires));
+    tb.append(h('tr', { class: `ck-row${c.deleted ? ' is-deleted' : ''}`, onclick: () => ckEditor(c) },
+      h('td', null, chk),
+      h('td', { class: 'mono ell', title: c.name }, c.name, c.inferred ? [' ', tag('inferred', '')] : null),
+      h('td', { class: 'mono ell ck-val', title: c.value.length > 2000 ? `${c.value.slice(0, 2000)}…` : c.value }, c.value === '' ? h('span', { class: 'muted' }, '(empty)') : c.value),
+      h('td', { class: 'mono ell', title: `${c.hostOnly ? 'host-only' : 'domain and subdomains'} · path ${c.path}` }, `${c.hostOnly ? '' : '.'}${c.domain}`, h('span', { class: 'muted' }, c.path), parent ? [' ', tag('parent')] : null),
+      h('td', { class: 'ell' }, c.deleted ? tag('deleted', 'err') : [exp, ckExpired(c) ? [' ', tag('expired', 'warn')] : null]),
+      h('td', { class: 'ck-flags' }, c.secure ? tag('Secure') : null, c.httpOnly ? tag('HttpOnly') : null, c.sameSite ? tag(c.sameSite) : null, c.partitioned ? tag('CHIPS') : null,
+        rules.map((o) => tag(o.action === 'pin' ? 'pinned' : o.action === 'strip' ? 'stripped' : 'blocked', o.enabled ? 'accent' : '')),
+        pend.map((o) => tag(`${o.op} pending`, 'warn'))),
+      h('td', { class: 'r-al muted', title: `set ${c.setCount}× · sent ${c.sentCount}×${c.blockedCount ? ` · blocked ${c.blockedCount}×` : ''}${c.lastUrl ? `\n${c.lastUrl}` : ''}` }, fmtAgo(c.lastSeen)),
+      h('td', { class: 'r-al', onclick: (ev) => ev.stopPropagation() },
+        h('button', { class: 'icon', title: 'Copy value', onclick: () => copy(c.value, 'Value copied') }, '⧉'),
+        c.deleted ? null : h('button', { class: 'icon', title: 'Delete in Chrome', onclick: guard(async () => { await ckCall('/api/cookies/ops', { op: 'delete', ids: [c.id] }); ckQueued(c.domain, `Deleting ${c.name}`); }) }, '🗑'))));
+  }
+  $('ckShown').textContent = list.length > CK_ROWS_MAX ? `${CK_ROWS_MAX.toLocaleString()} of ${list.length.toLocaleString()} shown — filter to narrow` : `${list.length.toLocaleString()} cookie${list.length === 1 ? '' : 's'}`;
+  $('ckAll').checked = shownList.length > 0 && shownList.every((c) => CK.checked.has(c.id));
+  const empty = $('ckEmpty');
+  empty.hidden = list.length > 0;
+  if (!list.length) {
+    append(clear(empty), [CK.data.list.length
+      ? h('p', null, 'No cookies match the filter.')
+      : [h('p', null, h('b', null, 'No cookies yet.')), h('p', { class: 'muted' }, 'Cookies appear here as Chrome sends or receives them through CupNet. Browse a site in the proxied Chrome, or add one with + Add cookie.')]]);
+  }
+  renderCkBulk();
+}
+function renderCkBulk() {
+  const bar = clear($('ckBulk'));
+  const ids = [...CK.checked];
+  bar.hidden = !ids.length;
+  if (!ids.length) return;
+  const sel = CK.data.list.filter((c) => CK.checked.has(c.id));
+  bar.append(h('b', null, `${ids.length} selected`),
+    h('button', { class: 'btn sm danger', onclick: guard(async () => {
+      const live = sel.filter((c) => !c.deleted);
+      if (!live.length) { toast('Only deleted cookies are selected', 'warn'); return; }
+      await ckCall('/api/cookies/ops', { op: 'delete', ids: live.map((c) => c.id) });
+      CK.checked.clear(); renderCookies();
+      ckQueued([...new Set(live.map((c) => c.domain))].join(', '), `${live.length} deletion(s) queued`);
+    }) }, 'Delete in Chrome'),
+    h('button', { class: 'btn sm', onclick: () => ckExportModal(true) }, 'Export…'),
+    h('button', { class: 'btn sm ghost', title: 'Drop the tracked copies; Chrome keeps the cookies', onclick: guard(async () => { const r = await ckCall('/api/cookies', { ids }, 'DELETE'); CK.checked.clear(); renderCookies(); toast(`Forgot ${r.forgotten} cookie(s)`, 'ok'); }) }, 'Forget'),
+    h('span', { class: 'spacer' }),
+    h('button', { class: 'btn sm ghost', onclick: () => { CK.checked.clear(); renderCkRows(); } }, 'Clear selection'));
+}
+
+const ckLocalInput = (ms) => { const d = new Date(ms); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
+function ckEditor(c) {
+  const isNew = !c;
+  const base = c || { name: '', value: '', domain: CK.site || '', hostOnly: true, path: '/', expires: Date.now() + 365 * 86400000, secure: true, httpOnly: false, sameSite: 'Lax', partitioned: false };
+  const f = {
+    name: h('input', { type: 'text', value: base.name, placeholder: 'session_id', spellcheck: false }),
+    value: h('textarea', { class: 'code', rows: 4, spellcheck: false }, base.value),
+    domain: h('input', { type: 'text', value: base.domain, placeholder: 'example.com', spellcheck: false }),
+    scope: h('select', null, h('option', { value: 'host' }, 'This host only'), h('option', { value: 'domain' }, 'Domain and its subdomains')),
+    path: h('input', { type: 'text', value: base.path, spellcheck: false }),
+    session: h('input', { type: 'checkbox', checked: base.expires == null }),
+    expires: h('input', { type: 'datetime-local', value: ckLocalInput(base.expires ?? Date.now() + 365 * 86400000) }),
+    secure: h('input', { type: 'checkbox', checked: !!base.secure }),
+    httpOnly: h('input', { type: 'checkbox', checked: !!base.httpOnly }),
+    sameSite: h('select', null, h('option', { value: '' }, 'Not set (Chrome: Lax)'), ['Lax', 'Strict', 'None'].map((v) => h('option', { value: v }, v))),
+    partitioned: h('input', { type: 'checkbox', checked: !!base.partitioned }),
+  };
+  f.scope.value = base.hostOnly ? 'host' : 'domain';
+  f.sameSite.value = base.sameSite || '';
+  const syncExp = () => { f.expires.disabled = f.session.checked; };
+  f.session.addEventListener('change', syncExp); syncExp();
+  const spec = () => ({
+    name: f.name.value.trim(), value: f.value.value.replace(/\r?\n/g, ''), domain: f.domain.value.trim(), hostOnly: f.scope.value === 'host', path: f.path.value.trim() || '/',
+    expires: f.session.checked ? null : new Date(f.expires.value).getTime() || null,
+    secure: f.secure.checked, httpOnly: f.httpOnly.checked, sameSite: f.sameSite.value || null, partitioned: f.partitioned.checked,
+  });
+  const chk = (input, label) => h('label', { class: 'chk' }, input, label);
+  const body = h('div', null,
+    c && c.inferred ? h('div', { class: 'note' }, 'Seen only in a Cookie request header, so its domain, path and flags are guesses until the site sets it.') : null,
+    h('div', { class: 'form ck-form' },
+      field('Name', f.name),
+      field('Value', f.value, null, true),
+      field('Domain', f.domain),
+      field('Scope', f.scope, 'Host-only cookies have no Domain attribute; __Host- cookies must be host-only.'),
+      field('Path', f.path),
+      field('Expires', h('div', { class: 'inline' }, chk(f.session, 'Session cookie'), f.expires)),
+      field('Flags', h('div', { class: 'inline' }, chk(f.secure, 'Secure'), chk(f.httpOnly, 'HttpOnly'), chk(f.partitioned, 'Partitioned (CHIPS)'))),
+      field('SameSite', f.sameSite)));
+  if (c) {
+    body.append(h('div', { class: 'muted ck-stats' },
+      `First seen ${fmtStamp(c.firstSeen)} · set by the site ${c.setCount}× · sent ${c.sentCount}×${c.blockedCount ? ` · blocked ${c.blockedCount}×` : ''}`,
+      c.lastUrl ? h('div', { class: 'mono ell' }, c.lastUrl) : null));
+    if (c.history?.length) {
+      body.append(sect(`History (${c.history.length})`, h('table', { class: 'tbl ck-hist' }, h('tbody', null, c.history.map((x) => h('tr', null,
+        h('td', { class: 'w-130 muted' }, fmtStamp(x.at)), h('td', { class: 'w-90' }, tag(x.via, x.via.includes('delete') ? 'err' : x.via === 'manual' ? 'accent' : '')),
+        h('td', { class: 'mono ell', title: x.value }, x.value === '' ? h('span', { class: 'muted' }, '(empty)') : x.value),
+        h('td', { class: 'mono ell muted w-180', title: x.url || '' }, x.url || ''))))), c.history.length <= 6));
+    }
+  }
+  modal(isNew ? 'Add cookie' : `Cookie ${c.name}`, body, [
+    { label: 'Cancel' },
+    c && !c.deleted ? { label: 'Delete in Chrome', cls: 'danger', fn: async () => { await ckCall('/api/cookies/ops', { op: 'delete', ids: [c.id] }); ckQueued(c.domain, `Deleting ${c.name}`); } } : null,
+    { label: 'Pin on wire', fn: async () => {
+      const s = spec();
+      await ckCall('/api/cookies/overrides', { action: 'pin', domain: s.domain, name: s.name, value: s.value, note: 'from cookie editor' });
+      toast(`Requests to ${s.domain} now send ${s.name} with this value, whatever Chrome has`, 'ok');
+    } },
+    { label: isNew ? 'Add to Chrome' : 'Save to Chrome', cls: 'primary', fn: async () => {
+      const s = spec();
+      await ckCall('/api/cookies/ops', { op: 'set', cookie: s });
+      // A changed identity is a different cookie: drop the old one so Chrome does not keep both.
+      if (c && !c.deleted && (c.name !== s.name || c.domain !== s.domain.toLowerCase().replace(/^\./, '') || c.path !== s.path || c.hostOnly !== s.hostOnly)) await ckCall('/api/cookies/ops', { op: 'delete', ids: [c.id] });
+      ckQueued(s.domain, `${s.name} queued`);
+    } },
+  ].filter(Boolean));
+}
+
+function ckRuleModal(o) {
+  const ed = { action: o?.action || 'pin', domain: o?.domain ?? (CK.site || ''), name: o?.name || '', value: o?.value || '', note: o?.note || '', enabled: o ? o.enabled : true };
+  const HELP = {
+    pin: 'Send this value to the site instead of the one Chrome has (adds the cookie if Chrome has none). Chrome\'s store is not changed.',
+    strip: 'Remove the cookie from requests to the site. Use * as the name to send no cookies at all.',
+    block: 'Drop matching Set-Cookie lines from responses, so Chrome never stores the cookie.',
+  };
+  const segBox = h('div'), help = h('div', { class: 'hint' });
+  const name = h('input', { type: 'text', value: ed.name, placeholder: 'name, or * for every cookie', spellcheck: false, oninput: (ev) => { ed.name = ev.target.value; } });
+  const value = h('input', { type: 'text', value: ed.value, spellcheck: false, oninput: (ev) => { ed.value = ev.target.value; } });
+  const valueRow = field('Value', value);
+  const paint = () => {
+    clear(segBox).append(seg([['pin', 'Pin value'], ['strip', 'Strip from requests'], ['block', 'Block Set-Cookie']], ed.action, (v) => { ed.action = v; paint(); }));
+    help.textContent = HELP[ed.action];
+    for (const n of valueRow) n.hidden = ed.action !== 'pin';
+  };
+  const body = h('div', { class: 'form' },
+    h('label', null, 'Action'), segBox, help,
+    field('Domain', h('input', { type: 'text', value: ed.domain, placeholder: 'example.com, or * for every site', spellcheck: false, oninput: (ev) => { ed.domain = ev.target.value; } }), 'Matches the domain and its subdomains.'),
+    field('Cookie', name), valueRow,
+    field('Note', h('input', { type: 'text', value: ed.note, oninput: (ev) => { ed.note = ev.target.value; } })),
+    h('label'), sw(ed.enabled, 'Enabled', (v) => { ed.enabled = v; }));
+  paint();
+  modal(o ? 'Edit wire rule' : 'New wire rule', body, [
+    { label: 'Cancel' },
+    o ? { label: 'Remove', cls: 'danger', fn: async () => { await ckCall(`/api/cookies/overrides/${o.id}`, undefined, 'DELETE'); toast('Rule removed', 'ok'); } } : null,
+    { label: 'Save', cls: 'primary', fn: async () => {
+      const payload = { ...ed, domain: ed.domain.trim(), name: ed.name.trim() };
+      await ckCall(o ? `/api/cookies/overrides/${o.id}` : '/api/cookies/overrides', payload);
+      toast(o ? 'Rule saved' : 'Rule added — it applies to the next requests', 'ok');
+    } },
+  ].filter(Boolean));
+}
+
+function ckImportModal() {
+  const text = h('textarea', { class: 'code ck-import', rows: 12, spellcheck: false, placeholder: 'Paste cookies: a JSON array (EditThisCookie / Cookie-Editor / CupNet export) or a Netscape cookies.txt' });
+  const out = h('div', { class: 'muted' }, 'Nothing checked yet.');
+  const file = h('input', { type: 'file', accept: '.json,.txt,application/json,text/plain', onchange: () => {
+    const fl = file.files[0]; if (!fl) return;
+    const r = new FileReader();
+    r.onload = () => { text.value = String(r.result || ''); preview(); };
+    r.readAsText(fl);
+  } });
+  const preview = guard(async () => {
+    if (!text.value.trim()) { clear(out).append('Nothing to import.'); return; }
+    const r = await post('/api/cookies/import', { text: text.value, dryRun: true });
+    append(clear(out), [h('b', { class: r.parsed ? 'ok' : 'warn' }, `${r.parsed} cookie(s) recognised`),
+      r.errors.length ? h('ul', { class: 'ck-errs' }, r.errors.slice(0, 12).map((e) => h('li', { class: 'warn' }, e))) : null]);
+  });
+  text.addEventListener('input', () => debounce('ckimp', 400, preview));
+  modal('Import cookies into Chrome', h('div', null,
+    h('p', { class: 'muted' }, 'Imported cookies are queued and written into Chrome on the next page load from each site.'),
+    h('div', { class: 'ck-file' }, file), text, out), [
+    { label: 'Cancel' },
+    { label: 'Import', cls: 'primary', fn: async () => {
+      if (!text.value.trim()) { toast('Paste or pick a file first', 'warn'); return false; }
+      const r = await post('/api/cookies/import', { text: text.value });
+      applyCookies(r);
+      if (!r.queued) { toast(r.errors[0] || 'No cookies recognised', 'warn'); return false; }
+      toast(`${r.queued} cookie(s) queued for Chrome${r.errors.length ? ` · ${r.errors.length} skipped` : ''}`, 'ok');
+      return undefined;
+    } },
+  ]);
+}
+
+function ckExportModal(selectedOnly = false) {
+  let fmt = store.get('ck-fmt', 'json');
+  let scope = selectedOnly && CK.checked.size ? 'selected' : CK.site ? 'site' : 'all';
+  const fmtBox = h('div'), scopeBox = h('div');
+  const paint = () => {
+    clear(fmtBox).append(seg([['json', 'JSON'], ['netscape', 'Netscape cookies.txt']], fmt, (v) => { fmt = v; store.set('ck-fmt', v); paint(); }));
+    const opts = [];
+    if (CK.checked.size) opts.push(['selected', `Selected (${CK.checked.size})`]);
+    if (CK.site) opts.push(['site', CK.site]);
+    opts.push(['all', 'All sites']);
+    clear(scopeBox).append(seg(opts, scope, (v) => { scope = v; paint(); }));
+  };
+  paint();
+  modal('Export cookies', h('div', { class: 'form' }, h('label', null, 'Format'), fmtBox, h('label', null, 'Cookies'), scopeBox,
+    h('div', { class: 'hint' }, 'The file holds cookie values — treat it like a password.')), [
+    { label: 'Cancel' },
+    { label: 'Download', cls: 'primary', fn: async () => {
+      const q = new URLSearchParams({ format: fmt });
+      if (scope === 'selected') q.set('ids', [...CK.checked].join(','));
+      if (scope === 'site') q.set('domain', CK.site);
+      const { blob } = await apiBlob(`/api/cookies/export?${q}`);
+      download(blob, `cookies${scope === 'site' ? `-${CK.site}` : ''}.${fmt === 'netscape' ? 'txt' : 'json'}`);
+    } },
+  ]);
+}
+
+$('ckSiteQ').addEventListener('input', () => debounce('cksite', 150, renderCkSites));
+$('ckQ').addEventListener('input', () => debounce('ckq', 150, renderCkRows));
+$('ckShow').addEventListener('change', renderCkRows);
+$('ckAll').addEventListener('change', (ev) => {
+  for (const c of ckVisible().slice(0, CK_ROWS_MAX)) { if (ev.target.checked) CK.checked.add(c.id); else CK.checked.delete(c.id); }
+  renderCkRows();
+});
+$('ckAdd').addEventListener('click', () => ckEditor(null));
+$('ckRule').addEventListener('click', () => ckRuleModal(null));
+$('ckImport').addEventListener('click', ckImportModal);
+$('ckExport').addEventListener('click', () => ckExportModal(false));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Boot

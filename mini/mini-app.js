@@ -29,6 +29,7 @@ const { createUiServer } = require('./ui-server');
 const { RuleStore } = require('./rule-store');
 const { ProxyStore, ProxyManager } = require('./proxy-store');
 const { IpMonitor } = require('./ip-monitor');
+const { CookieJar } = require('./cookie-jar');
 
 const PAGE_EVENT_MAX_BYTES = 64 * 1024;
 /** Bodies are logged in full; this only guards V8's string limit (base64 of the body must fit). */
@@ -131,6 +132,7 @@ class MiniApp {
     get proxiesKeyFile() { return path.join(this.dataDir, 'proxies.key'); }
     get settingsFile() { return path.join(this.dataDir, 'settings.json'); }
     get ipHistoryFile() { return path.join(this.dataDir, 'ip-history.jsonl'); }
+    get cookiesFile() { return path.join(this.dataDir, 'cookies.json'); }
 
     /** Encrypt a saved session into sealed/<id>.cupsess (its key file is created on first use). */
     sealSession(sessionId) {
@@ -174,6 +176,7 @@ class MiniApp {
         // The key exists from the first request, so the session's sealed name is known up front.
         this.sessionKey = sessionCrypto.ensureSessionKey(this.keysDir, this.log.sessionId);
 
+        this.cookies = new CookieJar({ file: this.cookiesFile });
         const { MitmProxy } = require('../mitm-proxy');
         this.mitm = new MitmProxy({
             port: this.mitmPort,
@@ -183,7 +186,10 @@ class MiniApp {
                 // Our own beacons are already logged as page events.
                 if (/^https?:\/\/[^/]+\/__cupnet\//i.test(String(e.url || ''))) return;
                 this.log.logRequest(e);
+                this.cookies.observe(e);
             },
+            onBeforeUpstream: (up) => { this.cookies.beforeUpstream(up); },
+            onResponseHead: (up, out) => { this.cookies.responseHead(up, out); return out; },
         });
         this._applySettings();
         await this.mitm.start();
@@ -442,6 +448,7 @@ class MiniApp {
         if (this.mitm) { this.mitm.stop(); this.mitm = null; }
         try { this.interceptor?.setRuleStore(null); } catch { /* ignore */ }
         try { this.rules?.close(); } catch { /* ignore */ }
+        try { this.cookies?.close(); } catch { /* ignore */ }
         if (this.uiWindow?.pid) { try { process.kill(this.uiWindow.pid); } catch { /* already closed */ } this.uiWindow = null; }
         if (this.log) {
             const { sessionId } = this.log;

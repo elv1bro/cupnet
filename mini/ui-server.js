@@ -23,6 +23,7 @@ const { SessionLog, SessionIndex } = require('./session-log');
 const sessionCrypto = require('./session-crypto');
 const { providerCatalog } = require('./proxy-store');
 const { writeHar } = require('./har');
+const { CookieJar } = require('./cookie-jar');
 
 const UI_HTML = path.join(__dirname, 'ui.html');
 const UI_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src blob:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
@@ -266,6 +267,7 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
             upstream: app.mitm?.upstream ? String(app.mitm.upstream).replace(/\/\/[^@/]*@/, '//***@') : null,
             proxy: app.proxies?.status() || null,
             ipWatch: app.ipMonitor?.summary() || null,
+            cookies: app.cookies?.summary() || null,
             paused: app._paused?.size || 0,
             trust: app.trust,
             rulesFile: app.rulesFile,
@@ -368,6 +370,13 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
         return _send(res, 200, { state: await app.ipMonitor.checkNow() });
     }
 
+    // ── Cookie manager ──────────────────────────────────────────────────────────
+    if (p.startsWith('/api/cookies')) {
+        if (!app.cookies) return _send(res, 503, { error: 'Cookie manager is not running' });
+        const r = await _cookieRoute(app.cookies, req, res, u).catch((e) => _badRequest(res, e));
+        if (r !== false) return r;
+    }
+
     if (p === '/api/settings' && m === 'GET') return _send(res, 200, app.getSettings());
     if (p === '/api/settings' && m === 'POST') {
         const body = await _readJson(req);
@@ -460,6 +469,59 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
     }
 
     return _send(res, 404, { error: 'not found' });
+}
+
+/** /api/cookies*. Returns false when nothing matched. Thrown errors → 400. */
+async function _cookieRoute(jar, req, res, u) {
+    const p = u.pathname;
+    const m = req.method;
+    const body = async () => (await _readJson(req)) || {};
+    const snapshot = () => _send(res, 200, jar.snapshot());
+
+    if (p === '/api/cookies' && m === 'GET') return snapshot();
+    if (p === '/api/cookies' && m === 'DELETE') {
+        const b = await body();
+        const forgotten = jar.forget({ ids: Array.isArray(b.ids) ? b.ids.map(String) : [], domain: b.domain, all: b.all === true });
+        return _send(res, 200, { forgotten, ...jar.snapshot() });
+    }
+    if (p === '/api/cookies/ops' && m === 'POST') {
+        const b = await body();
+        if (b.op === 'set') jar.queueSet(b.cookie);
+        else if (b.op === 'delete') jar.queueDelete({ ids: Array.isArray(b.ids) ? b.ids.map(String) : [], cookie: b.cookie });
+        else if (b.op === 'clear') jar.queueClearSite(b.domain);
+        else if (b.op === 'clear-done') jar.clearDoneOps();
+        else throw new Error('op must be set, delete, clear or clear-done');
+        return snapshot();
+    }
+    const op = /^\/api\/cookies\/ops\/([0-9a-f]{12})$/.exec(p);
+    if (op && m === 'DELETE') {
+        if (!jar.cancelOp(op[1])) return _send(res, 404, { error: 'No pending operation with this id' });
+        return snapshot();
+    }
+    if (p === '/api/cookies/overrides' && m === 'POST') { jar.addOverride(await body()); return snapshot(); }
+    const ov = /^\/api\/cookies\/overrides\/([0-9a-f]{12})$/.exec(p);
+    if (ov && m === 'POST') { jar.updateOverride(ov[1], await body()); return snapshot(); }
+    if (ov && m === 'DELETE') {
+        if (!jar.removeOverride(ov[1])) return _send(res, 404, { error: 'No such override' });
+        return snapshot();
+    }
+    if (p === '/api/cookies/export' && m === 'GET') {
+        const fmt = u.searchParams.get('format') === 'netscape' ? 'netscape' : 'json';
+        const ids = new Set((u.searchParams.get('ids') || '').split(',').filter(Boolean));
+        const domain = String(u.searchParams.get('domain') || '').toLowerCase().replace(/^\./, '');
+        const list = jar.list().filter((c) => (!ids.size || ids.has(c.id)) && (!domain || c.domain === domain || c.domain.endsWith(`.${domain}`)));
+        const text = fmt === 'netscape' ? jar.exportNetscape(list) : jar.exportJson(list);
+        return _send(res, 200, text, fmt === 'netscape' ? 'text/plain; charset=utf-8' : 'application/json; charset=utf-8', {
+            'Content-Disposition': `attachment; filename="cookies${domain ? `-${domain.replace(/[^a-z0-9.-]/g, '')}` : ''}.${fmt === 'netscape' ? 'txt' : 'json'}"`,
+        });
+    }
+    if (p === '/api/cookies/import' && m === 'POST') {
+        const b = await body();
+        const { cookies, errors } = CookieJar.parseImport(b.text);
+        if (!b.dryRun) for (const c of cookies) jar.queueSet(c);
+        return _send(res, 200, { queued: b.dryRun ? 0 : cookies.length, parsed: cookies.length, errors: errors.slice(0, 50), ...jar.snapshot() });
+    }
+    return false;
 }
 
 /** /api/proxies* and /api/egress. Returns false when nothing matched. Thrown errors → 400. */

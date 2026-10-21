@@ -1883,6 +1883,10 @@ npm run pack:mini        # standalone dist/CupNet mini.app (or dist/cupnet-mini/
     - `onChange` calls `noteSwitch()`, so a user switch becomes a `switch` event and not a `change`.
     - An answer for a connection that changed during the check is dropped.
     - History is `<data>/ip-history.jsonl`. Events are also written to the session log via `SessionLog.logIp` (kind `ip`).
+  - `mini/cookie-jar.js`: `CookieJar`, the cookie manager (MITM path only, no CDP).
+    - `observe()` is fed from every logged request. Wire rules (`pin`/`strip`/`block`) and the queued Chrome ops (set, delete, clear-site) run in the `MitmProxy` hooks `onBeforeUpstream` (after identity rewriting) and `onResponseHead` (on every upstream response, buffered or streamed, including the native fallback; mocks never reach it). The ops are injected as `Set-Cookie` / `Clear-Site-Data` into the next first-party response.
+    - State is `<data>/cookies.json` (0600). `rev` bumps on every change, and `/api/status.cookies` carries it so the UI polls cheaply.
+  - `mini/compare-diff.js`: the request-compare diff (header/query/cookie multimaps, header order, JSON structure, Myers line diff, hunks). It is an IIFE classic script shared by the UI (`window.CupNetDiff`) and Vitest (`module.exports`). Library scripts must not leak top-level names: they share one global lexical scope with `ui.js`.
   - `mini/har.js`: HAR 1.2.
   - `mini/browser-libs.json`: browser libs copied into the pack and served at `/lib/*`.
 - `upstream-tunnel.js` (`connectThroughProxy`) gives the raw MITM paths (TLS passthrough, WebSocket) http, https, socks4(a) and socks5(h) upstreams (A-410).

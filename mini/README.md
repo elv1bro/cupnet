@@ -132,6 +132,42 @@ Pages can report back with a same-origin request:
   - A `change` or `error` raises a toast unless the profile is rotating.
   - Events are also written to the session log as kind `ip`, which the Traffic kind select can
     show. Proxy URLs and credentials are never stored in the history.
+- **Compare**: two requests side by side, from the same session or from different ones.
+  - Ways to pick them:
+    - Cmd/Ctrl-click a second row in Traffic.
+    - **Pin as A**, then **Compare** in the detail pane.
+    - Type `#seq` (or `session:seq`) for A and B.
+    - **Previous same** compares an entry with the last earlier request to the same method and URL.
+  - Sections: overview, query string, request headers (including a header **order** view, which
+    shows moved headers), request cookies, request body, response headers, Set-Cookie and
+    response body. A sticky row of chips jumps to each section and says whether it differs.
+  - Changed values have the differing part highlighted.
+  - Options: **Only differences**, and **Ignore volatile headers** (Date, ETag, tracing ids, …).
+  - Body views: JSON bodies get a structural diff (path, old and new value) or a line diff. Form
+    bodies get a field diff or a line diff. Anything else gets a line diff with collapsed
+    unchanged runs. Binary bodies, and bodies over 8 MB, are compared by SHA-256.
+  - The diff logic is in `compare-diff.js`, shared by the UI and the unit tests.
+- **Cookies**: a cookie manager that works on the MITM path only. It needs no CDP, no extension
+  and nothing in the page.
+  - Tracking: `Set-Cookie` gives each cookie's attributes, and the `Cookie` request header shows
+    what Chrome really sends. A cookie seen only in requests is marked *inferred*. Each cookie
+    keeps a short value history, with set and sent counts.
+  - Layout: sites on the left, a filterable table with a Live / Deleted / All filter, and a
+    modal editor (name, value, domain or host-only, path, expiry, Secure, HttpOnly,
+    Partitioned, SameSite).
+  - **Changes for Chrome**: set, delete and clear-site operations are queued. Each one is
+    injected into the next first-party response from a matching host, as `Set-Cookie` or as
+    `Clear-Site-Data: "cookies"`, so the change lands in Chrome's own cookie store on the next
+    page load. Pending operations expire after 1 h; **Open site** loads the site in the proxied
+    Chrome.
+  - **Wire rules** rewrite traffic and leave Chrome's store untouched:
+    - `pin`: send a fixed value upstream, and add the cookie if Chrome has none.
+    - `strip`: drop a cookie, or `*` for all of them, from requests.
+    - `block`: drop matching `Set-Cookie` lines before Chrome sees them.
+    Rules can be switched on and off, and count their hits.
+  - Bulk actions: delete in Chrome, export or forget the selected cookies.
+  - **Import** takes a JSON array (or `{"cookies": [...]}`, as browser cookie-editor extensions export) or Netscape `cookies.txt`, with a
+    dry-run preview. **Export** writes JSON or Netscape for the selection, a site, or everything.
 - **Repeater**: edit and resend any request (method, URL, headers, body) through the same worker
   and upstream. Import from curl; generate code as curl, fetch, axios, Python requests, Go or PHP.
   Each send is logged with type `repeater`. Cmd/Ctrl+Enter sends.
@@ -174,6 +210,15 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
   - `POST /api/ip-history/check`: check now.
   - `DELETE /api/ip-history`: clear the history.
   - `/api/status` carries the monitor summary as `ipWatch`.
+- Cookies (every route returns the updated snapshot `{rev, epoch, cookies, pending, overrides, list, ops}`, where `overrides` here is the rule list):
+  - `GET /api/cookies`; `DELETE /api/cookies` (`{ids}`, `{domain}` or `{all: true}`) forgets the
+    tracked copies, and Chrome keeps them.
+  - `POST /api/cookies/ops` (`{op: 'set', cookie}`, `{op: 'delete', ids | cookie}`,
+    `{op: 'clear', domain}`, `{op: 'clear-done'}`); `DELETE /api/cookies/ops/:id` cancels a
+    pending operation.
+  - `POST /api/cookies/overrides`, `POST|DELETE /api/cookies/overrides/:id`: wire rules.
+  - `POST /api/cookies/import` (`{text, dryRun}`), `GET /api/cookies/export?format=json|netscape&ids=…&domain=…`.
+  - `/api/status` carries `cookies: {rev, epoch, cookies, pending, overrides}` (counts), so the UI reloads only on change.
 - `GET|POST /api/settings`
 - `POST /api/replay` (`{method, url, headers: [[k, v]], body}`). Only http(s) is accepted. It
   returns 409 while the kill switch blocks egress.
@@ -197,6 +242,8 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
   `ipWatchSec`.
 - `ip-history.jsonl`: the IP monitor history (mode 0600, append-only). The newest 5,000 events
   are kept, and the file is compacted on load.
+- `cookies.json`: tracked cookies, wire rules and queued Chrome operations (mode 0600, because it
+  holds cookie values). Up to 5,000 cookies, 20 history entries each.
 - `sessions/<sessionId>.jsonl`: one file per run, one JSON line per entry.
 - `keys/`, `sealed/`
 - `chrome-profile/`: the proxied Chrome.

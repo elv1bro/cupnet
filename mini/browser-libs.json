@@ -1,4 +1,5 @@
 {
   "lib/codegen.js": "request-editor-codegen.js",
-  "lib/curl.js": "request-editor-curl-parser.js"
+  "lib/curl.js": "request-editor-curl-parser.js",
+  "lib/diff.js": "mini/compare-diff.js"
 }
