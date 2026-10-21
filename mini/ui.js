@@ -163,7 +163,7 @@ function confirmBox(text, okLabel = 'OK', danger = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Navigation
 // ─────────────────────────────────────────────────────────────────────────────
-const TITLES = { traffic: 'Traffic', proxies: 'Proxies', repeater: 'Repeater', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
+const TITLES = { traffic: 'Traffic', proxies: 'Proxies', ipwatch: 'IP monitor', repeater: 'Repeater', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
 let PAGE = 'traffic';
 function go(page) {
   if (!TITLES[page]) page = 'traffic';
@@ -171,7 +171,7 @@ function go(page) {
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.page === page));
   document.querySelectorAll('#pages > section').forEach((s) => { s.hidden = s.id !== `page-${page}`; });
   $('pageTitle').textContent = TITLES[page];
-  const load = { traffic: () => scheduleDraw(false), proxies: loadProxies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode }[page];
+  const load = { traffic: () => scheduleDraw(false), proxies: loadProxies, ipwatch: loadIpw, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode }[page];
   if (load) guard(load)();
 }
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.page)));
@@ -222,8 +222,8 @@ function renderEgress() {
   const label = connLabel(px);
   let cls = '', text = label, title = 'Exit IP — click to manage proxies';
   if (px?.blocked && px.mode === 'direct') { cls = 'err'; text = 'Blocked — kill switch is on, no proxy'; }
-  else if (EG.data?.ok) { cls = px?.mode === 'direct' ? 'warn' : 'ok'; text = `${label} · ${flag(EG.data.country)} ${EG.data.ip}`; title = `${EG.data.ip} · ${geoText(EG.data)}${EG.data.org ? ` · ${EG.data.org}` : ''}\nClick to manage proxies`; }
-  else if (EG.pending) { text = `${label} · checking…`; }
+  else if (EG.data?.ok) { cls = px?.mode === 'direct' ? 'warn' : 'ok'; text = `${label} · ${flag(EG.data.country)} ${EG.data.ip}`; title = `${EG.data.ip} · ${geoText(EG.data)}${EG.data.org ? ` · ${EG.data.org}` : ''}${ST?.ipWatch?.enabled ? `\nIP monitor: ${ST.ipWatch.changes1h} change(s) in the last hour` : ''}\nClick to manage proxies`; }
+  else if (EG.pending || (ST?.ipWatch?.enabled && !EG.data)) { text = `${label} · checking…`; }
   else if (EG.data && !EG.data.ok) { cls = 'err'; text = `${label} · ${EG.data.error || 'check failed'}`; }
   pill.className = `pill ${cls}`;
   dot.className = `dot ${EG.pending && !EG.data ? 'busy' : ''}`;
@@ -252,8 +252,15 @@ async function pollStatus() {
     if (st.paused > _lastPaused && PAGE !== 'paused') toast(`${st.paused} request(s) paused by a breakpoint`, 'warn', { action: { label: 'Open', fn: () => go('paused') } });
     _lastPaused = st.paused;
     const key = egressKey(st.proxy);
-    if (key !== EG.key) { EG.key = key; EG.data = st.proxy?.egress || null; EG.at = EG.data ? Date.now() : 0; if (!EG.data) checkEgress(); }
+    const w = st.ipWatch;
+    if (w?.enabled) {
+      // The IP monitor keeps the egress fresh; no separate probes from the UI.
+      if (key !== EG.key) { EG.key = key; EG.data = null; EG.at = 0; }
+      if (st.proxy?.egress && st.proxy.egressAt >= EG.at) { EG.data = st.proxy.egress; EG.at = st.proxy.egressAt; }
+      if (w.consecutiveFailures && (w.lastCheckAt || 0) > (w.lastOkAt || 0) && !w.blocked) EG.data = { ok: false, error: w.lastError };
+    } else if (key !== EG.key) { EG.key = key; EG.data = st.proxy?.egress || null; EG.at = EG.data ? Date.now() : 0; if (!EG.data) checkEgress(); }
     else if (Date.now() - EG.at > EGRESS_RECHECK_MS) checkEgress();
+    onIpStatus(w || null);
     renderEgress();
     if (PAGE === 'proxies') { P.status = st.proxy; renderConn(); }
   } catch (e) {
@@ -302,7 +309,7 @@ function matches(e) {
   if (F.method && String(e.method || '').toLowerCase() !== F.method) return false;
   if (F.type && !String(e.type || '').toLowerCase().includes(F.type)) return false;
   if (F.mime && !String(e.mime || '').toLowerCase().includes(F.mime)) return false;
-  const url = e._lc || (e._lc = String(e.url || '').toLowerCase());
+  const url = e._lc || (e._lc = String(e.url || e.note || '').toLowerCase());
   if (F.host && !splitUrl(url)[0].includes(F.host)) return false;
   for (const t of F.inc) if (!url.includes(t)) return false;
   for (const t of F.exc) if (url.includes(t)) return false;
@@ -364,10 +371,10 @@ function draw() {
       c[0].textContent = e.seq;
       c[1].textContent = fmtTime(e.ts);
       c[2].textContent = ev ? '' : (e.method || ''); c[2].className = `m m-${e.method || ''}`;
-      c[3].textContent = ev ? (e.kind === 'page-event' ? 'event' : '') : (e.status || 'ERR'); c[3].className = `st ${ev ? '' : stCls(e.status)}`;
+      c[3].textContent = ev ? (e.kind === 'page-event' ? 'event' : e.kind === 'ip' ? 'ip' : '') : (e.status || 'ERR'); c[3].className = `st ${ev ? '' : stCls(e.status)}`;
       c[4].textContent = e.type || '';
       c[5].textContent = host; c[5].title = host;
-      c[6].textContent = ev && !e.url ? e.kind : p; c[6].title = e.url || '';
+      c[6].textContent = ev && !e.url ? (e.note || e.kind) : p; c[6].title = e.url || e.note || '';
       c[7].textContent = fmtSize(e.resSize);
       c[8].textContent = e.duration != null ? `${e.duration} ms` : '';
       r.className = `r cols${ev ? ' ev' : ''}${e.type === 'repeater' ? ' rep' : ''}${ev ? '' : !e.status ? ' tf' : e.status >= 500 ? ' t5' : e.status >= 400 ? ' t4' : ''}`;
@@ -523,7 +530,7 @@ function renderDetail() {
   const isReq = e.kind === 'request';
   $('dMethod').textContent = isReq ? e.method : e.kind; $('dMethod').className = `badge m-${isReq ? e.method : ''}`;
   $('dStatus').textContent = isReq ? (e.status || 'ERR') : ''; $('dStatus').className = `badge ${stCls(e.status)}`; $('dStatus').hidden = !isReq;
-  $('dUrl').textContent = e.url || ''; $('dUrl').title = e.url || '';
+  $('dUrl').textContent = e.url || e.note || ''; $('dUrl').title = e.url || e.note || '';
   document.querySelector('.dactions').hidden = !isReq;
   if (!isReq) {
     d.append(sect('Event', kvGrid([['Kind', e.kind], ['URL', e.url || ''], ['Time', new Date(e.ts).toISOString()]])), sect('Data', jsonPre(JSON.stringify(e.data ?? e, null, 2))));
@@ -1091,6 +1098,284 @@ function openImport() {
 $('pImport').addEventListener('click', openImport);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// IP monitor
+// ─────────────────────────────────────────────────────────────────────────────
+const IPW = {
+  events: [], lastId: 0, epoch: '', state: null, loaded: false, syncing: false, toastAt: 0,
+  range: store.get('ipw-range', 3600000), filter: store.get('ipw-filter', 'all'),
+};
+const IPW_TYPES = {
+  start: ['Started', 'accent'], switch: ['Switched', 'accent'], change: ['Changed', 'warn'], error: ['Error', 'err'],
+  recovered: ['Recovered', 'ok'], blocked: ['Blocked', 'err'], stop: ['Stopped', ''],
+};
+const IPW_INTERVALS = [[5, '5s'], [15, '15s'], [30, '30s'], [60, '1m'], [300, '5m']];
+const IPW_RANGES = [[3600000, '1h'], [6 * 3600000, '6h'], [24 * 3600000, '24h'], [7 * 24 * 3600000, '7d']];
+const MODE_LABEL = { rotating: 'rotating', sticky: 'sticky', static: 'static', direct: 'direct', cli: 'CLI' };
+const fmtDur = (ms) => {
+  if (ms == null || ms < 0) return '';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60); if (m < 60) return `${m}m ${s % 60}s`;
+  const hr = Math.floor(m / 60); if (hr < 24) return `${hr}h ${m % 60}m`;
+  return `${Math.floor(hr / 24)}d ${hr % 24}h`;
+};
+const fmtStamp = (at) => new Date(at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+const ipColor = (ip) => { let x = 0; for (const c of String(ip)) x = (x * 31 + c.charCodeAt(0)) >>> 0; return `hsl(${x % 360} 60% 58%)`; };
+const placeOf = (e) => [e.city, e.region && e.region !== e.city ? e.region : '', e.country].filter(Boolean).join(', ');
+const isChange = (e) => e.type === 'change' || e.type === 'switch' || e.type === 'start';
+
+async function syncIpHistory(full = false) {
+  if (IPW.syncing) return [];
+  IPW.syncing = true;
+  try {
+    let after = !full && IPW.loaded ? IPW.lastId : 0;
+    let r = await api(`/api/ip-history?limit=5000${after ? `&after=${after}` : ''}`);
+    if (after && r.state.epoch !== IPW.epoch) { after = 0; r = await api('/api/ip-history?limit=5000'); }
+    const asc = r.events.slice().reverse();
+    if (!after) IPW.events = asc; else IPW.events.push(...asc);
+    if (IPW.events.length > 5000) IPW.events.splice(0, IPW.events.length - 5000);
+    IPW.state = r.state;
+    IPW.lastId = r.state.lastEventId || 0;
+    IPW.epoch = r.state.epoch || '';
+    const fresh = IPW.loaded && after ? r.events : [];
+    IPW.loaded = true;
+    return fresh;
+  } finally { IPW.syncing = false; }
+}
+
+/** From pollStatus: pick up new history events, notify about unexpected changes. */
+function onIpStatus(w) {
+  const badge = $('ipCount');
+  badge.hidden = !w?.changes1h; badge.textContent = w?.changes1h || '';
+  badge.title = w ? `${w.changes1h} IP change(s) in the last hour` : '';
+  if (!w) return;
+  IPW.state = w;
+  const resync = !IPW.loaded || w.epoch !== IPW.epoch || w.lastEventId < IPW.lastId;
+  if (resync || w.lastEventId > IPW.lastId) {
+    guard(async () => {
+      const fresh = await syncIpHistory(resync);
+      notifyIp(fresh);
+      if (PAGE === 'ipwatch') renderIpw();
+    })();
+  } else if (PAGE === 'ipwatch') renderIpwHero();
+}
+
+function notifyIp(fresh) {
+  if (!fresh.length || PAGE === 'ipwatch') return;
+  // A rotating proxy changes IP by design; tell about it only for connections that should hold one IP.
+  const changed = fresh.filter((e) => e.type === 'change' && e.mode !== 'rotating');
+  const failed = fresh.filter((e) => e.type === 'error');
+  if ((!changed.length && !failed.length) || Date.now() - IPW.toastAt < 20000) return;
+  IPW.toastAt = Date.now();
+  const open = { label: 'Open', fn: () => go('ipwatch') };
+  if (changed.length) {
+    const e = changed[0];
+    toast(`Exit IP changed: ${e.prevIp || '?'} → ${flag(e.country)} ${e.ip}${placeOf(e) ? ` · ${placeOf(e)}` : ''}`, 'warn', { action: open, ms: 9000 });
+  } else {
+    toast(`IP check failed: ${failed[0].error || 'error'}`, 'err', { action: open });
+  }
+}
+
+async function loadIpw() {
+  await syncIpHistory(true);
+  renderIpw();
+}
+function renderIpw() {
+  renderIpwHero();
+  renderIpwTiles();
+  renderIpwTimeline();
+  renderIpwTable();
+}
+
+const setIpw = guard(async (patch) => {
+  await post('/api/settings', patch);
+  await pollStatus();
+  renderIpw();
+});
+
+function renderIpwHero() {
+  const w = IPW.state; if (!w) return;
+  const now = Date.now();
+  const failing = w.consecutiveFailures > 0 && (w.lastCheckAt || 0) > (w.lastOkAt || 0);
+  const cls = !w.enabled ? 'off' : w.blocked || failing ? 'err' : w.ip ? (w.mode === 'direct' ? 'warn' : 'ok') : '';
+  $('ipwHero').className = `card ipw-hero${cls ? ` is-${cls}` : ''}`;
+  const ipEl = clear($('ipwIp'));
+  if (w.blocked) ipEl.append('Blocked');
+  else if (w.ip) ipEl.append(h('span', { class: 'flag' }, flag(w.country)), ' ', h('span', { class: failing ? 'faint' : '', title: 'Click to copy', onclick: () => copy(w.ip, 'IP copied') }, w.ip));
+  else ipEl.append(w.enabled ? 'checking…' : '—');
+  $('ipwGeo').textContent = w.blocked ? (w.lastError || 'Kill switch is on and no proxy is connected')
+    : failing ? `Last check failed: ${w.lastError}` : [placeOf(w), w.org].filter(Boolean).join(' · ');
+  $('ipwGeo').className = `ipw-geo${w.blocked || failing ? ' err' : ''}`;
+  const meta = clear($('ipwMeta'));
+  meta.append(tag(w.label || 'Direct', 'accent'));
+  if (MODE_LABEL[w.mode]) meta.append(tag(MODE_LABEL[w.mode], w.mode === 'direct' ? 'warn' : ''));
+  if (w.ip && w.since && !w.blocked) meta.append(h('span', null, 'held ', h('b', null, fmtDur(now - w.since))));
+  if (w.lastOkAt) meta.append(h('span', null, `checked ${fmtAgo(w.lastOkAt)}`));
+  if (w.latencyMs) meta.append(h('span', null, `${w.latencyMs} ms`));
+
+  const swBox = clear($('ipwSwitch'));
+  swBox.append(sw(w.enabled, 'Monitor exit IP', (v) => setIpw({ ipWatch: v }), 'Check the exit IP on a timer and record every change'));
+  const sec = Math.round(w.intervalMs / 1000);
+  const opts = IPW_INTERVALS.some(([v]) => v === sec) ? IPW_INTERVALS : [...IPW_INTERVALS, [sec, `${sec}s`]];
+  clear($('ipwInterval')).append(seg(opts, sec, (v) => setIpw({ ipWatch: true, ipWatchSec: v })));
+  let next = 'off', frac = 0;
+  if (w.enabled) {
+    if (w.running) next = 'checking…';
+    else if (w.nextCheckAt) {
+      const left = Math.max(0, w.nextCheckAt - now);
+      next = `next in ${Math.ceil(left / 1000)}s`;
+      frac = 1 - Math.min(1, left / w.intervalMs);
+    }
+  }
+  $('ipwNext').textContent = next;
+  $('ipwBar').style.width = `${Math.round(frac * 100)}%`;
+}
+
+function renderIpwTiles() {
+  const w = IPW.state; if (!w) return;
+  const since = Date.now() - IPW.range;
+  const holds = IPW.events.filter((e) => e.at >= since && e.type === 'change' && e.heldMs != null).map((e) => e.heldMs);
+  const avg = holds.length ? holds.reduce((a, b) => a + b, 0) / holds.length : null;
+  const tile = (v, k, cls = '', title = '') => h('div', { class: `tile ${cls}`, title }, h('div', { class: 'tile-v' }, v), h('div', { class: 'tile-k' }, k));
+  clear($('ipwTiles')).append(
+    tile(String(w.changes1h), 'changes · 1h', w.changes1h ? 'warn' : ''),
+    tile(String(w.changes24h), 'changes · 24h'),
+    tile(String(w.uniqueIps24h), 'unique IPs · 24h'),
+    tile(avg == null ? '—' : fmtDur(avg), `avg hold · ${IPW_RANGES.find(([v]) => v === IPW.range)?.[1] || ''}`, '', 'Average time an IP lasted before it changed by itself'),
+    tile(w.checks.toLocaleString(), 'checks this run'),
+    tile(String(w.failures), 'failed checks', w.failures ? 'err' : ''),
+  );
+}
+
+/** History → [{ from, to, ip?, err?, ev }] spans (stop/blocked leave gaps). */
+function ipSpans(now) {
+  const out = [];
+  const ev = IPW.events;
+  let cur = null;
+  const close = (at) => { if (cur) { cur.to = at; out.push(cur); cur = null; } };
+  for (const e of ev) {
+    if (e.type === 'stop' || e.type === 'blocked') { close(e.at); continue; }
+    if (e.type === 'error') { close(e.at); cur = { from: e.at, err: true, ev: e }; continue; }
+    if (cur && !cur.err && cur.ip === e.ip) continue;
+    close(e.at);
+    cur = { from: e.at, ip: e.ip, ev: e };
+  }
+  if (cur) {
+    if (IPW.state?.enabled && !IPW.state.blocked) close(now);
+    else close(Math.max(cur.from, IPW.state?.lastCheckAt || cur.from));
+  }
+  return out;
+}
+
+function renderIpwTimeline() {
+  clear($('ipwRange')).append(seg(IPW_RANGES, IPW.range, (v) => { IPW.range = v; store.set('ipw-range', v); renderIpw(); }));
+  const now = Date.now(), from = now - IPW.range;
+  const band = clear($('ipwBand'));
+  const total = new Map();
+  const spans = ipSpans(now).filter((s) => s.to > from);
+  for (const s of spans) {
+    const a = Math.max(s.from, from), b = Math.min(s.to, now);
+    const left = ((a - from) / IPW.range) * 100, width = ((b - a) / IPW.range) * 100;
+    const geo = s.ev ? placeOf(s.ev) : '';
+    const title = s.err
+      ? `Checks failing: ${s.ev.error || ''}\n${fmtStamp(s.from)} – ${fmtStamp(s.to)} (${fmtDur(s.to - s.from)})`
+      : `${s.ip}${geo ? ` · ${geo}` : ''}${s.ev.org ? ` · ${s.ev.org}` : ''}\n${fmtStamp(s.from)} – ${fmtStamp(s.to)} (${fmtDur(s.to - s.from)})`;
+    const seg_ = h('div', { class: `ipw-span${s.err ? ' err' : ''}`, title });
+    seg_.style.left = `${left}%`; seg_.style.width = `max(2px, ${width}%)`;
+    if (!s.err) {
+      seg_.style.background = ipColor(s.ip);
+      const t = total.get(s.ip) || { ms: 0, ev: s.ev }; t.ms += b - a; total.set(s.ip, t);
+    }
+    band.append(seg_);
+  }
+  if (!spans.length) band.append(h('div', { class: 'ipw-band-empty' }, 'No data in this range'));
+  const axis = clear($('ipwAxis'));
+  for (let i = 0; i <= 4; i++) {
+    const at = from + (IPW.range * i) / 4;
+    const lbl = h('span', null, i === 4 ? 'now' : IPW.range > 24 * 3600000
+      ? new Date(at).toLocaleDateString([], { month: 'short', day: 'numeric' })
+      : new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }));
+    lbl.style.left = `${i * 25}%`;
+    axis.append(lbl);
+  }
+  const legend = clear($('ipwLegend'));
+  const items = [...total.entries()].sort((a, b) => b[1].ms - a[1].ms);
+  for (const [ip, t] of items.slice(0, 16)) {
+    const sw_ = h('i'); sw_.style.background = ipColor(ip);
+    legend.append(h('span', { class: 'ipw-leg', title: [placeOf(t.ev), t.ev.org].filter(Boolean).join(' · ') },
+      sw_, flag(t.ev.country), ' ', h('span', { class: 'mono' }, ip), h('span', { class: 'faint' }, fmtDur(t.ms))));
+  }
+  if (items.length > 16) legend.append(h('span', { class: 'faint' }, `+${items.length - 16} more`));
+}
+
+function ipwRows() {
+  const q = $('ipwQ').value.trim().toLowerCase();
+  return IPW.events.filter((e) => {
+    if (IPW.filter === 'changes' && !isChange(e)) return false;
+    if (IPW.filter === 'errors' && e.type !== 'error' && e.type !== 'blocked') return false;
+    if (!q) return true;
+    return [e.ip, e.prevIp, e.city, e.region, e.country, e.org, e.label, e.error, e.type].some((x) => String(x || '').toLowerCase().includes(q));
+  });
+}
+
+function renderIpwTable() {
+  clear($('ipwFilter')).append(seg([['all', 'All'], ['changes', 'Changes'], ['errors', 'Errors']], IPW.filter, (v) => {
+    IPW.filter = v; store.set('ipw-filter', v); renderIpwTable();
+  }));
+  const rows = ipwRows();
+  const body = clear($('ipwRows'));
+  const ipCell = (ip) => {
+    if (!ip) return h('td', { class: 'faint' }, '—');
+    const dot = h('i', { class: 'ipw-dot' }); dot.style.background = ipColor(ip);
+    return h('td', { class: 'mono', title: 'Click to copy', onclick: () => copy(ip, 'IP copied') }, dot, ip);
+  };
+  for (const e of rows.slice().reverse().slice(0, 1000)) {
+    const [label, cls] = IPW_TYPES[e.type] || [e.type, ''];
+    body.append(h('tr', { class: `ipw-${e.type}` },
+      h('td', { class: 'mono faint', title: new Date(e.at).toISOString() }, fmtStamp(e.at)),
+      h('td', null, tag(label, cls)),
+      ipCell(e.ip),
+      ipCell(e.prevIp),
+      h('td', { title: placeOf(e) }, e.type === 'error' ? h('span', { class: 'err' }, e.error || '')
+        : e.note && !e.ip ? h('span', { class: 'muted' }, e.note) : [flag(e.country), ' ', placeOf(e)]),
+      h('td', { class: 'muted', title: e.org || '' }, e.org || ''),
+      h('td', { title: e.mode ? `${e.label || ''} (${MODE_LABEL[e.mode] || e.mode})` : (e.label || '') }, e.label || '', e.mode && MODE_LABEL[e.mode] ? h('span', { class: 'faint' }, ` · ${MODE_LABEL[e.mode]}`) : null),
+      h('td', { class: 'r-al mono', title: e.heldMs != null ? 'How long the previous IP lasted' : '' }, fmtDur(e.heldMs)),
+    ));
+  }
+  $('ipwEmpty').hidden = IPW.events.length > 0;
+  $('ipwShown').textContent = rows.length === IPW.events.length ? `${rows.length.toLocaleString()} event${rows.length === 1 ? '' : 's'}` : `${rows.length.toLocaleString()} / ${IPW.events.length.toLocaleString()}`;
+}
+$('ipwQ').addEventListener('input', () => debounce('ipwq', 120, renderIpwTable));
+$('ipwCheck').addEventListener('click', guard(async () => {
+  await busy($('ipwCheck'), 'Checking…', async () => {
+    const r = await post('/api/ip-history/check');
+    IPW.state = r.state;
+    await syncIpHistory();
+  });
+  await pollStatus();
+  renderIpw();
+  const w = IPW.state;
+  if (w.blocked) toast(w.lastError || 'Blocked', 'err');
+  else if (w.consecutiveFailures) toast(`IP check failed: ${w.lastError}`, 'err');
+  else toast(`Exit IP ${w.ip}${placeOf(w) ? ` · ${placeOf(w)}` : ''}`, 'ok');
+}));
+$('ipwCsv').addEventListener('click', () => {
+  const cols = ['id', 'at', 'type', 'ip', 'prevIp', 'country', 'region', 'city', 'org', 'label', 'mode', 'via', 'latencyMs', 'heldMs', 'error'];
+  const esc = (v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const lines = [cols.join(',')].concat(ipwRows().map((e) => cols.map((c) => esc(c === 'at' ? new Date(e.at).toISOString() : e[c])).join(',')));
+  download(new Blob([`${lines.join('\n')}\n`], { type: 'text/csv' }), `cupnet-ip-history-${new Date().toISOString().slice(0, 10)}.csv`);
+});
+$('ipwClear').addEventListener('click', guard(async () => {
+  if (!(await confirmBox('Delete the whole IP history? The session logs keep their copies.', 'Delete', true))) return;
+  await del('/api/ip-history');
+  await syncIpHistory(true);
+  renderIpw();
+  toast('IP history cleared', 'ok');
+}));
+setInterval(() => { if (PAGE === 'ipwatch' && IPW.state) renderIpwHero(); }, 1000);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Header table (Repeater, Breakpoints)
 // ─────────────────────────────────────────────────────────────────────────────
 function headerTable(rows, onChange = () => {}) {
@@ -1503,6 +1788,7 @@ async function loadSettings() {
   renderTls();
   $('tlsCli').hidden = !s.browserFromCli;
   $('sCors').checked = !!s.cors; $('sH1').checked = !!s.forceHttp1;
+  $('sIpWatch').checked = s.ipWatch !== false; $('sIpSec').value = s.ipWatchSec || 15;
   $('sPass').value = (s.tlsPassthrough || []).join('\n');
   const st = ST || await api('/api/status');
   const setup = clear($('setup'));
@@ -1526,7 +1812,9 @@ function renderTls() {
   }
 }
 $('sSave').addEventListener('click', guard(async () => {
-  const patch = { cors: $('sCors').checked, forceHttp1: $('sH1').checked, tlsPassthrough: $('sPass').value.split(/[\n,]/).map((x) => x.trim()).filter(Boolean) };
+  const patch = {
+    cors: $('sCors').checked, forceHttp1: $('sH1').checked, ipWatch: $('sIpWatch').checked, ipWatchSec: Number($('sIpSec').value) || 15,
+    tlsPassthrough: $('sPass').value.split(/[\n,]/).map((x) => x.trim()).filter(Boolean) };
   if (S.browser && S.browser !== S.data?.browser) patch.browser = S.browser;
   await busy($('sSave'), 'Saving…', async () => { S.data = await post('/api/settings', patch); });
   S.browser = S.data.browser; renderTls(); $('tlsCli').hidden = !S.data.browserFromCli;

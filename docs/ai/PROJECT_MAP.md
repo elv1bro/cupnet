@@ -1878,6 +1878,11 @@ npm run pack:mini        # standalone dist/CupNet mini.app (or dist/cupnet-mini/
   - `mini/proxy-store.js`:
     - `ProxyStore`: encrypted profiles in `proxies.json` + `proxies.key`.
     - `ProxyManager`: test, connect, kill switch, a self-loop guard, and restore.
+  - `mini/ip-monitor.js`: `IpMonitor`, the exit-IP monitor.
+    - It gets its context from `ProxyManager.connectionContext()` and feeds results back through `adoptEgress`.
+    - `onChange` calls `noteSwitch()`, so a user switch becomes a `switch` event and not a `change`.
+    - An answer for a connection that changed during the check is dropped.
+    - History is `<data>/ip-history.jsonl`. Events are also written to the session log via `SessionLog.logIp` (kind `ip`).
   - `mini/har.js`: HAR 1.2.
   - `mini/browser-libs.json`: browser libs copied into the pack and served at `/lib/*`.
 - `upstream-tunnel.js` (`connectThroughProxy`) gives the raw MITM paths (TLS passthrough, WebSocket) http, https, socks4(a) and socks5(h) upstreams (A-410).

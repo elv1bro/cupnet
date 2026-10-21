@@ -265,6 +265,7 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
             browser: app.browser,
             upstream: app.mitm?.upstream ? String(app.mitm.upstream).replace(/\/\/[^@/]*@/, '//***@') : null,
             proxy: app.proxies?.status() || null,
+            ipWatch: app.ipMonitor?.summary() || null,
             paused: app._paused?.size || 0,
             trust: app.trust,
             rulesFile: app.rulesFile,
@@ -348,6 +349,23 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
     if (p.startsWith('/api/proxies') || p === '/api/egress') {
         const r = await _proxyRoute(app, req, res, u).catch((e) => _badRequest(res, e));
         if (r !== false) return r;
+    }
+
+    // ── Exit-IP monitor ─────────────────────────────────────────────────────────
+    if (p === '/api/ip-history' && m === 'GET') {
+        const mon = app.ipMonitor;
+        if (!mon) return _send(res, 503, { error: 'IP monitor is not running' });
+        const limit = Math.min(5000, Math.max(1, Number(u.searchParams.get('limit')) || 1000));
+        const after = Number(u.searchParams.get('after')) || 0;
+        return _send(res, 200, { state: mon.summary(), events: mon.history({ limit, after }) });
+    }
+    if (p === '/api/ip-history' && m === 'DELETE') {
+        app.ipMonitor?.clearHistory();
+        return _send(res, 200, { ok: true });
+    }
+    if (p === '/api/ip-history/check' && m === 'POST') {
+        if (!app.ipMonitor) return _send(res, 503, { error: 'IP monitor is not running' });
+        return _send(res, 200, { state: await app.ipMonitor.checkNow() });
     }
 
     if (p === '/api/settings' && m === 'GET') return _send(res, 200, app.getSettings());
@@ -453,7 +471,15 @@ async function _proxyRoute(app, req, res, u) {
     const listing = () => ({ profiles: store.list(), status: pm.status(), testing: pm.testing });
 
     if (p === '/api/egress' && m === 'GET') {
-        const egress = await pm.egress({ force: u.searchParams.get('force') === '1' });
+        const force = u.searchParams.get('force') === '1';
+        const mon = app.ipMonitor;
+        if (force && mon?.enabled) {
+            // The monitor is checking anyway: one check that also lands in the IP history.
+            const st = await mon.checkNow();
+            const egress = st.ok ? mon.egress() : { ok: false, blocked: st.blocked, error: st.lastError || 'IP check failed', at: new Date().toISOString() };
+            return _send(res, 200, { egress, status: pm.status() });
+        }
+        const egress = await pm.egress({ force });
         return _send(res, 200, { egress, status: pm.status() });
     }
     if (p === '/api/proxies' && m === 'GET') return _send(res, 200, listing());

@@ -15,6 +15,7 @@
   <nav id="nav">
     <button data-page="traffic" class="on"><svg viewBox="0 0 16 16"><path d="M2 3h12M2 8h12M2 13h8"/></svg><span>Traffic</span></button>
     <button data-page="proxies"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/></svg><span>Proxies</span></button>
+    <button data-page="ipwatch"><svg viewBox="0 0 16 16"><path d="M1.5 9h3l2-5 3 9 2-4h3"/></svg><span>IP monitor</span><i class="count accent" id="ipCount" hidden></i></button>
     <button data-page="repeater"><svg viewBox="0 0 16 16"><path d="M3 6h9l-3-3M13 10H4l3 3"/></svg><span>Repeater</span></button>
     <button data-page="rules"><svg viewBox="0 0 16 16"><path d="M3 3h10v3H3zM3 10h6v3H3z"/></svg><span>Rules</span></button>
     <button data-page="paused"><svg viewBox="0 0 16 16"><path d="M5 3v10M11 3v10"/></svg><span>Breakpoints</span><i class="count" id="pausedCount" hidden></i></button>
@@ -47,7 +48,7 @@
       <div class="toolbar">
         <select id="session" title="Session" class="w-session"></select>
         <input id="q" type="search" placeholder="Filter URL · -exclude · status:4xx method:POST type:xhr mime:json host:example.com">
-        <select id="fKind" title="Entry kind"><option value="request">Requests</option><option value="page-event">Page events</option><option value="">All</option></select>
+        <select id="fKind" title="Entry kind"><option value="request">Requests</option><option value="page-event">Page events</option><option value="ip">IP changes</option><option value="">All</option></select>
         <select id="fMethod" title="Method"><option value="">Method</option></select>
         <select id="fStatus" title="Status"><option value="">Status</option><option>2xx</option><option>3xx</option><option>4xx</option><option>5xx</option><option value="fail">failed</option></select>
         <select id="fType" title="Resource type"><option value="">Type</option></select>
@@ -130,6 +131,47 @@
       </div>
     </section>
 
+    <!-- ── IP monitor ── -->
+    <section id="page-ipwatch" class="page scroll" hidden>
+      <div class="card ipw-hero" id="ipwHero">
+        <div class="ipw-now">
+          <div class="conn-label">Exit IP now</div>
+          <div class="ipw-ip mono" id="ipwIp">—</div>
+          <div class="ipw-geo" id="ipwGeo"></div>
+          <div class="ipw-meta" id="ipwMeta"></div>
+        </div>
+        <div class="ipw-ctl">
+          <div class="ipw-ctl-row" id="ipwSwitch"></div>
+          <div class="ipw-ctl-row"><span class="muted">Every</span><span id="ipwInterval"></span></div>
+          <div class="ipw-ctl-row"><button class="btn primary" id="ipwCheck">Check now</button><span class="ipw-next mono muted" id="ipwNext"></span></div>
+          <div class="ipw-ring" aria-hidden="true"><i id="ipwBar"></i></div>
+        </div>
+      </div>
+      <div class="ipw-tiles" id="ipwTiles"></div>
+      <div class="card">
+        <div class="card-head"><h2>Timeline</h2><span class="spacer"></span><span id="ipwRange"></span></div>
+        <div class="ipw-band" id="ipwBand"></div>
+        <div class="ipw-axis mono" id="ipwAxis"></div>
+        <div class="ipw-legend" id="ipwLegend"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>History</h2><span id="ipwFilter"></span>
+          <input id="ipwQ" type="search" placeholder="Filter IP, city, org, connection…">
+          <span class="spacer"></span>
+          <span class="muted" id="ipwShown"></span>
+          <button class="btn sm" id="ipwCsv" title="Download the history as CSV">CSV</button>
+          <button class="btn sm danger" id="ipwClear" title="Delete the whole IP history">Clear</button>
+        </div>
+        <div class="ipw-scroll"><table class="tbl ipw-tbl">
+          <thead><tr><th class="w-150">Time</th><th class="w-90">Event</th><th class="w-130">IP</th><th class="w-130">Previous</th><th>Location</th><th>Network</th><th class="w-130">Connection</th><th class="w-80 r-al">Held</th></tr></thead>
+          <tbody id="ipwRows"></tbody>
+        </table></div>
+        <div class="empty" id="ipwEmpty" hidden>No IP history yet — the first check runs a few seconds after start.</div>
+      </div>
+      <p class="muted ipw-foot">Each check is one small HTTPS request through the current connection on a fresh tunnel (HTTP/1.1, <code>Connection: close</code>), so a rotating proxy shows its rotation. Location is looked up once per new IP through the same connection. History is kept in <code>ip-history.jsonl</code> in the data folder; changes are also written to the session log (kind <code>ip</code>).</p>
+    </section>
+
     <!-- ── Repeater ── -->
     <section id="page-repeater" class="page" hidden>
       <div class="toolbar">
@@ -207,6 +249,7 @@
         <h2>Connection</h2>
         <label class="switch"><input type="checkbox" id="sCors"><span></span>Add permissive CORS headers to every response</label>
         <label class="switch"><input type="checkbox" id="sH1"><span></span>Force HTTP/1.1 upstream</label>
+        <label class="switch" title="Ask which exit IP a new connection gets and record every change"><input type="checkbox" id="sIpWatch"><span></span>Monitor the exit IP every <input type="number" id="sIpSec" min="5" max="3600" step="1" class="w-num"> seconds</label>
         <h3>TLS passthrough</h3>
         <p class="muted">Hosts tunnelled without MITM (not logged, not changed) — e.g. Turnstile, certificate-pinned APIs. One per line, <code>*.example.com</code> allowed.</p>
         <textarea id="sPass" class="mono code short" spellcheck="false"></textarea>

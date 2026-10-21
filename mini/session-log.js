@@ -18,7 +18,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
 
-const SUMMARY_KEYS = ['seq', 'ts', 'kind', 'method', 'url', 'status', 'type', 'duration', 'mime', 'reqSize', 'resSize'];
+const SUMMARY_KEYS = ['seq', 'ts', 'kind', 'method', 'url', 'status', 'type', 'duration', 'mime', 'reqSize', 'resSize', 'note'];
 /** First key after the summary in each line layout (request / page event). */
 const HEAD_CUTS = [',"requestHeaders":', ',"data":'];
 const HEAD_SCAN_BYTES = 64 * 1024;
@@ -245,6 +245,15 @@ class SessionLog extends EventEmitter {
     /** Event posted by an injected page script to /__cupnet/event. */
     logPageEvent(pageUrl, data) {
         return this._append({ kind: 'page-event', url: pageUrl, data });
+    }
+
+    /** Exit-IP monitor event (start / switch / change / error / recovered); `note` is the one-line summary. */
+    logIp(ev) {
+        const where = [ev.city, ev.country].filter(Boolean).join(', ');
+        const note = ev.type === 'error' ? `IP check failed: ${ev.error || 'error'}`
+            : ev.type === 'stop' || ev.type === 'blocked' ? `IP monitor ${ev.type === 'stop' ? 'stopped' : 'blocked'}: ${ev.note || ''}`
+            : `${ev.prevIp && ev.prevIp !== ev.ip ? `${ev.prevIp} → ` : ''}${ev.ip}${where ? ` · ${where}` : ''}${ev.label ? ` · ${ev.label}` : ''}`;
+        return this._append({ kind: 'ip', type: ev.type, note, data: ev });
     }
 
     list(after = 0, limit = 1000) { return this.index.list(after, limit); }

@@ -110,6 +110,28 @@ Pages can report back with a same-origin request:
   - **Kill switch**: while no proxy is connected, nothing leaves directly. Chrome gets 502 and
     Repeater gets 409.
   - A profile pointing at mini's own proxy port is refused, because it would loop.
+- **IP monitor**: checks the exit IP every 15 s (5 s to 1 h, or off) and keeps a history of
+  every change.
+  - Each check is one small HTTPS request through the current connection (direct, CLI
+    upstream or the connected profile) on a fresh tunnel. The worker gets `forceHttp1` and
+    `Connection: close`, so a rotating proxy shows its real rotation. The endpoints are ipify,
+    then checkip.amazonaws.com, then icanhazip. The location comes from ipinfo, or ipwho as a
+    fallback, once per new IP, through the same connection.
+  - At 15 s this is about 5,760 tiny requests a day. The checks are not written to the
+    traffic log.
+  - Event types:
+    - `start`: first IP of a run.
+    - `switch`: you changed the connection.
+    - `change`: the IP changed by itself.
+    - `error`: first failed check of an outage. `recovered` is logged when checks work again.
+    - `blocked`: the kill switch is on and no proxy is connected; checks are skipped.
+    - `stop`: the app quit or the monitor was turned off.
+  - Changes and switches carry `heldMs`, how long the previous IP lasted.
+  - The page has the current IP with how long it has held, stat tiles, a timeline (1 h, 6 h,
+    24 h, 7 d) with one colour per IP, and the history table with a filter, search and CSV export.
+  - A `change` or `error` raises a toast unless the profile is rotating.
+  - Events are also written to the session log as kind `ip`, which the Traffic kind select can
+    show. Proxy URLs and credentials are never stored in the history.
 - **Repeater**: edit and resend any request (method, URL, headers, body) through the same worker
   and upstream. Import from curl; generate code as curl, fetch, axios, Python requests, Go or PHP.
   Each send is logged with type `repeater`. Cmd/Ctrl+Enter sends.
@@ -119,7 +141,7 @@ Pages can report back with a same-origin request:
 - **Breakpoints**: a rule with **Pause** holds matching requests. Edit method, URL, headers and
   body, then **Forward** or **Block**.
 - **Settings**: TLS profile (`--browser` overrides it for one run), TLS-passthrough domains, CORS
-  bypass, force HTTP/1.1. Stored in `settings.json`.
+  bypass, force HTTP/1.1, IP monitor on/off and interval. Stored in `settings.json`.
 - **Sessions**: open, download JSONL or HAR, seal.
 
 ## API
@@ -145,7 +167,13 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
   - `POST /api/proxies/test` (`{ids}`, or all), `/disconnect`, `/kill-switch` (`{enabled}`),
     `/new-ip`.
   - `PUT|DELETE /api/proxies/:id`, `POST /api/proxies/:id/duplicate|test|connect|new-ip`.
-  - `GET /api/egress[?force=1]`.
+  - `GET /api/egress[?force=1]`. While the IP monitor is on, `force=1` runs a monitor check.
+- IP monitor:
+  - `GET /api/ip-history?limit=N&after=ID`: `{state, events}`, newest first. `state.epoch`
+    changes when the history is reloaded or cleared; refetch everything when it does.
+  - `POST /api/ip-history/check`: check now.
+  - `DELETE /api/ip-history`: clear the history.
+  - `/api/status` carries the monitor summary as `ipWatch`.
 - `GET|POST /api/settings`
 - `POST /api/replay` (`{method, url, headers: [[k, v]], body}`). Only http(s) is accepted. It
   returns 409 while the kill switch blocks egress.
@@ -165,7 +193,10 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
   `node:sqlite` is available.
 - `proxies.json` + `proxies.key`: proxy profiles, the active profile and the kill switch.
   Passwords are AES-256-GCM encrypted with the key file.
-- `settings.json`: TLS profile, passthrough domains, CORS, force HTTP/1.1.
+- `settings.json`: TLS profile, passthrough domains, CORS, force HTTP/1.1, `ipWatch`,
+  `ipWatchSec`.
+- `ip-history.jsonl`: the IP monitor history (mode 0600, append-only). The newest 5,000 events
+  are kept, and the file is compacted on load.
 - `sessions/<sessionId>.jsonl`: one file per run, one JSON line per entry.
 - `keys/`, `sealed/`
 - `chrome-profile/`: the proxied Chrome.

@@ -550,6 +550,31 @@ class ProxyManager {
 
     get testing() { return [...this._testing]; }
 
+    /**
+     * What the exit-IP monitor needs about the current connection. `proxy` is used for its requests
+     * only; the monitor never stores it (it can hold credentials).
+     */
+    connectionContext() {
+        const p = this.store.activeId ? this.store.get(this.store.activeId) : null;
+        const pub = p ? this.store.publicProfile(p) : null;
+        return {
+            worker: this.mitm.worker,
+            proxy: this.mitm.upstream || null,
+            browser: this.mitm.browser,
+            blocked: this.mitm.isEgressBlocked(),
+            blockReason: this.mitm.isEgressBlocked() ? this.mitm.getEgressBlockReason() : '',
+            label: this.cliUpstream ? 'CLI upstream' : (pub ? pub.name : 'Direct'),
+            mode: this.cliUpstream ? 'cli' : (pub ? pub.sessionMode : 'direct'),
+        };
+    }
+
+    /** Take an exit IP measured elsewhere (the IP monitor) as the current egress. */
+    adoptEgress(eg) {
+        if (!eg || !eg.ok) return;
+        this._egress = eg;
+        this._egressAt = Date.now();
+    }
+
     /** Current exit IP/geo of the MITM (cached for a minute; force re-checks). */
     async egress({ force = false } = {}) {
         if (!force && this._egress && Date.now() - this._egressAt < EGRESS_CACHE_MS) return this._egress;

@@ -28,6 +28,7 @@ const { launchChrome, launchAppWindow } = require('./chrome');
 const { createUiServer } = require('./ui-server');
 const { RuleStore } = require('./rule-store');
 const { ProxyStore, ProxyManager } = require('./proxy-store');
+const { IpMonitor } = require('./ip-monitor');
 
 const PAGE_EVENT_MAX_BYTES = 64 * 1024;
 /** Bodies are logged in full; this only guards V8's string limit (base64 of the body must fit). */
@@ -53,6 +54,9 @@ const DEFAULT_SETTINGS = {
     tlsPassthrough: ['challenges.cloudflare.com'],
     cors: false,
     forceHttp1: false,
+    /** Exit-IP monitor: check every ipWatchSec seconds and keep a history of changes. */
+    ipWatch: true,
+    ipWatchSec: 15,
 };
 
 const TEXT_MIME = /^(text\/|application\/(json|[\w.+-]*\+json|javascript|ecmascript|xml|[\w.+-]*\+xml|x-www-form-urlencoded|graphql)|image\/svg\+xml)/i;
@@ -108,6 +112,7 @@ class MiniApp {
         this.ui = null;
         this.log = null;
         this.proxies = null;
+        this.ipMonitor = null;
         this.settings = { ...DEFAULT_SETTINGS };
         /** Requests paused by breakpoint rules: id → { info, resolve, timer } */
         this._paused = new Map();
@@ -125,6 +130,7 @@ class MiniApp {
     get proxiesFile() { return path.join(this.dataDir, 'proxies.json'); }
     get proxiesKeyFile() { return path.join(this.dataDir, 'proxies.key'); }
     get settingsFile() { return path.join(this.dataDir, 'settings.json'); }
+    get ipHistoryFile() { return path.join(this.dataDir, 'ip-history.jsonl'); }
 
     /** Encrypt a saved session into sealed/<id>.cupsess (its key file is created on first use). */
     sealSession(sessionId) {
@@ -181,8 +187,19 @@ class MiniApp {
         });
         this._applySettings();
         await this.mitm.start();
-        this.proxies = new ProxyManager(new ProxyStore(this.proxiesFile, this.proxiesKeyFile), this.mitm, { cliUpstream: this.upstream, selfPort: this.mitmPort });
+        this.proxies = new ProxyManager(new ProxyStore(this.proxiesFile, this.proxiesKeyFile), this.mitm, {
+            cliUpstream: this.upstream, selfPort: this.mitmPort, onChange: () => this.ipMonitor?.noteSwitch(),
+        });
         this.proxies.restore();
+        this.ipMonitor = new IpMonitor({
+            file: this.ipHistoryFile,
+            getContext: () => this.proxies.connectionContext(),
+            enabled: this.settings.ipWatch,
+            intervalMs: this.settings.ipWatchSec * 1000,
+        });
+        this.ipMonitor.on('ok', (eg) => this.proxies?.adoptEgress(eg));
+        this.ipMonitor.on('event', (ev) => this.log?.logIp(ev));
+        this.ipMonitor.start();
 
         this.token = _readOrCreateToken(this.tokenFile);
         this.ui = createUiServer(this);
@@ -278,7 +295,12 @@ class MiniApp {
             .map((d) => String(d || '').trim().toLowerCase())
             .filter((d) => /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(d))
             .slice(0, 200);
-        return { browser, tlsPassthrough: [...new Set(domains)], cors: !!s.cors, forceHttp1: !!s.forceHttp1 };
+        const sec = Math.round(Number(s.ipWatchSec));
+        return {
+            browser, tlsPassthrough: [...new Set(domains)], cors: !!s.cors, forceHttp1: !!s.forceHttp1,
+            ipWatch: s.ipWatch !== false,
+            ipWatchSec: Number.isFinite(sec) ? Math.min(3600, Math.max(5, sec)) : DEFAULT_SETTINGS.ipWatchSec,
+        };
     }
 
     _applySettings() {
@@ -287,6 +309,7 @@ class MiniApp {
         this.mitm.setTlsPassthroughDomains(this.settings.tlsPassthrough);
         this.mitm.setGlobalCorsEnabled(this.settings.cors);
         this.mitm.setForceHttp1(this.settings.forceHttp1);
+        this.ipMonitor?.configure({ enabled: this.settings.ipWatch, intervalMs: this.settings.ipWatchSec * 1000 });
     }
 
     getSettings() {
@@ -414,6 +437,7 @@ class MiniApp {
         try { this.interceptor?.setLocalEndpointHandler(null); } catch { /* ignore */ }
         try { this.interceptor?.setBreakpointHandler(null); } catch { /* ignore */ }
         for (const id of [...this._paused.keys()]) this.resumeRequest(id, { action: 'forward' });
+        if (this.ipMonitor) { this.ipMonitor.stop(); this.ipMonitor = null; }
         if (this.ui) { await this.ui.close().catch(() => {}); this.ui = null; }
         if (this.mitm) { this.mitm.stop(); this.mitm = null; }
         try { this.interceptor?.setRuleStore(null); } catch { /* ignore */ }
