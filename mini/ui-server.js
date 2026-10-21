@@ -31,6 +31,7 @@ const UI_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-
 const STATIC = new Map([
     ['/ui.css', [path.join(__dirname, 'ui.css'), 'text/css; charset=utf-8']],
     ['/ui.js', [path.join(__dirname, 'ui.js'), 'text/javascript; charset=utf-8']],
+    ['/ui-inspect.js', [path.join(__dirname, 'ui-inspect.js'), 'text/javascript; charset=utf-8']],
     ...Object.entries(JSON.parse(fs.readFileSync(path.join(__dirname, 'browser-libs.json'), 'utf8')))
         .map(([k, rel]) => [`/${k}`, [path.join(__dirname, '..', rel), 'text/javascript; charset=utf-8']]),
 ]);
@@ -375,6 +376,18 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
         if (!app.cookies) return _send(res, 503, { error: 'Cookie manager is not running' });
         const r = await _cookieRoute(app.cookies, req, res, u).catch((e) => _badRequest(res, e));
         if (r !== false) return r;
+    }
+
+    // ── Page agent: Console REPL + page analyzer ───────────────────────────────
+    if (p === '/api/pages' && m === 'GET') return _send(res, 200, app.listPages());
+    const pg = /^\/api\/pages\/([0-9a-f]{16,32})\/(eval|analyze|action)$/.exec(p);
+    if (pg && m === 'POST') {
+        const body = (await _readJson(req).catch(() => null)) || {};
+        try {
+            if (pg[2] === 'eval') return _send(res, 200, await app.evalInPage(pg[1], body.code, { await: body.await }));
+            if (pg[2] === 'analyze') return _send(res, 200, await app.analyzePage(pg[1], { fetchMissing: !!body.fetchMissing }));
+            return _send(res, 200, await app.pageAction(pg[1], body));
+        } catch (e) { return _badRequest(res, e); }
     }
 
     if (p === '/api/settings' && m === 'GET') return _send(res, 200, app.getSettings());

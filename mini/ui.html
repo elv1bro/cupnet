@@ -9,12 +9,15 @@
 <script src="/lib/curl.js" defer></script>
 <script src="/lib/diff.js" defer></script>
 <script src="/ui.js" defer></script>
+<script src="/ui-inspect.js" defer></script>
 </head>
 <body>
 <aside id="side">
   <div class="brand"><span class="logo">◆</span><span>CupNet <b>mini</b></span></div>
   <nav id="nav">
     <button data-page="traffic" class="on"><svg viewBox="0 0 16 16"><path d="M2 3h12M2 8h12M2 13h8"/></svg><span>Traffic</span></button>
+    <button data-page="console"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4 6l2.5 2L4 10M8 10.5h4"/></svg><span>Console</span><i class="count err" id="cnCount" hidden></i></button>
+    <button data-page="analyzer"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14M5 7h4M7 5v4"/></svg><span>Page analyzer</span></button>
     <button data-page="proxies"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/></svg><span>Proxies</span></button>
     <button data-page="ipwatch"><svg viewBox="0 0 16 16"><path d="M1.5 9h3l2-5 3 9 2-4h3"/></svg><span>IP monitor</span><i class="count accent" id="ipCount" hidden></i></button>
     <button data-page="compare"><svg viewBox="0 0 16 16"><path d="M2 3h5v10H2zM9 3h5v10H9z"/><path d="M4 6h1M4 9h1M11 7h1M11 10h1"/></svg><span>Compare</span></button>
@@ -51,7 +54,7 @@
       <div class="toolbar">
         <select id="session" title="Session" class="w-session"></select>
         <input id="q" type="search" placeholder="Filter URL · -exclude · status:4xx method:POST type:xhr mime:json host:example.com">
-        <select id="fKind" title="Entry kind"><option value="request">Requests</option><option value="page-event">Page events</option><option value="ip">IP changes</option><option value="">All</option></select>
+        <select id="fKind" title="Entry kind"><option value="request">Requests</option><option value="page-event">Page events</option><option value="ip">IP changes</option><option value="console">Console</option><option value="">All</option></select>
         <select id="fMethod" title="Method"><option value="">Method</option></select>
         <select id="fStatus" title="Status"><option value="">Status</option><option>2xx</option><option>3xx</option><option>4xx</option><option>5xx</option><option value="fail">failed</option></select>
         <select id="fType" title="Resource type"><option value="">Type</option></select>
@@ -92,6 +95,48 @@
           </div>
           <div id="dbody"></div>
         </div>
+      </div>
+    </section>
+
+    <!-- ── Console ── -->
+    <section id="page-console" class="page" hidden>
+      <div id="cnBanner"></div>
+      <div class="toolbar">
+        <input id="cnQ" type="search" placeholder="Filter messages — text or /regex/" spellcheck="false">
+        <select id="cnDoc" title="Page"></select>
+        <div class="chips" id="cnLevels"></div>
+        <label class="chk" title="Collapse identical consecutive messages into one row with a counter"><input type="checkbox" id="cnGroup">Group similar</label>
+        <label class="chk"><input type="checkbox" id="cnTimes">Timestamps</label>
+        <span class="spacer"></span>
+        <span class="muted" id="cnShown"></span>
+        <button class="btn sm" id="cnPause" title="Stop scrolling new messages in">Pause</button>
+        <button class="btn sm" id="cnClear" title="Clear the view (Ctrl+L) — the session log keeps everything">Clear</button>
+        <button class="btn sm" id="cnExport" title="Save the shown messages as a .log file">Export</button>
+      </div>
+      <div class="cn-wrap">
+        <div id="cnList" class="cn-list"></div>
+        <div id="cnEmpty" class="empty cn-empty"></div>
+        <button class="btn sm cn-jump" id="cnJump" hidden>↓ Newest</button>
+      </div>
+      <div class="cn-prompt">
+        <span class="cn-caret">›</span>
+        <textarea id="cnCode" rows="1" spellcheck="false" autocomplete="off" placeholder="Run JavaScript in the page — Enter runs, Shift+Enter new line, ↑/↓ history"></textarea>
+        <i class="dot busy" id="cnRunDot" hidden></i>
+        <select id="cnTarget" title="Page to run in"></select>
+        <label class="chk" title="Wait for a returned promise; top-level await works either way"><input type="checkbox" id="cnAwait">await</label>
+        <button class="btn primary sm" id="cnRun">Run</button>
+      </div>
+    </section>
+
+    <!-- ── Page analyzer ── -->
+    <section id="page-analyzer" class="page" hidden>
+      <div id="anBanner"></div>
+      <div class="split2">
+        <div class="list-pane an-pages">
+          <div class="toolbar"><input id="anQ" type="search" placeholder="Filter pages…"><label class="chk" title="Also list pages that were closed or navigated away"><input type="checkbox" id="anGone">Closed <span id="anGoneN" class="faint"></span></label></div>
+          <div id="anList" class="plist"></div>
+        </div>
+        <div class="an-main" id="anMain"></div>
       </div>
     </section>
 
@@ -305,6 +350,10 @@
         <h3>TLS passthrough</h3>
         <p class="muted">Hosts tunnelled without MITM (not logged, not changed) — e.g. Turnstile, certificate-pinned APIs. One per line, <code>*.example.com</code> allowed.</p>
         <textarea id="sPass" class="mono code short" spellcheck="false"></textarea>
+        <h3>Page agent</h3>
+        <label class="switch" title="Powers Console and Page analyzer"><input type="checkbox" id="sAgent"><span></span>Add the page agent to proxied HTML pages (console capture, prompt, analyzer)</label>
+        <p class="muted">Inserted on the MITM path only and stripped from the logged document. Strict CSPs get a narrow <code>connect-src</code> exception for <code>/__cupnet/</code>. Pages already open need a reload. Hosts to leave untouched, one per line:</p>
+        <textarea id="sAgentEx" class="mono code short" spellcheck="false"></textarea>
         <div class="row-end"><button class="btn primary" id="sSave">Save settings</button></div>
       </div>
       <div class="card" id="setup"></div>

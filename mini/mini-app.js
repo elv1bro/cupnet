@@ -30,8 +30,17 @@ const { RuleStore } = require('./rule-store');
 const { ProxyStore, ProxyManager } = require('./proxy-store');
 const { IpMonitor } = require('./ip-monitor');
 const { CookieJar } = require('./cookie-jar');
+const { PageAgents, POLL_IDLE_MS } = require('./page-agents');
+const { buildAgentSource } = require('./page-agent');
+const pageAnalyzer = require('./page-analyzer');
 
 const PAGE_EVENT_MAX_BYTES = 64 * 1024;
+/** Page agent posts (console batches are ≤48 KB; analyzer results carry the page's inline scripts). */
+const AGENT_CONSOLE_MAX_BYTES = 256 * 1024;
+const AGENT_RESULT_MAX_BYTES = 16 * 1024 * 1024;
+const AGENT_SMALL_MAX_BYTES = 16 * 1024;
+const CONSOLE_BATCH_MAX = 500;
+const DOMAIN_RE = /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
 /** Bodies are logged in full; this only guards V8's string limit (base64 of the body must fit). */
 const DEFAULT_LOG_BODY_MAX_BYTES = 256 * 1024 * 1024;
 const LAUNCH_CODE_TTL_MS = 60 * 1000;
@@ -58,6 +67,13 @@ const DEFAULT_SETTINGS = {
     /** Exit-IP monitor: check every ipWatchSec seconds and keep a history of changes. */
     ipWatch: true,
     ipWatchSec: 15,
+    /**
+     * Inject the page agent (console capture, Console REPL, page analyzer) into HTML documents. Off by
+     * default: it wraps console.* and polls /__cupnet/agent/*, which a page can notice.
+     */
+    pageAgent: false,
+    /** Hosts (and their subdomains, or *.host) the agent is never injected into. */
+    pageAgentExclude: ['challenges.cloudflare.com'],
 };
 
 const TEXT_MIME = /^(text\/|application\/(json|[\w.+-]*\+json|javascript|ecmascript|xml|[\w.+-]*\+xml|x-www-form-urlencoded|graphql)|image\/svg\+xml)/i;
@@ -74,6 +90,29 @@ function _readOrCreateToken(file) {
     const t = crypto.randomBytes(24).toString('base64url');
     fs.writeFileSync(file, `${t}\n`, { mode: 0o600 });
     return t;
+}
+
+function _jsonResponse(statusCode, obj) {
+    return {
+        statusCode,
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+        bodyBase64: Buffer.from(JSON.stringify(obj), 'utf8').toString('base64'),
+    };
+}
+
+const _NO_CONTENT = () => ({ statusCode: 204, headers: { 'Cache-Control': 'no-store' }, bodyBase64: '' });
+
+function _reqBody(req) {
+    return req.bodyBase64 != null
+        ? Buffer.from(String(req.bodyBase64), 'base64')
+        : Buffer.from(String(req.body ?? ''), 'utf8');
+}
+
+function _parseList(v) {
+    return (Array.isArray(v) ? v : String(v || '').split(/[\s,]+/))
+        .map((d) => String(d || '').trim().toLowerCase())
+        .filter((d) => DOMAIN_RE.test(d))
+        .slice(0, 200);
 }
 
 function _textResponse(statusCode, text, extraHeaders = {}) {
@@ -117,6 +156,9 @@ class MiniApp {
         this.settings = { ...DEFAULT_SETTINGS };
         /** Requests paused by breakpoint rules: id → { info, resolve, timer } */
         this._paused = new Map();
+        /** Pages running the page agent (console + analyzer). */
+        this.pages = new PageAgents();
+        this._agentSource = null;
     }
 
     get caDir() { return path.join(this.dataDir, 'ca'); }
@@ -170,6 +212,7 @@ class MiniApp {
         interceptor.setRuleStore(this.rules);
         interceptor.setLocalEndpointHandler((req) => this._handleLocalEndpoint(req));
         interceptor.setBreakpointHandler((opts, rule) => this._pauseRequest(opts, rule));
+        interceptor.setDocumentScriptsProvider((opts) => this._documentScripts(opts));
         this._loadSettings();
 
         this.log = new SessionLog({ dir: this.sessionsDir });
@@ -185,6 +228,10 @@ class MiniApp {
             onRequestLogged: (e) => {
                 // Our own beacons are already logged as page events.
                 if (/^https?:\/\/[^/]+\/__cupnet\//i.test(String(e.url || ''))) return;
+                if (this.settings.pageAgent || this._agentSource) {
+                    const s = pageAnalyzer.stripAgentFromLoggedDocument(e.responseBody, e.responseHeaders);
+                    if (s) e = { ...e, responseBody: s.body, responseHeaders: s.headers };
+                }
                 this.log.logRequest(e);
                 this.cookies.observe(e);
             },
@@ -280,9 +327,162 @@ class MiniApp {
             const h = req.headers || {};
             const referer = h.referer || h.Referer || `${u.origin}/`;
             this.log.logPageEvent(String(referer), data);
-            return { statusCode: 204, headers: { 'Cache-Control': 'no-store' }, bodyBase64: '' };
+            return _NO_CONTENT();
+        }
+        if (sub === 'console' || sub.startsWith('agent/')) return this._handleAgentEndpoint(sub, u.origin, req);
+        return _textResponse(404, 'unknown CupNet endpoint');
+    }
+
+    // ── Page agent (console + analyzer) ─────────────────────────────────────────
+
+    _agentExcluded(host) {
+        const h = String(host || '').toLowerCase();
+        return this.settings.pageAgentExclude.some((d) => {
+            const base = d.startsWith('*.') ? d.slice(2) : d;
+            return h === base || h.endsWith(`.${base}`);
+        });
+    }
+
+    /** request-interceptor document scripts provider: the agent for every HTML document load. */
+    _documentScripts(opts) {
+        if (!this.settings.pageAgent) return null;
+        let host = '';
+        try { host = new URL(opts.url).hostname; } catch { return null; }
+        if (this._agentExcluded(host)) return null;
+        if (!this._agentSource) this._agentSource = buildAgentSource({ poll: POLL_IDLE_MS });
+        return [{ source: this._agentSource, position: 'head', name: pageAnalyzer.AGENT_RULE_NAME, connectSelf: true }];
+    }
+
+    _handleAgentEndpoint(sub, origin, req) {
+        if (!/^POST$/i.test(req.method || '')) return _textResponse(405, 'POST only', { Allow: 'POST' });
+        // Turning the agent off stops the pages that still run it (they quit on 410).
+        if (!this.settings.pageAgent) return _textResponse(410, 'page agent is off');
+        const raw = _reqBody(req);
+        const max = sub === 'agent/result' ? AGENT_RESULT_MAX_BYTES : sub === 'console' ? AGENT_CONSOLE_MAX_BYTES : AGENT_SMALL_MAX_BYTES;
+        if (raw.length > max) return _textResponse(413, 'too large');
+        let b;
+        try { b = JSON.parse(raw.toString('utf8')); } catch { return _textResponse(400, 'bad JSON'); }
+        if (!b || typeof b !== 'object') return _textResponse(400, 'bad body');
+        if (sub === 'agent/poll') {
+            const r = this.pages.poll(origin, b);
+            return r ? _jsonResponse(200, r) : _textResponse(400, 'bad document id');
+        }
+        if (sub === 'agent/hello') {
+            return this.pages.touch(origin, b) ? _NO_CONTENT() : _textResponse(400, 'bad document id');
+        }
+        if (sub === 'agent/result') {
+            return this.pages.result(origin, b) ? _NO_CONTENT() : _textResponse(404, 'no such command');
+        }
+        if (sub === 'console') {
+            const d = this.pages.touch(origin, b);
+            if (!d) return _textResponse(400, 'bad document id');
+            const items = Array.isArray(b.items) ? b.items.slice(0, CONSOLE_BATCH_MAX) : [];
+            this.pages.noteConsole(d, items);
+            for (const it of items) if (it && typeof it === 'object') this.log.logConsole(d.url, it, d.id, d.frame);
+            return _NO_CONTENT();
         }
         return _textResponse(404, 'unknown CupNet endpoint');
+    }
+
+    listPages() {
+        this.pages.watch();
+        return { enabled: !!this.settings.pageAgent, watched: true, pages: this.pages.list() };
+    }
+
+    _page(id) {
+        const d = this.pages.get(id);
+        if (!d) throw Object.assign(new Error('No such page (reload it with the page agent on)'), { status: 404 });
+        return d;
+    }
+
+    /** Run code in a page; the command and its result are logged as console entries. */
+    async evalInPage(id, code, o = {}) {
+        const d = this._page(id);
+        const src = String(code ?? '');
+        if (!src.trim()) throw Object.assign(new Error('Nothing to run'), { status: 400 });
+        if (src.length > 512 * 1024) throw Object.assign(new Error('Code is too long'), { status: 413 });
+        this.log.logConsole(d.url, { lvl: 'command', text: src, sev: 'info' }, d.id, d.frame);
+        let r;
+        try {
+            r = await this.pages.command(d.id, { op: 'eval', code: src, await: o.await !== false });
+        } catch (e) {
+            this.log.logConsole(d.url, { lvl: 'result', text: e.message, sev: 'error' }, d.id, d.frame);
+            throw e;
+        }
+        const entry = this.log.logConsole(d.url, {
+            lvl: 'result', text: r.text || '', sev: r.ok ? 'info' : 'error',
+            args: [r.ok ? r.value : r.error].filter(Boolean),
+        }, d.id, d.frame);
+        return { ...r, seq: entry.seq };
+    }
+
+    /** Form / storage / highlight actions from the analyzer. */
+    async pageAction(id, a = {}) {
+        const d = this._page(id);
+        const op = String(a.op || '');
+        let cmd;
+        if (op === 'form') {
+            const types = ['focus', 'show', 'hide', 'toggle-disabled', 'toggle-readonly', 'toggle-password', 'set-value'];
+            if (!types.includes(a.type)) throw Object.assign(new Error('Unknown form action'), { status: 400 });
+            cmd = { op, type: a.type, form: Math.trunc(Number(a.form)), field: Math.trunc(Number(a.field)), value: a.value == null ? undefined : String(a.value) };
+            if (!Number.isFinite(cmd.form) || !Number.isFinite(cmd.field)) throw Object.assign(new Error('form and field are required'), { status: 400 });
+        } else if (op === 'storage') {
+            if (!a.data || typeof a.data !== 'object' || Array.isArray(a.data)) throw Object.assign(new Error('data must be an object'), { status: 400 });
+            cmd = { op, which: a.which === 'session' ? 'session' : 'local', data: a.data, replace: !!a.replace };
+        } else if (op === 'highlight') {
+            cmd = { op, selector: String(a.selector || '').slice(0, 2000) };
+        } else throw Object.assign(new Error('Unknown action'), { status: 400 });
+        return this.pages.command(d.id, cmd);
+    }
+
+    /** Full analyzer report for a page: the agent's DOM scan plus headers, cookies and endpoints. */
+    async analyzePage(id, o = {}) {
+        const d = this._page(id);
+        const started = Date.now();
+        const r = await this.pages.command(d.id, { op: 'analyze' }, 20000);
+        if (!r.ok || !r.report) throw Object.assign(new Error(r.text || 'The page could not be analyzed'), { status: 502 });
+        const page = this.pages.list().find((p) => p.id === d.id) || { id: d.id, url: d.url, title: d.title };
+        const ua = r.report.extra && r.report.extra.env && r.report.extra.env.userAgent;
+        const out = await pageAnalyzer.enrichReport(r.report, {
+            page, log: this.log, cookies: this.cookies ? this.cookies.list() : [],
+            fetchMissing: !!o.fetchMissing,
+            fetchScript: (url) => this._fetchForAnalyzer(url, d.url, ua),
+        });
+        if (out.endpoints) delete out.endpoints.inlineScripts;
+        return { page, at: Date.now(), durationMs: Date.now() - started, ...out };
+    }
+
+    /** GET a script through the worker (current upstream + TLS profile) and log it as type "analyzer". */
+    async _fetchForAnalyzer(url, referer, userAgent) {
+        if (!/^https?:\/\//i.test(url)) return { statusCode: 0, body: '', error: 'not http(s)' };
+        const proxy = this.mitm.upstream || null;
+        if (!proxy && this.mitm.isEgressBlocked()) return { statusCode: 0, body: '', error: 'egress blocked' };
+        let site = 'cross-site';
+        try { site = new URL(url).origin === new URL(referer).origin ? 'same-origin' : 'cross-site'; } catch { /* keep */ }
+        const pairs = [
+            ...(userAgent ? [['User-Agent', String(userAgent)]] : []),
+            ['Accept', '*/*'], ['Sec-Fetch-Site', site], ['Sec-Fetch-Mode', 'no-cors'], ['Sec-Fetch-Dest', 'script'],
+            ['Referer', referer], ['Accept-Encoding', 'gzip, deflate, br, zstd'],
+        ];
+        const headers = Object.fromEntries(pairs);
+        const t0 = Date.now();
+        let res;
+        try {
+            res = await this.mitm.worker.request({
+                method: 'GET', url, headers, orderedHeaders: pairs, proxy, browser: this.browser,
+                tabId: 'cupnet-mini-analyzer', timeout: 15000, maxRetries: 0, disableRedirects: false,
+                forceHttp1: !!this.settings.forceHttp1,
+            });
+        } catch (e) {
+            return { statusCode: 0, body: '', error: e?.message || String(e) };
+        }
+        const raw = res.bodyBase64 != null ? Buffer.from(String(res.bodyBase64), 'base64') : Buffer.from(String(res.body ?? ''), 'utf8');
+        const body = raw.toString('utf8');
+        this.log.logRequest({
+            method: 'GET', url, status: Number(res.statusCode) || 0, type: 'analyzer', duration: Date.now() - t0,
+            requestHeaders: headers, responseHeaders: res.headers || {}, requestBody: null, responseBody: body || null,
+        });
+        return { statusCode: Number(res.statusCode) || 0, body };
     }
 
     // ── Settings ────────────────────────────────────────────────────────────────
@@ -297,15 +497,14 @@ class MiniApp {
 
     _cleanSettings(s) {
         const browser = TLS_PROFILES.some((t) => t.id === s.browser) || /^chrome_\d+$/.test(String(s.browser)) ? String(s.browser) : DEFAULT_SETTINGS.browser;
-        const domains = (Array.isArray(s.tlsPassthrough) ? s.tlsPassthrough : String(s.tlsPassthrough || '').split(/[\s,]+/))
-            .map((d) => String(d || '').trim().toLowerCase())
-            .filter((d) => /^(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(d))
-            .slice(0, 200);
+        const domains = _parseList(s.tlsPassthrough);
         const sec = Math.round(Number(s.ipWatchSec));
         return {
             browser, tlsPassthrough: [...new Set(domains)], cors: !!s.cors, forceHttp1: !!s.forceHttp1,
             ipWatch: s.ipWatch !== false,
             ipWatchSec: Number.isFinite(sec) ? Math.min(3600, Math.max(5, sec)) : DEFAULT_SETTINGS.ipWatchSec,
+            pageAgent: !!s.pageAgent,
+            pageAgentExclude: [...new Set(_parseList(s.pageAgentExclude))],
         };
     }
 
@@ -442,6 +641,8 @@ class MiniApp {
     async stop() {
         try { this.interceptor?.setLocalEndpointHandler(null); } catch { /* ignore */ }
         try { this.interceptor?.setBreakpointHandler(null); } catch { /* ignore */ }
+        try { this.interceptor?.setDocumentScriptsProvider(null); } catch { /* ignore */ }
+        this.pages.clear();
         for (const id of [...this._paused.keys()]) this.resumeRequest(id, { action: 'forward' });
         if (this.ipMonitor) { this.ipMonitor.stop(); this.ipMonitor = null; }
         if (this.ui) { await this.ui.close().catch(() => {}); this.ui = null; }

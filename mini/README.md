@@ -95,6 +95,32 @@ Pages can report back with a same-origin request:
   - **HAR** exports the rows the current filter shows (the whole session when no filter is
     set). From the detail pane any request can go to Repeater, be copied as curl, or seed a
     Mock or Pause rule.
+- **Console** (needs **Settings → Page agent**): the browser console of every page Chrome has
+  open, without DevTools or CDP.
+  - The page agent is injected on the MITM path into HTML documents (with the page's CSP nonce)
+    and stripped again from the logged document. It wraps `console.*` and reports uncaught
+    errors and unhandled rejections in batches to `/__cupnet/console`.
+  - Level chips (log, info, warn, error, debug), a text/regex filter, collapsible
+    `console.group` nesting and an expandable value tree (Map, Set, Error, DOM nodes, cycles;
+    getters are never run).
+  - The prompt runs code in the selected page or frame, with history (↑/↓) and top-level
+    `await`. Pages whose CSP blocks `eval` fall back to a nonce'd `<script>`.
+  - **Pause**, **Clear** (Ctrl/Cmd+L), **Export**. Console rows are also logged as Traffic entries
+    (kind `console`).
+- **Page analyzer**: a report for any open page, from the agent's DOM scan plus the logged
+  traffic.
+  - **Overview**: title, transfer size, counts and technologies (from the DOM and from
+    response headers).
+  - **Forms**: every form and field. Focus, show/hide, enable, make writable and reveal
+    passwords in the live page; send a form to Repeater or copy it as curl.
+  - **Captcha**: detection only (reCAPTCHA, hCaptcha, Turnstile, GeeTest, …), with the widget
+    parameters and **Highlight** in the page.
+  - **Endpoints**: URLs found in scripts and the DOM, with the hits from the session. **Fetch
+    and rescan** loads the scripts the session did not log.
+  - **Storage**: local and session storage, editable in the page. **Cookies**: the page's
+    cookies from the cookie manager.
+  - **Security**: response-header audit (CSP, HSTS, framing, cookie flags, …), graded ok, to
+    review and missing. **Meta**: meta tags and links.
 - **Proxies**: the upstream proxy manager.
   - Profiles come from a provider preset (decodo, …) or a custom template such as
     `http://user-{SID}:{PASSWORD}@host:{RAND:10001-10100}`.
@@ -177,7 +203,10 @@ Pages can report back with a same-origin request:
 - **Breakpoints**: a rule with **Pause** holds matching requests. Edit method, URL, headers and
   body, then **Forward** or **Block**.
 - **Settings**: TLS profile (`--browser` overrides it for one run), TLS-passthrough domains, CORS
-  bypass, force HTTP/1.1, IP monitor on/off and interval. Stored in `settings.json`.
+  bypass, force HTTP/1.1, IP monitor on/off and interval, page agent on/off and its excluded
+  domains (`challenges.cloudflare.com` by default). Stored in `settings.json`.
+  The page agent is off by default: it wraps `console.*` and polls `/__cupnet/agent/*`, which a
+  page can notice.
 - **Sessions**: open, download JSONL or HAR, seal.
 
 ## API
@@ -219,6 +248,15 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
   - `POST /api/cookies/overrides`, `POST|DELETE /api/cookies/overrides/:id`: wire rules.
   - `POST /api/cookies/import` (`{text, dryRun}`), `GET /api/cookies/export?format=json|netscape&ids=…&domain=…`.
   - `/api/status` carries `cookies: {rev, epoch, cookies, pending, overrides}` (counts), so the UI reloads only on change.
+- Page agent (Console and Page analyzer):
+  - `GET /api/pages`: the pages that run the agent, with console counts.
+  - `POST /api/pages/:id/eval` (`{code, await}`): run code; the command and its result are
+    logged as console entries.
+  - `POST /api/pages/:id/analyze` (`{fetchMissing}`): the analyzer report.
+  - `POST /api/pages/:id/action`: `{op: 'form', type, form, field, value}`,
+    `{op: 'storage', which: 'local'|'session', data, replace}` or `{op: 'highlight', selector}`.
+  - Pages talk to mini through `POST /__cupnet/console` and `/__cupnet/agent/hello|poll|result`
+    on their own origin. These answer 410 while the agent is off.
 - `GET|POST /api/settings`
 - `POST /api/replay` (`{method, url, headers: [[k, v]], body}`). Only http(s) is accepted. It
   returns 409 while the kill switch blocks egress.

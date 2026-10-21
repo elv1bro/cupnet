@@ -11,6 +11,9 @@
  * script directive (header and <meta http-equiv>) is patched so that nonce is allowed — without
  * breaking the page's own inline scripts (adding a nonce to a policy that relies on 'unsafe-inline'
  * would switch 'unsafe-inline' off, so such policies are left as they are).
+ * Report-Only policies get the same patch, so the site's report endpoint never hears about our scripts.
+ * Scripts with `connectSelf` (they post to /__cupnet/* on the page's origin) also get 'self' in the
+ * effective connect directive.
  */
 
 const crypto = require('crypto');
@@ -54,13 +57,41 @@ function escapeScriptSource(src) {
 
 const NONCE_OR_HASH_RE = /^'(nonce-|sha256-|sha384-|sha512-)/i;
 
+/** True when a source list already lets the page fetch its own origin. */
+function _allowsSelf(sources) {
+    return sources.some((s) => {
+        const l = s.toLowerCase();
+        return l === "'self'" || l === '*' || l === 'https:' || l === 'http:';
+    });
+}
+
 /**
  * Allow `nonce` in one CSP policy string (one header value). Returns the policy unchanged when
  * inline scripts are already allowed or when no directive restricts scripts.
+ * @param {{ connectSelf?: boolean }} [opts] - also allow same-origin fetch/beacon (connect-src, or a
+ *   new connect-src copied from default-src when only default-src restricts it)
  */
-function patchCspPolicy(policy, nonce) {
+function patchCspPolicy(policy, nonce, opts = {}) {
     const directives = String(policy || '').split(';').map((p) => p.trim().split(/\s+/).filter(Boolean));
     const find = (name) => directives.findIndex((d) => d[0] && d[0].toLowerCase() === name);
+    let connectChanged = false;
+    if (opts.connectSelf) {
+        const ci = find('connect-src');
+        const di = find('default-src');
+        if (ci >= 0) {
+            const src = directives[ci].slice(1);
+            if (!_allowsSelf(src)) {
+                directives[ci] = [directives[ci][0], ...src.filter((x) => x.toLowerCase() !== "'none'"), "'self'"];
+                connectChanged = true;
+            }
+        } else if (di >= 0) {
+            const src = directives[di].slice(1);
+            if (!_allowsSelf(src)) {
+                directives.push(['connect-src', ...src.filter((x) => x.toLowerCase() !== "'none'" && !NONCE_OR_HASH_RE.test(x)), "'self'"]);
+                connectChanged = true;
+            }
+        }
+    }
     // Inline <script> elements: script-src-elem, else script-src, else default-src.
     const targets = [];
     const elem = find('script-src-elem');
@@ -82,16 +113,38 @@ function patchCspPolicy(policy, nonce) {
         directives[i] = [d[0], ...kept, `'nonce-${nonce}'`];
         changed = true;
     }
-    if (!changed) return policy;
+    if (!changed && !connectChanged) return policy;
     return directives.filter((d) => d.length).map((d) => d.join(' ')).join('; ');
 }
 
-function _patchCspHeaders(headers, nonce) {
+/**
+ * nonce → the CSP the site sent before an injection changed it ({ headers: {key: value}, metas:
+ * [[patchedTag, originalTag]] }), so a traffic log can show the original (takeInjectOriginals). Bounded.
+ */
+const _originals = new Map();
+const MAX_ORIGINALS = 200;
+
+function _remember(nonce, rec) {
+    if (!Object.keys(rec.headers).length && !rec.metas.length) return;
+    _originals.set(nonce, rec);
+    if (_originals.size > MAX_ORIGINALS) _originals.delete(_originals.keys().next().value);
+}
+
+/** The pre-injection CSP for a response injected with `nonce` (once), or null. */
+function takeInjectOriginals(nonce) {
+    const r = _originals.get(nonce) || null;
+    _originals.delete(nonce);
+    return r;
+}
+
+function _patchCspHeaders(headers, nonce, opts, rec) {
     const out = { ...headers };
     for (const k of Object.keys(out)) {
-        if (k.toLowerCase() !== 'content-security-policy') continue;
+        const lower = k.toLowerCase();
+        if (lower !== 'content-security-policy' && lower !== 'content-security-policy-report-only') continue;
         const v = out[k];
-        out[k] = Array.isArray(v) ? v.map((p) => patchCspPolicy(p, nonce)) : patchCspPolicy(v, nonce);
+        out[k] = Array.isArray(v) ? v.map((p) => patchCspPolicy(p, nonce, opts)) : patchCspPolicy(v, nonce, opts);
+        if (rec && String(out[k]) !== String(v)) rec.headers[k] = v;
     }
     return out;
 }
@@ -99,15 +152,19 @@ function _patchCspHeaders(headers, nonce) {
 const META_CSP_RE = /<meta\b[^>]*http-equiv\s*=\s*["']?content-security-policy["']?[^>]*>/gi;
 const CONTENT_ATTR_RE = /(\bcontent\s*=\s*)(["'])([\s\S]*?)\2/i;
 
-function _patchMetaCsp(html, nonce) {
-    return html.replace(META_CSP_RE, (tag) => tag.replace(CONTENT_ATTR_RE, (m, pre, q, val) => {
-        // CSP keywords use single quotes; inside a '…' attribute they arrive entity-encoded.
-        const decoded = val.replace(/&#39;|&apos;/g, "'");
-        let patched = patchCspPolicy(decoded, nonce);
-        if (patched === decoded) return m;
-        if (q === "'") patched = patched.replace(/'/g, '&#39;');
-        return `${pre}${q}${patched}${q}`;
-    }));
+function _patchMetaCsp(html, nonce, opts, rec) {
+    return html.replace(META_CSP_RE, (tag) => {
+        const next = tag.replace(CONTENT_ATTR_RE, (m, pre, q, val) => {
+            // CSP keywords use single quotes; inside a '…' attribute they arrive entity-encoded.
+            const decoded = val.replace(/&#39;|&apos;/g, "'");
+            let patched = patchCspPolicy(decoded, nonce, opts);
+            if (patched === decoded) return m;
+            if (q === "'") patched = patched.replace(/'/g, '&#39;');
+            return `${pre}${q}${patched}${q}`;
+        });
+        if (rec && next !== tag) rec.metas.push([next, tag]);
+        return next;
+    });
 }
 
 /** Offset where scripts go: after <head>, else after <html>, else after the doctype, else 0. */
@@ -169,7 +226,9 @@ function injectScriptsIntoHtmlResponse(res, scripts, opts = {}) {
     }
 
     const nonce = crypto.randomBytes(16).toString('base64');
-    let html = _patchMetaCsp(body.toString('latin1'), nonce);
+    const cspOpts = { connectSelf: scripts.some((s) => s && s.connectSelf) };
+    const rec = { headers: {}, metas: [] };
+    let html = _patchMetaCsp(body.toString('latin1'), nonce, cspOpts, rec);
 
     const byPos = { head: [], 'body-end': [] };
     for (const s of scripts) {
@@ -186,7 +245,8 @@ function injectScriptsIntoHtmlResponse(res, scripts, opts = {}) {
         html = html.slice(0, at) + byPos[pos].join('') + html.slice(at);
     }
 
-    const outHeaders = _patchCspHeaders(headers, nonce);
+    const outHeaders = _patchCspHeaders(headers, nonce, cspOpts, rec);
+    _remember(nonce, rec);
     for (const k of Object.keys(outHeaders)) {
         const lower = k.toLowerCase();
         // The body is now plain and a different length; validators for the old bytes no longer match.
@@ -202,4 +262,5 @@ module.exports = {
     escapeScriptSource,
     patchCspPolicy,
     injectScriptsIntoHtmlResponse,
+    takeInjectOriginals,
 };

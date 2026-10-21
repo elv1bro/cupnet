@@ -19,6 +19,15 @@ function setLocalEndpointHandler(fn) {
 }
 
 /**
+ * Optional: (opts, matchUrl) => Array<{ source, position?, name?, connectSelf? }> — built-in scripts
+ * for document loads, injected before any `inject` rule (CupNet mini page agent). Errors are ignored.
+ */
+let _documentScriptsProvider = null;
+function setDocumentScriptsProvider(fn) {
+    _documentScriptsProvider = typeof fn === 'function' ? fn : null;
+}
+
+/**
  * Optional: async (opts, rule, meta) => Promise<{ action?: 'forward'|'block', patch?: object }>
  * — breakpoint pause (see main-process / breakpoint.html).
  */
@@ -658,6 +667,14 @@ async function planMitmIntercept(opts, planOptions) {
     let responseDelayMs = 0;
     /** `inject` rules matched so far; applied to the HTML response in finalize (see html-inject.js). */
     const injectScripts = [];
+    if (_documentScriptsProvider && isDocumentRequest(opts.method, opts.headers)) {
+        try {
+            const extra = _documentScriptsProvider(opts, matchUrl);
+            if (Array.isArray(extra)) injectScripts.push(...extra.filter((x) => x && x.source));
+        } catch (e) {
+            safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.document_scripts.failed', context: { url: matchUrl } }, e, 'warn');
+        }
+    }
     const withInject = (post) => (injectScripts.length
         ? { ...(post || { _responseDelayMs: responseDelayMs }), _inject: injectScripts }
         : post);
@@ -1169,6 +1186,7 @@ module.exports = {
     setResolveTabIdFromDetails,
     setBreakpointHandler,
     setLocalEndpointHandler,
+    setDocumentScriptsProvider,
     setRuleStore,
     CUPNET_LOCAL_PATH_PREFIX,
 };

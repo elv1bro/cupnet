@@ -163,7 +163,7 @@ function confirmBox(text, okLabel = 'OK', danger = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Navigation
 // ─────────────────────────────────────────────────────────────────────────────
-const TITLES = { traffic: 'Traffic', proxies: 'Proxies', ipwatch: 'IP monitor', compare: 'Compare', cookies: 'Cookies', repeater: 'Repeater', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
+const TITLES = { traffic: 'Traffic', console: 'Console', analyzer: 'Page analyzer', proxies: 'Proxies', ipwatch: 'IP monitor', compare: 'Compare', cookies: 'Cookies', repeater: 'Repeater', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
 let PAGE = 'traffic';
 function go(page) {
   if (!TITLES[page]) page = 'traffic';
@@ -171,7 +171,7 @@ function go(page) {
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.page === page));
   document.querySelectorAll('#pages > section').forEach((s) => { s.hidden = s.id !== `page-${page}`; });
   $('pageTitle').textContent = TITLES[page];
-  const load = { traffic: () => scheduleDraw(false), proxies: loadProxies, ipwatch: loadIpw, compare: loadCompare, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode }[page];
+  const load = { traffic: () => scheduleDraw(false), console: () => loadConsole(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, compare: loadCompare, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode }[page];
   if (load) guard(load)();
 }
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.page)));
@@ -326,6 +326,7 @@ function ingest(items) {
     addOption($('fMethod'), methods, e.method); addOption($('fType'), types, e.type);
     if (matches(e)) view.push(all.length - 1);
   }
+  if (typeof consoleIngest === 'function') consoleIngest(items);
   scheduleDraw(atBottom && $('follow').checked);
 }
 function refilter() {
@@ -377,10 +378,10 @@ function draw() {
       c[0].textContent = e.seq;
       c[1].textContent = fmtTime(e.ts);
       c[2].textContent = ev ? '' : (e.method || ''); c[2].className = `m m-${e.method || ''}`;
-      c[3].textContent = ev ? (e.kind === 'page-event' ? 'event' : e.kind === 'ip' ? 'ip' : '') : (e.status || 'ERR'); c[3].className = `st ${ev ? '' : stCls(e.status)}`;
+      c[3].textContent = ev ? (e.kind === 'page-event' ? 'event' : e.kind === 'ip' ? 'ip' : e.kind === 'console' ? 'console' : '') : (e.status || 'ERR'); c[3].className = `st ${ev ? '' : stCls(e.status)}${e.kind === 'console' ? ` cn-${e.sev || 'info'}` : ''}`;
       c[4].textContent = e.type || '';
       c[5].textContent = host; c[5].title = host;
-      c[6].textContent = ev && !e.url ? (e.note || e.kind) : p; c[6].title = e.url || e.note || '';
+      c[6].textContent = e.kind === 'console' ? (e.note || '') : ev && !e.url ? (e.note || e.kind) : p; c[6].title = e.kind === 'console' ? `${e.note || ''}\n${e.url || ''}` : e.url || e.note || '';
       c[7].textContent = fmtSize(e.resSize);
       c[8].textContent = e.duration != null ? `${e.duration} ms` : '';
       r.className = `r cols${ev ? ' ev' : ''}${e.type === 'repeater' ? ' rep' : ''}${ev ? '' : !e.status ? ' tf' : e.status >= 500 ? ' t5' : e.status >= 400 ? ' t4' : ''}`;
@@ -422,6 +423,7 @@ function resetView() {
   gen++; all = []; view = []; bySeq = new Map(); selSeq = null; methods.clear(); types.clear();
   for (const s of [$('fMethod'), $('fType')]) while (s.options.length > 1) s.remove(1);
   closeDetail(); buildFilter(); scheduleDraw(true);
+  if (typeof consoleReset === 'function') consoleReset();
 }
 async function streamLive(myGen) {
   let lastSeq = 0;
@@ -538,6 +540,7 @@ function renderDetail() {
   $('dStatus').textContent = isReq ? (e.status || 'ERR') : ''; $('dStatus').className = `badge ${stCls(e.status)}`; $('dStatus').hidden = !isReq;
   $('dUrl').textContent = e.url || e.note || ''; $('dUrl').title = e.url || e.note || '';
   document.querySelector('.dactions').hidden = !isReq;
+  if (e.kind === 'console' && typeof renderConsoleDetail === 'function') { $('dMethod').textContent = e.type || 'console'; renderConsoleDetail(d, e); return; }
   if (!isReq) {
     d.append(sect('Event', kvGrid([['Kind', e.kind], ['URL', e.url || ''], ['Time', new Date(e.ts).toISOString()]])), sect('Data', jsonPre(JSON.stringify(e.data ?? e, null, 2))));
     return;
@@ -1796,6 +1799,7 @@ async function loadSettings() {
   $('sCors').checked = !!s.cors; $('sH1').checked = !!s.forceHttp1;
   $('sIpWatch').checked = s.ipWatch !== false; $('sIpSec').value = s.ipWatchSec || 15;
   $('sPass').value = (s.tlsPassthrough || []).join('\n');
+  $('sAgent').checked = !!s.pageAgent; $('sAgentEx').value = (s.pageAgentExclude || []).join('\n');
   const st = ST || await api('/api/status');
   const setup = clear($('setup'));
   const row = (k, v) => [h('div', null, k), h('div', null, v)];
@@ -1820,11 +1824,13 @@ function renderTls() {
 $('sSave').addEventListener('click', guard(async () => {
   const patch = {
     cors: $('sCors').checked, forceHttp1: $('sH1').checked, ipWatch: $('sIpWatch').checked, ipWatchSec: Number($('sIpSec').value) || 15,
-    tlsPassthrough: $('sPass').value.split(/[\n,]/).map((x) => x.trim()).filter(Boolean) };
+    tlsPassthrough: $('sPass').value.split(/[\n,]/).map((x) => x.trim()).filter(Boolean),
+    pageAgent: $('sAgent').checked, pageAgentExclude: $('sAgentEx').value.split(/[\n,]/).map((x) => x.trim()).filter(Boolean) };
   if (S.browser && S.browser !== S.data?.browser) patch.browser = S.browser;
   await busy($('sSave'), 'Saving…', async () => { S.data = await post('/api/settings', patch); });
   S.browser = S.data.browser; renderTls(); $('tlsCli').hidden = !S.data.browserFromCli;
   $('sPass').value = (S.data.tlsPassthrough || []).join('\n');
+  $('sAgentEx').value = (S.data.pageAgentExclude || []).join('\n');
   toast('Settings saved — they apply to new connections', 'ok');
 }));
 
@@ -2522,9 +2528,9 @@ $('ckImport').addEventListener('click', ckImportModal);
 $('ckExport').addEventListener('click', () => ckExportModal(false));
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Boot
+// Boot (after the deferred ui-inspect.js has run, so its pages and hooks exist)
 // ─────────────────────────────────────────────────────────────────────────────
-(async () => {
+document.addEventListener('DOMContentLoaded', async () => {
   if (!(await auth())) {
     $('login').hidden = false; $('pages').hidden = true; $('stats').textContent = 'no access token';
     return;
@@ -2536,4 +2542,4 @@ $('ckExport').addEventListener('click', () => ckExportModal(false));
   go(store.get('page', 'traffic'));
   grid.focus();
   pollStatus(); setInterval(pollStatus, 2000);
-})();
+});

@@ -10,7 +10,7 @@
  * are indexed the same way by `SessionIndex.open(file)`, which scans only the head of each line.
  *
  * Line layout: summary fields first (seq, ts, kind, method, url, status, type, duration, mime, reqSize,
- * resSize), then headers and bodies. The scanner relies on that order to skip big bodies.
+ * resSize, note, sev, src, doc, g), then headers and bodies (or `data`). The scanner relies on that order to skip big bodies.
  */
 
 const fs = require('fs');
@@ -18,7 +18,10 @@ const path = require('path');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
 
-const SUMMARY_KEYS = ['seq', 'ts', 'kind', 'method', 'url', 'status', 'type', 'duration', 'mime', 'reqSize', 'resSize', 'note'];
+const SUMMARY_KEYS = ['seq', 'ts', 'kind', 'method', 'url', 'status', 'type', 'duration', 'mime', 'reqSize', 'resSize', 'note', 'sev', 'src', 'doc', 'g'];
+/** Console text kept in the summary (the full message and its arguments are in `data`). */
+const CONSOLE_NOTE_MAX = 500;
+const CONSOLE_SEVS = new Set(['error', 'warn', 'info', 'verbose']);
 /** First key after the summary in each line layout (request / page event). */
 const HEAD_CUTS = [',"requestHeaders":', ',"data":'];
 const HEAD_SCAN_BYTES = 64 * 1024;
@@ -245,6 +248,38 @@ class SessionLog extends EventEmitter {
     /** Event posted by an injected page script to /__cupnet/event. */
     logPageEvent(pageUrl, data) {
         return this._append({ kind: 'page-event', url: pageUrl, data });
+    }
+
+    /**
+     * One console message from the page agent (or a Console command / result). Summary: type = level
+     * (log, warn, error, exception, csp, command, result…), note = text, sev, src (file:line), doc (page id),
+     * g (group depth). Arguments, stack and the full text go to `data`.
+     * @param {string} pageUrl
+     * @param {{ lvl?: string, text?: string, src?: string, sev?: string, g?: number, args?: any[], stack?: string, t?: number, collapsed?: boolean }} it
+     * @param {string} [docId]
+     * @param {number} [frame] - 1 when the page is an iframe
+     */
+    logConsole(pageUrl, it, docId, frame) {
+        const text = String(it?.text ?? '');
+        const lvl = String(it?.lvl || 'log').replace(/[^\w-]/g, '').slice(0, 24) || 'log';
+        const data = { text: text.length > CONSOLE_NOTE_MAX ? text : undefined };
+        if (Array.isArray(it?.args) && it.args.length) data.args = it.args;
+        if (it?.stack) data.stack = String(it.stack).slice(0, 16000);
+        if (Number.isFinite(it?.t)) data.t = it.t;
+        if (it?.collapsed) data.collapsed = true;
+        if (frame) data.frame = 1;
+        if (it?.value !== undefined) data.value = it.value;
+        return this._append({
+            kind: 'console',
+            type: lvl,
+            url: String(pageUrl || '').slice(0, 4000),
+            note: text.slice(0, CONSOLE_NOTE_MAX),
+            sev: CONSOLE_SEVS.has(it?.sev) ? it.sev : 'info',
+            src: it?.src ? String(it.src).slice(0, 500) : undefined,
+            doc: docId || undefined,
+            g: Number(it?.g) > 0 ? Math.min(32, Math.floor(Number(it.g))) : undefined,
+            data,
+        });
     }
 
     /** Exit-IP monitor event (start / switch / change / error / recovered); `note` is the one-line summary. */

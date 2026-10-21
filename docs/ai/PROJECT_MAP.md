@@ -1887,6 +1887,12 @@ npm run pack:mini        # standalone dist/CupNet mini.app (or dist/cupnet-mini/
     - `observe()` is fed from every logged request. Wire rules (`pin`/`strip`/`block`) and the queued Chrome ops (set, delete, clear-site) run in the `MitmProxy` hooks `onBeforeUpstream` (after identity rewriting) and `onResponseHead` (on every upstream response, buffered or streamed, including the native fallback; mocks never reach it). The ops are injected as `Set-Cookie` / `Clear-Site-Data` into the next first-party response.
     - State is `<data>/cookies.json` (0600). `rev` bumps on every change, and `/api/status.cookies` carries it so the UI polls cheaply.
   - `mini/compare-diff.js`: the request-compare diff (header/query/cookie multimaps, header order, JSON structure, Myers line diff, hunks). It is an IIFE classic script shared by the UI (`window.CupNetDiff`) and Vitest (`module.exports`). Library scripts must not leak top-level names: they share one global lexical scope with `ui.js`.
+  - Page agent (Console + Page analyzer, off by default via `settings.pageAgent`):
+    - `mini/page-agent.js`: the in-page script, injected through the request-interceptor document-scripts provider (`MiniApp._documentScripts`, `connectSelf`, CSP nonce). `pageAgentMain(cfg, hooks)`: tests pass `{test: true, window: fakeWindow, expose}` so nothing touches the real global and no hello/poll runs.
+    - `mini/page-agents.js`: `PageAgents`, the per-document registry (origin + id checked on every call), command queue with long-poll, results and console counts.
+    - `mini/page-analyzer.js`: `auditSecurityHeaders` (statuses `good|warn|bad|info`), `techFromHeaders`, `enrichReport`, and `stripAgentFromLoggedDocument`, which removes the agent (and restores the CSP) from the logged HTML so the session shows what the site sent.
+    - `/__cupnet/console` and `/__cupnet/agent/*` are answered in `MiniApp._handleAgentEndpoint`; they are reachable by any site, so they never return logged data.
+    - `mini/ui-inspect.js`: the Console and Page analyzer views. It loads after `ui.js` and shares its global scope (`h`, `PG`, `CN`, `AN`).
   - `mini/har.js`: HAR 1.2.
   - `mini/browser-libs.json`: browser libs copied into the pack and served at `/lib/*`.
 - `upstream-tunnel.js` (`connectThroughProxy`) gives the raw MITM paths (TLS passthrough, WebSocket) http, https, socks4(a) and socks5(h) upstreams (A-410).
