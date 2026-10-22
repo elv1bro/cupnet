@@ -23,6 +23,7 @@ const { SessionLog, SessionIndex } = require('./session-log');
 const sessionCrypto = require('./session-crypto');
 const { providerCatalog } = require('./proxy-store');
 const { writeHar } = require('./har');
+const VERSION = require('./version');
 const { CookieJar } = require('./cookie-jar');
 const siteMap = require('./site-map');
 const { buildSnapshot } = require('./page-snapshot');
@@ -270,6 +271,8 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
 
     if (p === '/api/status' && m === 'GET') {
         return _send(res, 200, {
+            version: VERSION.VERSION,
+            released: VERSION.RELEASED,
             sessionId: app.log.sessionId,
             entries: app.log.count,
             lastSeq: app.log.lastSeq,
@@ -564,7 +567,7 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
             'X-Content-Type-Options': 'nosniff',
             'Content-Disposition': `attachment; filename="cupnet-${har[1]}.har"`,
         });
-        await writeHar(res, _fullEntries(src, list), { comment: `CupNet mini session ${har[1]}` });
+        await writeHar(res, _fullEntries(src, list), { version: VERSION.VERSION, comment: `CupNet mini session ${har[1]}` });
         res.end();
         return undefined;
     }

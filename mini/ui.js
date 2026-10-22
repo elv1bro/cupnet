@@ -163,7 +163,7 @@ function confirmBox(text, okLabel = 'OK', danger = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Navigation
 // ─────────────────────────────────────────────────────────────────────────────
-const TITLES = { traffic: 'Traffic', search: 'Search', console: 'Console', ws: 'WebSockets', analyzer: 'Page analyzer', proxies: 'Proxies', ipwatch: 'IP monitor', dns: 'DNS overrides', sitemap: 'Site map', notes: 'Notes', compare: 'Compare', mirror: 'Mirror', cookies: 'Cookies', repeater: 'Repeater', intruder: 'Intruder', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
+const TITLES = { traffic: 'Traffic', search: 'Search', console: 'Console', ws: 'WebSockets', analyzer: 'Page analyzer', proxies: 'Proxies', ipwatch: 'IP monitor', dns: 'DNS overrides', sitemap: 'Site map', notes: 'Notes', compare: 'Compare', mirror: 'Mirror', cookies: 'Cookies', repeater: 'Repeater', intruder: 'Intruder', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings', guide: 'Guide' };
 let PAGE = 'traffic';
 function go(page) {
   if (!TITLES[page]) page = 'traffic';
@@ -171,7 +171,7 @@ function go(page) {
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.page === page));
   document.querySelectorAll('#pages > section').forEach((s) => { s.hidden = s.id !== `page-${page}`; });
   $('pageTitle').textContent = TITLES[page];
-  const load = { traffic: () => scheduleDraw(false), search: () => loadSearch(), console: () => loadConsole(), ws: () => loadWs(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, dns: loadDns, sitemap: loadSiteMap, notes: loadNotes, compare: loadCompare, mirror: loadMirror, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode, intruder: loadIntruder }[page];
+  const load = { traffic: () => scheduleDraw(false), search: () => loadSearch(), console: () => loadConsole(), ws: () => loadWs(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, dns: loadDns, sitemap: loadSiteMap, notes: loadNotes, compare: loadCompare, mirror: loadMirror, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, guide: loadGuide, repeater: renderRpCode, intruder: loadIntruder }[page];
   if (load) guard(load)();
 }
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.page)));
@@ -234,6 +234,7 @@ async function pollStatus() {
   try {
     const st = await api('/api/status');
     ST = st;
+    if (st.version) { const sv = $('sideVer'); if (sv) sv.textContent = `v${st.version}`; }
     $('quit').hidden = !st.canQuit;
     const s = st.stats;
     const parts = [`proxy 127.0.0.1:${st.mitmPort}`];
@@ -1843,6 +1844,18 @@ async function loadSessions() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Settings
 // ─────────────────────────────────────────────────────────────────────────────
+// Guide — static reference page; only the version/date and session id come from /api/status.
+async function loadGuide() {
+  const st = ST || await api('/api/status');
+  if (st.version) $('guideVer').textContent = st.version;
+  if (st.released) $('guideDate').textContent = st.released;
+  const sess = $('guideSess');
+  if (sess) {
+    sess.hidden = !st.sessionId;
+    if (st.sessionId) clear(sess).append('Session ', h('b', null, cutText(st.sessionId, 16)));
+  }
+}
+
 const S = { data: null, browser: null };
 async function loadSettings() {
   const s = await api('/api/settings');
