@@ -441,8 +441,23 @@ describe.skipIf(!haveBinary)('MITM streaming through the Go worker (local HTTPS)
     }, 30_000);
 
     it('External Proxy still requires its password', async () => {
+        // Loopback clients skip Basic auth by design (owner decision 2026-09-28), and the port only
+        // listens on 127.0.0.1, so treat this client as a remote address to exercise the auth path.
+        ext._isLoopbackAddress = () => false;
+        try {
+            expect((await getViaMitm(extPort, upstreamPort, '/json')).connectStatus).toBe(407);
+            expect((await getViaMitm(extPort, upstreamPort, '/json', { auth: 'u:wrong' })).connectStatus).toBe(407);
+            expect((await getViaMitm(extPort, upstreamHttpPort, '/json', { plain: true })).status).toBe(407);
+            expect((await getViaMitm(extPort, upstreamPort, '/json', { auth: 'u:p' })).status).toBe(200);
+        } finally {
+            delete ext._isLoopbackAddress;
+        }
+    }, 30_000);
+
+    it('External Proxy lets loopback clients in without a password', async () => {
         const r = await getViaMitm(extPort, upstreamPort, '/json');
-        expect(r.connectStatus).toBe(407);
+        expect(r.status).toBe(200);
+        expect(r.body.toString()).toBe('{"ok":true}');
     }, 30_000);
 
     it('External Proxy HTTPS: streamed, decoded, and the body is logged', async () => {
