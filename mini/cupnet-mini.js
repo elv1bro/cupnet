@@ -12,6 +12,8 @@
  *   ca                             print CA path, SHA-256, SPKI and the OS trust commands
  *   seal [SESSION_ID | --all]      encrypt saved session(s) → keys/<id>.cupkey + sealed/<id>.cupsess
  *   open KEYFILE [--sealed FILE]   decrypt a sealed session to stdout (JSONL)
+ *   host [--share-port 8879]       serve viewer.html + sealed/*.cupsess on 127.0.0.1 (local test host
+ *                                  for Share links; keys never leave the .cupkey / #k= fragment)
  *
  * Options: --data DIR  --port 8877  --ui-port 8878  --browser chrome_120  --upstream URL
  *          --trust spki|system  --chrome-bin PATH
@@ -23,6 +25,7 @@ const path = require('path');
 const { MiniApp } = require('./mini-app');
 const { SessionLog } = require('./session-log');
 const sessionCrypto = require('./session-crypto');
+const { ShareHost, DEFAULT_SHARE_PORT } = require('./share-host');
 
 function parseArgs(argv) {
     const out = { _: [] };
@@ -128,8 +131,23 @@ async function main() {
         return;
     }
 
+    if (cmd === 'host') {
+        const host = new ShareHost({ sealedDir: app.sealedDir, port: Number(a['share-port']) || DEFAULT_SHARE_PORT });
+        try { await host.start(); } catch (e) {
+            console.error(e?.code === 'EADDRINUSE' ? `Port ${host.port} is in use (is the share host already on in CupNet mini?)` : (e?.message || String(e)));
+            process.exitCode = 1;
+            return;
+        }
+        console.log(`Share host: ${host.baseUrl}  (127.0.0.1 only; serving ${app.sealedDir})`);
+        console.log('Open a link from Sessions → Share, or the viewer and pick a .cupsess + .cupkey. Ctrl-C to stop.');
+        const stop = () => { host.stop().then(() => process.exit(0)); };
+        process.on('SIGINT', stop);
+        process.on('SIGTERM', stop);
+        return;
+    }
+
     if (cmd !== 'start') {
-        console.error(`Unknown command "${cmd}". Use start | window | chrome | ca | seal | open.`);
+        console.error(`Unknown command "${cmd}". Use start | window | chrome | ca | seal | open | host.`);
         process.exitCode = 2;
         return;
     }

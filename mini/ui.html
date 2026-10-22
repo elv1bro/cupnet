@@ -10,6 +10,7 @@
 <script src="/lib/diff.js" defer></script>
 <script src="/ui.js" defer></script>
 <script src="/ui-inspect.js" defer></script>
+<script src="/ui-tools.js" defer></script>
 </head>
 <body>
 <aside id="side">
@@ -18,8 +19,11 @@
     <button data-page="traffic" class="on"><svg viewBox="0 0 16 16"><path d="M2 3h12M2 8h12M2 13h8"/></svg><span>Traffic</span></button>
     <button data-page="console"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4 6l2.5 2L4 10M8 10.5h4"/></svg><span>Console</span><i class="count err" id="cnCount" hidden></i></button>
     <button data-page="analyzer"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14M5 7h4M7 5v4"/></svg><span>Page analyzer</span></button>
+    <button data-page="sitemap"><svg viewBox="0 0 16 16"><rect x="6" y="1.5" width="4" height="3" rx=".6"/><rect x="1.5" y="11.5" width="4" height="3" rx=".6"/><rect x="10.5" y="11.5" width="4" height="3" rx=".6"/><path d="M8 4.5v3.5M3.5 11.5V8h9v3.5"/></svg><span>Site map</span></button>
+    <button data-page="notes"><svg viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3M5.5 8h5M5.5 10.5h5M5.5 13h3"/></svg><span>Notes</span></button>
     <button data-page="proxies"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/></svg><span>Proxies</span></button>
     <button data-page="ipwatch"><svg viewBox="0 0 16 16"><path d="M1.5 9h3l2-5 3 9 2-4h3"/></svg><span>IP monitor</span><i class="count accent" id="ipCount" hidden></i></button>
+    <button data-page="dns"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="2"/><circle cx="12.5" cy="4" r="2"/><circle cx="12.5" cy="12" r="2"/><path d="M5.5 8h3l2-3M8.5 8l2 3"/></svg><span>DNS</span><i class="count accent" id="dnsCount" hidden title="Enabled DNS overrides"></i></button>
     <button data-page="compare"><svg viewBox="0 0 16 16"><path d="M2 3h5v10H2zM9 3h5v10H9z"/><path d="M4 6h1M4 9h1M11 7h1M11 10h1"/></svg><span>Compare</span></button>
     <button data-page="cookies"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><circle cx="6" cy="6.5" r=".6"/><circle cx="10" cy="7" r=".6"/><circle cx="7" cy="10.5" r=".6"/></svg><span>Cookies</span><i class="count accent" id="ckCount" hidden title="Cookie changes waiting for the next page load"></i></button>
     <button data-page="repeater"><svg viewBox="0 0 16 16"><path d="M3 6h9l-3-3M13 10H4l3 3"/></svg><span>Repeater</span></button>
@@ -83,6 +87,7 @@
               <button class="btn sm" id="aBreak" title="Create a rule that pauses this URL">Break on URL</button>
               <button class="btn sm" id="aPin" title="Keep this request as side A of a comparison">Pin as A</button>
               <button class="btn sm" id="aCompare" title="Compare with the pinned request, or with the previous request to the same URL (Cmd/Ctrl-click a row to compare it with the selected one)">Compare</button>
+              <button class="btn sm" id="aNote" title="Append this request to a note">Add to note</button>
             </div>
             <div class="tabs" id="dtabs">
               <button data-d="headers" class="on">Headers</button>
@@ -137,6 +142,91 @@
           <div id="anList" class="plist"></div>
         </div>
         <div class="an-main" id="anMain"></div>
+      </div>
+    </section>
+
+    <!-- ── Site map ── -->
+    <section id="page-sitemap" class="page" hidden>
+      <div class="toolbar">
+        <select id="smSession" class="w-300" title="Session to map"></select>
+        <select id="smSite" class="sm-site" title="Site"></select>
+        <label class="chk" title="Include subdomains of the site"><input type="checkbox" id="smSubs">Subdomains</label>
+        <button class="btn sm" id="smRefresh">Refresh</button>
+        <label class="chk" title="Update every few seconds while you browse (live session only)"><input type="checkbox" id="smAuto">Live</label>
+        <span class="spacer"></span>
+        <span class="faint" id="smState"></span>
+      </div>
+      <div class="sm-top">
+        <div class="ipw-tiles sm-tiles" id="smTiles"></div>
+        <div class="tabs sm-tabs" id="smTabs" hidden>
+          <button data-t="pages" class="on">Pages <span class="tag"></span></button>
+          <button data-t="forms">Forms <span class="tag"></span></button>
+          <button data-t="external">External <span class="tag"></span></button>
+        </div>
+      </div>
+      <div class="sm-main" id="smMain"></div>
+    </section>
+
+    <!-- ── Notes ── -->
+    <section id="page-notes" class="page" hidden>
+      <div class="split2">
+        <div class="list-pane nt-side">
+          <div class="toolbar">
+            <input id="ntQ" type="search" placeholder="Search notes…">
+            <button class="btn primary sm" id="ntNew">+ New</button>
+          </div>
+          <div class="toolbar sub">
+            <select id="ntSite" title="Filter by site"></select>
+            <span class="spacer"></span>
+            <span class="muted" id="ntCount"></span>
+            <button class="btn sm" id="ntExport" title="Download the notes shown as one Markdown file">Export</button>
+          </div>
+          <div class="chips nt-tags" id="ntTags" hidden></div>
+          <div id="ntList" class="plist"></div>
+        </div>
+        <div class="edit-pane nt-editor" id="ntEditor"></div>
+      </div>
+    </section>
+
+    <!-- ── DNS overrides ── -->
+    <section id="page-dns" class="page scroll" hidden>
+      <div class="card">
+        <div class="card-head">
+          <h2>DNS overrides</h2>
+          <input id="dnsQ" type="search" placeholder="Filter host, IP, note…">
+          <span class="spacer"></span>
+          <span class="muted" id="dnsShown"></span>
+          <button class="btn sm" id="dnsImport" title="Import a hosts file">Import</button>
+          <button class="btn sm" id="dnsExport" title="Download the rules as a hosts file">Export</button>
+          <button class="btn primary sm" id="dnsAdd">+ Add rule</button>
+        </div>
+        <p class="muted">Send a host to another IP without touching the system hosts file. CupNet keeps the URL, so the TLS SNI, the <code>Host</code> header and HTTP/2 stay those of the real site — only the TCP connection goes to the override (like <code>curl --connect-to</code>). Tunnelled passthrough hosts follow the same rules. Changes apply to new connections.</p>
+        <table class="tbl dns-tbl">
+          <thead><tr><th class="w-60">On</th><th class="dns-h">Host</th><th class="w-130">IP</th><th class="w-130">Options</th><th>Note</th><th class="w-80 r-al">Hits</th><th class="w-130"></th></tr></thead>
+          <tbody id="dnsRows"></tbody>
+        </table>
+        <div class="empty" id="dnsEmpty" hidden></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Test a host</h2></div>
+        <div class="toolbar dns-res">
+          <input id="dnsResHost" type="text" class="mono" placeholder="api.example.com" spellcheck="false">
+          <button class="btn" id="dnsResBtn">Resolve</button>
+        </div>
+        <div id="dnsResOut"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>Activity</h2><span class="muted">requests sent to an override since start</span>
+          <span class="spacer"></span>
+          <button class="btn sm" id="dnsActRefresh">Refresh</button>
+          <button class="btn sm danger" id="dnsActClear" title="Clear the list and the hit counters">Clear</button>
+        </div>
+        <div class="ipw-scroll"><table class="tbl">
+          <thead><tr><th class="w-110">Time</th><th class="w-80">Method</th><th class="w-80">Status</th><th class="w-300">Host → IP</th><th>Path</th><th class="w-80"></th></tr></thead>
+          <tbody id="dnsAct"></tbody>
+        </table></div>
+        <div class="empty" id="dnsActEmpty" hidden>No request has used an override yet.</div>
       </div>
     </section>
 
@@ -355,6 +445,13 @@
         <p class="muted">Inserted on the MITM path only and stripped from the logged document. Strict CSPs get a narrow <code>connect-src</code> exception for <code>/__cupnet/</code>. Pages already open need a reload. Hosts to leave untouched, one per line:</p>
         <textarea id="sAgentEx" class="mono code short" spellcheck="false"></textarea>
         <div class="row-end"><button class="btn primary" id="sSave">Save settings</button></div>
+      </div>
+      <div class="card">
+        <h2>Local share host</h2>
+        <p class="muted">Serves <code>viewer.html</code> and the sealed sessions (<code>.cupsess</code>, encrypted) on <code>127.0.0.1</code> so a <b>Share</b> link opens in a browser on this computer. Keys are never served: they stay in the <code>.cupkey</code> file or in the link's <code>#fragment</code>.</p>
+        <label class="switch"><input type="checkbox" id="sShare"><span></span>Run the share host on port <input type="number" id="sSharePort" min="1024" max="65535" step="1" class="w-num"></label>
+        <p class="muted" id="sShareState"></p>
+        <div class="row-end"><button class="btn primary" id="sSave2">Save settings</button></div>
       </div>
       <div class="card" id="setup"></div>
     </section>

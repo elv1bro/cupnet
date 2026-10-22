@@ -22,6 +22,7 @@ npm run mini -- start --url https://example.com --chrome
 npm run mini -- window                  # another CupNet mini window (mini must be running)
 npm run mini -- chrome                  # another proxied Chrome window (mini must be running)
 npm run mini -- ca                      # CA path, SHA-256, SPKI, OS trust commands
+npm run mini -- host [--share-port 8879] # local test host for sealed sessions (viewer + .cupsess)
 ```
 
 The **CupNet mini window** is the UI in a Chrome app window (`--app=`), on its own unproxied
@@ -194,6 +195,46 @@ Pages can report back with a same-origin request:
   - Bulk actions: delete in Chrome, export or forget the selected cookies.
   - **Import** takes a JSON array (or `{"cookies": [...]}`, as browser cookie-editor extensions export) or Netscape `cookies.txt`, with a
     dry-run preview. **Export** writes JSON or Netscape for the selection, a site, or everything.
+- **DNS**: host → IP overrides, like an `/etc/hosts` that only CupNet's traffic sees.
+  - A rule is `api.example.com` or `*.example.com` (subdomains and the domain itself), mapped
+    to an IPv4 or IPv6 address. IDN hosts are stored as punycode.
+  - Overrides work in **dial mode**: the URL stays the same, so SNI, `Host` and HTTP/2 are those of
+    the real host, and only the TCP connection goes to the override IP. TLS-passthrough tunnels
+    follow the same rules.
+  - Options per rule: **Host header** (send another `Host`; forces HTTP/1.1), **CORS** (add
+    MITM CORS headers to that host's responses), a note, on/off.
+  - **Resolve** compares the system answer with the override. **Activity** lists recent requests
+    that used an override; hit counters are kept since start.
+  - Overridden requests carry a ⇢ marker in Traffic and a *DNS override* row in the detail pane.
+  - **Import** and **Export** use the hosts-file format (`IP host [host…]`, `#` comments),
+    merging or replacing.
+- **Notes**: Markdown notes, with an edit / split / preview editor, tags, pins, search, and a
+  site (`shop.example.com` or `*.example.com`) that ties a note to a host.
+  - Task lists, quotes, code and links are rendered without HTML (no `innerHTML`).
+  - **Add to note** in the Traffic detail pane appends the request (method, URL, status) to the
+    note for that host, or to a new one. A reference `cupnet:req/<session>/<seq>` renders as a
+    `#seq` link that opens the entry in Traffic.
+  - **Export** writes the notes shown as one Markdown file.
+- **Site map**: every page of a site, built from the HTML documents in a session.
+  - **Pages**: a tree of every URL of the site.
+    - A page the browser loaded is *opened*. A page that is only linked from one is
+      *not opened*.
+    - Links come from `<a>`, `<area>`, frames, form actions, `<link rel=canonical|alternate|…>`
+      and redirects.
+    - Tags show the status, redirects, files (pdf, zip, …) and hidden links.
+    - The detail panel lists the page's outgoing links, its forms and **Linked from**.
+    - From the detail panel: open the page in Chrome, show it in Traffic, send it to Repeater,
+      copy the URL, or add it to a note.
+  - **Forms**: every form of the site, merged across the pages it appears on. For each field:
+    - name, type, value, label and required;
+    - visibility: *hidden* (type=hidden, the `hidden` attribute, inline `display:none` /
+      `visibility:hidden` / `opacity:0` / off-screen / zero size / clip, a hidden ancestor) or
+      *likely hidden* (hiding classes such as `d-none`, `sr-only`, `honeypot`, or `aria-hidden`).
+    - Stylesheets and scripts are not run, so fields hidden only by CSS rules or JS show as
+      visible. The Page analyzer checks the live page.
+  - **External**: hosts the site links to, with link counts.
+  - Subdomains can be included. **Live** refreshes the current session every few seconds.
+    Each session is scanned once and cached; the live session is scanned incrementally.
 - **Repeater**: edit and resend any request (method, URL, headers, body) through the same worker
   and upstream. Import from curl; generate code as curl, fetch, axios, Python requests, Go or PHP.
   Each send is logged with type `repeater`. Cmd/Ctrl+Enter sends.
@@ -207,7 +248,12 @@ Pages can report back with a same-origin request:
   domains (`challenges.cloudflare.com` by default). Stored in `settings.json`.
   The page agent is off by default: it wraps `console.*` and polls `/__cupnet/agent/*`, which a
   page can notice.
-- **Sessions**: open, download JSONL or HAR, seal.
+- **Sessions**: open, download JSONL or HAR, seal, share.
+  - **Share** seals the session and gives two links for the local share host:
+    - one without the key, which asks for the `.cupkey`;
+    - one with the key in the `#k=` fragment, masked until revealed. Browsers never send the
+      fragment to the server.
+  - **Settings → Local share host** turns the host on (port 8879 by default).
 
 ## API
 
@@ -257,6 +303,15 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
     `{op: 'storage', which: 'local'|'session', data, replace}` or `{op: 'highlight', selector}`.
   - Pages talk to mini through `POST /__cupnet/console` and `/__cupnet/agent/hello|poll|result`
     on their own origin. These answer 410 while the agent is off.
+- DNS overrides (every route returns `{rules, activity}`):
+  - `GET|POST /api/dns`, `PUT|DELETE /api/dns/:id`, `DELETE /api/dns/activity`.
+  - `POST /api/dns/import` (`{text, replace}`) returns `{added, updated, skipped}` too;
+    `GET /api/dns/export` is a hosts file.
+  - `POST /api/dns/resolve` (`{host}`) returns `{host, addresses, error, override}`.
+- Notes: `GET /api/notes[?host=H]` (`{notes, tags}`), `POST /api/notes`,
+  `GET|PUT|DELETE /api/notes/:id`.
+- Site map: `GET /api/sitemap?session=ID` lists the sites; with `&site=HOST[&subs=1]` it adds
+  `pages`, `forms`, `external` and the counts.
 - `GET|POST /api/settings`
 - `POST /api/replay` (`{method, url, headers: [[k, v]], body}`). Only http(s) is accepted. It
   returns 409 while the kill switch blocks egress.
@@ -266,6 +321,8 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
   - `GET /api/sessions`, `GET /api/sessions/:id` (JSONL download).
   - `GET /api/sessions/:id/har[?seqs=1-20,25]`: requests only. Each entry has `_cupnetSeq`.
   - `POST /api/sessions/:id/seal`, `GET /api/sessions/:id/key`, `GET /api/sessions/:id/sealed`.
+  - `POST /api/sessions/:id/share`: seal now. It returns `{id, bytes, host, link, linkWithKey}`,
+    where `host` is the share-host status (also in `/api/settings` as `share`).
 
 ## Data
 
@@ -277,7 +334,9 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
 - `proxies.json` + `proxies.key`: proxy profiles, the active profile and the kill switch.
   Passwords are AES-256-GCM encrypted with the key file.
 - `settings.json`: TLS profile, passthrough domains, CORS, force HTTP/1.1, `ipWatch`,
-  `ipWatchSec`.
+  `ipWatchSec`, `shareHost`, `sharePort`.
+- `dns.json`: DNS overrides (mode 0600), up to 2,000 rules.
+- `notes.json`: notes (mode 0600, atomic writes), up to 5,000 notes of 512 KB each.
 - `ip-history.jsonl`: the IP monitor history (mode 0600, append-only). The newest 5,000 events
   are kept, and the file is compacted on load.
 - `cookies.json`: tracked cookies, wire rules and queued Chrome operations (mode 0600, because it
@@ -321,3 +380,20 @@ npm run mini -- open path/to/<id>.cupkey # decrypt to stdout (finds <id>.cupsess
 - `mini/viewer.html` opens the session in the browser with WebCrypto, and nothing is uploaded. Host it with
   a `sealed/` folder next to it (or point it at one with `?base=URL`) and drop in only the
   `.cupkey`. Or open the page locally and drop in both files.
+
+### Local test host
+
+The viewer and the sealed files can be served on this computer until a real host is chosen:
+
+```bash
+npm run mini -- host                    # http://localhost:8879/, serving <data>/sealed
+```
+
+Or turn on **Settings → Local share host** while mini runs (the same server inside mini).
+
+- It listens on `127.0.0.1` only and checks the `Host` header (anything else gets 421).
+- It serves exactly `/` (`viewer.html`, with a hash-pinned CSP and `X-Frame-Options: DENY`) and
+  `/sealed/<id>.cupsess`. There is no listing, and only GET and HEAD are allowed.
+- Keys are never served. A link is `http://localhost:8879/#id=<id>`, which asks for the
+  `.cupkey`, or `…#id=<id>&k=<key>`, which opens the session directly. Anyone who has the second
+  link can read the session.

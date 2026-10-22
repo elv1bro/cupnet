@@ -178,7 +178,12 @@ func borrowSession(browser, proxy, ja3 *string, tabID *string, factory func() (*
 
 // borrowSessionFor borrows from the pool of the request's origin (see workerFfiConcurrency).
 func borrowSessionFor(browser, proxy, ja3 *string, tabID *string, rawURL string, factory func() (*azuretls.Session, error)) (*azuretls.Session, string, error) {
-	key := poolKeyFor(browser, proxy, ja3, tabID, rawURL)
+	return borrowByKey(poolKeyFor(browser, proxy, ja3, tabID, rawURL), factory)
+}
+
+// borrowByKey borrows a session from the pool `key` (see requestPoolKey), creating one with factory
+// while the pool is under its concurrency budget.
+func borrowByKey(key string, factory func() (*azuretls.Session, error)) (*azuretls.Session, string, error) {
 	max := workerFfiConcurrency()
 	touchPoolKey(key)
 	evictPoolsIfNeeded()

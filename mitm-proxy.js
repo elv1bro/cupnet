@@ -41,7 +41,7 @@ const { absolutizeMitmRedirectResponse } = require('./utils');
  * Native Node.js HTTPS fallback when Go azureTLS library fails with connection errors.
  * No TLS fingerprinting, but reliable connection handling.
  */
-function _nativeHttpsFallback(url, method, headers, orderedHeaders, body, bodyBase64, timeout) {
+function _nativeHttpsFallback(url, method, headers, orderedHeaders, body, bodyBase64, timeout, connectTo) {
     const parsed = new URL(url);
     const isHttps = parsed.protocol === 'https:';
     const mod = isHttps ? https : http;
@@ -55,10 +55,13 @@ function _nativeHttpsFallback(url, method, headers, orderedHeaders, body, bodyBa
     delete finalHeaders[':path'];
     delete finalHeaders[':authority'];
     delete finalHeaders[':scheme'];
+    // DNS override (dial mode): connect to the IP, keep the hostname for SNI and Host.
+    if (connectTo && !Object.keys(finalHeaders).some((k) => k.toLowerCase() === 'host')) finalHeaders.Host = parsed.host;
 
     return new Promise((resolve, reject) => {
         const reqOpts = {
-            hostname: parsed.hostname,
+            hostname: connectTo || parsed.hostname,
+            ...(connectTo && isHttps ? { servername: parsed.hostname } : {}),
             port:     parsed.port || (isHttps ? 443 : 80),
             path:     parsed.pathname + parsed.search,
             method:   method || 'GET',
@@ -907,6 +910,10 @@ function _matchHostPattern(pattern, hostname) {
     return h === p;
 }
 
+function _sameHostname(a, b) {
+    try { return new URL(a).hostname.toLowerCase() === new URL(b).hostname.toLowerCase(); } catch { return false; }
+}
+
 function _shouldAutoRetryHttp1(message) {
     const m = String(message || '').toLowerCase();
     return /upstream connect error|connection termination|reset reason|disconnect.*before headers|protocol_error|err_http2|http2.*error|stream error/i.test(m);
@@ -962,6 +969,10 @@ class MitmProxy {
         /** Global outbound HTTP version when connected profile sets force HTTP/1.1 */
         this.forceHttp1 = false;
         this._dnsOverrides = new Map();
+        /** `*.suffix` overrides (setDnsOverrides wildcards option), longest suffix first. */
+        this._dnsWildcards = [];
+        /** Dial mode: keep the URL (SNI, Host, HTTP/2) and only connect to the override IP. */
+        this._dnsDial = false;
         /** @type {string[]} паттерны хоста из DNS rules с mitm_inject_cors (exact или *.suffix, см. _matchHostPattern). */
         this._dnsCorsPatterns = [];
         /** When true, MITM injects CORS headers for all HTTPS responses (toolbar setting). */
@@ -1170,25 +1181,33 @@ class MitmProxy {
         }
     }
 
-    setDnsOverrides(rules = []) {
+    /**
+     * @param {Array<{ id?: string, host: string, ip?: string, enabled?: boolean, rewrite_host?: string, mitm_inject_cors?: boolean }>} rules
+     * @param {{ dial?: boolean, wildcards?: boolean }} [o] - dial: connect to the IP but keep the URL
+     *   (SNI, Host, HTTP/2 stay real; without it the URL host becomes the IP and HTTP/1.1 is forced);
+     *   wildcards: `*.example.com` rules also override (otherwise they only select MITM CORS).
+     */
+    setDnsOverrides(rules = [], o = {}) {
         const next = new Map();
+        const wild = [];
         const corsPatterns = [];
         for (const r of (rules || [])) {
             if (!r || r.enabled === false) continue;
             const host = String(r.host || '').trim().toLowerCase();
             const ip = String(r.ip || '').trim();
             if (!host) continue;
-            if (ip && !host.startsWith('*.')) {
-                const rw = String(r.rewrite_host || '').trim();
-                next.set(host, { ip, rewriteHost: rw || null });
-            }
+            const entry = { ip, rewriteHost: String(r.rewrite_host || '').trim() || null, id: r.id != null ? String(r.id) : undefined };
+            if (ip && !host.startsWith('*.')) next.set(host, entry);
+            else if (ip && o.wildcards) wild.push({ ...entry, pattern: host });
             if (r.mitm_inject_cors === true) corsPatterns.push(host);
         }
         this._dnsOverrides = next;
+        this._dnsWildcards = wild.sort((a, b) => b.pattern.length - a.pattern.length);
+        this._dnsDial = !!o.dial;
         this._dnsCorsPatterns = corsPatterns;
-        if (corsPatterns.length || next.size) {
-            const rows = ['━━ DNS overrides · reload ━━', `  IPv4 → ${next.size} host(s)`];
-            for (const [h, v] of next) {
+        if (corsPatterns.length || next.size || wild.length) {
+            const rows = ['━━ DNS overrides · reload ━━', `  IP → ${next.size + wild.length} host(s)${this._dnsDial ? ' · dial' : ''}`];
+            for (const [h, v] of [...next, ...wild.map((w) => [w.pattern, w])]) {
                 const bits = [`${h} → ${v.ip}`];
                 if (v.rewriteHost) bits.push(`Host: ${v.rewriteHost}`);
                 rows.push(`    · ${bits.join(' · ')}`);
@@ -1500,8 +1519,11 @@ class MitmProxy {
             return;
         }
 
+        // DNS override (dial mode only; the classic mode rewrites URLs and never applied to tunnels).
+        const dialHost = (this._dnsDial && this._lookupDnsOverride(hostname)?.ip) || hostname;
+
         if (!proxyUrl) {
-            const upstreamSocket = net.connect(port, hostname);
+            const upstreamSocket = net.connect(port, dialHost);
             upstreamSocket.setTimeout(networkPolicy.timeouts.upstreamRequestMs, () => upstreamSocket.destroy());
             upstreamSocket.once('connect', () => attachTunnel(upstreamSocket));
             upstreamSocket.once('error', fail);
@@ -1509,7 +1531,7 @@ class MitmProxy {
         }
 
         // http / https / socks4(a) / socks5(h) upstreams (A-410: was HTTP CONNECT only).
-        connectThroughProxy(proxyUrl, hostname, port, { timeoutMs: networkPolicy.timeouts.upstreamRequestMs })
+        connectThroughProxy(proxyUrl, dialHost, port, { timeoutMs: networkPolicy.timeouts.upstreamRequestMs })
             .then(({ socket: upstreamSocket, buffered }) => {
                 upstreamSocket.setTimeout(networkPolicy.timeouts.upstreamRequestMs, () => upstreamSocket.destroy());
                 attachTunnel(upstreamSocket, buffered);
@@ -1681,8 +1703,12 @@ class MitmProxy {
                     forceHttp1 = /\.(youtube|googlevideo)\.com$/i.test(host);
                 } catch {}
             }
-            // DNS override: HTTP/2 `:authority` from IP — force HTTP/1.1 so Host header is used.
-            if (dnsAdjusted.dnsOverride) forceHttp1 = true;
+            // DNS override: HTTP/2 `:authority` from IP — force HTTP/1.1 so Host header is used. Dial mode
+            // keeps the URL, so only a Host rewrite (which HTTP/2 would ignore) needs HTTP/1.1.
+            const dnsO = dnsAdjusted.dnsOverride;
+            if (dnsO && (!dnsO.dial || dnsO.rewriteHost)) forceHttp1 = true;
+            // A rule that sent the request to another host drops the override.
+            const connectTo = dnsAdjusted.connectTo && _sameHostname(up.url, url) ? dnsAdjusted.connectTo : undefined;
 
             const workerReqBase = {
                 method:            up.method,
@@ -1699,6 +1725,7 @@ class MitmProxy {
                 maxRetries:        retryCountUp,
                 timeout:           networkPolicy.timeouts.upstreamRequestMs,
                 disableRedirects:  opts.disableRedirects !== false,
+                connectTo,
             };
             // Stream the body (CUPNET_MITM_STREAM) only when nothing needs the whole response first:
             // no response-rewriting intercept rule (postProcess) and not HEAD (no body). The Critical-CH
@@ -1777,7 +1804,8 @@ class MitmProxy {
                 const nativeRes = await _nativeHttpsFallback(
                     url, up.method, up.headers, up.orderedHeaders,
                     noBodyUp ? null : (up.body || null),
-                    noBodyUp ? null : (up.bodyBase64 || null)
+                    noBodyUp ? null : (up.bodyBase64 || null),
+                    undefined, connectTo
                 );
                 const ms = Date.now() - t0;
                 st.totalMs += ms;
@@ -1837,20 +1865,44 @@ class MitmProxy {
         return errRes;
     }
 
+    /** The override for a hostname: exact rule first, then the longest matching `*.suffix`. */
+    _lookupDnsOverride(hostname) {
+        const host = String(hostname || '').toLowerCase().replace(/\.$/, '');
+        if (!host) return null;
+        const exact = this._dnsOverrides.get(host);
+        if (exact?.ip) return exact;
+        for (const w of this._dnsWildcards) if (_matchHostPattern(w.pattern, host)) return w;
+        return null;
+    }
+
     _applyDnsOverride(opts) {
         const sourceUrl = String(opts?.url || '');
-        if (!sourceUrl || this._dnsOverrides.size === 0) return { ...opts };
+        if (!sourceUrl || (this._dnsOverrides.size === 0 && this._dnsWildcards.length === 0)) return { ...opts };
 
         let u;
         try { u = new URL(sourceUrl); } catch { return { ...opts }; }
         const host = (u.hostname || '').toLowerCase();
         if (!host) return { ...opts };
 
-        const entry = this._dnsOverrides.get(host);
+        const entry = this._lookupDnsOverride(host);
         if (!entry?.ip) return { ...opts };
 
         const overrideIp = entry.ip;
         const rewriteHost = entry.rewriteHost || null;
+
+        if (this._dnsDial) {
+            const dnsOverride = { host, ip: overrideIp, rewriteHost: rewriteHost || undefined, dial: true, ...(entry.id ? { id: entry.id } : {}) };
+            if (!rewriteHost) return { ...opts, connectTo: overrideIp, dnsOverride };
+            const headers = { ...(opts.headers || {}) };
+            for (const k of Object.keys(headers)) if (k.toLowerCase() === 'host') delete headers[k];
+            headers.host = rewriteHost;
+            let ordered = opts.orderedHeaders || undefined;
+            if (Array.isArray(ordered) && ordered.length) {
+                const i = ordered.findIndex(([k]) => String(k).toLowerCase() === 'host');
+                ordered = i >= 0 ? ordered.map((pair, j) => (j === i ? [pair[0], rewriteHost] : pair)) : [['Host', rewriteHost], ...ordered];
+            }
+            return { ...opts, connectTo: overrideIp, headers, orderedHeaders: ordered, dnsOverride };
+        }
 
         const overriddenUrl = new URL(sourceUrl);
         overriddenUrl.hostname = overrideIp;
@@ -1886,7 +1938,7 @@ class MitmProxy {
             interceptMatchUrl: sourceUrl,
             headers: nextHeaders,
             orderedHeaders: nextOrdered,
-            dnsOverride: { host, ip: overrideIp, rewriteHost: rewriteHost || undefined },
+            dnsOverride: { host, ip: overrideIp, rewriteHost: rewriteHost || undefined, ...(entry.id ? { id: entry.id } : {}) },
         };
     }
 

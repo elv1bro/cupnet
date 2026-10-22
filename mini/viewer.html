@@ -6,7 +6,8 @@
 <title>CupNet Session Viewer</title>
 <!--
   Opens a sealed CupNet mini session in the browser. Nothing leaves the page: decryption runs with
-  WebCrypto. Give it the session's .cupkey file. The matching <id>.cupsess is fetched from
+  WebCrypto. Give it the session's .cupkey file, or open a share link whose #k= fragment carries the
+  key (fragments are not sent to the server). The matching <id>.cupsess is fetched from
   ./sealed/<id>.cupsess or from ?base=<url>, or you can drop it here too.
   Format: mini/session-crypto.js.
 -->
@@ -64,14 +65,18 @@ const status = (msg, cls = 'muted') => { const s = $('status'); s.textContent = 
 async function parseKey(text) {
   const j = JSON.parse(text);
   if (!j || j.format !== 'cupnet-session-key' || j.v !== 1) throw new Error('not a CupNet session key file');
-  const raw = b64url(j.key);
+  const k = await keyFromRaw(b64url(j.key), j.sessionId);
+  if (j.id && j.id !== k.id) throw new Error('key file id does not match its key');
+  return k;
+}
+
+async function keyFromRaw(raw, sessionId) {
   if (raw.length !== 32) throw new Error('bad key length');
   const prefix = new TextEncoder().encode('cupnet-session-id:v1');
   const msg = new Uint8Array(prefix.length + 32); msg.set(prefix); msg.set(raw, prefix.length);
   const id = hex(await crypto.subtle.digest('SHA-256', msg)).slice(0, 32);
-  if (j.id && j.id !== id) throw new Error('key file id does not match its key');
   const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['decrypt']);
-  return { id, sessionId: j.sessionId, key };
+  return { id, sessionId, key };
 }
 
 async function decrypt(bytes, { id, key }) {
@@ -158,6 +163,23 @@ const drop = $('drop');
 drop.ondragover = (ev) => { ev.preventDefault(); drop.classList.add('over'); };
 drop.ondragleave = () => drop.classList.remove('over');
 drop.ondrop = (ev) => { ev.preventDefault(); drop.classList.remove('over'); takeFiles([...ev.dataTransfer.files]); };
+
+// Share link: #id=<id> (the key file is needed) or #id=<id>&k=<base64url key>.
+(async () => {
+  const h = new URLSearchParams(location.hash.slice(1));
+  const id = h.get('id'), k = h.get('k');
+  if (!id && !k) return;
+  if (!globalThis.crypto?.subtle) return status('WebCrypto is unavailable: open this page over https://, http://localhost or file://.', 'bad');
+  if (!k) return status(`Shared session ${id}: drop its .cupkey file.`);
+  try {
+    keyInfo = await keyFromRaw(b64url(k), null);
+    if (id && id !== keyInfo.id) { keyInfo = null; return status('The link key does not match the session id.', 'bad'); }
+    status(`Opening ${keyInfo.id}…`);
+    await tryOpen();
+  } catch (e) { keyInfo = null; status(e.message, 'bad'); }
+})();
+// Pasting another share link into the address bar only changes the fragment: start over.
+addEventListener('hashchange', () => location.reload());
 </script>
 </body>
 </html>

@@ -279,11 +279,9 @@ func handleHTTPStream(in *incomingLine) {
 		return
 	}
 	isIdem := isIdempotentMethod(in.Method)
-	factory := func() (*azuretls.Session, error) {
-		return createPooledSession(in.Browser, in.Proxy, in.Ja3)
-	}
+	factory := sessionFactoryFor(in)
 
-	sess, pkey, err := borrowSessionFor(in.Browser, in.Proxy, in.Ja3, in.TabID, in.URL, factory)
+	sess, pkey, err := borrowByKey(requestPoolKey(in), factory)
 	if err != nil {
 		sendLine(outgoingLine{ID: id, Headers: map[string]any{}, Error: err.Error()})
 		return

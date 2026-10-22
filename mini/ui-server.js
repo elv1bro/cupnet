@@ -24,6 +24,9 @@ const sessionCrypto = require('./session-crypto');
 const { providerCatalog } = require('./proxy-store');
 const { writeHar } = require('./har');
 const { CookieJar } = require('./cookie-jar');
+const siteMap = require('./site-map');
+const dnsPromises = require('dns').promises;
+const net = require('net');
 
 const UI_HTML = path.join(__dirname, 'ui.html');
 const UI_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src blob:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
@@ -32,6 +35,7 @@ const STATIC = new Map([
     ['/ui.css', [path.join(__dirname, 'ui.css'), 'text/css; charset=utf-8']],
     ['/ui.js', [path.join(__dirname, 'ui.js'), 'text/javascript; charset=utf-8']],
     ['/ui-inspect.js', [path.join(__dirname, 'ui-inspect.js'), 'text/javascript; charset=utf-8']],
+    ['/ui-tools.js', [path.join(__dirname, 'ui-tools.js'), 'text/javascript; charset=utf-8']],
     ...Object.entries(JSON.parse(fs.readFileSync(path.join(__dirname, 'browser-libs.json'), 'utf8')))
         .map(([k, rel]) => [`/${k}`, [path.join(__dirname, '..', rel), 'text/javascript; charset=utf-8']]),
 ]);
@@ -270,6 +274,7 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
             ipWatch: app.ipMonitor?.summary() || null,
             cookies: app.cookies?.summary() || null,
             paused: app._paused?.size || 0,
+            dns: app.dns ? { rules: app.dns.rules.length, enabled: app.dns.rules.filter((r) => r.enabled).length } : null,
             trust: app.trust,
             rulesFile: app.rulesFile,
             ca: { certPath: app.ca.certPath, spki: app.ca.spki, sha256: app.ca.sha256, commands: app.ca.commands },
@@ -378,6 +383,12 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
         if (r !== false) return r;
     }
 
+    // ── DNS overrides, notes, site map ─────────────────────────────────────────
+    if (p.startsWith('/api/dns') || p.startsWith('/api/notes') || p.startsWith('/api/sitemap')) {
+        const r = await _toolRoute(app, req, res, u, sessionSource).catch((e) => _badRequest(res, e));
+        if (r !== false) return r;
+    }
+
     // ── Page agent: Console REPL + page analyzer ───────────────────────────────
     if (p === '/api/pages' && m === 'GET') return _send(res, 200, app.listPages());
     const pg = /^\/api\/pages\/([0-9a-f]{16,32})\/(eval|analyze|action)$/.exec(p);
@@ -393,7 +404,7 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
     if (p === '/api/settings' && m === 'GET') return _send(res, 200, app.getSettings());
     if (p === '/api/settings' && m === 'POST') {
         const body = await _readJson(req);
-        return _send(res, 200, app.updateSettings(body || {}));
+        return _send(res, 200, await app.updateSettings(body || {}));
     }
 
     if (p === '/api/replay' && m === 'POST') {
@@ -464,6 +475,21 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
         return undefined;
     }
 
+    // Seal now and return viewer links on the local share host (#k= carries the key, never sent to it).
+    const share = /^\/api\/sessions\/([\w-]+)\/share$/.exec(p);
+    if (share && m === 'POST') {
+        if (!fs.existsSync(path.join(app.sessionsDir, `${share[1]}.jsonl`))) return _send(res, 404, { error: 'no such session' });
+        const r = app.sealSession(share[1]);
+        const k = sessionCrypto.findKeyBySessionId(app.keysDir, share[1]);
+        const st = app.shareStatus();
+        const base = `http://localhost:${st.port}/`;
+        return _send(res, 200, {
+            id: r.id, sessionId: share[1], bytes: r.bytes, host: st,
+            link: `${base}#id=${r.id}`,
+            linkWithKey: k ? `${base}#id=${r.id}&k=${Buffer.from(k.key).toString('base64url')}` : null,
+        });
+    }
+
     // Encrypt a session (own key per session) and fetch its key file / sealed file by the stable id.
     const seal = /^\/api\/sessions\/([\w-]+)\/(seal|key|sealed)$/.exec(p);
     if (seal) {
@@ -482,6 +508,79 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
     }
 
     return _send(res, 404, { error: 'not found' });
+}
+
+/** /api/dns*, /api/notes*, /api/sitemap*. Returns false when nothing matched. Thrown errors → 400. */
+async function _toolRoute(app, req, res, u, sessionSource) {
+    const p = u.pathname;
+    const m = req.method;
+    const body = async () => (await _readJson(req)) || {};
+
+    // DNS overrides (applied by the MITM in dial mode on every change).
+    if (p.startsWith('/api/dns')) {
+        const dns = app.dns;
+        const listing = () => _send(res, 200, { rules: dns.list(), activity: dns.activity.slice(-200).reverse() });
+        if (p === '/api/dns' && m === 'GET') return listing();
+        if (p === '/api/dns' && m === 'POST') { dns.add(await body()); app.applyDns(); return listing(); }
+        if (p === '/api/dns/activity' && m === 'DELETE') { dns.clearActivity(); return listing(); }
+        if (p === '/api/dns/import' && m === 'POST') {
+            const b = await body();
+            const r = dns.importHosts(String(b.text || ''), { replace: b.replace === true });
+            app.applyDns();
+            return _send(res, 200, { ...r, rules: dns.list(), activity: dns.activity.slice(-200).reverse() });
+        }
+        if (p === '/api/dns/export' && m === 'GET') {
+            return _send(res, 200, dns.exportHosts(), 'text/plain; charset=utf-8', { 'Content-Disposition': 'attachment; filename="cupnet-dns-hosts.txt"' });
+        }
+        if (p === '/api/dns/resolve' && m === 'POST') {
+            const host = String((await body()).host || '').trim().toLowerCase().replace(/^\*\./, '');
+            if (!host || host.length > 253 || net.isIP(host) || !/^[a-z0-9_.-]+$/.test(host)) throw new Error('Enter a hostname');
+            const rule = dns.rules.find((r) => r.enabled && (r.host === host || (r.host.startsWith('*.') && (host === r.host.slice(2) || host.endsWith(r.host.slice(1))))));
+            let addresses = [];
+            let error = null;
+            try { addresses = (await dnsPromises.lookup(host, { all: true, verbatim: true })).map((a) => ({ address: a.address, family: a.family })); } catch (e) { error = e.code || e.message; }
+            return _send(res, 200, { host, addresses, error, override: rule ? { id: rule.id, host: rule.host, ip: rule.ip } : null });
+        }
+        const one = /^\/api\/dns\/([0-9a-f]{12})$/.exec(p);
+        if (one && (m === 'PUT' || m === 'POST')) { dns.update(one[1], await body()); app.applyDns(); return listing(); }
+        if (one && m === 'DELETE') {
+            if (!dns.remove(one[1])) return _send(res, 404, { error: 'No such rule' });
+            app.applyDns();
+            return listing();
+        }
+        return false;
+    }
+
+    if (p.startsWith('/api/notes')) {
+        const notes = app.notes;
+        if (p === '/api/notes' && m === 'GET') {
+            const host = String(u.searchParams.get('host') || '').toLowerCase();
+            return _send(res, 200, { notes: host ? notes.forHost(host) : notes.list(), tags: notes.tags() });
+        }
+        if (p === '/api/notes' && m === 'POST') return _send(res, 200, notes.add(await body()));
+        const one = /^\/api\/notes\/([0-9a-f]{12})$/.exec(p);
+        if (one && m === 'GET') {
+            const n = notes.get(one[1]);
+            return n ? _send(res, 200, n) : _send(res, 404, { error: 'No such note' });
+        }
+        if (one && (m === 'PUT' || m === 'POST')) return _send(res, 200, notes.update(one[1], await body()));
+        if (one && m === 'DELETE') {
+            return notes.remove(one[1]) ? _send(res, 200, { ok: true }) : _send(res, 404, { error: 'No such note' });
+        }
+        return false;
+    }
+
+    if (p === '/api/sitemap' && m === 'GET') {
+        const sid = u.searchParams.get('session') || app.log.sessionId;
+        const src = sessionSource(sid);
+        if (!src) return _send(res, 404, { error: 'no such session' });
+        const st = app.siteMaps.state(sid, src);
+        const site = String(u.searchParams.get('site') || '').trim().toLowerCase();
+        const sites = siteMap.listSites(st);
+        if (!site) return _send(res, 200, { session: sid, sites });
+        return _send(res, 200, { session: sid, sites, ...siteMap.siteView(st, site, { subs: u.searchParams.get('subs') === '1' }) });
+    }
+    return false;
 }
 
 /** /api/cookies*. Returns false when nothing matched. Thrown errors → 400. */

@@ -10,7 +10,7 @@
  * are indexed the same way by `SessionIndex.open(file)`, which scans only the head of each line.
  *
  * Line layout: summary fields first (seq, ts, kind, method, url, status, type, duration, mime, reqSize,
- * resSize, note, sev, src, doc, g), then headers and bodies (or `data`). The scanner relies on that order to skip big bodies.
+ * resSize, dns, note, sev, src, doc, g), then headers and bodies (or `data`). The scanner relies on that order to skip big bodies.
  */
 
 const fs = require('fs');
@@ -18,7 +18,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
 
-const SUMMARY_KEYS = ['seq', 'ts', 'kind', 'method', 'url', 'status', 'type', 'duration', 'mime', 'reqSize', 'resSize', 'note', 'sev', 'src', 'doc', 'g'];
+const SUMMARY_KEYS = ['seq', 'ts', 'kind', 'method', 'url', 'status', 'type', 'duration', 'mime', 'reqSize', 'resSize', 'dns', 'note', 'sev', 'src', 'doc', 'g'];
 /** Console text kept in the summary (the full message and its arguments are in `data`). */
 const CONSOLE_NOTE_MAX = 500;
 const CONSOLE_SEVS = new Set(['error', 'warn', 'info', 'verbose']);
@@ -238,6 +238,9 @@ class SessionLog extends EventEmitter {
             mime: _headerVal(responseHeaders, 'content-type').split(';')[0].trim() || null,
             reqSize: bodySize(e.requestBody),
             resSize: bodySize(e.responseBody),
+            dns: e.dnsOverride?.ip ? {
+                host: e.dnsOverride.host, ip: e.dnsOverride.ip, ...(e.dnsOverride.id ? { id: e.dnsOverride.id } : {}),
+            } : undefined,
             requestHeaders,
             responseHeaders,
             requestBody: e.requestBody ?? null,

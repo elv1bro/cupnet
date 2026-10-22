@@ -268,3 +268,53 @@ test('applyMitmCorsToResponse: skips injection for challenge URL even if enabled
     assert.strictEqual(out, res);
 });
 
+
+// ─── Dial mode (CupNet mini): keep the URL, connect to the IP ─────────────────
+
+test('dial mode: URL, SNI host and HTTP/2 stay; connectTo carries the IP', () => {
+    const p = mkProxy();
+    p.setDnsOverrides([{ id: 'r1', host: 'api.example.com', ip: '10.0.0.5' }], { dial: true });
+    const out = p._applyDnsOverride({ url: 'https://api.example.com/v1?q=1', headers: { host: 'api.example.com' } });
+    assert.equal(out.url, 'https://api.example.com/v1?q=1');
+    assert.equal(out.connectTo, '10.0.0.5');
+    assert.equal(out.interceptMatchUrl, undefined);
+    assert.deepEqual(out.dnsOverride, { host: 'api.example.com', ip: '10.0.0.5', rewriteHost: undefined, dial: true, id: 'r1' });
+    assert.equal(out.headers.host, 'api.example.com');
+});
+
+test('dial mode: rewriteHost replaces the Host header (plain and ordered)', () => {
+    const p = mkProxy();
+    p.setDnsOverrides([{ host: 'a.example', ip: '10.0.0.6', rewrite_host: 'b.example' }], { dial: true });
+    const out = p._applyDnsOverride({
+        url: 'https://a.example/', headers: { Host: 'a.example', accept: '*/*' }, orderedHeaders: [['Host', 'a.example'], ['Accept', '*/*']],
+    });
+    assert.equal(out.url, 'https://a.example/');
+    assert.equal(out.headers.host, 'b.example');
+    assert.equal(out.headers.Host, undefined);
+    assert.deepEqual(out.orderedHeaders, [['Host', 'b.example'], ['Accept', '*/*']]);
+});
+
+test('wildcards option: *.suffix overrides, exact rule wins, longest suffix wins', () => {
+    const p = mkProxy();
+    p.setDnsOverrides([
+        { host: '*.example.com', ip: '10.0.0.1' },
+        { host: '*.api.example.com', ip: '10.0.0.2' },
+        { host: 'x.api.example.com', ip: '10.0.0.3' },
+        { host: '*.off.example', ip: '10.0.0.4', enabled: false },
+    ], { dial: true, wildcards: true });
+    assert.equal(p._lookupDnsOverride('www.example.com').ip, '10.0.0.1');
+    assert.equal(p._lookupDnsOverride('example.com').ip, '10.0.0.1');
+    assert.equal(p._lookupDnsOverride('v.api.example.com').ip, '10.0.0.2');
+    assert.equal(p._lookupDnsOverride('x.api.example.com').ip, '10.0.0.3');
+    assert.equal(p._lookupDnsOverride('a.off.example'), null);
+    assert.equal(p._lookupDnsOverride('other.org'), null);
+});
+
+test('without the wildcards option *.suffix stays CORS-only (Electron behaviour)', () => {
+    const p = mkProxy();
+    p.setDnsOverrides([{ host: '*.example.com', ip: '10.0.0.1', mitm_inject_cors: true }]);
+    assert.equal(p._lookupDnsOverride('www.example.com'), null);
+    const out = p._applyDnsOverride({ url: 'https://www.example.com/' });
+    assert.equal(out.url, 'https://www.example.com/');
+    assert.equal(out.dnsOverride, undefined);
+});

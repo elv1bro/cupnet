@@ -1893,6 +1893,11 @@ npm run pack:mini        # standalone dist/CupNet mini.app (or dist/cupnet-mini/
     - `mini/page-analyzer.js`: `auditSecurityHeaders` (statuses `good|warn|bad|info`), `techFromHeaders`, `enrichReport`, and `stripAgentFromLoggedDocument`, which removes the agent (and restores the CSP) from the logged HTML so the session shows what the site sent.
     - `/__cupnet/console` and `/__cupnet/agent/*` are answered in `MiniApp._handleAgentEndpoint`; they are reachable by any site, so they never return logged data.
     - `mini/ui-inspect.js`: the Console and Page analyzer views. It loads after `ui.js` and shares its global scope (`h`, `PG`, `CN`, `AN`).
+  - `mini/dns-store.js`: `DnsStore`, DNS overrides in `<data>/dns.json` (0600). `toMitmRules()` feeds `MitmProxy.setDnsOverrides({dial, wildcards})`: dial mode keeps URL/SNI/Host/H2 and changes only the TCP target (the Go worker gets `connectTo`, see `azuretls-go/connect_to.go`). Hits and activity are in memory; logged entries carry `dns`.
+  - `mini/notes-store.js`: `NotesStore`, Markdown notes in `<data>/notes.json` (0600, atomic). `site` uses the DNS host normalizer (wildcards OK). `cupnet:req/<session>/<seq>` references are rendered as Traffic links by the UI.
+  - `mini/site-map.js`: static HTML parse of a session's `Document` responses → pages (opened vs only linked), forms and fields with visibility (`hidden` / `likely`), external hosts. `SiteMapCache` scans each session once (LRU) and the live one incrementally. CSS/JS hiding is out of scope (the Page analyzer sees the live DOM).
+  - `mini/share-host.js`: `ShareHost`, the local test host for sealed sessions: 127.0.0.1 only, Host checked, serves only `/` (viewer.html with a CSP script hash computed at start) and `/sealed/<id>.cupsess`. Started by `settings.shareHost` or `cupnet-mini host`. Port 0 = ephemeral (tests).
+  - `mini/ui-tools.js`: DNS, Notes, Site map and Share views. Loads after `ui-inspect.js` and shares the global scope.
   - `mini/har.js`: HAR 1.2.
   - `mini/browser-libs.json`: browser libs copied into the pack and served at `/lib/*`.
 - `upstream-tunnel.js` (`connectThroughProxy`) gives the raw MITM paths (TLS passthrough, WebSocket) http, https, socks4(a) and socks5(h) upstreams (A-410).

@@ -571,6 +571,8 @@ function renderAnHead() {
       sw(AN.auto, 'Auto', (v) => { AN.auto = v; store.set('an-auto', v); anSchedule(); }, `Re-scan every ${AN_AUTO_MS / 1000} s while this page is open`),
       h('button', { class: 'btn sm', disabled: !r, onclick: () => copy(JSON.stringify(r, null, 2), 'Report copied') }, 'Copy JSON'),
       h('button', { class: 'btn sm', onclick: () => { CN.doc = p.id; if (p.live) CN.target = p.id; go('console'); } }, 'Console'),
+      typeof smOpenSite === 'function' && splitUrl(p.url)[0] ? h('button', { class: 'btn sm', title: 'Every link and form seen on this site', onclick: () => smOpenSite(splitUrl(p.url)[0].replace(/:\d+$/, '')) }, 'Site map') : null,
+      typeof ntHostButton === 'function' && splitUrl(p.url)[0] ? ntHostButton(splitUrl(p.url)[0].replace(/:\d+$/, '')) : null,
       h('button', { class: 'btn primary sm', disabled: busyNow || !p.live, title: p.live ? 'Scan the page again' : 'The page is gone — reload it in Chrome', onclick: guard(() => anAnalyze()) }, busyNow ? 'Scanning…' : r ? 'Rescan' : 'Scan')));
 }
 function renderAnMain() {

@@ -30,6 +30,10 @@ const { RuleStore } = require('./rule-store');
 const { ProxyStore, ProxyManager } = require('./proxy-store');
 const { IpMonitor } = require('./ip-monitor');
 const { CookieJar } = require('./cookie-jar');
+const { DnsStore } = require('./dns-store');
+const { NotesStore } = require('./notes-store');
+const { SiteMapCache } = require('./site-map');
+const { ShareHost } = require('./share-host');
 const { PageAgents, POLL_IDLE_MS } = require('./page-agents');
 const { buildAgentSource } = require('./page-agent');
 const pageAnalyzer = require('./page-analyzer');
@@ -74,6 +78,9 @@ const DEFAULT_SETTINGS = {
     pageAgent: false,
     /** Hosts (and their subdomains, or *.host) the agent is never injected into. */
     pageAgentExclude: ['challenges.cloudflare.com'],
+    /** Local test host for sealed sessions (viewer + .cupsess files) on 127.0.0.1:sharePort. */
+    shareHost: false,
+    sharePort: 8879,
 };
 
 const TEXT_MIME = /^(text\/|application\/(json|[\w.+-]*\+json|javascript|ecmascript|xml|[\w.+-]*\+xml|x-www-form-urlencoded|graphql)|image\/svg\+xml)/i;
@@ -175,6 +182,13 @@ class MiniApp {
     get settingsFile() { return path.join(this.dataDir, 'settings.json'); }
     get ipHistoryFile() { return path.join(this.dataDir, 'ip-history.jsonl'); }
     get cookiesFile() { return path.join(this.dataDir, 'cookies.json'); }
+    get dnsFile() { return path.join(this.dataDir, 'dns.json'); }
+    get notesFile() { return path.join(this.dataDir, 'notes.json'); }
+
+    /** Push DNS rules to the MITM: dial mode (URL, SNI and HTTP/2 kept) with `*.domain` rules. */
+    applyDns() {
+        this.mitm?.setDnsOverrides(this.dns.toMitmRules(), { dial: true, wildcards: true });
+    }
 
     /** Encrypt a saved session into sealed/<id>.cupsess (its key file is created on first use). */
     sealSession(sessionId) {
@@ -220,6 +234,9 @@ class MiniApp {
         this.sessionKey = sessionCrypto.ensureSessionKey(this.keysDir, this.log.sessionId);
 
         this.cookies = new CookieJar({ file: this.cookiesFile });
+        this.dns = new DnsStore({ file: this.dnsFile });
+        this.notes = new NotesStore({ file: this.notesFile });
+        this.siteMaps = new SiteMapCache();
         const { MitmProxy } = require('../mitm-proxy');
         this.mitm = new MitmProxy({
             port: this.mitmPort,
@@ -232,14 +249,16 @@ class MiniApp {
                     const s = pageAnalyzer.stripAgentFromLoggedDocument(e.responseBody, e.responseHeaders);
                     if (s) e = { ...e, responseBody: s.body, responseHeaders: s.headers };
                 }
-                this.log.logRequest(e);
+                const entry = this.log.logRequest(e);
                 this.cookies.observe(e);
+                if (e.dnsOverride) this.dns.noteHit(e.dnsOverride, { ...e, seq: entry?.seq });
             },
             onBeforeUpstream: (up) => { this.cookies.beforeUpstream(up); },
             onResponseHead: (up, out) => { this.cookies.responseHead(up, out); return out; },
         });
         this._applySettings();
         await this.mitm.start();
+        this.applyDns();
         this.proxies = new ProxyManager(new ProxyStore(this.proxiesFile, this.proxiesKeyFile), this.mitm, {
             cliUpstream: this.upstream, selfPort: this.mitmPort, onChange: () => this.ipMonitor?.noteSwitch(),
         });
@@ -258,6 +277,7 @@ class MiniApp {
         this.ui = createUiServer(this);
         await this.ui.listen(this.uiPort);
         this.uiPort = this.ui.port;
+        if (this.settings.shareHost) await this.applyShareHost();
         return this;
     }
 
@@ -505,6 +525,9 @@ class MiniApp {
             ipWatchSec: Number.isFinite(sec) ? Math.min(3600, Math.max(5, sec)) : DEFAULT_SETTINGS.ipWatchSec,
             pageAgent: !!s.pageAgent,
             pageAgentExclude: [...new Set(_parseList(s.pageAgentExclude))],
+            shareHost: !!s.shareHost,
+            sharePort: Number.isInteger(Number(s.sharePort)) && Number(s.sharePort) >= 1024 && Number(s.sharePort) <= 65535
+                ? Number(s.sharePort) : DEFAULT_SETTINGS.sharePort,
         };
     }
 
@@ -517,16 +540,35 @@ class MiniApp {
         this.ipMonitor?.configure({ enabled: this.settings.ipWatch, intervalMs: this.settings.ipWatchSec * 1000 });
     }
 
+    /** Start / stop / move the local share host to match the settings. */
+    async applyShareHost() {
+        if (!this.shareHost) this.shareHost = new ShareHost({ sealedDir: this.sealedDir, port: this.settings.sharePort });
+        const h = this.shareHost;
+        this.shareError = null;
+        try {
+            if (h.running && (!this.settings.shareHost || h.port !== this.settings.sharePort)) await h.stop();
+            if (this.settings.shareHost && !h.running) await h.start(this.settings.sharePort);
+        } catch (e) {
+            this.shareError = e?.code === 'EADDRINUSE' ? `Port ${this.settings.sharePort} is in use` : (e?.message || String(e));
+        }
+        return this.shareStatus();
+    }
+
+    shareStatus() {
+        return { ...(this.shareHost?.status() || { running: false, port: this.settings.sharePort, url: null }), enabled: this.settings.shareHost, error: this.shareError || null };
+    }
+
     getSettings() {
         return {
             ...this.settings,
             browser: this.browser,
             browserFromCli: !!this.browserArg,
             tlsProfiles: TLS_PROFILES,
+            share: this.shareStatus(),
         };
     }
 
-    updateSettings(patch) {
+    async updateSettings(patch) {
         const next = this._cleanSettings({ ...this.settings, ...(patch || {}) });
         this.settings = next;
         if (patch && patch.browser != null) { this.browser = next.browser; this.browserArg = null; }
@@ -534,6 +576,7 @@ class MiniApp {
         fs.writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
         fs.renameSync(tmp, this.settingsFile);
         this._applySettings();
+        if (patch && (patch.shareHost != null || patch.sharePort != null)) await this.applyShareHost();
         return this.getSettings();
     }
 
@@ -646,6 +689,7 @@ class MiniApp {
         for (const id of [...this._paused.keys()]) this.resumeRequest(id, { action: 'forward' });
         if (this.ipMonitor) { this.ipMonitor.stop(); this.ipMonitor = null; }
         if (this.ui) { await this.ui.close().catch(() => {}); this.ui = null; }
+        if (this.shareHost) { await this.shareHost.stop().catch(() => {}); this.shareHost = null; }
         if (this.mitm) { this.mitm.stop(); this.mitm = null; }
         try { this.interceptor?.setRuleStore(null); } catch { /* ignore */ }
         try { this.rules?.close(); } catch { /* ignore */ }

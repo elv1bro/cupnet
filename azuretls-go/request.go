@@ -103,6 +103,7 @@ type incomingLine struct {
 	TabID            *string             `json:"tabId"`
 	MaxRetries       *float64            `json:"maxRetries"`
 	Timeout          *float64            `json:"timeout"`
+	ConnectTo        *string             `json:"connectTo"` // dial this IP instead of resolving the host (connect_to.go)
 }
 
 type outgoingLine struct {
@@ -253,11 +254,9 @@ func handleHTTPRequest(in *incomingLine) outgoingLine {
 
 	isIdem := isIdempotentMethod(in.Method)
 
-	factory := func() (*azuretls.Session, error) {
-		return createPooledSession(in.Browser, in.Proxy, in.Ja3)
-	}
+	factory := sessionFactoryFor(in)
 
-	sess, pkey, err := borrowSessionFor(in.Browser, in.Proxy, in.Ja3, in.TabID, in.URL, factory)
+	sess, pkey, err := borrowByKey(requestPoolKey(in), factory)
 	if err != nil {
 		e := err.Error()
 		return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]any{}, Error: e}
@@ -289,7 +288,7 @@ func handleHTTPRequest(in *incomingLine) outgoingLine {
 		}
 
 		// Fresh session retry with full headers
-		fresh, errFresh := createPooledSession(in.Browser, in.Proxy, in.Ja3)
+		fresh, errFresh := factory()
 		if errFresh == nil {
 			req2, rerr := buildAzureRequest(in, false)
 			if rerr == nil {
@@ -308,7 +307,7 @@ func handleHTTPRequest(in *incomingLine) outgoingLine {
 		}
 
 		// Bare fallback
-		bare, errBare := createPooledSession(in.Browser, in.Proxy, in.Ja3)
+		bare, errBare := factory()
 		if errBare != nil {
 			return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]any{}, Error: errBare.Error()}
 		}

@@ -163,7 +163,7 @@ function confirmBox(text, okLabel = 'OK', danger = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Navigation
 // ─────────────────────────────────────────────────────────────────────────────
-const TITLES = { traffic: 'Traffic', console: 'Console', analyzer: 'Page analyzer', proxies: 'Proxies', ipwatch: 'IP monitor', compare: 'Compare', cookies: 'Cookies', repeater: 'Repeater', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
+const TITLES = { traffic: 'Traffic', console: 'Console', analyzer: 'Page analyzer', proxies: 'Proxies', ipwatch: 'IP monitor', dns: 'DNS overrides', sitemap: 'Site map', notes: 'Notes', compare: 'Compare', cookies: 'Cookies', repeater: 'Repeater', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
 let PAGE = 'traffic';
 function go(page) {
   if (!TITLES[page]) page = 'traffic';
@@ -171,7 +171,7 @@ function go(page) {
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.page === page));
   document.querySelectorAll('#pages > section').forEach((s) => { s.hidden = s.id !== `page-${page}`; });
   $('pageTitle').textContent = TITLES[page];
-  const load = { traffic: () => scheduleDraw(false), console: () => loadConsole(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, compare: loadCompare, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode }[page];
+  const load = { traffic: () => scheduleDraw(false), console: () => loadConsole(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, dns: loadDns, sitemap: loadSiteMap, notes: loadNotes, compare: loadCompare, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode }[page];
   if (load) guard(load)();
 }
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.page)));
@@ -249,6 +249,8 @@ async function pollStatus() {
     $('stats').className = `mono ${st.writeErrors || (s && !s.workerReady) ? 'warn' : 'muted'}`;
     const pc = $('pausedCount');
     pc.hidden = !st.paused; pc.textContent = st.paused || '';
+    const dc = $('dnsCount');
+    dc.hidden = !st.dns?.enabled; dc.textContent = st.dns?.enabled || '';
     if (st.paused > _lastPaused && PAGE !== 'paused') toast(`${st.paused} request(s) paused by a breakpoint`, 'warn', { action: { label: 'Open', fn: () => go('paused') } });
     _lastPaused = st.paused;
     const key = egressKey(st.proxy);
@@ -380,7 +382,7 @@ function draw() {
       c[2].textContent = ev ? '' : (e.method || ''); c[2].className = `m m-${e.method || ''}`;
       c[3].textContent = ev ? (e.kind === 'page-event' ? 'event' : e.kind === 'ip' ? 'ip' : e.kind === 'console' ? 'console' : '') : (e.status || 'ERR'); c[3].className = `st ${ev ? '' : stCls(e.status)}${e.kind === 'console' ? ` cn-${e.sev || 'info'}` : ''}`;
       c[4].textContent = e.type || '';
-      c[5].textContent = host; c[5].title = host;
+      c[5].textContent = host; c[5].title = e.dns ? `${host} → ${e.dns.ip} (DNS override)` : host; c[5].classList.toggle('dns', !!e.dns);
       c[6].textContent = e.kind === 'console' ? (e.note || '') : ev && !e.url ? (e.note || e.kind) : p; c[6].title = e.kind === 'console' ? `${e.note || ''}\n${e.url || ''}` : e.url || e.note || '';
       c[7].textContent = fmtSize(e.resSize);
       c[8].textContent = e.duration != null ? `${e.duration} ms` : '';
@@ -552,6 +554,7 @@ function tabHeaders(d, e) {
     ['URL', e.url], ['Method', e.method], ['Status', String(e.status || 'failed')], ['Type', e.type || ''],
     ['Duration', e.duration != null ? `${e.duration} ms` : ''], ['Time', new Date(e.ts).toLocaleString()],
     ['Request body', fmtSize(e.reqSize) || '—'], ['Response body', fmtSize(e.resSize) || '—'],
+    ...(e.dns ? [['DNS override', h('span', null, h('span', { class: 'mono' }, `${e.dns.host} → ${e.dns.ip}`), ' ', h('button', { class: 'btn sm', onclick: () => go('dns') }, 'Rules'))]] : []),
     ...(e.error ? [['Error', String(e.error)]] : []),
   ])));
   const rs = pairsOf(e.responseHeaders), rq = pairsOf(e.requestHeaders);
@@ -1783,7 +1786,8 @@ async function loadSessions() {
           for (const [what, name] of [['key', `${r.id}.cupkey`], ['sealed', `${r.id}.cupsess`]]) download((await apiBlob(`/api/sessions/${s.id}/${what}`)).blob, name);
           toast('Sealed: keep the .cupkey separate from the .cupsess', 'ok');
           loadSessions();
-        }, 'Encrypt with this session\'s own key and download both files'))));
+        }, 'Encrypt with this session\'s own key and download both files'),
+        btn('Share', (ev) => shareSession(s.id, ev.target), 'Seal and get a link for the local share host (viewer.html)'))));
   }
 }
 
@@ -1800,6 +1804,7 @@ async function loadSettings() {
   $('sIpWatch').checked = s.ipWatch !== false; $('sIpSec').value = s.ipWatchSec || 15;
   $('sPass').value = (s.tlsPassthrough || []).join('\n');
   $('sAgent').checked = !!s.pageAgent; $('sAgentEx').value = (s.pageAgentExclude || []).join('\n');
+  renderShareState(s);
   const st = ST || await api('/api/status');
   const setup = clear($('setup'));
   const row = (k, v) => [h('div', null, k), h('div', null, v)];
@@ -1821,18 +1826,30 @@ function renderTls() {
       h('b', null, p.name), h('span', { class: 'muted' }, p.note)));
   }
 }
-$('sSave').addEventListener('click', guard(async () => {
+function renderShareState(s) {
+  const sh = s.share || {};
+  $('sShare').checked = !!s.shareHost; $('sSharePort').value = s.sharePort || sh.port || 8879;
+  const el = clear($('sShareState'));
+  if (sh.running) el.append('Serving at ', h('code', null, sh.url), ' (this computer only).');
+  else if (sh.error) el.append(h('span', { class: 'err' }, `Not running: ${sh.error}`));
+  else el.append('Off.');
+}
+async function saveSettings(btn) {
   const patch = {
     cors: $('sCors').checked, forceHttp1: $('sH1').checked, ipWatch: $('sIpWatch').checked, ipWatchSec: Number($('sIpSec').value) || 15,
     tlsPassthrough: $('sPass').value.split(/[\n,]/).map((x) => x.trim()).filter(Boolean),
-    pageAgent: $('sAgent').checked, pageAgentExclude: $('sAgentEx').value.split(/[\n,]/).map((x) => x.trim()).filter(Boolean) };
+    pageAgent: $('sAgent').checked, pageAgentExclude: $('sAgentEx').value.split(/[\n,]/).map((x) => x.trim()).filter(Boolean),
+    shareHost: $('sShare').checked, sharePort: Number($('sSharePort').value) || 8879 };
   if (S.browser && S.browser !== S.data?.browser) patch.browser = S.browser;
-  await busy($('sSave'), 'Saving…', async () => { S.data = await post('/api/settings', patch); });
+  await busy(btn, 'Saving…', async () => { S.data = await post('/api/settings', patch); });
+  renderShareState(S.data);
   S.browser = S.data.browser; renderTls(); $('tlsCli').hidden = !S.data.browserFromCli;
   $('sPass').value = (S.data.tlsPassthrough || []).join('\n');
   $('sAgentEx').value = (S.data.pageAgentExclude || []).join('\n');
   toast('Settings saved — they apply to new connections', 'ok');
-}));
+}
+$('sSave').addEventListener('click', guard(() => saveSettings($('sSave'))));
+$('sSave2').addEventListener('click', guard(() => saveSettings($('sSave2'))));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Compare two requests
