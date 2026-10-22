@@ -456,6 +456,13 @@ input.w-num { width: 64px; height: 22px; margin: 0 4px; padding: 0 6px; }
 .ln-skip { display: block; padding: 3px 12px; color: var(--accent); background: var(--bg2); cursor: pointer; user-select: none; }
 .ln-skip:hover { background: var(--bg3); }
 
+/* ── mirror ── */
+.mir-list { width: 46%; min-width: 360px; flex: none; }
+.mir-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.mir-head { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.mir-route { font-size: 14px; }
+.mir-head .meta { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+
 /* ── cookies ── */
 .ck-sites { width: 270px; min-width: 220px; flex: none; }
 .ck-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }

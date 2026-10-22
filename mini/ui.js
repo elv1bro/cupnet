@@ -163,7 +163,7 @@ function confirmBox(text, okLabel = 'OK', danger = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Navigation
 // ─────────────────────────────────────────────────────────────────────────────
-const TITLES = { traffic: 'Traffic', search: 'Search', console: 'Console', ws: 'WebSockets', analyzer: 'Page analyzer', proxies: 'Proxies', ipwatch: 'IP monitor', dns: 'DNS overrides', sitemap: 'Site map', notes: 'Notes', compare: 'Compare', cookies: 'Cookies', repeater: 'Repeater', intruder: 'Intruder', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
+const TITLES = { traffic: 'Traffic', search: 'Search', console: 'Console', ws: 'WebSockets', analyzer: 'Page analyzer', proxies: 'Proxies', ipwatch: 'IP monitor', dns: 'DNS overrides', sitemap: 'Site map', notes: 'Notes', compare: 'Compare', mirror: 'Mirror', cookies: 'Cookies', repeater: 'Repeater', intruder: 'Intruder', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
 let PAGE = 'traffic';
 function go(page) {
   if (!TITLES[page]) page = 'traffic';
@@ -171,7 +171,7 @@ function go(page) {
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.page === page));
   document.querySelectorAll('#pages > section').forEach((s) => { s.hidden = s.id !== `page-${page}`; });
   $('pageTitle').textContent = TITLES[page];
-  const load = { traffic: () => scheduleDraw(false), search: () => loadSearch(), console: () => loadConsole(), ws: () => loadWs(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, dns: loadDns, sitemap: loadSiteMap, notes: loadNotes, compare: loadCompare, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode, intruder: loadIntruder }[page];
+  const load = { traffic: () => scheduleDraw(false), search: () => loadSearch(), console: () => loadConsole(), ws: () => loadWs(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, dns: loadDns, sitemap: loadSiteMap, notes: loadNotes, compare: loadCompare, mirror: loadMirror, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode, intruder: loadIntruder }[page];
   if (load) guard(load)();
 }
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.page)));
@@ -1527,6 +1527,7 @@ const RULE_TYPES = [
   ['block', 'Block', 'Fails the request; nothing is sent.'],
   ['modifyHeaders', 'Modify headers', 'Sets or removes request headers before sending and response headers before Chrome sees them.'],
   ['script', 'Script hooks', 'JS that edits the request before sending (ctx.url, ctx.method, ctx.headers, ctx.body, ctx.shortCircuit) and the response after (ctx.request, ctx.response.statusCode / headers / body).'],
+  ['mirror', 'Mirror host', 'Serves an upstream host under the matched host: fetches the upstream, then rewrites the body, Location and Set-Cookie back to the client host. Optional find/replace on the content.'],
   ['pause', 'Pause only (breakpoint)', 'Holds matching requests in Breakpoints so you can edit, forward or block them.'],
 ];
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'];
@@ -1539,6 +1540,7 @@ const RULE_TEMPLATES = {
   block: () => ({}),
   modifyHeaders: () => ({ requestHeaders: {}, removeRequestHeaders: [], responseHeaders: {}, removeResponseHeaders: [] }),
   script: () => ({ beforeSource: '// ctx.headers["x-example"] = "1";\n', afterSource: '' }),
+  mirror: () => ({ upstreamHost: '', upstreamPort: 0, replace: [] }),
   pause: () => ({}),
 };
 function edFromRule(r) {
@@ -1658,6 +1660,35 @@ function renderREditor() {
   } else if (ed.type === 'script') {
     form.append(...field('Before request', h('textarea', { class: 'code short', spellcheck: false, value: p.beforeSource || '', oninput: (ev) => { p.beforeSource = ev.target.value; changed(); } }), 'ctx.url, ctx.method, ctx.headers, ctx.body; set ctx.shortCircuit = { statusCode, headers, body } to answer without the network.', true));
     form.append(...field('After response', h('textarea', { class: 'code short', spellcheck: false, value: p.afterSource || '', oninput: (ev) => { p.afterSource = ev.target.value; changed(); } }), 'ctx.request, ctx.response.statusCode, ctx.response.headers, ctx.response.bodyBase64 (or set ctx.response.body).', true));
+  } else if (ed.type === 'mirror') {
+    form.append(...field('Upstream host', h('input', { class: 'mono', value: p.upstreamHost || '', spellcheck: false, placeholder: 'origin.example.com',
+      oninput: (ev) => { p.upstreamHost = ev.target.value; changed(); } }), 'The real host to fetch. Its body, Location and Set-Cookie are rewritten back to the host in the URL pattern.'));
+    form.append(...field('Upstream port', h('input', { type: 'number', min: 0, max: 65535, value: p.upstreamPort || 0,
+      oninput: (ev) => { p.upstreamPort = Number(ev.target.value) || 0; changed(); } }), '0 = same as the client (443).'));
+    if (!Array.isArray(p.replace)) p.replace = [];
+    const repBox = h('div');
+    const paintReplace = () => {
+      clear(repBox);
+      p.replace.forEach((r, i) => {
+        const isUrl = r.kind === 'url';
+        const row = h('div', { class: 'sect', style: 'margin-bottom:6px' },
+          h('div', { class: 'inline' },
+            h('select', { onchange: (ev) => { r.kind = ev.target.value === 'url' ? 'url' : 'word'; if (r.kind === 'url') { r.regex = r.urls = r.tags = false; } paintReplace(); changed(); } },
+              [['word', 'Find / replace'], ['url', 'Swap path']].map(([v, l]) => h('option', { value: v, selected: (r.kind || 'word') === v }, l))),
+            h('input', { class: 'mono grow', value: r.from || '', placeholder: isUrl ? '/client/path' : 'find', oninput: (ev) => { r.from = ev.target.value; changed(); } }),
+            h('span', { class: 'muted' }, '→'),
+            h('input', { class: 'mono grow', value: r.to || '', placeholder: isUrl ? '/upstream/path' : 'replace', oninput: (ev) => { r.to = ev.target.value; changed(); } }),
+            h('button', { class: 'icon', title: 'Remove', onclick: () => { p.replace.splice(i, 1); paintReplace(); changed(); } }, '✕')),
+          isUrl ? null : h('div', { class: 'inline', style: 'margin-top:4px' },
+            h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!r.regex, onchange: (ev) => { r.regex = ev.target.checked; changed(); } }), 'Regex ($1 groups)'),
+            h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!r.urls, onchange: (ev) => { r.urls = ev.target.checked; changed(); } }), 'In URL attributes'),
+            h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!r.tags, onchange: (ev) => { r.tags = ev.target.checked; changed(); } }), 'Whole document (incl. tags)')));
+        repBox.append(row);
+      });
+      repBox.append(h('button', { class: 'btn sm ghost', onclick: () => { p.replace.push({ from: '', to: '', kind: 'word', regex: false, urls: false, tags: false }); paintReplace(); } }, '+ Replace rule'));
+    };
+    paintReplace();
+    form.append(...field('Content rewrite', repBox, 'Applied to text responses. "Find / replace" edits text (word-aware); "Swap path" fetches one path as another.', true));
   }
 
   // ── conditions + behaviour ──

@@ -33,6 +33,7 @@ const { CookieJar } = require('./cookie-jar');
 const { DnsStore } = require('./dns-store');
 const { NotesStore } = require('./notes-store');
 const { SiteMapCache } = require('./site-map');
+const { MirrorAudit } = require('./mirror-audit');
 const { WsHub } = require('./ws-hub');
 const { ShareHost } = require('./share-host');
 const { PageAgents, POLL_IDLE_MS } = require('./page-agents');
@@ -185,6 +186,7 @@ class MiniApp {
     get cookiesFile() { return path.join(this.dataDir, 'cookies.json'); }
     get dnsFile() { return path.join(this.dataDir, 'dns.json'); }
     get notesFile() { return path.join(this.dataDir, 'notes.json'); }
+    get mirrorDir() { return path.join(this.dataDir, 'mirror'); }
 
     /** Push DNS rules to the MITM: dial mode (URL, SNI and HTTP/2 kept) with `*.domain` rules. */
     applyDns() {
@@ -228,6 +230,8 @@ class MiniApp {
         interceptor.setLocalEndpointHandler((req) => this._handleLocalEndpoint(req));
         interceptor.setBreakpointHandler((opts, rule) => this._pauseRequest(opts, rule));
         interceptor.setDocumentScriptsProvider((opts) => this._documentScripts(opts));
+        this.mirrorAudit = new MirrorAudit({ dir: this.mirrorDir });
+        interceptor.setMirrorAuditSink((e) => { try { this.mirrorAudit.add(e); } catch { /* ignore */ } });
         this._loadSettings();
 
         this.log = new SessionLog({ dir: this.sessionsDir });
@@ -729,6 +733,7 @@ class MiniApp {
         try { this.interceptor?.setLocalEndpointHandler(null); } catch { /* ignore */ }
         try { this.interceptor?.setBreakpointHandler(null); } catch { /* ignore */ }
         try { this.interceptor?.setDocumentScriptsProvider(null); } catch { /* ignore */ }
+        try { this.interceptor?.setMirrorAuditSink(null); } catch { /* ignore */ }
         this.pages.clear();
         for (const id of [...this._paused.keys()]) this.resumeRequest(id, { action: 'forward' });
         if (this.ipMonitor) { this.ipMonitor.stop(); this.ipMonitor = null; }

@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const { networkPolicy } = require('./network-policy');
 const { safeCatch, sysLog } = require('./sys-log');
 const { isDocumentRequest, injectScriptsIntoHtmlResponse } = require('./html-inject');
+const mirrorRewrite = require('./mirror-rewrite');
 
 /** Same-origin path served by the MITM itself (page beacons from injected scripts), never the origin. */
 const CUPNET_LOCAL_PATH_PREFIX = '/__cupnet/';
@@ -36,6 +37,15 @@ function setBreakpointHandler(fn) {
     _breakpointHandler = typeof fn === 'function' ? fn : null;
 }
 
+/**
+ * Optional: (entry) => void — receives one before/after record per `mirror` rule response so a host
+ * (CupNet mini) can store an audit trail. Called fire-and-forget from finalize; errors are ignored.
+ */
+let _mirrorAuditSink = null;
+function setMirrorAuditSink(fn) {
+    _mirrorAuditSink = typeof fn === 'function' ? fn : null;
+}
+
 function applyBreakpointPatch(opts, patch) {
     if (!patch || typeof patch !== 'object') return;
     if (patch.url != null) opts.url = String(patch.url);
@@ -65,6 +75,7 @@ const INTERCEPT_SCRIPT_MS = Math.min(
 );
 
 const MITM_POST_SCRIPT_AFTER = 'scriptAfter';
+const MITM_POST_MIRROR = 'mirror';
 
 /** Логировать каждое срабатывание правила (block/modifyHeaders/mock). Выключить: CUPNET_INTERCEPT_LOG_MATCHES=0 */
 function _interceptLogMatchesEnabled() {
@@ -632,6 +643,37 @@ function _patchRequestOptsForMitm(opts, p) {
 }
 
 /**
+ * Mirror rule: point the outbound request at the upstream host. Rewrites opts.url (so the worker
+ * fetches host A) and the Host / `:authority` headers to the upstream authority so the origin sees
+ * its own host. The reverse path rewriting is done by mirror-rewrite.rewriteRequest.
+ */
+function _applyMirrorRequest(opts, upstream) {
+    opts.url = upstream.url;
+    const authority = upstream.port && upstream.port !== 443
+        ? `${upstream.host}:${upstream.port}`
+        : upstream.host;
+    if (!opts.headers) opts.headers = {};
+    for (const k of Object.keys(opts.headers)) {
+        const low = k.toLowerCase();
+        if (low === 'host' || low === ':authority') delete opts.headers[k];
+    }
+    opts.headers.Host = authority;
+    if (Array.isArray(opts.orderedHeaders)) {
+        let sawAuthority = false;
+        opts.orderedHeaders = opts.orderedHeaders.map(([k, v]) => {
+            const low = String(k).toLowerCase();
+            if (low === ':authority') { sawAuthority = true; return [k, authority]; }
+            if (low === 'host') return [k, authority];
+            return [k, v];
+        });
+        // Keep HTTP/2's pseudo-authority consistent even if Chrome only sent a Host header.
+        if (!sawAuthority && !opts.orderedHeaders.some(([k]) => String(k).toLowerCase() === 'host')) {
+            opts.orderedHeaders.unshift(['Host', authority]);
+        }
+    }
+}
+
+/**
  * @param {object} opts — копия dnsAdjusted (headers/orderedHeaders можно мутировать).
  *   Если задан `interceptMatchUrl`, правила матчятся по нему (логический URL до DNS‑подмены host→IP).
  * @param {{ rulesOverride?: object[] }|undefined} planOptions
@@ -865,6 +907,48 @@ async function planMitmIntercept(opts, planOptions) {
             continue;
         }
 
+        if (rule.type === 'mirror') {
+            const m = mirrorRewrite.normalizeMirror(rule.params || {});
+            if (!m.upstreamHost) continue; // misconfigured: nothing to mirror
+            let clientHost = '';
+            let clientPort = 443;
+            try {
+                const u = new URL(matchUrl);
+                clientHost = (u.hostname || '').replace(/\.$/, '').toLowerCase();
+                clientPort = Number(u.port) || (u.protocol === 'http:' ? 80 : 443);
+            } catch { clientHost = mirrorRewrite.hostOnly(matchUrl); }
+            const upstream = mirrorRewrite.rewriteRequest(
+                { url: matchUrl, clientHost, clientPort }, m,
+            );
+            if (!upstream) continue;
+            _applyMirrorRequest(opts, upstream);
+            const postProcess = {
+                _mitmPost: MITM_POST_MIRROR,
+                mirror: m,
+                clientHost,
+                clientPort,
+                clientUrl: upstream.path,
+                ruleName: rule.name,
+                ruleId: rule.id,
+                method: opts.method || 'GET',
+                _responseDelayMs: responseDelayMs,
+            };
+            const detailStr = `mirror ${clientHost} ⇐ ${m.upstreamHost}`;
+            _bumpRuleHit(rule);
+            _logRuleApplied('mitm', {
+                type: 'mirror', ruleName: rule.name, url: matchUrl, tabId: null, detail: detailStr,
+            });
+            if (_onRuleMatch) {
+                try {
+                    _onRuleMatch({ type: 'mirror', ruleName: rule.name, url: matchUrl, tabId: null, detail: detailStr, ruleId: rule.id });
+                } catch (err) {
+                    safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.callback.failed', context: { type: 'mirror', stage: 'mitm' } }, err);
+                }
+            }
+            // A mirror is a terminal transform; later rules would match the client host, not the upstream.
+            return { done: false, opts, postProcess: withInject(postProcess), responseDelayMs };
+        }
+
         if (rule.type === 'script') {
             const p = rule.params || {};
             const beforeSrc = String(p.beforeSource || '');
@@ -967,9 +1051,55 @@ function _applyInject(res, ruleParams) {
     }
 }
 
+/** Rewrite a mirror response (body + Location/Set-Cookie back to the client host) and emit an audit record. */
+function _applyMirror(res, ruleParams) {
+    const m = ruleParams && ruleParams.mirror;
+    if (!m || !m.upstreamHost) return res;
+    try {
+        const beforeBuf = Buffer.from(res.bodyBase64 || '', 'base64');
+        let contentType = '';
+        for (const [k, v] of Object.entries(res.headers || {})) {
+            if (String(k).toLowerCase() === 'content-type') { contentType = Array.isArray(v) ? v[0] : v; break; }
+        }
+        const out = mirrorRewrite.rewriteResponse(
+            { statusCode: res.statusCode, headers: res.headers || {}, body: beforeBuf, contentType },
+            m,
+            { clientHost: ruleParams.clientHost, clientPort: ruleParams.clientPort, clientUrl: ruleParams.clientUrl },
+        );
+        if (_mirrorAuditSink) {
+            try {
+                _mirrorAuditSink({
+                    ruleId: ruleParams.ruleId,
+                    ruleName: ruleParams.ruleName,
+                    method: ruleParams.method || 'GET',
+                    clientHost: ruleParams.clientHost,
+                    upstreamHost: m.upstreamHost,
+                    clientUrl: ruleParams.clientUrl,
+                    status: res.statusCode,
+                    contentType,
+                    hits: out.hits,
+                    rewrote: out.rewrote,
+                    before: beforeBuf,
+                    after: out.body,
+                    ts: Date.now(),
+                });
+            } catch (e) {
+                safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.mirror.audit_failed', context: { ruleName: ruleParams.ruleName } }, e, 'warn');
+            }
+        }
+        return { ...res, headers: out.headers, bodyBase64: out.body.toString('base64') };
+    } catch (e) {
+        safeCatch({ module: 'request-interceptor', eventCode: 'interceptor.mirror.failed', context: { ruleName: ruleParams.ruleName } }, e, 'warn');
+        return res;
+    }
+}
+
 function finalizeMitmInterceptResponse(res, ruleParams) {
     if (!res || !ruleParams) return res;
     if (ruleParams._mitmPost === MITM_POST_SCRIPT_AFTER) return res;
+    if (ruleParams._mitmPost === MITM_POST_MIRROR) {
+        return _applyInject(_applyMirror(res, ruleParams), ruleParams);
+    }
     return _applyInject(_applyResponseHeaderEdits(res, ruleParams), ruleParams);
 }
 
@@ -1052,6 +1182,10 @@ function validateInterceptRuleForSave(rule) {
         if (p.position != null && p.position !== 'head' && p.position !== 'body-end') {
             return { ok: false, error: "Inject position must be 'head' or 'body-end'" };
         }
+    }
+    if (rule?.type === 'mirror') {
+        const v = mirrorRewrite.validateMirrorParams(parseParams(rule.params));
+        if (!v.ok) return v;
     }
     if (rule?.type === 'script') {
         const p = parseParams(rule.params);
@@ -1187,6 +1321,7 @@ module.exports = {
     setBreakpointHandler,
     setLocalEndpointHandler,
     setDocumentScriptsProvider,
+    setMirrorAuditSink,
     setRuleStore,
     CUPNET_LOCAL_PATH_PREFIX,
 };

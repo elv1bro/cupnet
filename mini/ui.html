@@ -15,6 +15,7 @@
 <script src="/ui-ws.js" defer></script>
 <script src="/ui-search.js" defer></script>
 <script src="/ui-intruder.js" defer></script>
+<script src="/ui-mirror.js" defer></script>
 </head>
 <body>
 <aside id="side">
@@ -31,6 +32,7 @@
     <button data-page="ipwatch"><svg viewBox="0 0 16 16"><path d="M1.5 9h3l2-5 3 9 2-4h3"/></svg><span>IP monitor</span><i class="count accent" id="ipCount" hidden></i></button>
     <button data-page="dns"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="2"/><circle cx="12.5" cy="4" r="2"/><circle cx="12.5" cy="12" r="2"/><path d="M5.5 8h3l2-3M8.5 8l2 3"/></svg><span>DNS</span><i class="count accent" id="dnsCount" hidden title="Enabled DNS overrides"></i></button>
     <button data-page="compare"><svg viewBox="0 0 16 16"><path d="M2 3h5v10H2zM9 3h5v10H9z"/><path d="M4 6h1M4 9h1M11 7h1M11 10h1"/></svg><span>Compare</span></button>
+    <button data-page="mirror"><svg viewBox="0 0 16 16"><path d="M5 2.5H2.5v11H5M11 2.5h2.5v11H11"/><path d="M8 1v14"/><path d="M6 5.5 4.5 8 6 10.5M10 5.5 11.5 8 10 10.5"/></svg><span>Mirror</span><i class="count accent" id="mirCount" hidden title="Mirrored responses captured"></i></button>
     <button data-page="cookies"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><circle cx="6" cy="6.5" r=".6"/><circle cx="10" cy="7" r=".6"/><circle cx="7" cy="10.5" r=".6"/></svg><span>Cookies</span><i class="count accent" id="ckCount" hidden title="Cookie changes waiting for the next page load"></i></button>
     <button data-page="repeater"><svg viewBox="0 0 16 16"><path d="M3 6h9l-3-3M13 10H4l3 3"/></svg><span>Repeater</span></button>
     <button data-page="intruder"><svg viewBox="0 0 16 16"><path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3"/><circle cx="8" cy="8" r="3"/><circle cx="8" cy="8" r=".8"/></svg><span>Intruder</span></button>
@@ -401,6 +403,27 @@
       </div>
       <div id="cmpBody" class="cmp-body">
         <div class="empty">Pick two requests: <b>Pin as A</b> on one and <b>Compare</b> on another in Traffic, Cmd/Ctrl-click a second row, or type two request numbers above.</div>
+      </div>
+    </section>
+
+    <!-- ── Mirror ── -->
+    <section id="page-mirror" class="page" hidden>
+      <div class="split2">
+        <div class="list-pane mir-list">
+          <div class="toolbar">
+            <input id="mirQ" type="search" placeholder="Filter host or path…">
+            <button class="icon" id="mirRefresh" title="Refresh">↻</button>
+            <button class="btn sm danger" id="mirClear" title="Erase the whole mirror trail">Clear</button>
+            <span class="spacer"></span>
+            <span class="muted" id="mirShown"></span>
+          </div>
+          <div id="mirRows" class="plist"></div>
+        </div>
+        <div class="mir-main">
+          <div id="mirBody" class="cmp-body">
+            <div class="empty">A <b>Mirror host</b> rule serves an upstream host under the matched host and rewrites its response back. Each mirrored response is captured here — pick one on the left to see the before/after diff.</div>
+          </div>
+        </div>
       </div>
     </section>
 

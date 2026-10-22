@@ -43,6 +43,7 @@ const STATIC = new Map([
     ['/ui-ws.js', [path.join(__dirname, 'ui-ws.js'), 'text/javascript; charset=utf-8']],
     ['/ui-search.js', [path.join(__dirname, 'ui-search.js'), 'text/javascript; charset=utf-8']],
     ['/ui-intruder.js', [path.join(__dirname, 'ui-intruder.js'), 'text/javascript; charset=utf-8']],
+    ['/ui-mirror.js', [path.join(__dirname, 'ui-mirror.js'), 'text/javascript; charset=utf-8']],
     ...Object.entries(JSON.parse(fs.readFileSync(path.join(__dirname, 'browser-libs.json'), 'utf8')))
         .map(([k, rel]) => [`/${k}`, [path.join(__dirname, '..', rel), 'text/javascript; charset=utf-8']]),
 ]);
@@ -391,7 +392,7 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
     }
 
     // ── DNS overrides, notes, site map ─────────────────────────────────────────
-    if (p.startsWith('/api/dns') || p.startsWith('/api/notes') || p.startsWith('/api/sitemap')) {
+    if (p.startsWith('/api/dns') || p.startsWith('/api/notes') || p.startsWith('/api/sitemap') || p.startsWith('/api/mirror')) {
         const r = await _toolRoute(app, req, res, u, sessionSource).catch((e) => _badRequest(res, e));
         if (r !== false) return r;
     }
@@ -666,6 +667,25 @@ async function _toolRoute(app, req, res, u, sessionSource) {
         if (one && (m === 'PUT' || m === 'POST')) return _send(res, 200, notes.update(one[1], await body()));
         if (one && m === 'DELETE') {
             return notes.remove(one[1]) ? _send(res, 200, { ok: true }) : _send(res, 404, { error: 'No such note' });
+        }
+        return false;
+    }
+
+    // Mirror audit: before/after trail for `mirror` intercept rules.
+    if (p.startsWith('/api/mirror')) {
+        const audit = app.mirrorAudit;
+        if (!audit) return _send(res, 200, { total: 0, items: [] });
+        if (p === '/api/mirror' && m === 'GET') {
+            return _send(res, 200, audit.list({
+                limit: Number(u.searchParams.get('limit')) || 200,
+                offset: Number(u.searchParams.get('offset')) || 0,
+            }));
+        }
+        if (p === '/api/mirror' && m === 'DELETE') { audit.clear(); return _send(res, 200, { ok: true }); }
+        const one = /^\/api\/mirror\/([a-z0-9]+)$/.exec(p);
+        if (one && m === 'GET') {
+            const row = audit.get(one[1]);
+            return row ? _send(res, 200, row) : _send(res, 404, { error: 'No such entry' });
         }
         return false;
     }

@@ -194,6 +194,19 @@ Pages can report back with a same-origin request:
     bodies get a field diff or a line diff. Anything else gets a line diff with collapsed
     unchanged runs. Binary bodies, and bodies over 8 MB, are compared by SHA-256.
   - The diff logic is in `compare-diff.js`, shared by the UI and the unit tests.
+- **Mirror**: the before/after trail of the `mirror` rule type (see **Rules**). A **Mirror host**
+  rule serves an upstream host *A* under a matched host *B*: the proxy fetches *A* through the
+  egress worker, then rewrites the response body, `Location` and `Set-Cookie` back to *B* (and can
+  find/replace content on the way), so the browser only ever sees host *B*.
+  - Each mirrored response is captured here: pick one on the left to see the diff between the raw
+    upstream body and the rewritten body the browser received.
+  - Rows show the method, path, `A ← B` hosts, the number of content replacements, whether the
+    body changed, and the age. The same line-diff renderer as **Compare** is reused.
+  - Binary or oversized bodies keep only the metadata row, no stored bodies. **Clear** erases the
+    whole trail (rows and bodies). The trail is bounded (newest ~2000 responses) and holds pure
+    request/response metadata — never a proxy URL or credential.
+  - The rewrite engine is `mirror-rewrite.js` (pure, shared with the full app and the unit tests);
+    the trail store is `mini/mirror-audit.js`, under `<data>/mirror/`.
 - **Cookies**: a cookie manager that works on the MITM path only. It needs no CDP, no extension
   and nothing in the page.
   - Tracking: `Set-Cookie` gives each cookie's attributes, and the `Cookie` request header shows
@@ -278,8 +291,10 @@ Pages can report back with a same-origin request:
   Traffic. Load a request into Intruder from Traffic's detail pane or from Repeater. Capped at 20
   positions and 10,000 requests.
 - **Rules**: a structured form per rule type (`inject`, `mock`, `block`, `modifyHeaders`,
-  `script`, `pause`). A rule matches on URL pattern, methods, headers and body, and has a
-  priority. Rules show hit counters.
+  `script`, `mirror`, `pause`). A rule matches on URL pattern, methods, headers and body, and has a
+  priority. Rules show hit counters. The `mirror` type (**Mirror host**) serves an upstream host
+  under the matched host and rewrites the response back to it, with optional content find/replace;
+  its captures show up on the **Mirror** page.
 - **Breakpoints**: a rule with **Pause** holds matching requests. Edit method, URL, headers and
   body, then **Forward** or **Block**.
 - **Settings**: TLS profile (`--browser` overrides it for one run), TLS-passthrough domains, CORS
@@ -353,6 +368,9 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
 - Site map: `GET /api/sitemap?session=ID` lists the sites; with `&site=HOST[&subs=1]` it adds
   `pages`, `forms`, `external` and the counts. `GET /api/sitemap/snapshot/:seq?session=ID`
   returns the offline page (`{html, url, stats, missing}`).
+- Mirror: `GET /api/mirror[?limit=N&offset=N]` (`{total, items}`, newest first),
+  `GET /api/mirror/:id` (one row plus its `before`/`after` bodies), `DELETE /api/mirror` clears the
+  trail.
 - WebSockets: `GET /api/ws` (`{open: [{id, url, openedAt, counts, deflate}]}`; `id` is the seq of
   the upgrade request), `POST /api/ws/:id/send` (`{dir: 'out'|'in', type: 'text'|'binary'|'ping'|
   'pong'|'close', data, base64?}`), `POST /api/ws/:id/close` (`{code, reason}`).
@@ -398,6 +416,9 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
   are kept, and the file is compacted on load.
 - `cookies.json`: tracked cookies, wire rules and queued Chrome operations (mode 0600, because it
   holds cookie values). Up to 5,000 cookies, 20 history entries each.
+- `mirror/`: the **Mirror** before/after trail — `history.jsonl` (metadata rows) and
+  `bodies/<id>.before|.after` (raw and rewritten text bodies, mode 0600). Newest ~2,000 responses;
+  binary or oversized bodies keep only the metadata row.
 - `sessions/<sessionId>.jsonl`: one file per run, one JSON line per entry.
 - `keys/`, `sealed/`
 - `chrome-profile/`: the proxied Chrome.
