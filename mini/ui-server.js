@@ -36,6 +36,7 @@ const STATIC = new Map([
     ['/ui.js', [path.join(__dirname, 'ui.js'), 'text/javascript; charset=utf-8']],
     ['/ui-inspect.js', [path.join(__dirname, 'ui-inspect.js'), 'text/javascript; charset=utf-8']],
     ['/ui-tools.js', [path.join(__dirname, 'ui-tools.js'), 'text/javascript; charset=utf-8']],
+    ['/ui-select.js', [path.join(__dirname, 'ui-select.js'), 'text/javascript; charset=utf-8']],
     ...Object.entries(JSON.parse(fs.readFileSync(path.join(__dirname, 'browser-libs.json'), 'utf8')))
         .map(([k, rel]) => [`/${k}`, [path.join(__dirname, '..', rel), 'text/javascript; charset=utf-8']]),
 ]);
