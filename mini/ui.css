@@ -883,3 +883,31 @@ svg.ico { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-wi
 .sr-f { flex: none; width: 112px; color: var(--muted); font-size: 10.5px; text-align: right; }
 .sr-snip { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--dim); }
 .sr-snip mark { color: var(--fg); padding: 0 1px; }
+
+/* ── Intruder ── */
+.in-left { overflow: auto; }
+.in-opts { flex: none; border-top: 1px solid var(--line); padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+.in-orow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.in-olbl { flex: none; width: 54px; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+.in-help { margin: -4px 0 0; font-size: 11px; }
+.in-plwrap { display: flex; flex-direction: column; gap: 8px; }
+.in-plblock { display: flex; flex-direction: column; gap: 3px; }
+.in-pllabel { color: var(--dim); font-size: 11px; display: flex; gap: 6px; }
+textarea.in-pl { width: 100%; min-height: 72px; max-height: 200px; resize: vertical; padding: 6px 8px; }
+.in-run .btn { height: 26px; }
+.in-plan { font-size: 11.5px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.in-plan.warn { color: var(--warn); }
+.in-right { overflow: hidden; }
+.in-status { border-bottom: 1px solid var(--line); border-top: 0; }
+.in-tablewrap { flex: 1; min-height: 0; overflow: auto; }
+.in-tbl { table-layout: auto; }
+.in-tbl th { position: sticky; top: 0; z-index: 1; background: var(--bg); cursor: pointer; user-select: none; }
+.in-tbl th.sort { color: var(--fg); }
+.in-tbl th.sort::after { content: ' ▲'; font-size: 9px; opacity: .7; }
+.in-tbl th.sort.desc::after { content: ' ▼'; }
+.in-tbl td.num, .in-tbl th.r-al { text-align: right; font-variant-numeric: tabular-nums; }
+.in-tbl td.num { color: var(--dim); }
+.in-tbl tr.in-row { cursor: pointer; }
+.in-tbl tr.in-row.hit td { background: var(--ok-bg, rgba(63, 185, 80, .08)); }
+.in-tbl tr.in-row.err td { color: var(--dim); }
+.in-pcell { max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

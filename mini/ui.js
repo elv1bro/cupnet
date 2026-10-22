@@ -163,7 +163,7 @@ function confirmBox(text, okLabel = 'OK', danger = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Navigation
 // ─────────────────────────────────────────────────────────────────────────────
-const TITLES = { traffic: 'Traffic', search: 'Search', console: 'Console', ws: 'WebSockets', analyzer: 'Page analyzer', proxies: 'Proxies', ipwatch: 'IP monitor', dns: 'DNS overrides', sitemap: 'Site map', notes: 'Notes', compare: 'Compare', cookies: 'Cookies', repeater: 'Repeater', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
+const TITLES = { traffic: 'Traffic', search: 'Search', console: 'Console', ws: 'WebSockets', analyzer: 'Page analyzer', proxies: 'Proxies', ipwatch: 'IP monitor', dns: 'DNS overrides', sitemap: 'Site map', notes: 'Notes', compare: 'Compare', cookies: 'Cookies', repeater: 'Repeater', intruder: 'Intruder', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
 let PAGE = 'traffic';
 function go(page) {
   if (!TITLES[page]) page = 'traffic';
@@ -171,7 +171,7 @@ function go(page) {
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.page === page));
   document.querySelectorAll('#pages > section').forEach((s) => { s.hidden = s.id !== `page-${page}`; });
   $('pageTitle').textContent = TITLES[page];
-  const load = { traffic: () => scheduleDraw(false), search: () => loadSearch(), console: () => loadConsole(), ws: () => loadWs(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, dns: loadDns, sitemap: loadSiteMap, notes: loadNotes, compare: loadCompare, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode }[page];
+  const load = { traffic: () => scheduleDraw(false), search: () => loadSearch(), console: () => loadConsole(), ws: () => loadWs(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, dns: loadDns, sitemap: loadSiteMap, notes: loadNotes, compare: loadCompare, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode, intruder: loadIntruder }[page];
   if (load) guard(load)();
 }
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.page)));
@@ -750,6 +750,10 @@ $('aRepeat').addEventListener('click', guard(async () => {
   const e = dEntry; if (!e) return;
   rpLoad({ method: e.method, url: e.url, headers: sendableHeaders(e.requestHeaders), body: isB64Body(e.requestBody) ? '' : await fullBodyText(e, 'request') });
   go('repeater');
+}));
+$('aIntrude').addEventListener('click', guard(async () => {
+  const e = dEntry; if (!e) return;
+  openInIntruder({ method: e.method, url: e.url, headers: sendableHeaders(e.requestHeaders), body: isB64Body(e.requestBody) ? '' : await fullBodyText(e, 'request') });
 }));
 $('aResend').addEventListener('click', guard(async () => {
   const e = dEntry; if (!e) return;
@@ -1509,6 +1513,7 @@ function renderRpRespTab() {
   else box.append(bodyView(e, 'response', ''));
 }
 document.querySelectorAll('#rpRespTabs button').forEach((b) => b.addEventListener('click', () => { RP.respTab = b.dataset.t; renderRpRespTab(); }));
+$('rpIntrude').addEventListener('click', () => openInIntruder(rpRequest()));
 $('rpSend').addEventListener('click', guard(rpSend));
 $('rpUrl').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') guard(rpSend)(); });
 document.addEventListener('keydown', (ev) => { if (PAGE === 'repeater' && ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); guard(rpSend)(); } });

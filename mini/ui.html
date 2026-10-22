@@ -14,6 +14,7 @@
 <script src="/ui-tools.js" defer></script>
 <script src="/ui-ws.js" defer></script>
 <script src="/ui-search.js" defer></script>
+<script src="/ui-intruder.js" defer></script>
 </head>
 <body>
 <aside id="side">
@@ -32,6 +33,7 @@
     <button data-page="compare"><svg viewBox="0 0 16 16"><path d="M2 3h5v10H2zM9 3h5v10H9z"/><path d="M4 6h1M4 9h1M11 7h1M11 10h1"/></svg><span>Compare</span></button>
     <button data-page="cookies"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><circle cx="6" cy="6.5" r=".6"/><circle cx="10" cy="7" r=".6"/><circle cx="7" cy="10.5" r=".6"/></svg><span>Cookies</span><i class="count accent" id="ckCount" hidden title="Cookie changes waiting for the next page load"></i></button>
     <button data-page="repeater"><svg viewBox="0 0 16 16"><path d="M3 6h9l-3-3M13 10H4l3 3"/></svg><span>Repeater</span></button>
+    <button data-page="intruder"><svg viewBox="0 0 16 16"><path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3"/><circle cx="8" cy="8" r="3"/><circle cx="8" cy="8" r=".8"/></svg><span>Intruder</span></button>
     <button data-page="rules"><svg viewBox="0 0 16 16"><path d="M3 3h10v3H3zM3 10h6v3H3z"/></svg><span>Rules</span></button>
     <button data-page="paused"><svg viewBox="0 0 16 16"><path d="M5 3v10M11 3v10"/></svg><span>Breakpoints</span><i class="count" id="pausedCount" hidden></i></button>
     <button data-page="sessions"><svg viewBox="0 0 16 16"><path d="M3 2h7l3 3v9H3z"/><path d="M10 2v3h3"/></svg><span>Sessions</span></button>
@@ -87,6 +89,7 @@
               <button class="btn sm" id="aCopyUrl">Copy URL</button>
               <button class="btn sm" id="aCopyCurl">Copy as curl</button>
               <button class="btn sm" id="aRepeat" title="Open in Repeater">Repeater</button>
+              <button class="btn sm" id="aIntrude" title="Open in Intruder to fuzz this request">Intruder</button>
               <button class="btn sm" id="aResend" title="Send again through AzureTLS now">Resend</button>
               <button class="btn sm" id="aMock" title="Create a mock rule that serves this response">Mock from response</button>
               <button class="btn sm" id="aBreak" title="Create a rule that pauses this URL">Break on URL</button>
@@ -439,6 +442,7 @@
         <input id="rpUrl" class="mono grow" placeholder="https://example.com/api" spellcheck="false">
         <label class="chk"><input type="checkbox" id="rpFollow"> follow redirects</label>
         <button class="btn primary" id="rpSend">Send</button>
+        <button class="btn" id="rpIntrude" title="Send this request to Intruder to fuzz it">To Intruder</button>
         <button class="btn" id="rpCurl" title="Paste a curl command">Import curl</button>
       </div>
       <div class="split2 even">
@@ -455,6 +459,55 @@
           <div class="resp-head" id="rpRespHead"><span class="muted">Send a request — it goes through AzureTLS with the current proxy and TLS profile, and is logged as type <code>repeater</code>.</span></div>
           <div class="tabs" id="rpRespTabs" hidden><button data-t="body" class="on">Body</button><button data-t="headers">Headers</button></div>
           <div class="tabbody" id="rpResp"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Intruder ── -->
+    <section id="page-intruder" class="page" hidden>
+      <div class="toolbar">
+        <select id="inMethod" class="w-method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option></select>
+        <input id="inUrl" class="mono grow" placeholder="https://example.com/api?q=§term§" spellcheck="false">
+        <button class="btn" id="inAddPos" title="Wrap the selected text in § … § as a payload position">Add §position§</button>
+        <button class="btn" id="inClearPos" title="Remove every § marker">Clear §</button>
+      </div>
+      <div class="split2 even">
+        <div class="col in-left">
+          <div class="tabs" id="inTabs"><button data-t="headers" class="on">Headers</button><button data-t="body">Body</button></div>
+          <div class="tabbody" id="inHeaders"></div>
+          <div class="tabbody" id="inBodyWrap" hidden><textarea id="inBody" class="mono code" spellcheck="false" placeholder="Request body — mark positions with § … §"></textarea></div>
+          <div class="in-opts">
+            <div class="in-orow"><span class="in-olbl">Attack</span><span id="inType"></span></div>
+            <p class="in-help muted" id="inHelp"></p>
+            <div class="in-plwrap" id="inPayloads"></div>
+            <div class="in-orow">
+              <label class="chk" title="Apply encodeURIComponent to every payload"><input type="checkbox" id="inEncode"> URL-encode payloads</label>
+              <label class="chk" title="Follow redirects when you open one result in Traffic"><input type="checkbox" id="inFollow"> follow redirects</label>
+            </div>
+            <div class="in-orow">
+              <span class="in-olbl">Grep</span>
+              <input id="inGrep" class="mono grow" placeholder="flag any response that contains…" spellcheck="false">
+              <button type="button" class="chip" id="inGrepRe" title="Treat the grep text as a regular expression">.*</button>
+            </div>
+            <div class="in-orow in-run">
+              <span class="in-olbl">Threads</span>
+              <input id="inConc" type="number" min="1" max="32" class="w-num">
+              <span class="spacer"></span>
+              <span class="in-plan mono" id="inPlan"></span>
+              <button class="btn primary" id="inGo" disabled>Start attack</button>
+              <button class="btn danger" id="inStop" hidden>Stop</button>
+            </div>
+          </div>
+        </div>
+        <div class="col in-right">
+          <div class="sr-status in-status" id="inStatus" hidden></div>
+          <div class="in-tablewrap">
+            <table class="tbl in-tbl">
+              <thead id="inHead"></thead>
+              <tbody id="inResults"></tbody>
+            </table>
+            <div class="empty" id="inEmpty">Load a request — from Traffic or Repeater, or type one above — then mark one or more <b>§ positions</b>, add payloads and start. Results stream in; click any row to open it in Traffic.</div>
+          </div>
         </div>
       </div>
     </section>

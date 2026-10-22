@@ -27,6 +27,7 @@ const { CookieJar } = require('./cookie-jar');
 const siteMap = require('./site-map');
 const { buildSnapshot } = require('./page-snapshot');
 const { startSearch } = require('./session-search');
+const { runAttack, buildRequestAt } = require('./intruder');
 const dnsPromises = require('dns').promises;
 const net = require('net');
 
@@ -41,6 +42,7 @@ const STATIC = new Map([
     ['/ui-select.js', [path.join(__dirname, 'ui-select.js'), 'text/javascript; charset=utf-8']],
     ['/ui-ws.js', [path.join(__dirname, 'ui-ws.js'), 'text/javascript; charset=utf-8']],
     ['/ui-search.js', [path.join(__dirname, 'ui-search.js'), 'text/javascript; charset=utf-8']],
+    ['/ui-intruder.js', [path.join(__dirname, 'ui-intruder.js'), 'text/javascript; charset=utf-8']],
     ...Object.entries(JSON.parse(fs.readFileSync(path.join(__dirname, 'browser-libs.json'), 'utf8')))
         .map(([k, rel]) => [`/${k}`, [path.join(__dirname, '..', rel), 'text/javascript; charset=utf-8']]),
 ]);
@@ -495,6 +497,44 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
         flush();
         try { res.end(); } catch { /* ignore */ }
         return undefined;
+    }
+    if (p === '/api/intruder' && m === 'POST') {
+        const spec = (await _readJson(req)) || {};
+        let job;
+        const events = [];
+        let timer = null;
+        const flush = () => {
+            timer = null;
+            if (events.length) { try { res.write(events.map((e) => JSON.stringify(e)).join('\n') + '\n'); } catch { /* closed */ } events.length = 0; }
+        };
+        try {
+            job = runAttack({
+                spec, concurrency: spec.concurrency,
+                send: (r) => app.intruderSend(r),
+                onEvent: (ev) => { events.push(ev); if (!timer) timer = setTimeout(flush, STREAM_FLUSH_MS); },
+            });
+        } catch (e) { return _badRequest(res, e); }
+        res.writeHead(200, {
+            'Content-Type': 'application/x-ndjson; charset=utf-8',
+            'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff',
+            'X-Accel-Buffering': 'no',
+        });
+        const handle = { end: () => job.stop() };
+        streams.add(handle);
+        res.on('close', () => job.stop());
+        await job.done;
+        streams.delete(handle);
+        if (timer) clearTimeout(timer);
+        flush();
+        try { res.end(); } catch { /* ignore */ }
+        return undefined;
+    }
+    if (p === '/api/intruder/replay' && m === 'POST') {
+        const b = (await _readJson(req)) || {};
+        let r;
+        try { r = buildRequestAt(b.spec || {}, b.index); } catch (e) { return _badRequest(res, e); }
+        return _send(res, 200, await app.replay({ ...r, followRedirects: !!b.followRedirects }));
     }
     const sess = /^\/api\/sessions\/([\w-]+)$/.exec(p);
     if (sess && m === 'GET') {

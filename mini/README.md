@@ -268,6 +268,15 @@ Pages can report back with a same-origin request:
 - **Repeater**: edit and resend any request (method, URL, headers, body) through the same worker
   and upstream. Import from curl; generate code as curl, fetch, axios, Python requests, Go or PHP.
   Each send is logged with type `repeater`. Cmd/Ctrl+Enter sends.
+- **Intruder**: fuzz one request. Mark payload positions with `§ … §` (**Add §position§** wraps the
+  selection in the focused URL, header value or body), pick an attack — **Sniper** (one position at
+  a time), **Battering ram** (same payload everywhere), **Pitchfork** (lists advanced in lockstep)
+  or **Cluster bomb** (every combination) — and give the payload list(s). Options: URL-encode
+  payloads, a grep to flag matching responses (literal or regex), and a thread count. Results stream
+  in live (status, length, time, grep hit) and are sortable; nothing is logged during the run. Click
+  a row to rebuild just that request and replay it (logged as type `repeater`) and open it in
+  Traffic. Load a request into Intruder from Traffic's detail pane or from Repeater. Capped at 20
+  positions and 10,000 requests.
 - **Rules**: a structured form per rule type (`inject`, `mock`, `block`, `modifyHeaders`,
   `script`, `pause`). A rule matches on URL pattern, methods, headers and body, and has a
   priority. Rules show hit counters.
@@ -355,6 +364,14 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
 - `GET|POST /api/settings`
 - `POST /api/replay` (`{method, url, headers: [[k, v]], body}`). Only http(s) is accepted. It
   returns 409 while the kill switch blocks egress.
+- Intruder: `POST /api/intruder` (`{template: {method, url, headers: [[k, v]], body}, attackType:
+  'sniper'|'ram'|'pitchfork'|'clusterbomb', payloadSets: [[string]], urlEncode?, grep?, grepRegex?,
+  concurrency?}`) streams NDJSON events: `start` (`{count, attackType, positions, concurrency}`),
+  `result` (`{i, payloads, position, status, length, time, error, matched}`), then `done` (`{count,
+  completed, errored, matched, stopped, ms}`). Positions are marked with `§ … §` in the template;
+  bad specs are rejected with 400, and closing the connection stops the attack. Nothing is logged.
+  `POST /api/intruder/replay` (`{spec, index, followRedirects?}`) rebuilds request `index` from the
+  same spec and replays it through `/api/replay`, returning its result (logged as `repeater`).
 - `GET /api/breakpoints`, `POST /api/breakpoints/:id` (`{action: 'forward'|'block', method, url, headers, body}`)
 - `POST /api/chrome`, `POST /api/window`, `POST /api/quit`
 - Sessions:

@@ -685,6 +685,46 @@ class MiniApp {
         return { seq: entry.seq, status: entry.status, duration, error: res.error || null };
     }
 
+    /**
+     * Send one Intruder request through the same egress path as {@link replay}, but log nothing to
+     * the session (an attack can be thousands of requests). Returns just the metrics a result row
+     * needs, plus the response text for grep matching.
+     * @param {{ method?: string, url: string, headers?: Array<[string,string]>, body?: string }} r
+     * @returns {Promise<{ status: number, duration: number, length: number, error: string|null, bodyText: string }>}
+     */
+    async intruderSend(r) {
+        const url = String(r?.url || '').trim();
+        if (!/^https?:\/\/[^/]/i.test(url)) return { status: 0, duration: 0, length: 0, error: 'URL must start with http:// or https://', bodyText: '' };
+        const method = String(r.method || 'GET').toUpperCase().replace(/[^A-Z]/g, '') || 'GET';
+        const pairs = (Array.isArray(r.headers) ? r.headers : Object.entries(r.headers || {}))
+            .filter((h) => Array.isArray(h) && String(h[0] || '').trim())
+            .map(([k, v]) => [String(k).trim(), String(v ?? '')]);
+        const headers = {};
+        for (const [k, v] of pairs) headers[k] = v;
+        const proxy = this.mitm.upstream || null;
+        if (!proxy && this.mitm.isEgressBlocked()) throw Object.assign(new Error(this.mitm.getEgressBlockReason() || 'Egress blocked'), { status: 409 });
+        const body = typeof r.body === 'string' ? r.body : '';
+        const isB64 = body.startsWith('__b64__:');
+        const started = Date.now();
+        let res;
+        try {
+            res = await this.mitm.worker.request({
+                method, url, headers, orderedHeaders: pairs,
+                ...(body ? (isB64 ? { bodyBase64: body.slice(8) } : { body }) : {}),
+                proxy, browser: this.browser, tabId: 'cupnet-mini-intruder',
+                timeout: REPLAY_TIMEOUT_MS, maxRetries: 0, disableRedirects: true,
+                forceHttp1: !!this.settings.forceHttp1,
+            });
+        } catch (e) {
+            res = { statusCode: 0, headers: {}, error: e?.message || String(e) };
+        }
+        const duration = Date.now() - started;
+        const rawRes = res.bodyBase64 != null ? Buffer.from(String(res.bodyBase64), 'base64') : Buffer.from(String(res.body ?? ''), 'utf8');
+        const ct = Object.entries(res.headers || {}).find(([k]) => k.toLowerCase() === 'content-type')?.[1];
+        const mime = String(Array.isArray(ct) ? ct[0] : (ct || ''));
+        return { status: Number(res.statusCode) || 0, duration, length: rawRes.length, error: res.error || null, bodyText: TEXT_MIME.test(mime) ? rawRes.toString('utf8') : '' };
+    }
+
     async stop() {
         try { this.interceptor?.setLocalEndpointHandler(null); } catch { /* ignore */ }
         try { this.interceptor?.setBreakpointHandler(null); } catch { /* ignore */ }
