@@ -26,6 +26,7 @@ const { writeHar } = require('./har');
 const { CookieJar } = require('./cookie-jar');
 const siteMap = require('./site-map');
 const { buildSnapshot } = require('./page-snapshot');
+const { startSearch } = require('./session-search');
 const dnsPromises = require('dns').promises;
 const net = require('net');
 
@@ -39,6 +40,7 @@ const STATIC = new Map([
     ['/ui-tools.js', [path.join(__dirname, 'ui-tools.js'), 'text/javascript; charset=utf-8']],
     ['/ui-select.js', [path.join(__dirname, 'ui-select.js'), 'text/javascript; charset=utf-8']],
     ['/ui-ws.js', [path.join(__dirname, 'ui-ws.js'), 'text/javascript; charset=utf-8']],
+    ['/ui-search.js', [path.join(__dirname, 'ui-search.js'), 'text/javascript; charset=utf-8']],
     ...Object.entries(JSON.parse(fs.readFileSync(path.join(__dirname, 'browser-libs.json'), 'utf8')))
         .map(([k, rel]) => [`/${k}`, [path.join(__dirname, '..', rel), 'text/javascript; charset=utf-8']]),
 ]);
@@ -456,6 +458,43 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
             return { ...s, keyId: k?.id || null, sealed: !!(sealedFile && fs.existsSync(sealedFile)) };
         });
         return _send(res, 200, { current: app.log.sessionId, sessions });
+    }
+    // Search every (or the picked) saved session: NDJSON events — session, progress, hit…, done | error.
+    if (p === '/api/search' && m === 'POST') {
+        const b = (await _readJson(req)) || {};
+        let list = SessionLog.listSessions(app.sessionsDir);
+        if (Array.isArray(b.sessions) && b.sessions.length) { const want = new Set(b.sessions.map(String)); list = list.filter((s) => want.has(s.id)); }
+        if (Number(b.since) > 0) list = list.filter((s) => s.mtime >= Number(b.since) || s.id === app.log.sessionId);
+        let job;
+        const events = [];
+        let timer = null;
+        const flush = () => {
+            timer = null;
+            if (events.length) { try { res.write(events.map((e) => JSON.stringify(e)).join('\n') + '\n'); } catch { /* closed */ } events.length = 0; }
+        };
+        try {
+            job = startSearch({
+                sessionsDir: app.sessionsDir, sessions: list, q: b.q, regex: !!b.regex, caseSensitive: !!b.caseSensitive,
+                kinds: b.kinds, fields: b.fields, host: b.host, limit: b.limit,
+                onEvent: (ev) => { events.push(ev); if (!timer) timer = setTimeout(flush, STREAM_FLUSH_MS); },
+            });
+        } catch (e) { return _badRequest(res, e); }
+        res.writeHead(200, {
+            'Content-Type': 'application/x-ndjson; charset=utf-8',
+            'Cache-Control': 'no-store',
+            'X-Content-Type-Options': 'nosniff',
+            'X-Accel-Buffering': 'no',
+        });
+        const handle = { end: () => job.stop() };
+        streams.add(handle);
+        // Not req 'close': it fires as soon as the POST body has been read.
+        res.on('close', () => job.stop());
+        await job.done;
+        streams.delete(handle);
+        if (timer) clearTimeout(timer);
+        flush();
+        try { res.end(); } catch { /* ignore */ }
+        return undefined;
     }
     const sess = /^\/api\/sessions\/([\w-]+)$/.exec(p);
     if (sess && m === 'GET') {

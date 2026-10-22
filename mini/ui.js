@@ -163,7 +163,7 @@ function confirmBox(text, okLabel = 'OK', danger = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Navigation
 // ─────────────────────────────────────────────────────────────────────────────
-const TITLES = { traffic: 'Traffic', console: 'Console', ws: 'WebSockets', analyzer: 'Page analyzer', proxies: 'Proxies', ipwatch: 'IP monitor', dns: 'DNS overrides', sitemap: 'Site map', notes: 'Notes', compare: 'Compare', cookies: 'Cookies', repeater: 'Repeater', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
+const TITLES = { traffic: 'Traffic', search: 'Search', console: 'Console', ws: 'WebSockets', analyzer: 'Page analyzer', proxies: 'Proxies', ipwatch: 'IP monitor', dns: 'DNS overrides', sitemap: 'Site map', notes: 'Notes', compare: 'Compare', cookies: 'Cookies', repeater: 'Repeater', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
 let PAGE = 'traffic';
 function go(page) {
   if (!TITLES[page]) page = 'traffic';
@@ -171,7 +171,7 @@ function go(page) {
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.page === page));
   document.querySelectorAll('#pages > section').forEach((s) => { s.hidden = s.id !== `page-${page}`; });
   $('pageTitle').textContent = TITLES[page];
-  const load = { traffic: () => scheduleDraw(false), console: () => loadConsole(), ws: () => loadWs(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, dns: loadDns, sitemap: loadSiteMap, notes: loadNotes, compare: loadCompare, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode }[page];
+  const load = { traffic: () => scheduleDraw(false), search: () => loadSearch(), console: () => loadConsole(), ws: () => loadWs(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, dns: loadDns, sitemap: loadSiteMap, notes: loadNotes, compare: loadCompare, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode }[page];
   if (load) guard(load)();
 }
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.page)));
@@ -342,6 +342,8 @@ for (const id of ['q', 'fKind', 'fMethod', 'fStatus', 'fType', 'hideOptions']) $
 
 const grid = $('grid'), spacer = $('spacer');
 let drawQueued = false, stick = false;
+/** A row to scroll into view once it is loaded (opened from Search or Compare). */
+let revealSeq = null;
 const pool = [];
 function isAtBottom() { return grid.scrollTop + grid.clientHeight >= grid.scrollHeight - ROW * 2; }
 function scheduleDraw(toBottom) { stick = stick || toBottom; if (!drawQueued) { drawQueued = true; requestAnimationFrame(draw); } }
@@ -366,6 +368,10 @@ function draw() {
   $('empty').hidden = all.length > 0;
   spacer.style.height = `${view.length * ROW}px`;
   if (stick) { grid.scrollTop = grid.scrollHeight; stick = false; }
+  if (revealSeq != null) {
+    const pos = bySeq.has(revealSeq) ? view.indexOf(bySeq.get(revealSeq)) : -1;
+    if (pos >= 0) { grid.scrollTop = Math.max(0, pos * ROW - (grid.clientHeight - ROW) / 2); revealSeq = null; }
+  }
   const first = Math.max(0, Math.floor(grid.scrollTop / ROW) - 10);
   const n = Math.max(0, Math.min(view.length - first, Math.ceil(grid.clientHeight / ROW) + 20));
   for (let k = 0; k < n; k++) {
@@ -423,7 +429,7 @@ grid.addEventListener('keydown', (ev) => {
 
 // ── sessions: live stream or a saved one ──
 function resetView() {
-  gen++; all = []; view = []; bySeq = new Map(); selSeq = null; methods.clear(); types.clear();
+  gen++; all = []; view = []; bySeq = new Map(); selSeq = null; revealSeq = null; methods.clear(); types.clear();
   for (const s of [$('fMethod'), $('fType')]) while (s.options.length > 1) s.remove(1);
   closeDetail(); buildFilter(); scheduleDraw(true);
   if (typeof consoleReset === 'function') consoleReset();
@@ -649,6 +655,8 @@ function markPre(text, q) {
   pre.append(frag);
   return { pre, marks };
 }
+/** One-shot text for "Find in body" when a body opens (set by Search before it shows a hit). */
+let bodyFindSeed = null;
 const extFor = (ct) => { const m = /\/([a-z0-9.+-]+)/.exec(ct || ''); if (!m) return '.bin'; const t = m[1].replace(/\+.*$/, ''); return '.' + ({ javascript: 'js', 'x-javascript': 'js', plain: 'txt', jpeg: 'jpg', 'octet-stream': 'bin', 'x-www-form-urlencoded': 'txt' }[t] || t); };
 function bodyView(e, which, sessQs) {
   const box = h('div');
@@ -681,8 +689,9 @@ function bodyView(e, which, sessQs) {
   const modes = isJson ? [['pretty', 'Pretty'], ['raw', 'Raw']] : isForm ? [['form', 'Form'], ['raw', 'Raw']] : [];
   let mode = modes.length ? modes[0][0] : 'raw';
   let q = '', marks = [], cur = -1;
+  if (bodyFindSeed && bodyFindSeed.seq === e.seq && bodyFindSeed.which === which) { q = bodyFindSeed.q; bodyFindSeed = null; }
   const segBox = h('span');
-  const find = h('input', { type: 'search', placeholder: 'Find in body…' });
+  const find = h('input', { type: 'search', placeholder: 'Find in body…', value: q });
   const cnt = h('span', { class: 'muted mono' });
   const content = h('div');
   const copyBtn = h('button', { class: 'btn sm', onclick: () => copy(text, 'Body copied') }, 'Copy');
@@ -2063,6 +2072,7 @@ function renderCompare() {
 function cmpShowInTraffic(s) {
   if (s.sid !== (shown || current)) openSession(s.sid);
   go('traffic');
+  revealSeq = s.seq;
   select(s.seq);
 }
 function orderView(o) {

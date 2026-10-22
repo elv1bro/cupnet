@@ -108,6 +108,14 @@ Pages can report back with a same-origin request:
     `await`. Pages whose CSP blocks `eval` fall back to a nonce'd `<script>`.
   - **Pause**, **Clear** (Ctrl/Cmd+L), **Export**. Console rows are also logged as Traffic entries
     (kind `console`).
+- **Search** (Cmd/Ctrl+Shift+F): finds text or a regular expression across all saved sessions.
+  - Searches URLs, request/response headers (matched as `name: value` lines), request/response
+    bodies and WebSocket / console messages; filters by kind, host and age (all, 7 days, 24 h,
+    this session). Binary bodies are not searched.
+  - Results stream in grouped by session, each with the matched field and a snippet. Clicking a
+    result opens it in Traffic on the matching tab, with Find in body prefilled.
+  - The scan runs in a worker thread and stops at 500 matches or after 2 minutes; **Stop**
+    cancels it.
 - **WebSockets**: every `wss://` connection Chrome opens through CupNet, with each message.
   - The MITM relays the frames and parses a copy (`ws-frames.js`); permessage-deflate messages
     are inflated for display only. Messages are logged as kind `ws` (direction, type, size, a
@@ -339,6 +347,11 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
 - WebSockets: `GET /api/ws` (`{open: [{id, url, openedAt, counts, deflate}]}`; `id` is the seq of
   the upgrade request), `POST /api/ws/:id/send` (`{dir: 'out'|'in', type: 'text'|'binary'|'ping'|
   'pong'|'close', data, base64?}`), `POST /api/ws/:id/close` (`{code, reason}`).
+- Search: `POST /api/search` (`{q, regex?, caseSensitive?, fields?: ['url'|'headers'|'bodies'],
+  kinds?: ['request'|'ws'|'console'], host?, sessions?: [id], since?, limit?}`) streams NDJSON
+  events: `session`, `hit` (`{session, seq, kind, method, url, status, matches: [{field, count,
+  pre, hit, post}]}`), `progress`, then `done` (`{hits, scanned, truncated, timedOut, ms}`) or
+  `error`. Closing the connection cancels the scan.
 - `GET|POST /api/settings`
 - `POST /api/replay` (`{method, url, headers: [[k, v]], body}`). Only http(s) is accepted. It
   returns 409 while the kill switch blocks egress.
