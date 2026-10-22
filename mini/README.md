@@ -108,6 +108,18 @@ Pages can report back with a same-origin request:
     `await`. Pages whose CSP blocks `eval` fall back to a nonce'd `<script>`.
   - **Pause**, **Clear** (Ctrl/Cmd+L), **Export**. Console rows are also logged as Traffic entries
     (kind `console`).
+- **WebSockets**: every `wss://` connection Chrome opens through CupNet, with each message.
+  - The MITM relays the frames and parses a copy (`ws-frames.js`); permessage-deflate messages
+    are inflated for display only. Messages are logged as kind `ws` (direction, type, size, a
+    300-character preview, the payload up to 4 MB). The upgrade request stays a normal
+    Traffic entry (status 101) with **Open messages**.
+  - Connections list (open / closed), a message list with direction, type and text/regex
+    filters, and a message view as Text, JSON or Hex.
+  - **Send** a text, binary (hex or base64) or ping message to the server or to the page on an
+    open connection; it is written only between whole messages. **Edit & resend** fills the
+    composer from a message. **Close…** sends a close frame both ways.
+  - Limits: plain `ws://` through the proxy is not inspected (Chrome tunnels it with CONNECT and
+    the MITM expects TLS there). The upstream TLS certificate is verified.
 - **Page analyzer**: a report for any open page, from the agent's DOM scan plus the logged
   traffic.
   - **Overview**: title, transfer size, counts and technologies (from the DOM and from
@@ -215,6 +227,12 @@ Pages can report back with a same-origin request:
     note for that host, or to a new one. A reference `cupnet:req/<session>/<seq>` renders as a
     `#seq` link that opens the entry in Traffic.
   - **Export** writes the notes shown as one Markdown file.
+  - The toolbar (and Cmd/Ctrl+B, I, E, K, Shift+H, Shift+X) adds bold, italic, code, links,
+    highlight (`==text==`), strike, lists, quotes, callouts, code blocks and secrets.
+  - A secret (```` ```secret ````) shows as `••••` in the preview and the note list, with
+    **Show** and **Copy**. The editor shows it in plain text, and `notes.json` is not encrypted.
+  - **Templates**: five built in (Endpoint, Credentials, Finding, Checklist, Log entry) and your
+    own, saved from the selection or the whole note.
 - **Site map**: every page of a site, built from the HTML documents in a session.
   - **Pages**: a tree of every URL of the site.
     - A page the browser loaded is *opened*. A page that is only linked from one is
@@ -225,6 +243,10 @@ Pages can report back with a same-origin request:
     - The detail panel lists the page's outgoing links, its forms and **Linked from**.
     - From the detail panel: open the page in Chrome, show it in Traffic, send it to Repeater,
       copy the URL, or add it to a note.
+    - **Page** shows an offline copy built only from the session (`page-snapshot.js`):
+      stylesheets inlined, images and fonts as data URLs, scripts removed. It renders in a
+      sandboxed frame with its own CSP, so it cannot load anything. Pages drawn by JavaScript
+      can look empty, and resources the browser never fetched stay missing (they are listed).
   - **Forms**: every form of the site, merged across the pages it appears on. For each field:
     - name, type, value, label and required;
     - visibility: *hidden* (type=hidden, the `hidden` attribute, inline `display:none` /
@@ -310,8 +332,13 @@ Every `/api/*` route needs the `X-CupNet-Token` header (`<data>/ui-token`). A no
   - `POST /api/dns/resolve` (`{host}`) returns `{host, addresses, error, override}`.
 - Notes: `GET /api/notes[?host=H]` (`{notes, tags}`), `POST /api/notes`,
   `GET|PUT|DELETE /api/notes/:id`.
+- Notes templates: `GET|POST /api/notes/templates`, `DELETE /api/notes/templates/:id`.
 - Site map: `GET /api/sitemap?session=ID` lists the sites; with `&site=HOST[&subs=1]` it adds
-  `pages`, `forms`, `external` and the counts.
+  `pages`, `forms`, `external` and the counts. `GET /api/sitemap/snapshot/:seq?session=ID`
+  returns the offline page (`{html, url, stats, missing}`).
+- WebSockets: `GET /api/ws` (`{open: [{id, url, openedAt, counts, deflate}]}`; `id` is the seq of
+  the upgrade request), `POST /api/ws/:id/send` (`{dir: 'out'|'in', type: 'text'|'binary'|'ping'|
+  'pong'|'close', data, base64?}`), `POST /api/ws/:id/close` (`{code, reason}`).
 - `GET|POST /api/settings`
 - `POST /api/replay` (`{method, url, headers: [[k, v]], body}`). Only http(s) is accepted. It
   returns 409 while the kill switch blocks egress.

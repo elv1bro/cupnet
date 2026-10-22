@@ -10,7 +10,7 @@
  * are indexed the same way by `SessionIndex.open(file)`, which scans only the head of each line.
  *
  * Line layout: summary fields first (seq, ts, kind, method, url, status, type, duration, mime, reqSize,
- * resSize, dns, note, sev, src, doc, g), then headers and bodies (or `data`). The scanner relies on that order to skip big bodies.
+ * resSize, dns, note, sev, src, doc, g, ws, dir, inj), then headers and bodies (or `data`). The scanner relies on that order to skip big bodies.
  */
 
 const fs = require('fs');
@@ -18,7 +18,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
 
-const SUMMARY_KEYS = ['seq', 'ts', 'kind', 'method', 'url', 'status', 'type', 'duration', 'mime', 'reqSize', 'resSize', 'dns', 'note', 'sev', 'src', 'doc', 'g'];
+const SUMMARY_KEYS = ['seq', 'ts', 'kind', 'method', 'url', 'status', 'type', 'duration', 'mime', 'reqSize', 'resSize', 'dns', 'note', 'sev', 'src', 'doc', 'g', 'ws', 'dir', 'inj'];
+/** WebSocket message preview kept in the summary (the payload is in `data.body`). */
+const WS_NOTE_MAX = 300;
 /** Console text kept in the summary (the full message and its arguments are in `data`). */
 const CONSOLE_NOTE_MAX = 500;
 const CONSOLE_SEVS = new Set(['error', 'warn', 'info', 'verbose']);
@@ -51,6 +53,12 @@ function _headerVal(h, name) {
     if (!k) return '';
     const v = h[k];
     return String(Array.isArray(v) ? v[0] : v);
+}
+
+/** Ping/pong payload as text when it is printable, else hex. */
+function _utf8Preview(buf) {
+    const t = buf.toString('utf8');
+    return /^[\x20-\x7e]*$/.test(t) ? t.slice(0, 60) : buf.subarray(0, 30).toString('hex');
 }
 
 function _summary(e, off, len) {
@@ -292,6 +300,42 @@ class SessionLog extends EventEmitter {
             : ev.type === 'stop' || ev.type === 'blocked' ? `IP monitor ${ev.type === 'stop' ? 'stopped' : 'blocked'}: ${ev.note || ''}`
             : `${ev.prevIp && ev.prevIp !== ev.ip ? `${ev.prevIp} → ` : ''}${ev.ip}${where ? ` · ${where}` : ''}${ev.label ? ` · ${ev.label}` : ''}`;
         return this._append({ kind: 'ip', type: ev.type, note, data: ev });
+    }
+
+    /**
+     * One WebSocket message (or the end of a connection: type 'end'). Summary: ws = seq of the upgrade
+     * request, dir = 'out' (page → server) | 'in', type = text/binary/close/ping/pong, resSize = payload
+     * bytes on the wire, note = preview, inj = 1 when CupNet sent it. Payload in `data.body`
+     * (`__b64__:` for binary).
+     * @param {number} wsId
+     * @param {{ dir: string, type: string, data?: Buffer, size?: number, ts?: number, url?: string, compressed?: boolean,
+     *   truncated?: boolean, injected?: boolean, code?: number, reason?: string, inflateError?: string, note?: string }} m
+     */
+    logWs(wsId, m) {
+        const buf = Buffer.isBuffer(m.data) ? m.data : Buffer.from(String(m.data ?? ''), 'utf8');
+        const text = m.type === 'text' || m.type === 'close' && !m.code ? buf.toString('utf8') : null;
+        const note = m.note != null ? String(m.note)
+            : m.type === 'close' ? `close${m.code ? ` ${m.code}` : ''}${m.reason ? ` ${m.reason}` : ''}`
+            : m.type === 'text' && !m.inflateError ? text.slice(0, WS_NOTE_MAX).replace(/\s+/g, ' ')
+            : m.type === 'ping' || m.type === 'pong' ? `${m.type}${buf.length ? ` ${_utf8Preview(buf)}` : ''}`
+            : `binary ${buf.length.toLocaleString('en-US')} bytes`;
+        const data = { body: text != null && !m.inflateError ? text : buf.length ? `__b64__:${buf.toString('base64')}` : '' };
+        if (m.compressed) data.compressed = true;
+        if (m.truncated) data.truncated = true;
+        if (m.inflateError) data.inflateError = m.inflateError;
+        if (m.code) { data.code = m.code; data.reason = m.reason || ''; }
+        return this._append({
+            ...(Number.isFinite(m.ts) ? { ts: m.ts } : {}),
+            kind: 'ws',
+            url: m.url ? String(m.url).slice(0, 4000) : undefined,
+            type: m.type,
+            resSize: Number.isFinite(m.size) ? m.size : buf.length,
+            note: note.slice(0, WS_NOTE_MAX),
+            ws: wsId,
+            dir: m.dir === 'in' ? 'in' : m.dir === 'out' ? 'out' : undefined,
+            inj: m.injected ? 1 : undefined,
+            data,
+        });
     }
 
     list(after = 0, limit = 1000) { return this.index.list(after, limit); }

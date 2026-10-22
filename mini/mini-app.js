@@ -33,6 +33,7 @@ const { CookieJar } = require('./cookie-jar');
 const { DnsStore } = require('./dns-store');
 const { NotesStore } = require('./notes-store');
 const { SiteMapCache } = require('./site-map');
+const { WsHub } = require('./ws-hub');
 const { ShareHost } = require('./share-host');
 const { PageAgents, POLL_IDLE_MS } = require('./page-agents');
 const { buildAgentSource } = require('./page-agent');
@@ -237,6 +238,7 @@ class MiniApp {
         this.dns = new DnsStore({ file: this.dnsFile });
         this.notes = new NotesStore({ file: this.notesFile });
         this.siteMaps = new SiteMapCache();
+        this.ws = new WsHub({ getLog: () => this.log });
         const { MitmProxy } = require('../mitm-proxy');
         this.mitm = new MitmProxy({
             port: this.mitmPort,
@@ -250,9 +252,11 @@ class MiniApp {
                     if (s) e = { ...e, responseBody: s.body, responseHeaders: s.headers };
                 }
                 const entry = this.log.logRequest(e);
+                if (e.type === 'websocket' && e.status === 101) this.ws.noteUpgrade(e.requestId, entry?.seq);
                 this.cookies.observe(e);
                 if (e.dnsOverride) this.dns.noteHit(e.dnsOverride, { ...e, seq: entry?.seq });
             },
+            onWebSocket: (w) => this.ws.attach(w),
             onBeforeUpstream: (up) => { this.cookies.beforeUpstream(up); },
             onResponseHead: (up, out) => { this.cookies.responseHead(up, out); return out; },
         });
@@ -690,6 +694,7 @@ class MiniApp {
         if (this.ipMonitor) { this.ipMonitor.stop(); this.ipMonitor = null; }
         if (this.ui) { await this.ui.close().catch(() => {}); this.ui = null; }
         if (this.shareHost) { await this.shareHost.stop().catch(() => {}); this.shareHost = null; }
+        try { this.ws?.closeAll(); } catch { /* ignore */ }
         if (this.mitm) { this.mitm.stop(); this.mitm = null; }
         try { this.interceptor?.setRuleStore(null); } catch { /* ignore */ }
         try { this.rules?.close(); } catch { /* ignore */ }

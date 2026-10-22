@@ -89,6 +89,7 @@ function _nativeHttpsFallback(url, method, headers, orderedHeaders, body, bodyBa
     });
 }
 const { applyIdentityToOutboundHeaders } = require('./identity-headers');
+const { relayWebSocket } = require('./ws-frames');
 const { ClientHintsCache } = require('./client-hints-cache');
 
 /** Reserved host served by the MITM itself (identity self-check page); never resolved or dialed. */
@@ -949,6 +950,8 @@ class MitmProxy {
         // rewriting, and the response head before Chrome sees it. Both may mutate their arguments.
         this.onBeforeUpstream = opts.onBeforeUpstream || null;
         this.onResponseHead = opts.onResponseHead || null;
+        /** Opt-in WebSocket tap: ({ requestId, url, tabId, requestHeaders, responseHeaders, relay }) after a 101. */
+        this.onWebSocket = opts.onWebSocket || null;
         /**
          * Present the CupNet CA after the leaf in the TLS chain. Lets an external Chrome trust the MITM
          * via --ignore-certificate-errors-spki-list=<CA SPKI> (matched against any cert in the chain)
@@ -2152,10 +2155,24 @@ class MitmProxy {
                     try { clientTls.end(); } catch {}
                     return;
                 }
+                const rem = clientRemainder && clientRemainder.length ? clientRemainder : Buffer.alloc(0);
+                if (this.onWebSocket) {
+                    // Frame-aware relay: same bytes on the wire, plus a message tap and injection.
+                    const relay = relayWebSocket({
+                        client: clientTls, upstream: upSock, responseHeaders: parsed.headers,
+                        clientRemainder: rem, upstreamRemainder: remainder,
+                    });
+                    try {
+                        this.onWebSocket({ requestId, url: up.url, tabId, requestHeaders: { ...(up.headers || {}) }, responseHeaders: parsed.headers, relay });
+                    } catch (e) {
+                        safeCatch({ module: 'mitm-proxy', eventCode: 'mitm.hook.webSocket.failed', context: { url } }, e, 'warn');
+                    }
+                    dbg(`[mitm] ws relay established ${url}\n`);
+                    return;
+                }
                 if (remainder && remainder.length) {
                     try { clientTls.write(remainder); } catch {}
                 }
-                const rem = clientRemainder && clientRemainder.length ? clientRemainder : Buffer.alloc(0);
                 if (rem.length) {
                     try { upSock.write(rem); } catch {}
                 }

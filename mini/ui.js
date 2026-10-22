@@ -163,7 +163,7 @@ function confirmBox(text, okLabel = 'OK', danger = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Navigation
 // ─────────────────────────────────────────────────────────────────────────────
-const TITLES = { traffic: 'Traffic', console: 'Console', analyzer: 'Page analyzer', proxies: 'Proxies', ipwatch: 'IP monitor', dns: 'DNS overrides', sitemap: 'Site map', notes: 'Notes', compare: 'Compare', cookies: 'Cookies', repeater: 'Repeater', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
+const TITLES = { traffic: 'Traffic', console: 'Console', ws: 'WebSockets', analyzer: 'Page analyzer', proxies: 'Proxies', ipwatch: 'IP monitor', dns: 'DNS overrides', sitemap: 'Site map', notes: 'Notes', compare: 'Compare', cookies: 'Cookies', repeater: 'Repeater', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings' };
 let PAGE = 'traffic';
 function go(page) {
   if (!TITLES[page]) page = 'traffic';
@@ -171,7 +171,7 @@ function go(page) {
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.page === page));
   document.querySelectorAll('#pages > section').forEach((s) => { s.hidden = s.id !== `page-${page}`; });
   $('pageTitle').textContent = TITLES[page];
-  const load = { traffic: () => scheduleDraw(false), console: () => loadConsole(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, dns: loadDns, sitemap: loadSiteMap, notes: loadNotes, compare: loadCompare, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode }[page];
+  const load = { traffic: () => scheduleDraw(false), console: () => loadConsole(), ws: () => loadWs(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, dns: loadDns, sitemap: loadSiteMap, notes: loadNotes, compare: loadCompare, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, repeater: renderRpCode }[page];
   if (load) guard(load)();
 }
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.page)));
@@ -325,10 +325,11 @@ function ingest(items) {
     if (bySeq.has(e.seq)) continue;
     bySeq.set(e.seq, all.length);
     all.push(e);
-    addOption($('fMethod'), methods, e.method); addOption($('fType'), types, e.type);
+    if (e.kind === 'request') { addOption($('fMethod'), methods, e.method); addOption($('fType'), types, e.type); }
     if (matches(e)) view.push(all.length - 1);
   }
   if (typeof consoleIngest === 'function') consoleIngest(items);
+  if (typeof wsIngest === 'function') wsIngest(items);
   scheduleDraw(atBottom && $('follow').checked);
 }
 function refilter() {
@@ -380,10 +381,10 @@ function draw() {
       c[0].textContent = e.seq;
       c[1].textContent = fmtTime(e.ts);
       c[2].textContent = ev ? '' : (e.method || ''); c[2].className = `m m-${e.method || ''}`;
-      c[3].textContent = ev ? (e.kind === 'page-event' ? 'event' : e.kind === 'ip' ? 'ip' : e.kind === 'console' ? 'console' : '') : (e.status || 'ERR'); c[3].className = `st ${ev ? '' : stCls(e.status)}${e.kind === 'console' ? ` cn-${e.sev || 'info'}` : ''}`;
+      c[3].textContent = ev ? (e.kind === 'page-event' ? 'event' : e.kind === 'ip' ? 'ip' : e.kind === 'console' ? 'console' : e.kind === 'ws' ? `ws ${e.dir === 'out' ? '↑' : e.dir === 'in' ? '↓' : '•'}` : '') : (e.status || 'ERR'); c[3].className = `st ${ev ? '' : stCls(e.status)}${e.kind === 'console' ? ` cn-${e.sev || 'info'}` : e.kind === 'ws' ? ` ws-st ws-${e.dir || 'sys'}` : ''}`;
       c[4].textContent = e.type || '';
       c[5].textContent = host; c[5].title = e.dns ? `${host} → ${e.dns.ip} (DNS override)` : host; c[5].classList.toggle('dns', !!e.dns);
-      c[6].textContent = e.kind === 'console' ? (e.note || '') : ev && !e.url ? (e.note || e.kind) : p; c[6].title = e.kind === 'console' ? `${e.note || ''}\n${e.url || ''}` : e.url || e.note || '';
+      c[6].textContent = e.kind === 'console' || e.kind === 'ws' ? (e.note || '') : ev && !e.url ? (e.note || e.kind) : p; c[6].title = e.kind === 'console' ? `${e.note || ''}\n${e.url || ''}` : e.url || e.note || '';
       c[7].textContent = fmtSize(e.resSize);
       c[8].textContent = e.duration != null ? `${e.duration} ms` : '';
       r.className = `r cols${ev ? ' ev' : ''}${e.type === 'repeater' ? ' rep' : ''}${ev ? '' : !e.status ? ' tf' : e.status >= 500 ? ' t5' : e.status >= 400 ? ' t4' : ''}`;
@@ -426,6 +427,7 @@ function resetView() {
   for (const s of [$('fMethod'), $('fType')]) while (s.options.length > 1) s.remove(1);
   closeDetail(); buildFilter(); scheduleDraw(true);
   if (typeof consoleReset === 'function') consoleReset();
+  if (typeof wsReset === 'function') wsReset();
 }
 async function streamLive(myGen) {
   let lastSeq = 0;
@@ -543,6 +545,7 @@ function renderDetail() {
   $('dUrl').textContent = e.url || e.note || ''; $('dUrl').title = e.url || e.note || '';
   document.querySelector('.dactions').hidden = !isReq;
   if (e.kind === 'console' && typeof renderConsoleDetail === 'function') { $('dMethod').textContent = e.type || 'console'; renderConsoleDetail(d, e); return; }
+  if (e.kind === 'ws' && typeof renderWsDetail === 'function') { $('dMethod').textContent = `ws ${e.type}`; renderWsDetail(d, e); return; }
   if (!isReq) {
     d.append(sect('Event', kvGrid([['Kind', e.kind], ['URL', e.url || ''], ['Time', new Date(e.ts).toISOString()]])), sect('Data', jsonPre(JSON.stringify(e.data ?? e, null, 2))));
     return;
@@ -556,6 +559,7 @@ function tabHeaders(d, e) {
     ['Request body', fmtSize(e.reqSize) || '—'], ['Response body', fmtSize(e.resSize) || '—'],
     ...(e.dns ? [['DNS override', h('span', null, h('span', { class: 'mono' }, `${e.dns.host} → ${e.dns.ip}`), ' ', h('button', { class: 'btn sm', onclick: () => go('dns') }, 'Rules'))]] : []),
     ...(e.error ? [['Error', String(e.error)]] : []),
+    ...(e.status === 101 && e.type === 'websocket' && typeof wsReveal === 'function' ? [['WebSocket', h('button', { class: 'btn sm', onclick: () => wsReveal(e.seq) }, 'Open messages')]] : []),
   ])));
   const rs = pairsOf(e.responseHeaders), rq = pairsOf(e.requestHeaders);
   d.append(sect('Response headers', kvGrid(rs), true, tag(rs.length)), sect('Request headers', kvGrid(rq), true, tag(rq.length)));

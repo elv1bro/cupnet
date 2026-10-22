@@ -126,7 +126,44 @@ $('dnsActClear').addEventListener('click', guard(async () => { dnsApply(await de
 // ─────────────────────────────────────────────────────────────────────────────
 // Markdown (notes): a small, safe renderer — DOM nodes only, links limited to http(s) and cupnet:req refs
 // ─────────────────────────────────────────────────────────────────────────────
-const MD_INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(\*[^*\s][^*\n]*\*|_[^_\s][^_\n]*_)|(~~[^~\n]+~~)|\[([^\]\n]+)\]\(([^)\s]+)\)|(cupnet:req\/[\w-]+\/\d+)|(https?:\/\/[^\s<>()\]]+[^\s<>()\].,;:!?'"])/g;
+const MD_INLINE = /(`[^`\n]+`)|(\|\|[^|\n]+\|\|)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(\*[^*\s][^*\n]*\*|_[^_\s][^_\n]*_)|(~~[^~\n]+~~)|(==[^=\n]+==)|\[([^\]\n]+)\]\(([^)\s]+)\)|(cupnet:req\/[\w-]+\/\d+)|(https?:\/\/[^\s<>()\]]+[^\s<>()\].,;:!?'"])/g;
+/** Same mask for every secret, so its length is not given away. */
+const MD_MASK = '••••••••';
+const MD_CALLOUTS = { note: 'Note', tip: 'Tip', important: 'Important', warning: 'Warning', caution: 'Caution', danger: 'Danger' };
+/** Stroke icon, 16×16 grid (same look as the nav icons). */
+function svgIcon(...paths) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16'); svg.setAttribute('class', 'ico'); svg.setAttribute('aria-hidden', 'true');
+  for (const d of paths) { const p = document.createElementNS(NS, 'path'); p.setAttribute('d', d); svg.append(p); }
+  return svg;
+}
+const ICON_LOCK = ['M4 7.5h8v6H4z', 'M5.5 7.5V5a2.5 2.5 0 015 0v2.5'];
+const ICON_COPY = ['M5.5 5.5h7v8h-7z', 'M3.5 10.5v-8h7'];
+const ICON_EYE = ['M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z', 'M8 6.3a1.7 1.7 0 110 3.4 1.7 1.7 0 010-3.4z'];
+/** A secret: masked until "Show"; "Copy" copies it without showing it. */
+function mdSecret(value, block = false) {
+  let shown = false;
+  const val = h(block ? 'pre' : 'span', { class: 'md-sv' }, MD_MASK);
+  const toggle = (ev) => {
+    ev.preventDefault(); ev.stopPropagation();
+    shown = !shown; val.textContent = shown ? value : MD_MASK; wrap.classList.toggle('shown', shown);
+    eye.title = shown ? 'Hide' : 'Show';
+    if (block) eye.lastChild.textContent = shown ? 'Hide' : 'Show';
+  };
+  const eye = h('button', { type: 'button', class: 'md-sb', title: 'Show', onclick: toggle }, svgIcon(...ICON_EYE), block ? h('span', null, 'Show') : null);
+  const cp = h('button', { type: 'button', class: 'md-sb', title: 'Copy without showing', onclick: (ev) => { ev.preventDefault(); ev.stopPropagation(); copy(value, 'Secret copied'); } }, svgIcon(...ICON_COPY), block ? h('span', null, 'Copy') : null);
+  const wrap = block
+    ? h('div', { class: 'md-secret block' }, h('div', { class: 'md-bh' }, svgIcon(...ICON_LOCK), h('span', null, 'Secret'), h('span', { class: 'spacer' }), eye, cp), val)
+    : h('span', { class: 'md-secret', title: 'Secret' }, svgIcon(...ICON_LOCK), val, eye, cp);
+  return wrap;
+}
+function mdCode(code, lang) {
+  return h('div', { class: 'md-code' },
+    h('div', { class: 'md-bh' }, h('span', { class: 'mono' }, lang || 'code'), h('span', { class: 'spacer' }),
+      h('button', { type: 'button', class: 'md-sb', title: 'Copy code', onclick: (ev) => { ev.preventDefault(); copy(code, 'Code copied'); } }, svgIcon(...ICON_COPY), h('span', null, 'Copy'))),
+    h('pre', { class: 'codebox' }, code));
+}
 function mdRef(ref, label) {
   const m = /^cupnet:req\/([\w-]+)\/(\d+)$/.exec(ref);
   if (!m) return label;
@@ -143,17 +180,23 @@ function mdInline(s) {
   for (const m of s.matchAll(MD_INLINE)) {
     if (m.index > last) out.push(s.slice(last, m.index));
     if (m[1]) out.push(h('code', null, m[1].slice(1, -1)));
-    else if (m[2]) out.push(h('b', null, mdInline(m[2].slice(2, -2))));
-    else if (m[3]) out.push(h('i', null, mdInline(m[3].slice(1, -1))));
-    else if (m[4]) out.push(h('s', null, mdInline(m[4].slice(2, -2))));
-    else if (m[5]) out.push(mdLink(m[6], mdInline(m[5])));
-    else if (m[7]) out.push(mdRef(m[7], `#${m[7].split('/').pop()}`));
-    else if (m[8]) out.push(mdLink(m[8], m[8]));
+    else if (m[2]) out.push(mdSecret(m[2].slice(2, -2)));
+    else if (m[3]) out.push(h('b', null, mdInline(m[3].slice(2, -2))));
+    else if (m[4]) out.push(h('i', null, mdInline(m[4].slice(1, -1))));
+    else if (m[5]) out.push(h('s', null, mdInline(m[5].slice(2, -2))));
+    else if (m[6]) out.push(h('mark', null, mdInline(m[6].slice(2, -2))));
+    else if (m[7]) out.push(mdLink(m[8], mdInline(m[7])));
+    else if (m[9]) out.push(mdRef(m[9], `#${m[9].split('/').pop()}`));
+    else if (m[10]) out.push(mdLink(m[10], m[10]));
     last = m.index + m[0].length;
   }
   if (last < s.length) out.push(s.slice(last));
   return out;
 }
+/** Note text with secrets masked (list snippets, search previews). */
+const mdMaskSecrets = (text) => String(text || '')
+  .replace(/^\s*(```|~~~)\s*secret\s*\n[\s\S]*?(?:\n\s*\1\s*(?:\n|$)|$)/gim, `${MD_MASK}\n`)
+  .replace(/\|\|[^|\n]+\|\|/g, MD_MASK);
 function mdRender(text) {
   const root = h('div', { class: 'md' });
   const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
@@ -171,7 +214,8 @@ function mdRender(text) {
       flush();
       const fence = m[1], code = [];
       for (i++; i < lines.length && !lines[i].trim().startsWith(fence); i++) code.push(lines[i]);
-      root.append(h('pre', { class: 'codebox', title: m[2] || '' }, code.join('\n')));
+      if (m[2].toLowerCase() === 'secret') root.append(mdSecret(code.join('\n'), true));
+      else root.append(mdCode(code.join('\n'), m[2]));
       continue;
     }
     if (!line.trim()) { flush(); continue; }
@@ -182,7 +226,13 @@ function mdRender(text) {
       const q = [];
       for (; i < lines.length && /^\s*>/.test(lines[i]); i++) q.push(lines[i].replace(/^\s*>\s?/, ''));
       i--;
-      root.append(h('blockquote', null, [...mdRender(q.join('\n')).childNodes]));
+      const co = /^\s*\[!(\w+)\]\s*(.*)$/.exec(q[0] || '');
+      const kind = co && MD_CALLOUTS[co[1].toLowerCase()] ? co[1].toLowerCase() : '';
+      if (kind) {
+        const title = co[2].trim();
+        root.append(h('div', { class: `md-callout md-${kind}` }, h('div', { class: 'md-ct' }, title ? mdInline(title) : MD_CALLOUTS[kind]),
+          [...mdRender(q.slice(1).join('\n')).childNodes]));
+      } else root.append(h('blockquote', null, [...mdRender(q.join('\n')).childNodes]));
       continue;
     }
     if ((m = /^(\s*)([-*+]|\d+[.)])\s+/.exec(line))) {
@@ -251,7 +301,7 @@ function renderNtList() {
   const sites = [...new Set(NT.notes.map((n) => n.site).filter(Boolean))].sort();
   const sel = $('ntSite');
   const keep = NT.site;
-  clear(sel).append(h('option', { value: '' }, 'All sites'), h('option', { value: '-' }, 'No site'), sites.map((s) => h('option', { value: s }, s)));
+  append(clear(sel), [h('option', { value: '' }, 'All sites'), h('option', { value: '-' }, 'No site'), sites.map((s) => h('option', { value: s }, s))]);
   sel.value = keep === '-' || sites.includes(keep) ? keep : '';
   NT.site = sel.value;
   const chips = clear($('ntTags'));
@@ -264,11 +314,11 @@ function renderNtList() {
   const box = clear($('ntList'));
   if (!list.length) box.append(h('div', { class: 'empty' }, NT.notes.length ? 'No note matches.' : 'No notes yet.'));
   for (const n of list) {
-    const first = n.body.split('\n').find((l) => l.trim() && !/^#{1,6}\s/.test(l)) || '';
+    const first = mdMaskSecrets(n.body).split('\n').find((l) => l.trim() && !/^#{1,6}\s/.test(l) && !/^\s*(```|~~~)/.test(l)) || '';
     box.append(h('div', { class: `prow nt-prow${n.id === NT.sel ? ' sel' : ''}`, onclick: guard(async () => { await ntFlush(); NT.sel = n.id; store.set('nt-sel', n.id); renderNotes(true); }) },
       h('div', { class: 'ell' },
         h('div', { class: 'title' }, n.pinned ? h('span', { class: 'nt-pin', title: 'Pinned' }, '★') : null, h('b', null, n.title || 'Untitled')),
-        h('div', { class: 'nt-snip ell' }, first.replace(/[#*_`>[\]]/g, '').slice(0, 160)),
+        h('div', { class: 'nt-snip ell' }, first.replace(/[#*_`>[\]=]|\[!\w+\]/g, '').slice(0, 160)),
         h('div', { class: 'meta' }, n.site ? h('span', { class: 'mono' }, n.site) : null, n.tags.slice(0, 4).map((t) => h('span', { class: 'faint' }, `#${t}`)), h('span', { class: 'faint' }, fmtAgo(n.updated)))),
       null));
   }
@@ -324,6 +374,274 @@ function ntMd(n) {
 }
 const ntFileName = (n) => `${(n.title || 'note').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'note'}.md`;
 
+// ── Notes editor: formatting toolbar, shortcuts, templates ──
+/** Built-in templates. {{selection}} {{cursor}} {{date}} {{time}} {{site}} are filled on insert. */
+const NT_BUILTIN = [
+  { id: 'b-endpoint', name: 'Endpoint', body: '## {{cursor}}GET /path\n\n- **Auth:** \n- **Params:** \n- **Response:** \n- **Notes:** {{selection}}\n' },
+  { id: 'b-creds', name: 'Credentials', body: '### {{cursor}}Account\n\n- **Login:** \n- **Password:** ||password||\n\n```secret\n{{selection}}\n```\n' },
+  { id: 'b-finding', name: 'Finding', body: '## {{cursor}}Finding\n\n> [!WARNING] Impact\n> {{selection}}\n\n**Steps**\n1. \n\n**Expected:** \n**Actual:** \n\n_{{date}} · {{site}}_\n' },
+  { id: 'b-check', name: 'Checklist', body: '### Checklist — {{site}}\n\n- [ ] {{cursor}}Login / logout\n- [ ] Rate limits\n- [ ] Cookies and storage\n- [ ] Error responses\n' },
+  { id: 'b-log', name: 'Log entry', body: '**{{date}} {{time}}** — {{cursor}}{{selection}}\n' },
+];
+NT.tpls = null;
+const ntTpls = async () => { if (!NT.tpls) NT.tpls = await api('/api/notes/templates'); return NT.tpls; };
+const ntTa = () => $('ntBody');
+/** Replace [s, e) through the edit stack (so ⌘Z works), then select [a, b). */
+function ntReplace(ta, s, e, text, a, b = a) {
+  ta.focus();
+  ta.setSelectionRange(s, e);
+  let ok = false;
+  try { ok = document.execCommand('insertText', false, text); } catch { ok = false; }
+  if (!ok || ta.value.slice(s, s + text.length) !== text) { ta.setRangeText(text, s, e, 'end'); ntChanged(); }
+  ta.setSelectionRange(a, b);
+}
+/** Toggle an inline wrapper (**, _, ~~, ==, `, ||) around the selection. */
+function ntWrap(before, after = before, ph = 'text') {
+  const ta = ntTa(); if (!ta) return;
+  const v = ta.value, s = ta.selectionStart, e = ta.selectionEnd, sel = v.slice(s, e);
+  if (sel.length >= before.length + after.length && sel.startsWith(before) && sel.endsWith(after)) {
+    const inner = sel.slice(before.length, sel.length - after.length);
+    return ntReplace(ta, s, e, inner, s, s + inner.length);
+  }
+  if (v.slice(s - before.length, s) === before && v.slice(e, e + after.length) === after) {
+    return ntReplace(ta, s - before.length, e + after.length, sel, s - before.length, e - before.length);
+  }
+  const inner = sel || ph;
+  ntReplace(ta, s, e, `${before}${inner}${after}`, s + before.length, s + before.length + inner.length);
+}
+/** Rewrite the whole lines the selection touches. */
+function ntLines(fn) {
+  const ta = ntTa(); if (!ta) return;
+  const v = ta.value, a = ta.selectionStart, b = ta.selectionEnd;
+  const s = v.lastIndexOf('\n', a - 1) + 1;
+  let e = v.indexOf('\n', b > a && v[b - 1] === '\n' ? b - 1 : b);
+  if (e < 0) e = v.length;
+  const out = fn(v.slice(s, e).split('\n')).join('\n');
+  if (a === b) ntReplace(ta, s, e, out, s + out.length);
+  else ntReplace(ta, s, e, out, s, s + out.length);
+}
+function ntHeading(n) {
+  const mk = `${'#'.repeat(n)} `;
+  ntLines((ls) => {
+    const body = ls.length > 1 ? ls.filter((l) => l.trim()) : ls;
+    const all = body.every((l) => l.startsWith(mk));
+    return ls.map((l) => (ls.length > 1 && !l.trim() ? l : all ? l.replace(/^#{1,6}\s+/, '') : mk + l.replace(/^#{1,6}\s+/, '')));
+  });
+}
+const NT_LIST_RE = /^(\s*)(?:[-*+]\s+\[[ xX]\]\s+|[-*+]\s+|\d+[.)]\s+)/;
+const NT_LIST_IS = { ul: /^\s*[-*+]\s(?!\s*\[[ xX]\])/, ol: /^\s*\d+[.)]\s/, task: /^\s*[-*+]\s+\[[ xX]\]\s/ };
+function ntList(kind) {
+  const mk = { ul: () => '- ', ol: (i) => `${i + 1}. `, task: () => '- [ ] ' }[kind];
+  ntLines((ls) => {
+    const body = ls.filter((l) => l.trim());
+    const all = body.length > 0 && body.every((l) => NT_LIST_IS[kind].test(l));
+    let i = 0;
+    return ls.map((l) => {
+      if (!l.trim() && ls.length > 1) return l;
+      const m = NT_LIST_RE.exec(l);
+      const ind = m ? m[1] : /^\s*/.exec(l)[0];
+      const rest = l.slice(m ? m[0].length : ind.length);
+      return all ? ind + rest : ind + mk(i++) + rest;
+    });
+  });
+}
+function ntQuote() {
+  ntLines((ls) => {
+    const all = ls.every((l) => /^>/.test(l));
+    return ls.map((l) => (all ? l.replace(/^>\s?/, '') : `> ${l}`));
+  });
+}
+/** Put a fenced or callout block around the selected text (on lines of its own). */
+function ntBlock(open, close, ph = '') {
+  const ta = ntTa(); if (!ta) return;
+  const v = ta.value, s = ta.selectionStart, e = ta.selectionEnd;
+  const sel = v.slice(s, e).replace(/\n$/, '');
+  const pre = s > 0 && v[s - 1] !== '\n' ? '\n' : '';
+  const post = e < v.length && v[e] !== '\n' ? '\n' : '';
+  const inner = sel || ph;
+  const text = `${pre}${open}\n${inner}${close == null ? '' : `\n${close}`}${post}`;
+  const at = s + pre.length + open.length + 1;
+  ntReplace(ta, s, e, text, at, at + inner.length);
+}
+function ntCallout(kind) {
+  const ta = ntTa(); if (!ta) return;
+  const sel = ta.value.slice(ta.selectionStart, ta.selectionEnd).replace(/\n$/, '');
+  const body = (sel || '').split('\n').map((l) => `> ${l}`).join('\n');
+  const head = `> [!${kind.toUpperCase()}]`;
+  const s = ta.selectionStart, v = ta.value;
+  const pre = s > 0 && v[s - 1] !== '\n' ? '\n' : '';
+  const post = ta.selectionEnd < v.length && v[ta.selectionEnd] !== '\n' ? '\n' : '';
+  const text = `${pre}${head}\n${body}${post}`;
+  const end = s + pre.length + head.length + 1 + body.length;
+  ntReplace(ta, s, ta.selectionEnd, text, sel ? s + pre.length : end, end);
+}
+/** One line selected → inline ||secret||; several lines or nothing → a ```secret block. */
+function ntSecret() {
+  const ta = ntTa(); if (!ta) return;
+  const sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+  if (sel && !sel.includes('\n')) ntWrap('||', '||');
+  else ntBlock('```secret', '```', 'token, password or key');
+}
+function ntLink() {
+  const ta = ntTa(); if (!ta) return;
+  const s = ta.selectionStart, e = ta.selectionEnd, sel = ta.value.slice(s, e);
+  if (/^https?:\/\/\S+$/.test(sel)) { const t = `[link](${sel})`; return ntReplace(ta, s, e, t, s + 1, s + 5); }
+  const label = sel || 'text', t = `[${label}](https://)`;
+  ntReplace(ta, s, e, t, s + label.length + 3, s + label.length + 11);
+}
+function ntRule() {
+  const ta = ntTa(); if (!ta) return;
+  const v = ta.value, s = ta.selectionEnd;
+  const pre = s > 0 && v[s - 1] !== '\n' ? '\n\n' : s > 1 && v[s - 2] !== '\n' ? '\n' : '';
+  const t = `${pre}---\n`;
+  ntReplace(ta, s, s, t, s + t.length);
+}
+/** Tab / Shift+Tab on list lines or a multi-line selection: indent or outdent. */
+function ntIndent(out) {
+  const ta = ntTa();
+  const v = ta.value, multi = v.slice(ta.selectionStart, ta.selectionEnd).includes('\n');
+  const line = v.slice(v.lastIndexOf('\n', ta.selectionStart - 1) + 1).split('\n')[0];
+  if (!multi && !NT_LIST_RE.test(line) && !out) { const p = ta.selectionStart; return ntReplace(ta, p, ta.selectionEnd, '  ', p + 2); }
+  ntLines((ls) => ls.map((l) => (out ? l.replace(/^ {1,2}|^\t/, '') : l.trim() ? `  ${l}` : l)));
+}
+/** Enter inside a list or quote continues it; Enter on an empty item ends it. */
+function ntEnter(ev) {
+  const ta = ntTa();
+  if (ta.selectionStart !== ta.selectionEnd) return;
+  const v = ta.value, p = ta.selectionStart, ls = v.lastIndexOf('\n', p - 1) + 1;
+  const line = v.slice(ls, p);
+  const m = /^(\s*)(?:([-*+])\s+(\[[ xX]\])\s+|([-*+])\s+|(\d+)([.)])\s+|(>)\s?)/.exec(line);
+  if (!m) return;
+  const le = v.indexOf('\n', p) < 0 ? v.length : v.indexOf('\n', p);
+  ev.preventDefault();
+  if (line.length === m[0].length && !v.slice(p, le).trim()) { ntReplace(ta, ls, le, '', ls); return; }
+  const next = m[3] ? `${m[1]}${m[2]} [ ] ` : m[4] ? `${m[1]}${m[4]} ` : m[5] ? `${m[1]}${Number(m[5]) + 1}${m[6]} ` : `${m[1]}> `;
+  ntReplace(ta, p, p, `\n${next}`, p + 1 + next.length);
+}
+function ntFillTemplate(body, sel) {
+  const d = new Date();
+  const pad = (x) => String(x).padStart(2, '0');
+  const n = ntById(NT.sel);
+  const vars = { date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, time: `${pad(d.getHours())}:${pad(d.getMinutes())}`, site: n?.site || $('ntSiteIn')?.value || '', selection: sel };
+  let text = body.replace(/\{\{(date|time|site|selection)\}\}/g, (_, k) => vars[k]);
+  const at = text.indexOf('{{cursor}}');
+  text = text.replace(/\{\{cursor\}\}/g, '');
+  return { text, at: at < 0 ? text.length : at };
+}
+function ntInsertTemplate(t) {
+  const ta = ntTa(); if (!ta) return;
+  const v = ta.value, s = ta.selectionStart, e = ta.selectionEnd;
+  const { text, at } = ntFillTemplate(t.body, v.slice(s, e));
+  const pre = s > 0 && v[s - 1] !== '\n' && /\n/.test(text) ? '\n' : '';
+  ntReplace(ta, s, e, pre + text, s + pre.length + at);
+}
+/** Small anchored menu (same look as the custom select). Items: {label, hint, fn, cls} | {group} | null. */
+function ntMenu(anchor, items) {
+  document.querySelector('.nt-menu')?.remove();
+  const pop = h('div', { class: 'cs-pop nt-menu', role: 'menu' });
+  const list = h('div', { class: 'cs-list' });
+  const close = () => { pop.remove(); document.removeEventListener('mousedown', outside, true); document.removeEventListener('keydown', esc, true); };
+  const outside = (ev) => { if (!pop.contains(ev.target) && ev.target !== anchor) close(); };
+  const esc = (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); close(); ntTa()?.focus(); } };
+  for (const it of items) {
+    if (!it) { list.append(h('div', { class: 'nt-menu-sep' })); continue; }
+    if (it.group) { list.append(h('div', { class: 'cs-grp' }, it.group)); continue; }
+    list.append(h('div', { class: `cs-opt${it.cls ? ` ${it.cls}` : ''}`, role: 'menuitem', title: it.title || '',
+      onmousedown: (ev) => ev.preventDefault(),
+      onclick: () => { close(); it.fn(); } }, h('span', { class: 'cs-t' }, it.label), it.hint ? h('span', { class: 'cs-val' }, it.hint) : null));
+  }
+  pop.append(list);
+  document.body.append(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.minWidth = `${Math.max(200, r.width)}px`;
+  pop.style.maxHeight = `${Math.min(420, innerHeight - r.bottom - 12)}px`;
+  pop.style.left = `${Math.min(r.left, innerWidth - pop.offsetWidth - 8)}px`;
+  pop.style.top = `${r.bottom + 4}px`;
+  document.addEventListener('mousedown', outside, true);
+  document.addEventListener('keydown', esc, true);
+}
+async function ntTemplatesMenu(anchor) {
+  if (document.querySelector('.nt-menu')) { document.querySelector('.nt-menu').remove(); return; }
+  const mine = await ntTpls().catch(() => []);
+  const ta = ntTa();
+  const hasSel = !!ta && ta.selectionStart !== ta.selectionEnd;
+  ntMenu(anchor, [
+    { group: 'Templates' },
+    ...NT_BUILTIN.map((t) => ({ label: t.name, fn: () => ntInsertTemplate(t) })),
+    ...(mine.length ? [{ group: 'My templates' }, ...mine.map((t) => ({ label: t.name, hint: `${t.body.split('\n').length} lines`, fn: () => ntInsertTemplate(t) }))] : []),
+    null,
+    { label: hasSel ? 'Save selection as template…' : 'New template…', fn: () => ntTemplateModal(null, hasSel ? ta.value.slice(ta.selectionStart, ta.selectionEnd) : '') },
+    ...(mine.length ? [{ label: 'Manage templates…', fn: ntManageTemplates }] : []),
+  ]);
+}
+function ntTemplateModal(t, body = '') {
+  const name = h('input', { type: 'text', value: t?.name || '', placeholder: 'Bug report', maxlength: 80 });
+  const ta = h('textarea', { class: 'mono code short', spellcheck: false, value: t?.body ?? body });
+  modal(t ? 'Edit template' : 'New template', h('div', { class: 'form' },
+    ...field('Name', name),
+    ...field('Text', ta, 'Markdown. {{cursor}} places the caret; {{selection}}, {{date}}, {{time}} and {{site}} are filled in on insert.', true)), [
+    { label: 'Cancel' },
+    { label: t ? 'Save' : 'Create', cls: 'primary', fn: async () => {
+      const data = { name: name.value, body: ta.value };
+      if (t) await put(`/api/notes/templates/${t.id}`, data); else await post('/api/notes/templates', data);
+      NT.tpls = null;
+      toast(t ? 'Template saved' : `Template "${data.name.trim()}" created`, 'ok');
+      return true;
+    } },
+  ]);
+}
+async function ntManageTemplates() {
+  const mine = await ntTpls();
+  const body = h('div', { class: 'nt-tpl-list' });
+  const draw = () => {
+    clear(body);
+    if (!NT.tpls.length) body.append(h('div', { class: 'empty' }, 'No templates of your own yet.'));
+    for (const t of NT.tpls) {
+      body.append(h('div', { class: 'nt-tpl-row' },
+        h('div', { class: 'ell' }, h('b', null, t.name), h('div', { class: 'faint ell mono' }, mdMaskSecrets(t.body).split('\n').find((l) => l.trim()) || '')),
+        h('button', { class: 'btn sm', onclick: () => ntTemplateModal(t) }, 'Edit'),
+        h('button', { class: 'btn sm danger', onclick: guard(async () => {
+          await del(`/api/notes/templates/${t.id}`);
+          NT.tpls = NT.tpls.filter((x) => x.id !== t.id); draw();
+        }) }, 'Delete')));
+    }
+  };
+  NT.tpls = mine; draw();
+  modal('My templates', body, [{ label: 'Close' }]);
+}
+const NT_KEYS = { b: () => ntWrap('**'), i: () => ntWrap('_'), k: ntLink, e: () => ntWrap('`', '`', 'code'), 'shift+h': () => ntWrap('==', '==', 'highlight'), 'shift+x': ntSecret, 'shift+7': () => ntList('ol'), 'shift+8': () => ntList('ul'), 'shift+9': () => ntList('task') };
+function ntToolbar() {
+  const tb = (label, title, fn, cls = '') => h('button', { type: 'button', class: `nt-tb${cls ? ` ${cls}` : ''}`, title,
+    onmousedown: (ev) => ev.preventDefault(), onclick: () => fn() }, label);
+  const sep = () => h('span', { class: 'nt-tsep' });
+  const menuBtn = (label, title, items) => {
+    const b = tb(label, title, () => ntMenu(b, items()), 'menu');
+    return b;
+  };
+  const tpl = tb('Templates', 'Insert a template · save the selection as a template', () => guard(() => ntTemplatesMenu(tpl))(), 'menu tpl');
+  return h('div', { class: 'nt-tools', role: 'toolbar' },
+    menuBtn('Heading', 'Heading', () => [1, 2, 3, 4].map((n) => ({ label: `${'#'.repeat(n)} Heading ${n}`, cls: `nt-mh${n}`, fn: () => ntHeading(n) }))),
+    sep(),
+    tb(h('b', null, 'B'), 'Bold (⌘B)', () => ntWrap('**')),
+    tb(h('i', null, 'I'), 'Italic (⌘I)', () => ntWrap('_')),
+    tb(h('s', null, 'S'), 'Strikethrough', () => ntWrap('~~')),
+    tb(h('mark', null, 'H'), 'Highlight (⌘⇧H)', () => ntWrap('==', '==', 'highlight')),
+    tb(h('code', null, '`c`'), 'Inline code (⌘E)', () => ntWrap('`', '`', 'code')),
+    tb('Link', 'Link (⌘K)', ntLink),
+    sep(),
+    tb('{ } Code', 'Code block', () => ntBlock('```', '```')),
+    tb([svgIcon(...ICON_LOCK), h('span', null, 'Secret')], 'Secret (⌘⇧X) — masked as •••••••• in the preview; one line → inline, several → block', ntSecret, 'secret'),
+    menuBtn('Callout', 'Callout box', () => Object.entries(MD_CALLOUTS).map(([k, label]) => ({ label, cls: `nt-mc md-${k}`, fn: () => ntCallout(k) }))),
+    sep(),
+    tb('• List', 'Bulleted list (⌘⇧8)', () => ntList('ul')),
+    tb('1. List', 'Numbered list (⌘⇧7)', () => ntList('ol')),
+    tb('☐ Tasks', 'Task list (⌘⇧9)', () => ntList('task')),
+    tb('❝', 'Quote', ntQuote),
+    tb('—', 'Horizontal rule', ntRule),
+    h('span', { class: 'spacer' }),
+    tpl);
+}
+
 function renderNtEditor() {
   const box = clear($('ntEditor'));
   const n = ntById(NT.sel);
@@ -358,10 +676,20 @@ function renderNtEditor() {
     n.site ? h('button', { class: 'btn sm', title: 'Site map of this site (current session)', onclick: () => { smOpenSite(n.site.replace(/^\*\./, ''), dnsWild(n.site)); } }, 'Site map') : null));
   const ta = h('textarea', { id: 'ntBody', class: 'mono nt-body', spellcheck: false, value: n.body, placeholder: '# Findings\n\n- Login posts to /api/auth — cupnet:req/<session>/42\n- [ ] check rate limits', oninput: ntChanged });
   ta.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Tab') { ev.preventDefault(); const s = ta.selectionStart; ta.setRangeText('  ', s, ta.selectionEnd, 'end'); ntChanged(); }
-    if ((ev.metaKey || ev.ctrlKey) && ev.key === 's') { ev.preventDefault(); guard(ntFlush)(); }
+    if (ev.isComposing) return;
+    const mod = ev.metaKey || ev.ctrlKey;
+    if (ev.key === 'Tab' && !mod) { ev.preventDefault(); ntIndent(ev.shiftKey); return; }
+    if (ev.key === 'Enter' && !mod && !ev.shiftKey && !ev.altKey) { ntEnter(ev); return; }
+    if (!mod || ev.altKey) return;
+    if (ev.key === 's' || ev.key === 'S') { ev.preventDefault(); guard(ntFlush)(); return; }
+    // Physical key (layout-independent); fall back to the key for events without a code.
+    const code = ev.code || '';
+    const k = code.startsWith('Key') ? code.slice(3).toLowerCase() : code.startsWith('Digit') ? code.slice(5) : code ? '' : /^[a-z0-9]$/i.test(ev.key) ? ev.key.toLowerCase() : '';
+    const fn = NT_KEYS[`${ev.shiftKey ? 'shift+' : ''}${k}`];
+    if (fn) { ev.preventDefault(); fn(); }
   });
   const pv = h('div', { id: 'ntPreview', class: 'nt-preview' });
+  if (NT.mode !== 'preview') box.append(ntToolbar());
   box.append(h('div', { class: `nt-panes nt-${NT.mode}` }, NT.mode !== 'preview' ? ta : null, NT.mode !== 'edit' ? pv : null));
   if (NT.mode !== 'edit') pv.append(mdRender(n.body));
   if (NT.mode === 'preview' && !n.body.trim()) pv.append(h('div', { class: 'empty' }, 'Empty note — switch to Edit.'));
@@ -428,7 +756,7 @@ window.addEventListener('beforeunload', () => { if (NT.pending) ntFlush(); });
 const SM = {
   session: '', site: store.get('sm-site', ''), subs: store.get('sm-subs', true), data: null, sites: [], tab: store.get('sm-tab', 'pages'),
   filter: store.get('sm-filter', 'all'), hideFiles: store.get('sm-files', true), view: store.get('sm-view', 'tree'), sel: null, open: new Set(), closed: new Set(), expand: 'top',
-  formPage: '', formHidden: store.get('sm-fhidden', false), fieldShow: 'all', auto: store.get('sm-auto', true), timer: null, gen: 0, loading: false,
+  pv: store.get('sm-pv', 'page'), formPage: '', formHidden: store.get('sm-fhidden', false), fieldShow: 'all', auto: store.get('sm-auto', true), timer: null, gen: 0, loading: false,
 };
 const SM_RENDER_MAX = 3000;
 const smStatusCls = (p) => (!p.opened ? 'not' : p.status >= 400 ? 'bad' : p.status >= 300 ? 'redir' : 'ok');
@@ -636,11 +964,57 @@ function smRenderList() {
   return undefined;
 }
 
+/** Offline snapshots fetched this session (session/seq → response), a few at a time. */
+const SM_SNAPS = new Map();
+const smCanSnap = (p) => !!(p && p.opened && p.seq && p.status >= 200 && p.status < 300);
+function smSnapView(p) {
+  const key = `${SM.session}/${p.seq}`;
+  const info = h('div', { class: 'sm-snapinfo' }, h('span', { class: 'faint' }, 'Building the snapshot…'));
+  const fr = h('iframe', { class: 'sm-frame', sandbox: '', referrerpolicy: 'no-referrer', title: `Snapshot of ${p.url}` });
+  const box = h('div', { class: 'sm-framebox' }, fr);
+  let width = store.get('sm-snapw', 'fit');
+  const fit = () => {
+    if (width === 'fit') { fr.style.width = '100%'; fr.style.height = '100%'; fr.style.transform = ''; fr.style.left = '0'; return; }
+    const w = Number(width), k = Math.min(1, box.clientWidth / w);
+    fr.style.width = `${w}px`; fr.style.height = `${box.clientHeight / k}px`; fr.style.transform = `scale(${k})`;
+    fr.style.left = `${Math.max(0, (box.clientWidth - w * k) / 2)}px`;
+  };
+  new ResizeObserver(fit).observe(box);
+  const show = (r) => {
+    fr.srcdoc = r.html;
+    const st = r.stats;
+    const parts = [st.styles && `${st.styles} style${st.styles === 1 ? '' : 's'}`, st.images && `${st.images} image${st.images === 1 ? '' : 's'}`, st.fonts && `${st.fonts} font${st.fonts === 1 ? '' : 's'}`].filter(Boolean);
+    append(clear(info), [
+      h('span', { class: 'faint', title: 'Rebuilt from the captured HTML and the resources the browser loaded. Scripts are removed and nothing is fetched — pages drawn by JavaScript look empty or unstyled here.' },
+        `Offline copy · captured ${fmtAgo(r.ts)}${parts.length ? ` · ${parts.join(', ')}` : ''}${st.scripts ? ` · ${st.scripts} script${st.scripts === 1 ? '' : 's'} off` : ''}`),
+      st.missing ? h('button', { class: 'btn sm ghost sm-miss', title: 'Resources the page uses that were never requested through CupNet', onclick: () => modal(`Not captured (${st.missing})`,
+        h('div', { class: 'sm-misslist mono' }, r.missing.map((u) => h('div', { class: 'ell', title: u }, u)), st.missing > r.missing.length ? h('div', { class: 'faint' }, `… and ${st.missing - r.missing.length} more`) : null), [{ label: 'Close' }]) }, `${st.missing} not captured`) : null,
+      st.skipped ? h('span', { class: 'faint' }, ` · ${st.skipped} too large`) : null,
+      h('span', { class: 'spacer' }),
+      seg([['fit', 'Fit'], ['1280', '1280'], ['390', 'Phone']], width, (v) => { width = v; store.set('sm-snapw', v); info.querySelectorAll('.seg button').forEach((b, i) => b.classList.toggle('on', ['fit', '1280', '390'][i] === v)); fit(); })]);
+    fit();
+  };
+  const cached = SM_SNAPS.get(key);
+  if (cached) show(cached);
+  else {
+    api(`/api/sitemap/snapshot/${p.seq}?session=${encodeURIComponent(SM.session)}`).then((r) => {
+      SM_SNAPS.set(key, r);
+      while (SM_SNAPS.size > 6) SM_SNAPS.delete(SM_SNAPS.keys().next().value);
+      if (fr.isConnected) show(r);
+    }, (e) => { clear(info).append(h('span', { class: 'err' }, e.message)); box.remove(); });
+  }
+  return h('div', { class: 'sm-snap' }, info, box);
+}
 function smRenderDetail() {
   const box = $('smDetail');
   if (!box) return;
-  clear(box);
   const p = SM.sel && smPageByUrl(SM.sel);
+  const snapKey = smCanSnap(p) && SM.pv === 'page' ? `${SM.session}/${p.seq}` : '';
+  // Keep a loaded snapshot on refreshes of the same page (re-inserting a frame reloads it).
+  if (snapKey && box.dataset.snap === snapKey && box.querySelector('iframe')) return;
+  clear(box);
+  box.dataset.snap = snapKey;
+  box.classList.toggle('sm-detail-page', !!snapKey);
   if (!p) {
     const s = SM.data.stats;
     box.append(h('div', { class: 'empty' },
@@ -661,6 +1035,10 @@ function smRenderDetail() {
     h('button', { class: 'btn sm', onclick: () => { rpLoad({ method: 'GET', url: p.url, headers: [['Accept', 'text/html,application/xhtml+xml,*/*;q=0.8']] }); go('repeater'); } }, 'Repeater'),
     h('button', { class: 'btn sm', onclick: () => copy(p.url, 'URL copied') }, 'Copy URL'),
     h('button', { class: 'btn sm', onclick: guard(() => ntAddFrom({ host, line: `- ${p.opened ? '' : '(not opened) '}${p.url}${p.title ? ` — ${p.title}` : ''}${p.seq ? ` — cupnet:req/${SM.session}/${p.seq}` : ''}` })) }, 'Add to note')));
+  if (smCanSnap(p)) {
+    box.append(h('div', { class: 'sm-pvtabs' }, seg([['page', 'Page'], ['info', 'Details']], SM.pv, (v) => { SM.pv = v; store.set('sm-pv', v); smRenderDetail(); })));
+    if (snapKey) { box.append(smSnapView(p)); return; }
+  }
   const onlyHidden = p.refs > 0 && p.hiddenRefs === p.refs;
   box.append(sect('Page', kvGrid([
     ['State', p.opened ? `opened ${p.count}× · ${(p.methods || []).join(', ')} · ${p.status || 'failed'}` : 'not opened — linked only'],

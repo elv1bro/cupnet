@@ -6,6 +6,9 @@
  * Note: { id, title, body (markdown), site ('' or a host such as shop.example.com / *.example.com),
  * tags [], pinned, created, updated }. A body may reference logged requests as `cupnet:req/<session>/<seq>`;
  * the UI turns them into links to Traffic.
+ *
+ * Templates: { id, name, body, created, updated } — user snippets inserted from the editor toolbar
+ * (placeholders such as {{selection}} and {{cursor}} are filled in by the UI).
  */
 
 const fs = require('fs');
@@ -17,6 +20,9 @@ const BODY_MAX = 512 * 1024;
 const TITLE_MAX = 200;
 const TAG_MAX = 40;
 const TAGS_PER_NOTE = 20;
+const MAX_TEMPLATES = 200;
+const TEMPLATE_MAX = 64 * 1024;
+const TEMPLATE_NAME_MAX = 80;
 const REF_RE = /cupnet:req\/([\w-]+)\/(\d+)/g;
 
 function _err(message, status = 400) { return Object.assign(new Error(message), { status }); }
@@ -51,6 +57,16 @@ function _clean(n, prev = null) {
     };
 }
 
+function _cleanTemplate(t, prev = null) {
+    const name = String(t.name ?? prev?.name ?? '').trim().slice(0, TEMPLATE_NAME_MAX);
+    const body = String(t.body ?? prev?.body ?? '');
+    if (!name) throw _err('A template needs a name');
+    if (!body.trim()) throw _err('A template needs some text');
+    if (body.length > TEMPLATE_MAX) throw _err(`A template is limited to ${TEMPLATE_MAX / 1024} KB`);
+    const now = Date.now();
+    return { id: prev?.id || crypto.randomBytes(6).toString('hex'), name, body, created: prev?.created || now, updated: now };
+}
+
 /** Does a note's site ('' = any) apply to `host`? `*.x` covers x and its subdomains. */
 function siteMatches(site, host) {
     const h = String(host || '').toLowerCase();
@@ -70,8 +86,16 @@ class NotesStore {
     constructor({ file }) {
         this.file = file;
         this.notes = [];
+        this.templates = [];
         try {
             const d = JSON.parse(fs.readFileSync(file, 'utf8'));
+            for (const t of (Array.isArray(d?.templates) ? d.templates : []).slice(0, MAX_TEMPLATES)) {
+                try {
+                    const c = _cleanTemplate(t, { ...t, id: /^[0-9a-f]{12}$/.test(String(t.id)) ? t.id : undefined });
+                    c.updated = Number(t.updated) || c.updated;
+                    this.templates.push(c);
+                } catch { /* skip a broken template */ }
+            }
             for (const n of (Array.isArray(d?.notes) ? d.notes : []).slice(0, MAX_NOTES)) {
                 try {
                     const c = _clean(n, { ...n, id: /^[0-9a-f]{12}$/.test(String(n.id)) ? n.id : undefined });
@@ -84,7 +108,7 @@ class NotesStore {
 
     _save() {
         const tmp = `${this.file}.${process.pid}.tmp`;
-        fs.writeFileSync(tmp, `${JSON.stringify({ v: 1, notes: this.notes })}\n`, { mode: 0o600 });
+        fs.writeFileSync(tmp, `${JSON.stringify({ v: 1, notes: this.notes, templates: this.templates })}\n`, { mode: 0o600 });
         fs.renameSync(tmp, this.file);
     }
 
@@ -115,6 +139,32 @@ class NotesStore {
         const n = this.notes.length;
         this.notes = this.notes.filter((x) => x.id !== id);
         if (this.notes.length === n) return false;
+        this._save();
+        return true;
+    }
+
+    listTemplates() { return [...this.templates].sort((a, b) => a.name.localeCompare(b.name)); }
+
+    addTemplate(t) {
+        if (this.templates.length >= MAX_TEMPLATES) throw _err(`At most ${MAX_TEMPLATES} templates`);
+        const c = _cleanTemplate(t || {});
+        this.templates.push(c);
+        this._save();
+        return c;
+    }
+
+    updateTemplate(id, patch) {
+        const i = this.templates.findIndex((t) => t.id === id);
+        if (i < 0) throw _err('No such template', 404);
+        this.templates[i] = _cleanTemplate(patch || {}, this.templates[i]);
+        this._save();
+        return this.templates[i];
+    }
+
+    removeTemplate(id) {
+        const n = this.templates.length;
+        this.templates = this.templates.filter((t) => t.id !== id);
+        if (this.templates.length === n) return false;
         this._save();
         return true;
     }

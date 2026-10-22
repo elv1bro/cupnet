@@ -25,11 +25,12 @@ const { providerCatalog } = require('./proxy-store');
 const { writeHar } = require('./har');
 const { CookieJar } = require('./cookie-jar');
 const siteMap = require('./site-map');
+const { buildSnapshot } = require('./page-snapshot');
 const dnsPromises = require('dns').promises;
 const net = require('net');
 
 const UI_HTML = path.join(__dirname, 'ui.html');
-const UI_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src blob:; connect-src 'self'; font-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+const UI_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src blob: data:; connect-src 'self'; font-src 'self' data:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 /** UI assets (no data in them, so no token): mini/ui.* plus repo modules listed in browser-libs.json. */
 const STATIC = new Map([
     ['/ui.css', [path.join(__dirname, 'ui.css'), 'text/css; charset=utf-8']],
@@ -37,6 +38,7 @@ const STATIC = new Map([
     ['/ui-inspect.js', [path.join(__dirname, 'ui-inspect.js'), 'text/javascript; charset=utf-8']],
     ['/ui-tools.js', [path.join(__dirname, 'ui-tools.js'), 'text/javascript; charset=utf-8']],
     ['/ui-select.js', [path.join(__dirname, 'ui-select.js'), 'text/javascript; charset=utf-8']],
+    ['/ui-ws.js', [path.join(__dirname, 'ui-ws.js'), 'text/javascript; charset=utf-8']],
     ...Object.entries(JSON.parse(fs.readFileSync(path.join(__dirname, 'browser-libs.json'), 'utf8')))
         .map(([k, rel]) => [`/${k}`, [path.join(__dirname, '..', rel), 'text/javascript; charset=utf-8']]),
 ]);
@@ -402,6 +404,17 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
         } catch (e) { return _badRequest(res, e); }
     }
 
+    // ── WebSockets: open connections, send / close (messages themselves are in the log) ──
+    if (p === '/api/ws' && m === 'GET') return _send(res, 200, { open: app.ws?.list() || [] });
+    const wsOne = /^\/api\/ws\/(\d+)\/(send|close)$/.exec(p);
+    if (wsOne && m === 'POST') {
+        const body = (await _readJson(req).catch(() => null)) || {};
+        try {
+            if (wsOne[2] === 'send') return _send(res, 200, app.ws.send(Number(wsOne[1]), body));
+            return _send(res, 200, app.ws.close(Number(wsOne[1]), body.code, body.reason));
+        } catch (e) { return _badRequest(res, e); }
+    }
+
     if (p === '/api/settings' && m === 'GET') return _send(res, 200, app.getSettings());
     if (p === '/api/settings' && m === 'POST') {
         const body = await _readJson(req);
@@ -559,6 +572,13 @@ async function _toolRoute(app, req, res, u, sessionSource) {
             return _send(res, 200, { notes: host ? notes.forHost(host) : notes.list(), tags: notes.tags() });
         }
         if (p === '/api/notes' && m === 'POST') return _send(res, 200, notes.add(await body()));
+        if (p === '/api/notes/templates' && m === 'GET') return _send(res, 200, notes.listTemplates());
+        if (p === '/api/notes/templates' && m === 'POST') return _send(res, 200, notes.addTemplate(await body()));
+        const tpl = /^\/api\/notes\/templates\/([0-9a-f]{12})$/.exec(p);
+        if (tpl && (m === 'PUT' || m === 'POST')) return _send(res, 200, notes.updateTemplate(tpl[1], await body()));
+        if (tpl && m === 'DELETE') {
+            return notes.removeTemplate(tpl[1]) ? _send(res, 200, { ok: true }) : _send(res, 404, { error: 'No such template' });
+        }
         const one = /^\/api\/notes\/([0-9a-f]{12})$/.exec(p);
         if (one && m === 'GET') {
             const n = notes.get(one[1]);
@@ -571,6 +591,12 @@ async function _toolRoute(app, req, res, u, sessionSource) {
         return false;
     }
 
+    const snap = /^\/api\/sitemap\/snapshot\/(\d+)$/.exec(p);
+    if (snap && m === 'GET') {
+        const src = sessionSource(u.searchParams.get('session') || app.log.sessionId);
+        if (!src) return _send(res, 404, { error: 'no such session' });
+        return _send(res, 200, buildSnapshot(src, Number(snap[1])));
+    }
     if (p === '/api/sitemap' && m === 'GET') {
         const sid = u.searchParams.get('session') || app.log.sessionId;
         const src = sessionSource(sid);
