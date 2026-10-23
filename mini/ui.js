@@ -171,6 +171,7 @@ function go(page) {
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.page === page));
   document.querySelectorAll('#pages > section').forEach((s) => { s.hidden = s.id !== `page-${page}`; });
   $('pageTitle').textContent = TITLES[page];
+  if (typeof syncHelpBtn === 'function') syncHelpBtn(page);
   const load = { traffic: () => scheduleDraw(false), activity: () => loadActivity(), search: () => loadSearch(), console: () => loadConsole(), ws: () => loadWs(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, dns: loadDns, sitemap: loadSiteMap, notes: loadNotes, compare: loadCompare, mirror: loadMirror, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, guide: loadGuide, repeater: renderRpCode, intruder: loadIntruder }[page];
   if (load) guard(load)();
 }
@@ -181,6 +182,7 @@ $('quit').addEventListener('click', guard(async () => {
   await post('/api/quit'); $('stats').textContent = 'остановлено'; window.close();
 }));
 $('egress').addEventListener('click', () => go('proxies'));
+$('helpBtn').addEventListener('click', () => { if (typeof showHelp === 'function') showHelp(PAGE); });
 // HAR import → a new session (cross-compatible with old CupNet 2 and other tools' HAR exports).
 $('harImportBtn').addEventListener('click', () => $('harImport').click());
 $('harImport').addEventListener('change', guard(async (ev) => {
@@ -546,6 +548,16 @@ $('harBtn').addEventListener('click', guard(async () => {
     download(blob, `cupnet-${sid}${q ? '-filtered' : ''}.har`);
   });
   toast(`Экспортировано ${reqs.length.toLocaleString()} запросов в HAR`, 'ok');
+}));
+
+// ── Full session export: the raw JSONL (everything, not just requests) ──
+$('jsonlBtn').addEventListener('click', guard(async () => {
+  const sid = shown || current;
+  await busy($('jsonlBtn'), 'Экспорт…', async () => {
+    const { blob } = await apiBlob(`/api/sessions/${encodeURIComponent(sid)}`);
+    download(blob, `cupnet-${sid}.jsonl`);
+  });
+  toast('Вся сессия экспортирована в JSONL', 'ok');
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────

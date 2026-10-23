@@ -40,6 +40,7 @@ const STATIC = new Map([
     ['/ui.css', [path.join(__dirname, 'ui.css'), 'text/css; charset=utf-8']],
     ['/ui.js', [path.join(__dirname, 'ui.js'), 'text/javascript; charset=utf-8']],
     ['/ui-activity.js', [path.join(__dirname, 'ui-activity.js'), 'text/javascript; charset=utf-8']],
+    ['/ui-help.js', [path.join(__dirname, 'ui-help.js'), 'text/javascript; charset=utf-8']],
     ['/ui-inspect.js', [path.join(__dirname, 'ui-inspect.js'), 'text/javascript; charset=utf-8']],
     ['/ui-tools.js', [path.join(__dirname, 'ui-tools.js'), 'text/javascript; charset=utf-8']],
     ['/ui-select.js', [path.join(__dirname, 'ui-select.js'), 'text/javascript; charset=utf-8']],

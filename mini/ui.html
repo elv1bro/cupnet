@@ -11,6 +11,7 @@
 <script src="/ui-select.js" defer></script>
 <script src="/ui.js" defer></script>
 <script src="/ui-activity.js" defer></script>
+<script src="/ui-help.js" defer></script>
 <script src="/ui-inspect.js" defer></script>
 <script src="/ui-tools.js" defer></script>
 <script src="/ui-ws.js" defer></script>
@@ -53,6 +54,7 @@
 <div id="app">
   <header id="top">
     <h1 id="pageTitle">Трафик</h1>
+    <button id="helpBtn" class="help-dot" title="Справка по этому инструменту" aria-label="Справка по этому инструменту">?</button>
     <button id="egress" class="pill" title="Выходной IP прокси — нажмите, чтобы управлять прокси"><i class="dot"></i><span id="egressText">проверка…</span></button>
     <span id="stats" class="muted mono"></span>
   </header>
@@ -80,6 +82,7 @@
         <span class="pin-chip" id="pinChip" hidden></span>
         <span class="muted mono" id="count"></span>
         <button class="btn" id="harBtn" title="Экспортировать отфильтрованные строки в HAR 1.2">HAR</button>
+        <button class="btn" id="jsonlBtn" title="Экспортировать всю сессию в JSONL — все данные: заголовки, тела, консоль, WebSocket, смены IP, срабатывания правил (в HAR только запросы)">Всё</button>
       </div>
       <div id="split">
         <div id="gridWrap">

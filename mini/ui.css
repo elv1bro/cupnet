@@ -178,6 +178,12 @@ textarea.code.short { min-height: 90px; }
 #stats { margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pill { display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 11px; border-radius: 13px; border: 1px solid var(--line); background: var(--bg2); cursor: pointer; max-width: 46vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pill:hover { border-color: var(--line2); background: var(--bg3); }
+.help-dot { margin-left: -8px; width: 20px; height: 20px; flex: none; display: inline-flex; align-items: center; justify-content: center; padding: 0; border-radius: 50%; border: 1px solid var(--line2); background: var(--bg2); color: var(--muted); font-size: 12px; font-weight: 700; line-height: 1; cursor: pointer; }
+.help-dot:hover { color: var(--accent); border-color: var(--accent); background: var(--bg3); }
+.help-lead { margin: 0 0 10px; color: var(--fg); line-height: 1.5; }
+.help-tips { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 7px; }
+.help-tips li { line-height: 1.5; color: var(--fg2, var(--fg)); }
+.help-body { max-width: 560px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
 .pill.ok .dot, .dot.ok { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-bg); }
 .pill.warn .dot, .dot.warn { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-bg); }
