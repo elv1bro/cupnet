@@ -10,6 +10,7 @@
 <script src="/lib/diff.js" defer></script>
 <script src="/ui-select.js" defer></script>
 <script src="/ui.js" defer></script>
+<script src="/ui-activity.js" defer></script>
 <script src="/ui-inspect.js" defer></script>
 <script src="/ui-tools.js" defer></script>
 <script src="/ui-ws.js" defer></script>
@@ -22,6 +23,7 @@
   <div class="brand"><span class="logo">◆</span><span>CupNet <b>mini</b></span><span class="ver mono" id="sideVer" title="Версия"></span></div>
   <nav id="nav">
     <button data-page="traffic" class="on"><svg viewBox="0 0 16 16"><path d="M2 3h12M2 8h12M2 13h8"/></svg><span>Трафик</span></button>
+    <button data-page="activity" title="Единый системный журнал всего: запросы, правила, консоль, WebSocket, IP, страница"><svg viewBox="0 0 16 16"><path d="M1.5 8h3l2-5.5 3 11 2-5.5h3"/></svg><span>Активность</span><i class="count accent" id="actBadge" hidden title="Запросы, ошибки консоли и правил"></i></button>
     <button data-page="search" title="Поиск по всем сессиям (⌘⇧F)"><svg viewBox="0 0 16 16"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l4.5 4.5"/></svg><span>Поиск</span></button>
     <button data-page="console"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4 6l2.5 2L4 10M8 10.5h4"/></svg><span>Консоль</span><i class="count err" id="cnCount" hidden></i></button>
     <button data-page="ws"><svg viewBox="0 0 16 16"><path d="M2 5.5h9l-2.5-2.5M14 10.5H5l2.5 2.5"/></svg><span>WebSockets</span><i class="count accent" id="wsCount" hidden title="Открытые соединения"></i></button>
@@ -112,6 +114,23 @@
           <div id="dbody"></div>
         </div>
       </div>
+    </section>
+
+    <!-- ── Activity: one system feed of everything ── -->
+    <section id="page-activity" class="page" hidden>
+      <div class="act-strip" id="actStats"></div>
+      <div class="toolbar">
+        <input id="actQ" type="search" placeholder="Фильтр — текст или /regex/" spellcheck="false">
+        <div class="chips" id="actKinds"></div>
+        <label class="chk" title="Показывать только ошибки: ответы 4xx/5xx, сбои, ошибки консоли и правил"><input type="checkbox" id="actErr">только ошибки</label>
+        <span class="spacer"></span>
+        <span class="muted mono" id="actCount"></span>
+        <label class="chk" title="Держать в поле зрения самую новую строку"><input type="checkbox" id="actFollow" checked>следить</label>
+        <button class="btn sm" id="actPause" title="Остановить автопрокрутку новых событий">Пауза</button>
+        <button class="btn sm" id="actClear" title="Очистить вид — в логе сессии остаётся всё">Очистить</button>
+      </div>
+      <div class="act-head"><div>Время</div><div>Тип</div><div>Событие</div><div class="r-al">Детали</div></div>
+      <div id="actGrid" tabindex="0"><div id="actSpacer"></div><div id="actEmpty" class="empty" hidden>Пока нет событий. Нажмите <b>Открыть Chrome</b> — запросы, правила, консоль и всё остальное появятся здесь в реальном времени.</div></div>
     </section>
 
     <!-- ── Console ── -->
@@ -593,6 +612,11 @@
     <section id="page-sessions" class="page scroll" hidden>
       <div class="card">
         <p class="muted">Каждый запуск пишет один JSONL-файл со всем захваченным: заголовки, полные тела и события страниц. Сессии содержат cookie и токены — относитесь к ним как к секретам. <b>Запечатать</b> шифрует сессию отдельным ключом: файл <code>.cupkey</code> открывает соответствующий <code>.cupsess</code> в <code>viewer.html</code>.</p>
+        <div class="row-end">
+          <span class="muted" style="margin-right:auto">Импорт HAR 1.2 создаёт новую сессию — так переносятся логи из старого CupNet 2 и других инструментов (DevTools, Charles, Fiddler).</span>
+          <input type="file" id="harImport" accept=".har,application/json" hidden>
+          <button class="btn" id="harImportBtn" title="Загрузить HAR-файл как новую сессию">Импорт HAR…</button>
+        </div>
         <table class="tbl">
           <thead><tr><th>Сессия</th><th class="w-110">Размер</th><th class="w-180">Изменена</th><th class="w-80">Запечатана</th><th class="w-300"></th></tr></thead>
           <tbody id="sessions"></tbody>

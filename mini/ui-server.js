@@ -39,6 +39,7 @@ const UI_CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-
 const STATIC = new Map([
     ['/ui.css', [path.join(__dirname, 'ui.css'), 'text/css; charset=utf-8']],
     ['/ui.js', [path.join(__dirname, 'ui.js'), 'text/javascript; charset=utf-8']],
+    ['/ui-activity.js', [path.join(__dirname, 'ui-activity.js'), 'text/javascript; charset=utf-8']],
     ['/ui-inspect.js', [path.join(__dirname, 'ui-inspect.js'), 'text/javascript; charset=utf-8']],
     ['/ui-tools.js', [path.join(__dirname, 'ui-tools.js'), 'text/javascript; charset=utf-8']],
     ['/ui-select.js', [path.join(__dirname, 'ui-select.js'), 'text/javascript; charset=utf-8']],
@@ -84,6 +85,23 @@ function _readJson(req) {
         req.on('error', reject);
     });
 }
+
+/** Read a raw request body (for file uploads like HAR import), capped at `max` bytes. */
+function _readRaw(req, max) {
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        let size = 0;
+        req.on('data', (c) => {
+            size += c.length;
+            if (size > max) { reject(new Error('файл слишком большой')); req.destroy(); return; }
+            chunks.push(c);
+        });
+        req.on('end', () => resolve(Buffer.concat(chunks)));
+        req.on('error', reject);
+    });
+}
+/** HAR imports can carry full bodies, so allow much more than a JSON API call. */
+const HAR_IMPORT_MAX = 128 * 1024 * 1024;
 
 // Live preview for the Mirror replace editor: run the REAL rewrite engine (mirror-rewrite.js, the
 // same code the MITM path uses) over a sample body so the editor shows the exact transformed output,
@@ -572,6 +590,14 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
         let r;
         try { r = buildRequestAt(b.spec || {}, b.index); } catch (e) { return _badRequest(res, e); }
         return _send(res, 200, await app.replay({ ...r, followRedirects: !!b.followRedirects }));
+    }
+    // Import a HAR file as a new saved session (e.g. a session exported from the old cupnet2).
+    if (p === '/api/sessions/import' && m === 'POST') {
+        let buf;
+        try { buf = await _readRaw(req, HAR_IMPORT_MAX); }
+        catch (e) { return _send(res, 413, { ok: false, error: String(e?.message || e) }); }
+        const r = app.importHar(buf);
+        return _send(res, r.ok ? 200 : 400, r);
     }
     const sess = /^\/api\/sessions\/([\w-]+)$/.exec(p);
     if (sess && m === 'GET') {

@@ -163,7 +163,7 @@ function confirmBox(text, okLabel = 'OK', danger = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Navigation
 // ─────────────────────────────────────────────────────────────────────────────
-const TITLES = { traffic: 'Трафик', search: 'Поиск', console: 'Консоль', ws: 'WebSockets', analyzer: 'Анализатор страницы', proxies: 'Прокси', ipwatch: 'Монитор IP', dns: 'Переопределения DNS', sitemap: 'Карта сайта', notes: 'Заметки', compare: 'Сравнение', mirror: 'Зеркало', cookies: 'Cookies', repeater: 'Репитер', intruder: 'Интрудер', rules: 'Правила', paused: 'Точки останова', sessions: 'Сессии', settings: 'Настройки', guide: 'Гайд' };
+const TITLES = { traffic: 'Трафик', activity: 'Активность', search: 'Поиск', console: 'Консоль', ws: 'WebSockets', analyzer: 'Анализатор страницы', proxies: 'Прокси', ipwatch: 'Монитор IP', dns: 'Переопределения DNS', sitemap: 'Карта сайта', notes: 'Заметки', compare: 'Сравнение', mirror: 'Зеркало', cookies: 'Cookies', repeater: 'Репитер', intruder: 'Интрудер', rules: 'Правила', paused: 'Точки останова', sessions: 'Сессии', settings: 'Настройки', guide: 'Гайд' };
 let PAGE = 'traffic';
 function go(page) {
   if (!TITLES[page]) page = 'traffic';
@@ -171,7 +171,7 @@ function go(page) {
   document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('on', b.dataset.page === page));
   document.querySelectorAll('#pages > section').forEach((s) => { s.hidden = s.id !== `page-${page}`; });
   $('pageTitle').textContent = TITLES[page];
-  const load = { traffic: () => scheduleDraw(false), search: () => loadSearch(), console: () => loadConsole(), ws: () => loadWs(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, dns: loadDns, sitemap: loadSiteMap, notes: loadNotes, compare: loadCompare, mirror: loadMirror, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, guide: loadGuide, repeater: renderRpCode, intruder: loadIntruder }[page];
+  const load = { traffic: () => scheduleDraw(false), activity: () => loadActivity(), search: () => loadSearch(), console: () => loadConsole(), ws: () => loadWs(), analyzer: () => loadAnalyzer(), proxies: loadProxies, ipwatch: loadIpw, dns: loadDns, sitemap: loadSiteMap, notes: loadNotes, compare: loadCompare, mirror: loadMirror, cookies: loadCookies, rules: loadRules, paused: loadPaused, sessions: loadSessions, settings: loadSettings, guide: loadGuide, repeater: renderRpCode, intruder: loadIntruder }[page];
   if (load) guard(load)();
 }
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.page)));
@@ -181,6 +181,21 @@ $('quit').addEventListener('click', guard(async () => {
   await post('/api/quit'); $('stats').textContent = 'остановлено'; window.close();
 }));
 $('egress').addEventListener('click', () => go('proxies'));
+// HAR import → a new session (cross-compatible with old CupNet 2 and other tools' HAR exports).
+$('harImportBtn').addEventListener('click', () => $('harImport').click());
+$('harImport').addEventListener('change', guard(async (ev) => {
+  const file = ev.target.files && ev.target.files[0];
+  ev.target.value = '';
+  if (!file) return;
+  await busy($('harImportBtn'), 'Импорт…', async () => {
+    const r = await fetch('/api/sessions/import', { method: 'POST', headers: { 'X-CupNet-Token': TOKEN, 'Content-Type': 'application/octet-stream' }, body: file });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    toast(`Импортировано ${data.entries.toLocaleString()} запросов → сессия ${data.sessionId}`, 'ok',
+      { ms: 6000, action: { label: 'Открыть', fn: guard(async () => { await fillSessionSelect(); openSession(data.sessionId); go('traffic'); }) } });
+    if (PAGE === 'sessions') loadSessions();
+  });
+}));
 document.addEventListener('keydown', (ev) => {
   if (ev.key !== 'Escape') return;
   if (_modalClose) { _modalClose(); return; }
@@ -255,6 +270,8 @@ async function pollStatus() {
       if (s.errors) parts.push(`${s.errors} ошиб.`);
       if (!s.workerReady) parts.push('TLS-воркер запускается…');
     }
+    // Live traffic volume (sent + received) — aggregated by the Activity feed from the same stream.
+    if (typeof ACT === 'object' && (ACT.bin || ACT.bout)) parts.push(`⇅ ${fmtSize(ACT.bin + ACT.bout)}`);
     if (st.writeErrors) parts.push(`${st.writeErrors} ошибок записи`);
     $('stats').textContent = parts.join(' · ');
     $('stats').className = `mono ${st.writeErrors || (s && !s.workerReady) ? 'warn' : 'muted'}`;
@@ -277,6 +294,7 @@ async function pollStatus() {
     onCookieStatus(st.cookies);
     renderEgress();
     if (PAGE === 'proxies') { P.status = st.proxy; renderConn(); }
+    if (PAGE === 'activity' && typeof renderActStats === 'function') renderActStats();
     maybeOfferCaInstall();
   } catch (e) {
     $('stats').textContent = `нет соединения: ${e.message}`; $('stats').className = 'mono err';
@@ -342,6 +360,7 @@ function ingest(items) {
   }
   if (typeof consoleIngest === 'function') consoleIngest(items);
   if (typeof wsIngest === 'function') wsIngest(items);
+  if (typeof activityIngest === 'function') activityIngest(items);
   scheduleDraw(atBottom && $('follow').checked);
 }
 function refilter() {
@@ -446,6 +465,7 @@ function resetView() {
   closeDetail(); buildFilter(); scheduleDraw(true);
   if (typeof consoleReset === 'function') consoleReset();
   if (typeof wsReset === 'function') wsReset();
+  if (typeof activityReset === 'function') activityReset();
 }
 async function streamLive(myGen) {
   let lastSeq = 0;
