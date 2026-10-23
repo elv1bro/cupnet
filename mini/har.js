@@ -121,4 +121,59 @@ async function writeHar(out, entries, o = {}) {
     await write(']}}');
 }
 
-module.exports = { harEntry, writeHar };
+/** HAR header list [{name,value}] → object, repeating a name into an array (mirrors `_headers`). */
+function _headersToObject(list) {
+    const out = {};
+    for (const it of Array.isArray(list) ? list : []) {
+        const name = String(it?.name ?? '').trim();
+        if (!name) continue;
+        const value = String(it?.value ?? '');
+        if (out[name] === undefined) out[name] = value;
+        else if (Array.isArray(out[name])) out[name].push(value);
+        else out[name] = [out[name], value];
+    }
+    return out;
+}
+
+/** HAR content/postData → a session body string (`__b64__:` for base64 content), or null. */
+function _contentToBody(c) {
+    if (!c || c.text == null || c.text === '') return null;
+    const text = String(c.text);
+    return String(c.encoding || '').toLowerCase() === 'base64' ? `__b64__:${text}` : text;
+}
+
+/**
+ * HAR 1.2 document → session entries (MITM-event shape for SessionLog.logRequest), in order.
+ * Keeps full headers and bodies; preserves start time (`ts`), duration, status, resource type.
+ * Accepts a parsed object or a JSON string; throws on anything that is not a HAR log.
+ * @param {object|string} har
+ * @returns {Array<object>}
+ */
+function parseHar(har) {
+    const doc = typeof har === 'string' ? JSON.parse(har) : har;
+    const entries = doc?.log?.entries;
+    if (!Array.isArray(entries)) throw new Error('not a HAR document (log.entries missing)');
+    const out = [];
+    for (const e of entries) {
+        const req = e?.request || {};
+        const res = e?.response || {};
+        if (!req.url) continue;
+        const ts = Date.parse(e?.startedDateTime);
+        const time = Number(e?.time);
+        out.push({
+            ts: Number.isFinite(ts) ? ts : undefined,
+            method: req.method || 'GET',
+            url: String(req.url),
+            status: Number(res.status) || 0,
+            type: e?._resourceType || null,
+            duration: Number.isFinite(time) && time >= 0 ? Math.round(time) : undefined,
+            requestHeaders: _headersToObject(req.headers),
+            responseHeaders: _headersToObject(res.headers),
+            requestBody: _contentToBody(req.postData),
+            responseBody: _contentToBody(res.content),
+        });
+    }
+    return out;
+}
+
+module.exports = { harEntry, writeHar, parseHar };

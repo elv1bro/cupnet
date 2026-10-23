@@ -21,7 +21,8 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 
-const { SessionLog } = require('./session-log');
+const { SessionLog, newSessionId } = require('./session-log');
+const { parseHar } = require('./har');
 const sessionCrypto = require('./session-crypto');
 const { spkiHashFromCertPem, fingerprintSha256, caInstructions, caTrustStatus, installCa } = require('./ca');
 const { launchChrome, launchAppWindow } = require('./chrome');
@@ -247,6 +248,8 @@ class MiniApp {
         this.log = new SessionLog({ dir: this.sessionsDir });
         // The key exists from the first request, so the session's sealed name is known up front.
         this.sessionKey = sessionCrypto.ensureSessionKey(this.keysDir, this.log.sessionId);
+        // Every intercept-rule match (and rule error) becomes an Activity-feed entry.
+        this.rules.on('hit', (r) => { try { this.log?.logRule(r); } catch { /* ignore */ } });
 
         this.cookies = new CookieJar({ file: this.cookiesFile });
         this.dns = new DnsStore({ file: this.dnsFile });
@@ -367,6 +370,31 @@ class MiniApp {
             try { this.caStatusCache = caTrustStatus(ca.certPath); } catch { /* best effort */ }
         }
         return { ...r, trust: this.trust };
+    }
+
+    /**
+     * Import a HAR document as a new saved session (never the live one). Writes a fresh
+     * sessions/import-<id>.jsonl with one `request` entry per HAR entry — full headers and bodies kept.
+     * @param {Buffer|string} harBuf
+     * @returns {{ ok: true, sessionId: string, entries: number } | { ok: false, error: string }}
+     */
+    importHar(harBuf) {
+        let entries;
+        try {
+            entries = parseHar(typeof harBuf === 'string' ? harBuf : Buffer.from(harBuf).toString('utf8'));
+        } catch (e) {
+            return { ok: false, error: `не похоже на HAR: ${e?.message || e}` };
+        }
+        if (!entries.length) return { ok: false, error: 'в HAR нет запросов' };
+        const sessionId = `import-${newSessionId()}`;
+        const log = new SessionLog({ dir: this.sessionsDir, sessionId });
+        try {
+            for (const e of entries) log.logRequest(e);
+        } finally {
+            // close() appends session-end and closeSyncs the fd — synchronous, so the file is complete now.
+            try { log.close(); } catch { /* ignore */ }
+        }
+        return { ok: true, sessionId, entries: entries.length };
     }
 
     launchChrome(url) {

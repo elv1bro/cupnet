@@ -18,7 +18,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
 
-const SUMMARY_KEYS = ['seq', 'ts', 'kind', 'method', 'url', 'status', 'type', 'duration', 'mime', 'reqSize', 'resSize', 'dns', 'note', 'sev', 'src', 'doc', 'g', 'ws', 'dir', 'inj'];
+const SUMMARY_KEYS = ['seq', 'ts', 'kind', 'method', 'url', 'status', 'type', 'duration', 'mime', 'reqSize', 'resSize', 'dns', 'note', 'sev', 'src', 'doc', 'g', 'ws', 'dir', 'inj', 'rid'];
 /** WebSocket message preview kept in the summary (the payload is in `data.body`). */
 const WS_NOTE_MAX = 300;
 /** Console text kept in the summary (the full message and its arguments are in `data`). */
@@ -237,6 +237,8 @@ class SessionLog extends EventEmitter {
         const requestHeaders = e.requestHeaders || {};
         const responseHeaders = e.responseHeaders || {};
         return this._append({
+            // Imported entries carry their original timestamp; live MITM logging leaves it to _append.
+            ...(Number.isFinite(e.ts) ? { ts: e.ts } : {}),
             kind: 'request',
             method: e.method,
             url: e.url,
@@ -335,6 +337,32 @@ class SessionLog extends EventEmitter {
             dir: m.dir === 'in' ? 'in' : m.dir === 'out' ? 'out' : undefined,
             inj: m.injected ? 1 : undefined,
             data,
+        });
+    }
+
+    /**
+     * One intercept-rule match (block / mock / modifyHeaders / script / inject / delay / breakpoint).
+     * Summary: type = rule action, note = rule name, rid = rule id, url = the rule's url_pattern,
+     * sev = 'error' when the rule last failed. Details (pattern, group, priority, hit count) go to `data`.
+     * @param {{ id?: number, name?: string, type?: string, url_pattern?: string, group_name?: string,
+     *   priority?: number, hit_count?: number, last_error?: string }} rule
+     */
+    logRule(rule) {
+        const name = String(rule?.name || '').trim() || `rule #${rule?.id ?? '?'}`;
+        return this._append({
+            kind: 'rule',
+            type: String(rule?.type || '').slice(0, 40) || null,
+            note: name.slice(0, 300),
+            rid: Number.isFinite(rule?.id) ? rule.id : undefined,
+            url: rule?.url_pattern ? String(rule.url_pattern).slice(0, 4000) : undefined,
+            sev: rule?.last_error ? 'error' : 'info',
+            data: {
+                pattern: rule?.url_pattern || '',
+                group: rule?.group_name || undefined,
+                priority: Number(rule?.priority) || 0,
+                hitCount: Number(rule?.hit_count) || undefined,
+                error: rule?.last_error || undefined,
+            },
         });
     }
 

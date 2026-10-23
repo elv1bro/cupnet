@@ -8,6 +8,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { EventEmitter } = require('events');
 
 const FLUSH_DELAY_MS = 1000;
 
@@ -36,9 +37,11 @@ function _normalize(rule, prev = {}) {
     };
 }
 
-class RuleStore {
+class RuleStore extends EventEmitter {
     /** @param {string} file - rules.json */
     constructor(file) {
+        super();
+        this.setMaxListeners(0);
         this.file = file;
         this._rules = [];
         this._nextId = 1;
@@ -107,6 +110,8 @@ class RuleStore {
         r.last_hit_at = new Date().toISOString();
         r.last_error = null;
         this._flushSoon();
+        // The Activity feed logs each match; the row is a shallow copy so a later edit can't mutate it.
+        if (this.listenerCount('hit')) { try { this.emit('hit', { ...r }); } catch { /* never block interception */ } }
     }
 
     setInterceptRuleError(id, errText) {
@@ -114,6 +119,7 @@ class RuleStore {
         if (!r) return;
         r.last_error = errText != null && String(errText).trim() !== '' ? String(errText).slice(0, 2000) : null;
         this._flushSoon();
+        if (r.last_error && this.listenerCount('hit')) { try { this.emit('hit', { ...r }); } catch { /* never block interception */ } }
     }
 
     incrementInterceptRuleHitAsync(id) { this.incrementInterceptRuleHit(id); return Promise.resolve(); }
