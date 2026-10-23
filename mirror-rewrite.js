@@ -13,10 +13,14 @@
  * {@link rewriteRequest} mutates the request URL/Host (see request-interceptor.js `mirror` rule).
  *
  * `replace` rule shape (same as the standalone service's config `sites[].replace`):
- *   { from, to, kind: 'word'|'url', regex?: bool, urls?: bool, tags?: bool }
- *   - word (default): whole-word, boundary-aware; by default only text nodes of HTML are touched.
+ *   { from, to, kind: 'word'|'url', regex?, whole?, cs?, urls?, tags? }
+ *   - word (default): plain substring match, case-insensitive. So a single letter maps to another
+ *     ("A" -> "o") and partial matches work. By default only text nodes of HTML are touched.
+ *   - whole: match whole words only (boundary-aware), instead of any substring.
+ *   - cs: case-sensitive match (default: case-insensitive).
  *   - regex: `from` is a RegExp source, `to` may use $1.. groups.
  *   - urls: also rewrite inside href/src/action/... attributes (and, with `tags`, the whole text).
+ *   - tags: rewrite the whole document, markup included (not only text nodes).
  *   - kind:'url': path-swap — request path `from` is fetched as `to` upstream and swapped back.
  */
 
@@ -113,24 +117,48 @@ function htmlParts(text) {
     return parts;
 }
 
-function replaceWordsInText(text, from, to, loose) {
-    const lowerText = text.toLowerCase();
-    const needle = from.toLowerCase();
-    const stable = lowerText.length === text.length && needle.length === from.length;
+/** Find the next index of `needle` in `text` at/after `i`, honouring the folded comparison. */
+function nextIndex(text, cmpText, needle, from, stable, i) {
+    if (stable) return cmpText.indexOf(needle, i);
+    const fold = cmpText === text ? (s) => s : (s) => s.toLowerCase();
+    for (let k = i; k <= text.length - from.length; k += 1) {
+        if (fold(text.slice(k, k + from.length)) === needle) return k;
+    }
+    return -1;
+}
+
+/** Plain substring replacement (the default word-rule mode): any occurrence, optionally case-sensitive. */
+function replaceSubstring(text, from, to, caseSensitive) {
+    if (!from) return { text, hits: 0 };
+    const cmpText = caseSensitive ? text : text.toLowerCase();
+    const needle = caseSensitive ? from : from.toLowerCase();
+    const stable = cmpText.length === text.length && needle.length === from.length;
     let out = '';
     let i = 0;
     let hits = 0;
     while (i < text.length) {
-        let idx = -1;
-        if (stable) idx = lowerText.indexOf(needle, i);
-        else {
-            for (let k = i; k <= text.length - from.length; k += 1) {
-                if (text.slice(k, k + from.length).toLowerCase() === needle) {
-                    idx = k;
-                    break;
-                }
-            }
+        const idx = nextIndex(text, cmpText, needle, from, stable, i);
+        if (idx < 0) {
+            out += text.slice(i);
+            break;
         }
+        out += text.slice(i, idx) + to;
+        hits += 1;
+        i = idx + from.length;
+    }
+    return { text: out, hits };
+}
+
+/** Whole-word (boundary-aware) replacement. `loose` keeps leading/trailing slashes as boundaries. */
+function replaceWordsInText(text, from, to, loose, caseSensitive) {
+    const cmpText = caseSensitive ? text : text.toLowerCase();
+    const needle = caseSensitive ? from : from.toLowerCase();
+    const stable = cmpText.length === text.length && needle.length === from.length;
+    let out = '';
+    let i = 0;
+    let hits = 0;
+    while (i < text.length) {
+        const idx = nextIndex(text, cmpText, needle, from, stable, i);
         if (idx < 0) {
             out += text.slice(i);
             break;
@@ -159,13 +187,15 @@ function expandReplacement(template, match, groups) {
     });
 }
 
-function replaceRegex(text, pattern, replacement) {
+function replaceRegex(text, pattern, replacement, caseSensitive) {
+    const flags = caseSensitive ? 'gu' : 'giu';
+    const fallback = caseSensitive ? 'g' : 'gi';
     let re;
     try {
-        re = new RegExp(pattern, 'giu');
+        re = new RegExp(pattern, flags);
     } catch {
         try {
-            re = new RegExp(pattern, 'gi');
+            re = new RegExp(pattern, fallback);
         } catch {
             return { text, hits: 0 };
         }
@@ -183,8 +213,9 @@ function replaceRegex(text, pattern, replacement) {
 }
 
 function applyRuleText(text, item) {
-    if (item.regex) return replaceRegex(text, item.from, item.to);
-    return replaceWordsInText(text, item.from, item.to, Boolean(item.urls));
+    if (item.regex) return replaceRegex(text, item.from, item.to, item.cs);
+    if (item.whole) return replaceWordsInText(text, item.from, item.to, Boolean(item.urls), item.cs);
+    return replaceSubstring(text, item.from, item.to, item.cs);
 }
 
 function replaceInUrlAttrs(tag, item) {
@@ -209,6 +240,8 @@ function replaceWords(buf, fromBuf, toBuf, opts) {
         tags: Boolean(flags.tags),
         regex: Boolean(flags.regex),
         urls: Boolean(flags.urls),
+        whole: Boolean(flags.whole),
+        cs: Boolean(flags.cs),
     };
     if (!item.from) return { body: buf, hits: 0 };
     const text = Buffer.isBuffer(buf) ? buf.toString('utf8') : String(buf || '');
@@ -385,6 +418,8 @@ function normalizeReplaceRules(raw, strict) {
         const tags = kind !== 'url' && Boolean(rule && rule.tags);
         const regex = kind !== 'url' && Boolean(rule && rule.regex);
         const urls = kind !== 'url' && Boolean(rule && rule.urls);
+        const whole = kind !== 'url' && !regex && Boolean(rule && rule.whole);
+        const cs = kind !== 'url' && Boolean(rule && rule.cs);
         if (!from || from === to) {
             if (strict) throw new Error('each replace rule needs a non-empty "from" different from "to"');
             continue;
@@ -411,7 +446,7 @@ function normalizeReplaceRules(raw, strict) {
             if (strict) throw new Error(`path rule must be two absolute paths: ${from} -> ${to}`);
             continue;
         }
-        out.push({ from, to, kind, tags, regex, urls });
+        out.push({ from, to, kind, tags, regex, urls, whole, cs });
     }
     return out;
 }
@@ -588,6 +623,7 @@ module.exports = {
     htmlParts,
     replaceWords,
     replaceWordsInText,
+    replaceSubstring,
     replaceRegex,
     applyRuleText,
     swapHostText,

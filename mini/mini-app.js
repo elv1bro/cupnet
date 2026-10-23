@@ -513,6 +513,36 @@ class MiniApp {
         return { statusCode: Number(res.statusCode) || 0, body };
     }
 
+    /** GET a page through the worker so the Mirror replace editor can test rules on real HTML. */
+    async mirrorFetch(url) {
+        if (!/^https?:\/\//i.test(String(url || ''))) return { statusCode: 0, body: '', error: 'URL must start with http(s)://' };
+        const proxy = this.mitm.upstream || null;
+        if (!proxy && this.mitm.isEgressBlocked()) return { statusCode: 0, body: '', error: 'egress blocked' };
+        const pairs = [
+            ['Accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'],
+            ['Sec-Fetch-Site', 'none'], ['Sec-Fetch-Mode', 'navigate'], ['Sec-Fetch-Dest', 'document'],
+            ['Accept-Encoding', 'gzip, deflate, br, zstd'],
+        ];
+        const headers = Object.fromEntries(pairs);
+        let res;
+        try {
+            res = await this.mitm.worker.request({
+                method: 'GET', url, headers, orderedHeaders: pairs, proxy, browser: this.browser,
+                tabId: 'cupnet-mini-mirror-studio', timeout: 15000, maxRetries: 0, disableRedirects: false,
+                forceHttp1: !!this.settings.forceHttp1,
+            });
+        } catch (e) {
+            return { statusCode: 0, body: '', error: e?.message || String(e) };
+        }
+        const raw = res.bodyBase64 != null ? Buffer.from(String(res.bodyBase64), 'base64') : Buffer.from(String(res.body ?? ''), 'utf8');
+        const ct = (res.headers && (res.headers['content-type'] || res.headers['Content-Type'])) || '';
+        return {
+            statusCode: Number(res.statusCode) || 0,
+            contentType: String(Array.isArray(ct) ? ct[0] : ct || ''),
+            body: raw.toString('utf8'),
+        };
+    }
+
     // ── Settings ────────────────────────────────────────────────────────────────
 
     _loadSettings() {

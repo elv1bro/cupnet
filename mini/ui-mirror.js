@@ -127,32 +127,362 @@ async function openMh(id) {
   renderMhList(); renderMhEditor();
 }
 
-// Shared replace[] editor used by the mirror editor. Returns a node; mutates ed.replace in place.
+// Labels shared by the inline summary and the fullscreen studio.
+const REP_KINDS = [['word', 'Найти / заменить'], ['url', 'Подменить путь']];
+// Where a content replacement looks: whole document (tags), text nodes only, or text + URL attributes.
+const REP_SCOPES = [['all', 'Везде'], ['text', 'Только текст'], ['attr', 'Текст + атрибуты']];
+const mirRepPlural = (n) => { const a = Math.abs(n) % 100, b = a % 10; if (a > 10 && a < 20) return 'замен'; if (b > 1 && b < 5) return 'замены'; if (b === 1) return 'замена'; return 'замен'; };
+const repKindLabel = (r) => (r.kind === 'url' ? 'путь' : 'текст');
+// Scope is stored as two independent engine flags; map them to one of the three REP_SCOPES choices.
+const repScope = (r) => (r.tags ? 'all' : r.urls ? 'attr' : 'text');
+const setRepScope = (r, v) => { r.tags = v === 'all'; r.urls = v === 'attr'; };
+// Defaults match the old web tool: substring match over the whole document, case-insensitive.
+const newReplaceRule = () => ({ from: '', to: '', kind: 'word', regex: false, urls: false, tags: true, whole: false, cs: false });
+
+// Quick-insert fragments for the regex helper. Label is Russian; the snippet itself is a pattern.
+const REGEX_SNIPPETS = [
+  ['\\d+', 'цифры'],
+  ['\\w+', 'слово'],
+  ['\\s+', 'пробелы'],
+  ['.*?', 'любой текст'],
+  ['[A-Za-zА-Яа-я]+', 'буквы'],
+  ['(…)', 'группа → $1'],
+  ['a|b', 'или'],
+  ['^', 'начало'],
+  ['$', 'конец'],
+  ['https?:\\/\\/[^"\'\\s]+', 'ссылка'],
+  ['[\\w.+-]+@[\\w.-]+', 'e-mail'],
+];
+
+// A small sample so a new mirror's replacements can be tried before any traffic exists. Users paste a
+// real page's source over it. Shows text (word), attribute (urls) and whole-document (tags) behaviour.
+const MIR_SAMPLE_DEFAULT = `<h1>Пример страницы</h1>
+<p>Здравствуйте! Это демонстрация замен. Откройте настоящую страницу через зеркало,
+скопируйте её исходный код и вставьте сюда — результат слева обновляется на лету.</p>
+<a href="https://origin.example.com/account">Личный кабинет</a>
+<img src="/img/logo.png" alt="Логотип">`;
+
+// Compact inline summary of a mirror's replace[] rules + a button into the fullscreen studio. The
+// studio is where rules are actually edited (with a live unified red/green diff). Mutates ed.replace.
 function mirReplaceEditor(ed, onChange) {
   if (!Array.isArray(ed.replace)) ed.replace = [];
-  const box = h('div');
+  const box = h('div', { class: 'mir-rep' });
   const paint = () => {
     clear(box);
-    ed.replace.forEach((r, i) => {
-      const isUrl = r.kind === 'url';
-      const row = h('div', { class: 'sect', style: 'margin-bottom:6px' },
-        h('div', { class: 'inline' },
-          h('select', { onchange: (ev) => { r.kind = ev.target.value === 'url' ? 'url' : 'word'; if (r.kind === 'url') { r.regex = r.urls = r.tags = false; } paint(); onChange(); } },
-            [['word', 'Найти / заменить'], ['url', 'Подменить путь']].map(([v, l]) => h('option', { value: v, selected: (r.kind || 'word') === v }, l))),
-          h('input', { class: 'mono grow', value: r.from || '', placeholder: isUrl ? '/client/path' : 'найти', oninput: (ev) => { r.from = ev.target.value; onChange(); } }),
-          h('span', { class: 'muted' }, '→'),
-          h('input', { class: 'mono grow', value: r.to || '', placeholder: isUrl ? '/upstream/path' : 'заменить на', oninput: (ev) => { r.to = ev.target.value; onChange(); } }),
-          h('button', { class: 'icon', title: 'Удалить', onclick: () => { ed.replace.splice(i, 1); paint(); onChange(); } }, '✕')),
-        isUrl ? null : h('div', { class: 'inline', style: 'margin-top:4px' },
-          h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!r.regex, onchange: (ev) => { r.regex = ev.target.checked; onChange(); } }), 'Регулярка ($1-группы)'),
-          h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!r.urls, onchange: (ev) => { r.urls = ev.target.checked; onChange(); } }), 'В URL-атрибутах'),
-          h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!r.tags, onchange: (ev) => { r.tags = ev.target.checked; onChange(); } }), 'Весь документ (вкл. теги)')));
-      box.append(row);
-    });
-    box.append(h('button', { class: 'btn sm ghost', onclick: () => { ed.replace.push({ from: '', to: '', kind: 'word', regex: false, urls: false, tags: false }); paint(); } }, '+ Правило замены'));
+    const n = ed.replace.length;
+    const chips = h('div', { class: 'mir-rep-chips' });
+    if (!n) {
+      chips.append(h('span', { class: 'muted' }, 'Замен пока нет. Откройте редактор, чтобы искать и заменять текст в ответе с живым предпросмотром.'));
+    } else {
+      ed.replace.forEach((r) => chips.append(h('span', { class: 'mir-rep-chip', title: `${r.from || '—'} → ${r.to || '—'}` },
+        h('span', { class: 'mir-rep-badge' }, repKindLabel(r)),
+        h('span', { class: 'mono ell' }, r.from || '—'),
+        h('span', { class: 'muted' }, '→'),
+        h('span', { class: 'mono ell' }, r.to || '—'))));
+    }
+    box.append(chips, h('div', { class: 'inline', style: 'margin-top:8px' },
+      h('button', { class: 'btn sm primary', onclick: () => openReplaceStudio(ed, () => { onChange(); paint(); }) },
+        n ? `Редактор замен (${n}) — полный экран` : '+ Открыть редактор замен')));
   };
   paint();
   return box;
+}
+
+// ── fullscreen replace studio: rules on the left, source + a single red/green diff on the right ──
+const RSX = { sample: null, url: null };
+
+// Regex helper: inserts a snippet at the caret of the rule's «найти» input and turns regex mode on.
+function openRegexHelper(input, enableRegex) {
+  const insert = (snip) => {
+    const s = input.selectionStart == null ? input.value.length : input.selectionStart;
+    const e = input.selectionEnd == null ? input.value.length : input.selectionEnd;
+    input.value = input.value.slice(0, s) + snip + input.value.slice(e);
+    if (enableRegex) enableRegex();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.focus();
+    const pos = s + snip.length;
+    try { input.setSelectionRange(pos, pos); } catch { /* ignore */ }
+  };
+  const grid = h('div', { class: 'rsx-rx-grid' },
+    REGEX_SNIPPETS.map(([snip, label]) => h('button', { class: 'btn sm', type: 'button', onclick: () => insert(snip) },
+      h('code', null, snip), h('span', { class: 'muted' }, label))));
+  const body = h('div', { class: 'form' },
+    h('p', { class: 'muted' }, 'Нажмите фрагмент — он вставится в поле «найти» и включит режим регулярного выражения. В поле «заменить на» используйте $1, $2 для групп и $& для всего совпадения.'),
+    grid);
+  modal('Помощник по регулярным выражениям', body, [{ label: 'Закрыть', cls: 'primary' }]);
+}
+
+// Build the preview by asking the server to run the real rewrite engine, then render one unified diff.
+function openReplaceStudio(ed, onChange) {
+  if (!Array.isArray(ed.replace)) ed.replace = [];
+  if (RSX.sample == null) RSX.sample = store.get('mir-sample', MIR_SAMPLE_DEFAULT);
+  if (RSX.url == null) RSX.url = store.get('mir-url', ed.upstreamHost ? `https://${ed.upstreamHost}/` : '');
+
+  let preview = { output: '', hits: 0, perRule: [], changed: false };
+  let view = store.get('mir-studio-view', 'diff'); // 'diff' | 'out'
+  let findQ = '';
+  let findEls = [];
+  let findCur = 0;
+  let srcOpen = true;
+
+  const rulesBox = h('div', { class: 'rsx-rules' });
+  const src = h('textarea', { class: 'rsx-src mono', spellcheck: false, placeholder: 'Вставьте сюда исходный код страницы или загрузите его по ссылке выше…' });
+  src.value = RSX.sample;
+  const urlInput = h('input', { class: 'rsx-url mono', type: 'url', placeholder: 'https://origin.example.com/ — загрузить исходный код', value: RSX.url });
+  const fetchStatus = h('span', { class: 'muted mono rsx-fetch-st' }, '');
+  const outPane = h('div', { class: 'rsx-out mono' });
+  const hitsLabel = h('span', { class: 'mono muted' }, '');
+  const findInput = h('input', { class: 'rsx-find-in mono', type: 'search', placeholder: 'Поиск в результате…', value: findQ });
+  const findCount = h('span', { class: 'muted mono rsx-find-n' }, '');
+  const selBtn = h('button', { class: 'btn sm', disabled: true, title: 'Создать правило из выделенного исходника' }, '+ Из выделения');
+
+  // ── unified diff rendering (red = removed, green = added), with in-result search ──
+  const buildOps = () => {
+    const D = window.CupNetDiff;
+    const a = src.value;
+    const b = preview.output != null ? preview.output : '';
+    if (view === 'out') return { ops: [{ t: '=', text: b }], line: false };
+    const td = D && D.tokenDiff ? D.tokenDiff(a, b) : null;
+    if (td && !td.tooBig) return { ops: td.ops, line: false };
+    const ld = D.lineDiff(a, b);
+    return { ops: ld.ops, line: true };
+  };
+  const clsFor = (t) => (t === '-' ? 'rsx-del' : t === '+' ? 'rsx-ins' : null);
+  const appendText = (frag, text, cls) => {
+    const q = findQ.trim();
+    const make = (t) => (cls ? h('span', { class: cls }, t) : document.createTextNode(t));
+    if (!q) { if (text) frag.append(make(text)); return; }
+    const ql = q.toLowerCase();
+    const lower = text.toLowerCase();
+    let i = 0;
+    let idx;
+    while ((idx = lower.indexOf(ql, i)) >= 0) {
+      if (idx > i) frag.append(make(text.slice(i, idx)));
+      const mk = h('mark', { class: `rsx-find${cls ? ` ${cls}` : ''}` }, text.slice(idx, idx + q.length));
+      findEls.push(mk);
+      frag.append(mk);
+      i = idx + q.length;
+    }
+    if (i < text.length) frag.append(make(text.slice(i)));
+  };
+  const paintOut = () => {
+    clear(outPane);
+    findEls = [];
+    const built = buildOps();
+    if (built.line) {
+      // Huge document: fall back to a read-only line diff (no in-result search there).
+      outPane.append(lineDiffView(built.ops));
+    } else {
+      const frag = document.createDocumentFragment();
+      let any = false;
+      for (const op of built.ops) {
+        if (!op.text) continue;
+        any = true;
+        appendText(frag, op.text, clsFor(op.t));
+      }
+      if (!any) frag.append(h('span', { class: 'muted' }, '(пусто)'));
+      outPane.append(frag);
+    }
+    if (findCur >= findEls.length) findCur = 0;
+    paintFindCursor();
+    const n = preview.hits;
+    hitsLabel.textContent = n ? `${n} ${mirRepPlural(n)}` : (preview.changed ? 'изменено' : 'без изменений');
+    hitsLabel.className = `mono ${n || preview.changed ? 'ok' : 'muted'}`;
+  };
+  const paintFindCursor = () => {
+    findEls.forEach((el, i) => el.classList.toggle('cur', i === findCur));
+    findCount.textContent = findEls.length ? `${findCur + 1}/${findEls.length}` : (findQ.trim() ? '0' : '');
+    if (findEls[findCur]) findEls[findCur].scrollIntoView({ block: 'center' });
+  };
+  const stepFind = (d) => { if (!findEls.length) return; findCur = (findCur + d + findEls.length) % findEls.length; paintFindCursor(); };
+
+  const recompute = () => debounce('rsx-preview', 160, async () => {
+    RSX.sample = src.value;
+    store.set('mir-sample', src.value);
+    try {
+      preview = await post('/api/mirror/preview', { source: src.value, replace: ed.replace });
+    } catch (e) {
+      preview = { output: src.value, hits: 0, perRule: [], changed: false };
+    }
+    paintOut();
+    paintRuleHits();
+    onChange();
+  });
+
+  // ── view toggle (Diff / Результат) ──
+  const viewBtns = h('div', { class: 'rsx-view' });
+  const paintViewBtns = () => {
+    clear(viewBtns);
+    [['diff', 'Diff'], ['out', 'Результат']].forEach(([v, l]) =>
+      viewBtns.append(h('button', { class: `btn sm rsx-vbtn${view === v ? ' on' : ''}`, onclick: () => { view = v; store.set('mir-studio-view', v); paintViewBtns(); paintOut(); } }, l)));
+  };
+
+  // ── source URL load + "open in Chrome" ──
+  const loadUrl = guard(async () => {
+    const url = (urlInput.value || '').trim();
+    if (!url) { toast('Укажите ссылку', 'warn'); return; }
+    fetchStatus.textContent = 'Загрузка…';
+    fetchStatus.className = 'muted mono rsx-fetch-st';
+    const r = await post('/api/mirror/fetch', { url });
+    if (!r || r.error) {
+      fetchStatus.textContent = (r && r.error) || 'ошибка';
+      fetchStatus.className = 'err mono rsx-fetch-st';
+      return;
+    }
+    src.value = r.body || '';
+    RSX.sample = src.value;
+    RSX.url = url;
+    store.set('mir-sample', src.value);
+    store.set('mir-url', url);
+    const ok = r.statusCode >= 200 && r.statusCode < 400;
+    fetchStatus.textContent = `HTTP ${r.statusCode} · ${(r.body || '').length} симв.`;
+    fetchStatus.className = `${ok ? 'ok' : 'warn'} mono rsx-fetch-st`;
+    if (!srcOpen) toggleSrc();
+    recompute();
+  });
+  const chromeUrl = () => {
+    const up = (urlInput.value || '').trim();
+    const pat = (ed.url_pattern || '').trim();
+    if (/^https?:\/\//i.test(pat)) return pat;
+    if (pat && !/[*?]/.test(pat)) return `https://${pat.replace(/^\/+/, '')}`;
+    if (/^https?:\/\//i.test(up)) return up;
+    if (ed.upstreamHost) return `https://${ed.upstreamHost}/`;
+    return '';
+  };
+  const openChrome = guard(async () => {
+    const url = chromeUrl();
+    if (!url) { toast('Нет адреса — укажите хост клиента (url_pattern) или ссылку', 'warn'); return; }
+    await post('/api/chrome', { url });
+    toast(`Открываю в Chrome: ${url}`, 'ok');
+  });
+
+  // ── rule rows (drag to reorder via the grip) ──
+  let ruleEls = [];
+  let dragFrom = -1;
+  const paintRuleHits = () => ruleEls.forEach((el, i) => {
+    const n = preview.perRule[i] || 0;
+    el.textContent = n ? `${n} ${mirRepPlural(n)}` : '';
+    el.className = `rsx-hit mono ${n ? 'ok' : 'muted'}`;
+  });
+  const paintRules = () => {
+    clear(rulesBox);
+    ruleEls = [];
+    if (!ed.replace.length) rulesBox.append(h('div', { class: 'muted', style: 'padding:4px 2px 10px' }, 'Нет правил. Добавьте первое кнопкой «+ Правило» или выделите текст в исходнике.'));
+    ed.replace.forEach((r, i) => {
+      const isUrl = r.kind === 'url';
+      const hit = h('span', { class: 'rsx-hit mono muted' }, '');
+      ruleEls.push(hit);
+      const grip = h('span', { class: 'rsx-grip', draggable: true, title: 'Перетащите, чтобы изменить порядок' }, '⋮⋮');
+      grip.addEventListener('dragstart', (ev) => { dragFrom = i; ev.dataTransfer.effectAllowed = 'move'; try { ev.dataTransfer.setData('text/plain', String(i)); } catch { /* ignore */ } });
+      const fromIn = h('input', { class: 'mono', value: r.from || '', placeholder: isUrl ? '/client/path' : 'найти', oninput: (ev) => { r.from = ev.target.value; recompute(); } });
+      const row = h('div', { class: 'rsx-rule' },
+        h('div', { class: 'rsx-rule-top' },
+          grip,
+          h('select', { class: 'rsx-kind', onchange: (ev) => { r.kind = ev.target.value === 'url' ? 'url' : 'word'; if (r.kind === 'url') { r.regex = r.urls = r.tags = r.whole = r.cs = false; } paintRules(); recompute(); } },
+            REP_KINDS.map(([v, l]) => h('option', { value: v, selected: (r.kind || 'word') === v }, l))),
+          hit,
+          h('button', { class: 'icon', title: 'Удалить правило', onclick: () => { ed.replace.splice(i, 1); paintRules(); recompute(); } }, '✕')),
+        h('div', { class: 'rsx-rule-io' },
+          fromIn,
+          h('span', { class: 'muted' }, '→'),
+          h('input', { class: 'mono', value: r.to || '', placeholder: isUrl ? '/upstream/path' : 'заменить на', oninput: (ev) => { r.to = ev.target.value; recompute(); } })),
+        isUrl
+          ? h('div', { class: 'rsx-rule-note muted' }, 'Подменяет путь запроса, а не текст ответа — в предпросмотре не участвует.')
+          : h('div', { class: 'rsx-opts' },
+            h('label', { class: 'rsx-opt' }, h('span', { class: 'muted' }, 'Где:'),
+              h('select', { class: 'rsx-scope', onchange: (ev) => { setRepScope(r, ev.target.value); recompute(); } },
+                REP_SCOPES.map(([v, l]) => h('option', { value: v, selected: repScope(r) === v }, l)))),
+            h('label', { class: 'chk', title: 'Трактовать «найти» как регулярное выражение' },
+              h('input', { type: 'checkbox', checked: !!r.regex, onchange: (ev) => { r.regex = ev.target.checked; paintRules(); recompute(); } }), 'Регулярка'),
+            h('button', { class: 'icon rsx-rx-help', type: 'button', title: 'Помощник по регулярным выражениям', onclick: () => openRegexHelper(fromIn, () => { r.regex = true; }) }, '?'),
+            h('label', { class: `chk${r.regex ? ' off' : ''}`, title: 'Совпадать только по целым словам' },
+              h('input', { type: 'checkbox', checked: !!r.whole, disabled: !!r.regex, onchange: (ev) => { r.whole = ev.target.checked; recompute(); } }), 'Целые слова'),
+            h('label', { class: 'chk', title: 'Учитывать регистр букв' },
+              h('input', { type: 'checkbox', checked: !!r.cs, onchange: (ev) => { r.cs = ev.target.checked; recompute(); } }), 'Регистр')));
+      row.addEventListener('dragover', (ev) => { if (dragFrom >= 0) { ev.preventDefault(); row.classList.add('drop'); } });
+      row.addEventListener('dragleave', () => row.classList.remove('drop'));
+      row.addEventListener('drop', (ev) => {
+        ev.preventDefault();
+        row.classList.remove('drop');
+        if (dragFrom < 0 || dragFrom === i) return;
+        const [moved] = ed.replace.splice(dragFrom, 1);
+        ed.replace.splice(i, 0, moved);
+        dragFrom = -1;
+        paintRules();
+        recompute();
+      });
+      rulesBox.append(row);
+    });
+    paintRuleHits();
+  };
+
+  const addRule = (from = '', to = '') => { ed.replace.push({ ...newReplaceRule(), from, to }); paintRules(); recompute(); };
+
+  // enable "+ Из выделения" only when the source textarea has a selection
+  const refreshSel = () => { selBtn.disabled = src.selectionStart === src.selectionEnd; };
+  src.addEventListener('select', refreshSel);
+  src.addEventListener('keyup', refreshSel);
+  src.addEventListener('mouseup', refreshSel);
+  src.addEventListener('input', () => { recompute(); refreshSel(); });
+  selBtn.addEventListener('click', () => {
+    const sel = src.value.slice(src.selectionStart, src.selectionEnd);
+    if (sel) addRule(sel, sel);
+  });
+
+  findInput.addEventListener('input', () => { findQ = findInput.value; findCur = 0; paintOut(); });
+  findInput.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); stepFind(ev.shiftKey ? -1 : 1); } });
+  urlInput.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); loadUrl(); } });
+
+  // collapsible source editor
+  const srcWrap = h('div', { class: 'rsx-src-wrap' }, src);
+  const srcToggle = h('button', { class: 'btn sm', onclick: () => toggleSrc() }, 'Скрыть исходник');
+  function toggleSrc() {
+    srcOpen = !srcOpen;
+    srcWrap.hidden = !srcOpen;
+    srcToggle.textContent = srcOpen ? 'Скрыть исходник' : 'Показать исходник';
+  }
+
+  const close = () => { document.removeEventListener('keydown', onKey); overlay.remove(); onChange(); };
+  const onKey = (ev) => { if (ev.key === 'Escape' && document.activeElement !== findInput && document.activeElement !== src && document.activeElement !== urlInput) { ev.preventDefault(); close(); } };
+  document.addEventListener('keydown', onKey);
+
+  const overlay = h('div', { class: 'rsx' },
+    h('div', { class: 'rsx-head' },
+      h('div', { class: 'rsx-title' }, h('b', null, 'Редактор замен'), h('span', { class: 'muted ell' }, ed.name ? ` · ${ed.name}` : '')),
+      h('div', { class: 'rsx-tools' },
+        h('button', { class: 'btn sm primary', onclick: () => addRule() }, '+ Правило'),
+        selBtn,
+        h('span', { class: 'rsx-search' },
+          findInput,
+          h('button', { class: 'icon', title: 'Назад (Shift+Enter)', onclick: () => stepFind(-1) }, '↑'),
+          h('button', { class: 'icon', title: 'Вперёд (Enter)', onclick: () => stepFind(1) }, '↓'),
+          findCount),
+        h('button', { class: 'btn sm', onclick: close }, 'Готово')),
+    ),
+    h('div', { class: 'rsx-body' },
+      h('div', { class: 'rsx-col rsx-left' }, rulesBox),
+      h('div', { class: 'rsx-main' },
+        h('div', { class: 'rsx-srcbar' },
+          urlInput,
+          h('button', { class: 'btn sm', onclick: loadUrl }, 'Загрузить'),
+          fetchStatus,
+          h('span', { class: 'grow' }),
+          srcToggle,
+          h('button', { class: 'btn sm', title: 'Открыть зеркало в проксируемом Chrome со всеми стилями', onclick: openChrome }, 'Открыть в Chrome')),
+        srcWrap,
+        h('div', { class: 'rsx-result-head' },
+          h('span', null, 'Результат'),
+          h('span', { class: 'muted' }, '— красным удалённое, зелёным добавленное'),
+          h('span', { class: 'grow' }),
+          hitsLabel,
+          viewBtns),
+        outPane)));
+
+  document.body.append(overlay);
+  paintViewBtns();
+  paintRules();
+  recompute();
+  setTimeout(() => src.focus(), 0);
 }
 
 function renderMhEditor() {
@@ -199,7 +529,7 @@ function renderMhEditor() {
   paintMethods();
   form.append(...field('Методы', mBox, 'Какие запросы зеркалировать. По умолчанию — любые.'));
 
-  form.append(...field('Замены содержимого', mirReplaceEditor(ed, changed), 'Применяются к текстовым ответам. «Найти / заменить» правит текст (с учётом границ слов); «Подменить путь» загружает один путь вместо другого.', true));
+  form.append(...field('Замены содержимого', mirReplaceEditor(ed, changed), 'Применяются к текстовым ответам. В редакторе (полный экран) можно загрузить исходник по ссылке и увидеть единый diff: красным — удалённое, зелёным — добавленное. «Найти / заменить» по умолчанию ищет подстроку по всему документу без учёта регистра (можно включить целые слова, регистр, регулярку); «Подменить путь» загружает один путь вместо другого.', true));
 
   const adv = h('details', { class: 'sect' }, h('summary', null, 'Дополнительно'),
     h('div', { class: 'form' }, ...field('Приоритет', h('input', { type: 'number', value: ed.priority, oninput: (ev) => { ed.priority = Number(ev.target.value) || 0; changed(); } }), 'Чем выше, тем раньше срабатывает среди всех правил перехвата.')));

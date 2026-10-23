@@ -198,6 +198,45 @@ function lineDiff(aText, bText, opts = {}) {
     return { ops, added, removed };
 }
 
+/**
+ * Word/punctuation token diff of two strings for an inline red(removed)/green(added) view.
+ * Tokens are runs of letters/digits, runs of whitespace, or single other chars — so a one-letter
+ * change shows as one removed + one added token rather than a whole rewritten line.
+ * Trims the common head/tail first, then Myers over the middle. `tooBig` when it blows past maxD.
+ * @returns {{ ops: Array<{t:'='|'-'|'+', text:string}>, added:number, removed:number, tooBig?:boolean }}
+ */
+function tokenDiff(aText, bText, opts = {}) {
+    const maxTokens = opts.maxTokens || 60000;
+    const maxD = opts.maxD || 4000;
+    const re = /[\p{L}\p{N}_]+|\s+|[^\p{L}\p{N}_\s]/gu;
+    const A = String(aText ?? '').match(re) || [];
+    const B = String(bText ?? '').match(re) || [];
+    if (A.length > maxTokens || B.length > maxTokens) return { ops: [], added: 0, removed: 0, tooBig: true };
+    let pre = 0;
+    while (pre < A.length && pre < B.length && A[pre] === B[pre]) pre++;
+    let suf = 0;
+    while (suf < A.length - pre && suf < B.length - pre && A[A.length - 1 - suf] === B[B.length - 1 - suf]) suf++;
+    const a = A.slice(pre, A.length - suf), b = B.slice(pre, B.length - suf);
+    const mid = _myers(a, b, maxD);
+    if (!mid) return { ops: [], added: 0, removed: 0, tooBig: true };
+    // Merge adjacent same-type tokens into one op so the rendered DOM stays small.
+    const ops = [];
+    let added = 0, removed = 0;
+    const push = (t, text) => {
+        const last = ops[ops.length - 1];
+        if (last && last.t === t) last.text += text; else ops.push({ t, text });
+    };
+    for (let i = 0; i < pre; i++) push('=', A[i]);
+    let ia = pre, ib = pre;
+    for (const op of mid) {
+        if (op === '=') { push('=', A[ia]); ia++; ib++; }
+        else if (op === '-') { push('-', A[ia]); ia++; removed++; }
+        else { push('+', B[ib]); ib++; added++; }
+    }
+    for (let i = 0; i < suf; i++) push('=', A[ia + i]);
+    return { ops, added, removed };
+}
+
 /** Myers shortest edit script as a list of '=', '-', '+'; null when the distance exceeds maxD. */
 function _myers(a, b, maxD) {
     const n = a.length, m = b.length;
@@ -269,7 +308,7 @@ function summaryRows(a, b) {
 }
 
 const CupNetDiff = {
-    VOLATILE, pairsOf, diffPairs, orderDiff, cookiePairs, setCookiePairs, queryPairs, jsonDiff, tryJson, lineDiff, hunks, summaryRows,
+    VOLATILE, pairsOf, diffPairs, orderDiff, cookiePairs, setCookiePairs, queryPairs, jsonDiff, tryJson, lineDiff, tokenDiff, hunks, summaryRows,
 };
 if (typeof window !== 'undefined') window.CupNetDiff = CupNetDiff;
 if (typeof module !== 'undefined' && module.exports) module.exports = CupNetDiff;

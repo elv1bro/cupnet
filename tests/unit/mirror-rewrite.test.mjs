@@ -16,6 +16,7 @@ const {
     authority,
     replaceWords,
     replaceWordsInText,
+    replaceSubstring,
     replaceRegex,
     swapHostText,
     swapPathText,
@@ -55,6 +56,29 @@ describe('word replacement', () => {
         const html = '<a data-x="cat">cat</a>';
         const out = replaceWords(Buffer.from(html), 'cat', 'dog', { tags: true });
         expect(out.body.toString()).toBe('<a data-x="dog">dog</a>');
+    });
+});
+
+describe('substring replacement (default word mode)', () => {
+    it('replaces a single letter inside words, case-insensitively', () => {
+        expect(replaceSubstring('Banana', 'a', 'o')).toEqual({ text: 'Bonono', hits: 3 });
+    });
+    it('honours case-sensitivity when asked', () => {
+        expect(replaceSubstring('Aa', 'a', 'o', true)).toEqual({ text: 'Ao', hits: 1 });
+    });
+    it('is the default engine mode: a partial match rewrites every occurrence', () => {
+        const out = replaceWords(Buffer.from('concatenate the cat'), 'cat', 'dog');
+        expect(out.body.toString()).toBe('condogenate the dog');
+        expect(out.hits).toBe(2);
+    });
+    it('whole:true restores boundary-aware matching', () => {
+        const out = replaceWords(Buffer.from('concatenate the cat'), 'cat', 'dog', { whole: true });
+        expect(out.body.toString()).toBe('concatenate the dog');
+        expect(out.hits).toBe(1);
+    });
+    it('cs:true matches case-sensitively through the rule pipeline', () => {
+        const out = replaceWords(Buffer.from('Cat cat'), 'cat', 'dog', { cs: true });
+        expect(out.body.toString()).toBe('Cat dog');
     });
 });
 

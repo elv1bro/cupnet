@@ -29,6 +29,7 @@ const siteMap = require('./site-map');
 const { buildSnapshot } = require('./page-snapshot');
 const { startSearch } = require('./session-search');
 const { runAttack, buildRequestAt } = require('./intruder');
+const mirrorRewrite = require('../mirror-rewrite');
 const dnsPromises = require('dns').promises;
 const net = require('net');
 
@@ -82,6 +83,28 @@ function _readJson(req) {
         });
         req.on('error', reject);
     });
+}
+
+// Live preview for the Mirror replace editor: run the REAL rewrite engine (mirror-rewrite.js, the
+// same code the MITM path uses) over a sample body so the editor shows the exact transformed output,
+// never a drifting client-side re-implementation. The UI computes the red/green diff of source ->
+// output itself. `perRule[i]` stays aligned with the editor's rule list (invalid rows score 0), so
+// each rule's hit badge is correct even while a rule is being typed.
+function mirrorPreview(data) {
+    const source = String(data && data.source != null ? data.source : '');
+    const raw = Array.isArray(data && data.replace) ? data.replace : [];
+    let body = Buffer.from(source, 'utf8');
+    let hits = 0;
+    const perRule = raw.map((rule) => {
+        const norm = mirrorRewrite.normalizeReplaceRules([rule], false)[0];
+        if (!norm || norm.kind === 'url') return 0; // dropped/invalid, or a path-swap (not sample text)
+        const r = mirrorRewrite.replaceWords(body, norm.from, norm.to, norm);
+        body = r.body;
+        hits += r.hits;
+        return r.hits;
+    });
+    const output = body.toString('utf8');
+    return { output, hits, perRule, changed: output !== source };
 }
 
 function _tokenOk(given, expected) {
@@ -676,6 +699,18 @@ async function _toolRoute(app, req, res, u, sessionSource) {
 
     // Mirror audit: before/after trail for `mirror` intercept rules.
     if (p.startsWith('/api/mirror')) {
+        // Live preview for the replace editor (runs the real engine; no audit store needed).
+        if (p === '/api/mirror/preview' && m === 'POST') {
+            const data = (await _readJson(req).catch(() => ({}))) || {};
+            return _send(res, 200, mirrorPreview(data));
+        }
+        // Fetch a real page through the egress worker so the editor can test rules on live HTML.
+        if (p === '/api/mirror/fetch' && m === 'POST') {
+            const data = (await _readJson(req).catch(() => ({}))) || {};
+            const r = await app.mirrorFetch(String(data.url || ''));
+            // Always 200 so the editor can show the error inline instead of a transport failure.
+            return _send(res, 200, r);
+        }
         const audit = app.mirrorAudit;
         if (!audit) return _send(res, 200, { total: 0, items: [] });
         if (p === '/api/mirror' && m === 'GET') {
