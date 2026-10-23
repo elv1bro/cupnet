@@ -4,14 +4,14 @@
 // badge, stCls, fmtSize, cmpShowInTraffic, guard, go, current, shown, …).
 
 const IN_MARK = '§'; // §
-const IN_TYPES = [['sniper', 'Sniper'], ['ram', 'Battering ram'], ['pitchfork', 'Pitchfork'], ['clusterbomb', 'Cluster bomb']];
+const IN_TYPES = [['sniper', 'Снайпер'], ['ram', 'Таран'], ['pitchfork', 'Вилы'], ['clusterbomb', 'Кассетная бомба']];
 const IN_HELP = {
-  sniper: 'One position at a time; the others keep their baseline. Requests = positions × payloads.',
-  ram: 'The same payload goes into every position at once. One payload list.',
-  pitchfork: 'One payload list per position, advanced together; stops at the shortest list.',
-  clusterbomb: 'Every combination of the per-position lists. Requests = the product of their lengths.',
+  sniper: 'По одной позиции за раз; остальные остаются базовыми. Запросов = позиции × payloads.',
+  ram: 'Один и тот же payload подставляется во все позиции сразу. Один список payload.',
+  pitchfork: 'По одному списку payload на позицию, идут параллельно; останавливается на самом коротком списке.',
+  clusterbomb: 'Все сочетания списков по позициям. Запросов = произведение их длин.',
 };
-const IN_COLS = [['i', '#'], ['payload', 'Payload'], ['status', 'Status'], ['length', 'Length'], ['time', 'Time'], ['matched', 'Grep']];
+const IN_COLS = [['i', '#'], ['payload', 'Payload'], ['status', 'Статус'], ['length', 'Длина'], ['time', 'Время'], ['matched', 'Grep']];
 
 const IN = {
   opts: Object.assign({ attackType: 'sniper', urlEncode: false, grep: '', grepRegex: false, concurrency: 8, followRedirects: false }, store.get('in-opts', {})),
@@ -23,6 +23,13 @@ const IN = {
 const inSave = () => store.set('in-opts', IN.opts);
 const inSaveSets = () => store.set('in-sets', IN.sets);
 const inLines = (s) => String(s || '').split('\n').filter((x) => x.length);
+/** Russian plural: pick one/few/many form by count. */
+function inPlural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
 
 function inLoad({ method, url, headers, body }) {
   $('inMethod').value = [...$('inMethod').options].some((o) => o.value === method) ? method : 'GET';
@@ -62,7 +69,7 @@ function inCount(positions, sets) {
 /** Wrap the current selection in the last-focused template field with § … §. */
 function inAddPosition() {
   const el = IN.lastField;
-  if (!el || (el.id !== 'inUrl' && el.id !== 'inBody' && !el.closest('#inHeaders'))) { toast('Click in the URL, a header value or the body, select the text to fuzz, then add a position', 'warn'); return; }
+  if (!el || (el.id !== 'inUrl' && el.id !== 'inBody' && !el.closest('#inHeaders'))) { toast('Кликните в URL, значение заголовка или тело, выделите текст для фаззинга, затем добавьте позицию', 'warn'); return; }
   const s = el.selectionStart ?? el.value.length;
   const e = el.selectionEnd ?? el.value.length;
   el.value = `${el.value.slice(0, s)}${IN_MARK}${el.value.slice(s, e)}${IN_MARK}${el.value.slice(e)}`;
@@ -94,12 +101,12 @@ function renderInPayloads() {
   const perPosition = type === 'pitchfork' || type === 'clusterbomb';
   const blocks = perPosition ? Math.max(1, positions) : 1;
   for (let i = 0; i < blocks; i++) {
-    const label = perPosition ? `Position ${i + 1}` : 'Payloads';
-    const ta = h('textarea', { class: 'mono code in-pl', spellcheck: false, placeholder: 'One payload per line', value: IN.sets[i] || '',
+    const label = perPosition ? `Позиция ${i + 1}` : 'Payloads';
+    const ta = h('textarea', { class: 'mono code in-pl', spellcheck: false, placeholder: 'По одному payload в строке', value: IN.sets[i] || '',
       oninput: (ev) => { IN.sets[i] = ev.target.value; inSaveSets(); inRefresh(); } });
     box.append(h('div', { class: 'in-plblock' }, h('div', { class: 'in-pllabel' }, label, h('span', { class: 'muted' }, ` ${inLines(IN.sets[i]).length}`)), ta));
   }
-  if (perPosition && positions < 1) box.append(h('div', { class: 'hint muted' }, 'Mark positions in the request first.'));
+  if (perPosition && positions < 1) box.append(h('div', { class: 'hint muted' }, 'Сначала отметьте позиции в запросе.'));
 }
 
 /** Update the live count hint and the Start button's enabled state. */
@@ -108,8 +115,8 @@ function inRefresh() {
   const sets = inSetArrays(positions);
   const count = inCount(positions, sets);
   IN.count = count;
-  const parts = [`${positions} position${positions === 1 ? '' : 's'}`];
-  if (count > 0) parts.push(`${count.toLocaleString()} request${count === 1 ? '' : 's'}`);
+  const parts = [`${positions} ${inPlural(positions, 'позиция', 'позиции', 'позиций')}`];
+  if (count > 0) parts.push(`${count.toLocaleString()} ${inPlural(count, 'запрос', 'запроса', 'запросов')}`);
   $('inPlan').textContent = parts.join(' · ');
   $('inPlan').classList.toggle('warn', count > 10000);
   $('inGo').disabled = IN.running || positions < 1 || count < 1 || count > 10000;
@@ -136,7 +143,7 @@ function inRunUi() {
 
 async function inRun() {
   const spec = inSpec();
-  if (!/^https?:\/\//i.test(spec.template.url)) { toast('Enter an http(s) URL', 'warn'); $('inUrl').focus(); return; }
+  if (!/^https?:\/\//i.test(spec.template.url)) { toast('Введите http(s) URL', 'warn'); $('inUrl').focus(); return; }
   inStop();
   const ctl = new AbortController();
   IN.ctl = ctl; IN.spec = spec;
@@ -186,12 +193,12 @@ function inStatus({ end, error, stopped }) {
   const pct = IN.count ? Math.min(100, Math.round((IN.done / IN.count) * 100)) : 0;
   const bar = h('div', { class: 'sr-bar' }, h('i', { style: `width:${pct}%` }));
   const ms = (end ? end.ms : Date.now() - IN.t0);
-  const seconds = ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`;
-  const summary = `${IN.done.toLocaleString()} of ${IN.count.toLocaleString()} · ${seconds}`;
+  const seconds = ms >= 1000 ? `${(ms / 1000).toFixed(1)} с` : `${ms} мс`;
+  const summary = `${IN.done.toLocaleString()} из ${IN.count.toLocaleString()} · ${seconds}`;
   const tags = [];
-  if (IN.matched) tags.push(tag(`${IN.matched} grep hit${IN.matched === 1 ? '' : 's'}`, 'ok'));
-  if (IN.errored) tags.push(tag(`${IN.errored} error${IN.errored === 1 ? '' : 's'}`, 'warn'));
-  if (end && end.stopped) tags.push(tag('stopped', 'warn'));
+  if (IN.matched) tags.push(tag(`${IN.matched} ${inPlural(IN.matched, 'совпадение', 'совпадения', 'совпадений')} grep`, 'ok'));
+  if (IN.errored) tags.push(tag(`${IN.errored} ${inPlural(IN.errored, 'ошибка', 'ошибки', 'ошибок')}`, 'warn'));
+  if (end && end.stopped) tags.push(tag('остановлено', 'warn'));
   append(box, [IN.running ? h('span', { class: 'sr-spin' }) : null, h('span', null, summary), ...tags, h('span', { class: 'spacer' }), bar]);
 }
 
@@ -211,14 +218,14 @@ function inPaint() {
   const frag = document.createDocumentFragment();
   for (const row of rows) {
     const payload = (row.payloads || []).join('  /  ');
-    const tr = h('tr', { class: `in-row${row.matched ? ' hit' : ''}${row.error ? ' err' : ''}`, title: 'Open this request in Traffic',
+    const tr = h('tr', { class: `in-row${row.matched ? ' hit' : ''}${row.error ? ' err' : ''}`, title: 'Открыть этот запрос в Трафике',
       onclick: guard(() => inInspect(row)) },
       h('td', { class: 'num' }, String(row.i + 1)),
-      h('td', { class: 'mono in-pcell' }, payload || h('span', { class: 'muted' }, '(baseline)')),
+      h('td', { class: 'mono in-pcell' }, payload || h('span', { class: 'muted' }, '(базовый)')),
       h('td', null, badge(row.status || 'ERR', stCls(row.status))),
       h('td', { class: 'num mono' }, String(row.length.toLocaleString())),
-      h('td', { class: 'num mono' }, `${row.time} ms`),
-      h('td', null, row.matched ? tag('match', 'ok') : (row.error ? h('span', { class: 'err', title: row.error }, 'error') : '')));
+      h('td', { class: 'num mono' }, `${row.time} мс`),
+      h('td', null, row.matched ? tag('совпадение', 'ok') : (row.error ? h('span', { class: 'err', title: row.error }, 'ошибка') : '')));
     frag.append(tr);
   }
   tb.append(frag);
@@ -226,7 +233,7 @@ function inPaint() {
 
 async function inInspect(row) {
   const res = await post('/api/intruder/replay', { spec: IN.spec, index: row.i, followRedirects: IN.opts.followRedirects });
-  if (!res || !res.seq) { toast(res && res.error ? res.error : 'Could not replay', 'warn'); return; }
+  if (!res || !res.seq) { toast(res && res.error ? res.error : 'Не удалось повторить', 'warn'); return; }
   cmpShowInTraffic({ sid: current, seq: res.seq });
 }
 

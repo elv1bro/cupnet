@@ -14,26 +14,26 @@ function renderDns() {
   const q = $('dnsQ').value.trim().toLowerCase();
   const rows = DN.rules.filter((r) => !q || `${r.host} ${r.ip} ${r.note} ${r.rewriteHost || ''}`.toLowerCase().includes(q));
   const on = DN.rules.filter((r) => r.enabled).length;
-  $('dnsShown').textContent = DN.rules.length ? `${on} on · ${DN.rules.length} rule${DN.rules.length > 1 ? 's' : ''}` : '';
+  $('dnsShown').textContent = DN.rules.length ? `${on} вкл · ${DN.rules.length} правил` : '';
   const tb = clear($('dnsRows'));
   $('dnsEmpty').hidden = rows.length > 0;
-  $('dnsEmpty').textContent = DN.rules.length ? 'No rule matches the filter.' : 'No overrides yet — add one, or import a hosts file.';
+  $('dnsEmpty').textContent = DN.rules.length ? 'Нет правил по фильтру.' : 'Пока нет переопределений — добавьте или импортируйте hosts-файл.';
   for (const r of rows) {
     tb.append(h('tr', { class: r.enabled ? '' : 'off' },
-      h('td', null, h('label', { class: 'switch', title: r.enabled ? 'On — click to turn off' : 'Off — click to turn on' },
+      h('td', null, h('label', { class: 'switch', title: r.enabled ? 'Вкл — нажмите, чтобы выключить' : 'Выкл — нажмите, чтобы включить' },
         h('input', { type: 'checkbox', checked: r.enabled, onchange: guard(async (ev) => dnsApply(await put(`/api/dns/${r.id}`, { enabled: ev.target.checked }))) }), h('span'))),
-      h('td', { title: dnsWild(r.host) ? `${r.host.slice(2)} and every subdomain` : r.host }, h('span', { class: 'mono' }, r.host), dnsWild(r.host) ? [' ', tag('wildcard', 'accent')] : null),
+      h('td', { title: dnsWild(r.host) ? `${r.host.slice(2)} и все поддомены` : r.host }, h('span', { class: 'mono' }, r.host), dnsWild(r.host) ? [' ', tag('маска', 'accent')] : null),
       h('td', null, h('span', { class: 'mono' }, r.ip)),
       h('td', null, r.rewriteHost ? tag(`Host: ${r.rewriteHost}`, 'warn') : null, r.cors ? [' ', tag('CORS')] : null),
       h('td', { class: 'muted', title: r.note || '' }, r.note || ''),
-      h('td', { class: 'r-al', title: r.lastHit ? `last ${new Date(r.lastHit).toLocaleString()}` : 'No requests since start' },
+      h('td', { class: 'r-al', title: r.lastHit ? `последний ${new Date(r.lastHit).toLocaleString()}` : 'Нет запросов с момента запуска' },
         r.hits ? h('b', null, r.hits.toLocaleString()) : h('span', { class: 'faint' }, '0'), r.lastHit ? h('div', { class: 'faint' }, fmtAgo(r.lastHit)) : null),
       h('td', { class: 'r-al' },
-        h('button', { class: 'btn sm', onclick: () => dnsEditor(r) }, 'Edit'),
+        h('button', { class: 'btn sm', onclick: () => dnsEditor(r) }, 'Изменить'),
         h('button', { class: 'btn sm danger', onclick: guard(async () => {
-          if (!(await confirmBox(`Delete the override ${r.host} → ${r.ip}?`, 'Delete', true))) return;
-          dnsApply(await del(`/api/dns/${r.id}`)); toast('Deleted', 'ok');
-        }) }, 'Delete'))));
+          if (!(await confirmBox(`Удалить переопределение ${r.host} → ${r.ip}?`, 'Удалить', true))) return;
+          dnsApply(await del(`/api/dns/${r.id}`)); toast('Удалено', 'ok');
+        }) }, 'Удалить'))));
   }
   renderDnsActivity();
 }
@@ -49,7 +49,7 @@ function renderDnsActivity() {
       h('td', null, a.status ? h('span', { class: `st ${stCls(a.status)}` }, a.status) : h('span', { class: 'st sf' }, 'ERR')),
       h('td', { class: 'mono', title: `${a.host} → ${a.ip}` }, a.host, h('span', { class: 'faint' }, ' → '), a.ip),
       h('td', { class: 'mono muted', title: a.url }, path),
-      h('td', { class: 'r-al' }, a.seq ? h('button', { class: 'btn sm', title: 'Show this request in Traffic', onclick: () => cmpShowInTraffic({ sid: current, seq: a.seq }) }, `#${a.seq}`) : null)));
+      h('td', { class: 'r-al' }, a.seq ? h('button', { class: 'btn sm', title: 'Показать этот запрос в Трафике', onclick: () => cmpShowInTraffic({ sid: current, seq: a.seq }) }, `#${a.seq}`) : null)));
   }
 }
 
@@ -60,20 +60,20 @@ function dnsEditor(r) {
   const inp = (key, ph, extra = {}) => h('input', { type: 'text', class: 'mono', value: v[key], placeholder: ph, spellcheck: false, oninput: (ev) => { v[key] = ev.target.value; }, ...extra });
   const body = h('div', null,
     h('div', { class: 'form' },
-      ...field('Host', inp('host', 'api.example.com or *.example.com'), '*.example.com covers example.com and every subdomain'),
-      ...field('IP', inp('ip', '203.0.113.10 or 2001:db8::1'), 'The TCP connection goes here. URL, SNI and Host stay the real host, so HTTPS and HTTP/2 work as usual.'),
-      ...field('Rewrite Host', inp('rewriteHost', 'optional — e.g. staging.example.com'), 'Send another Host header (virtual hosts on the same IP). Uses HTTP/1.1 for these requests.'),
-      ...field('Options', h('div', { class: 'inline' },
-        sw(v.cors, 'Add permissive CORS headers', (x) => { v.cors = x; }),
-        sw(v.enabled, 'Enabled', (x) => { v.enabled = x; }))),
-      ...field('Note', inp('note', 'optional', { class: '' }))),
+      ...field('Хост', inp('host', 'api.example.com или *.example.com'), '*.example.com включает example.com и все поддомены'),
+      ...field('IP', inp('ip', '203.0.113.10 или 2001:db8::1'), 'Сюда идёт TCP-соединение. URL, SNI и Host остаются настоящим хостом, поэтому HTTPS и HTTP/2 работают как обычно.'),
+      ...field('Переопределить Host', inp('rewriteHost', 'необязательно — напр. staging.example.com'), 'Отправлять другой заголовок Host (виртуальные хосты на одном IP). Для таких запросов используется HTTP/1.1.'),
+      ...field('Опции', h('div', { class: 'inline' },
+        sw(v.cors, 'Добавлять разрешающие заголовки CORS', (x) => { v.cors = x; }),
+        sw(v.enabled, 'Включено', (x) => { v.enabled = x; }))),
+      ...field('Заметка', inp('note', 'необязательно', { class: '' }))),
     err);
-  modal(isNew ? 'New DNS override' : `Edit ${r.host}`, body, [
-    { label: 'Cancel' },
-    { label: isNew ? 'Add' : 'Save', cls: 'primary', fn: async () => {
+  modal(isNew ? 'Новое переопределение DNS' : `Изменить ${r.host}`, body, [
+    { label: 'Отмена' },
+    { label: isNew ? 'Добавить' : 'Сохранить', cls: 'primary', fn: async () => {
       try {
         dnsApply(isNew ? await post('/api/dns', v) : await put(`/api/dns/${r.id}`, v));
-        toast(isNew ? `${v.host.trim()} → ${v.ip.trim()} added — applies to new connections` : 'Saved', 'ok');
+        toast(isNew ? `${v.host.trim()} → ${v.ip.trim()} добавлено — применяется к новым соединениям` : 'Сохранено', 'ok');
         return true;
       } catch (e) { err.textContent = e.message; err.hidden = false; return false; }
     } },
@@ -81,19 +81,19 @@ function dnsEditor(r) {
 }
 
 function dnsImport() {
-  const ta = h('textarea', { class: 'mono code', spellcheck: false, placeholder: '# hosts-file format\n203.0.113.10  api.example.com  # staging API\n203.0.113.11  *.cdn.example.com\n# off: 203.0.113.12  old.example.com' });
+  const ta = h('textarea', { class: 'mono code', spellcheck: false, placeholder: '# формат hosts-файла\n203.0.113.10  api.example.com  # staging API\n203.0.113.11  *.cdn.example.com\n# off: 203.0.113.12  old.example.com' });
   let replace = false;
   const file = h('input', { type: 'file', accept: '.txt,.hosts,text/plain', onchange: async (ev) => { const f = ev.target.files[0]; if (f) ta.value = await f.text(); } });
-  modal('Import DNS overrides', h('div', null,
-    h('p', { class: 'muted' }, 'Paste a hosts file, or pick one. A trailing # comment becomes the note, lines starting with # off: import as disabled rules; localhost is skipped.'),
+  modal('Импорт переопределений DNS', h('div', null,
+    h('p', { class: 'muted' }, 'Вставьте hosts-файл или выберите его. Завершающий # комментарий становится заметкой, строки, начинающиеся с # off:, импортируются как выключенные правила; localhost пропускается.'),
     h('div', { class: 'ck-file' }, file), ta,
-    sw(false, 'Replace all current rules', (x) => { replace = x; })), [
-    { label: 'Cancel' },
-    { label: 'Import', cls: 'primary', fn: async () => {
-      if (replace && DN.rules.length && !(await confirmBox(`Replace all ${DN.rules.length} rules with the imported ones?`, 'Replace', true))) return false;
+    sw(false, 'Заменить все текущие правила', (x) => { replace = x; })), [
+    { label: 'Отмена' },
+    { label: 'Импорт', cls: 'primary', fn: async () => {
+      if (replace && DN.rules.length && !(await confirmBox(`Заменить все ${DN.rules.length} правил импортированными?`, 'Заменить', true))) return false;
       const r = await post('/api/dns/import', { text: ta.value, replace });
       dnsApply(r);
-      toast(`Imported: ${r.added} added, ${r.updated} updated${r.skipped ? `, ${r.skipped} skipped` : ''}`, r.added || r.updated ? 'ok' : 'warn');
+      toast(`Импортировано: ${r.added} добавлено, ${r.updated} обновлено${r.skipped ? `, ${r.skipped} пропущено` : ''}`, r.added || r.updated ? 'ok' : 'warn');
       return true;
     } },
   ]);
@@ -103,15 +103,15 @@ async function dnsResolve() {
   const host = $('dnsResHost').value.trim();
   if (!host) return;
   const out = clear($('dnsResOut'));
-  out.append(h('span', { class: 'muted' }, 'Resolving…'));
+  out.append(h('span', { class: 'muted' }, 'Разрешение…'));
   const r = await busy($('dnsResBtn'), '…', () => post('/api/dns/resolve', { host }));
   clear(out);
-  const sys = r.error ? h('span', { class: 'err' }, r.error) : r.addresses.length ? r.addresses.map((a) => [tag(`IPv${a.family}`), ' ', h('span', { class: 'mono' }, a.address), ' ']) : h('span', { class: 'muted' }, 'no addresses');
+  const sys = r.error ? h('span', { class: 'err' }, r.error) : r.addresses.length ? r.addresses.map((a) => [tag(`IPv${a.family}`), ' ', h('span', { class: 'mono' }, a.address), ' ']) : h('span', { class: 'muted' }, 'нет адресов');
   out.append(h('div', { class: 'kv dns-kv' },
-    h('div', { class: 'k' }, 'System resolver'), h('div', null, sys),
-    h('div', { class: 'k' }, 'CupNet connects to'), h('div', null, r.override
-      ? [h('b', { class: 'mono ok' }, r.override.ip), h('span', { class: 'muted' }, ` — override ${r.override.host}`)]
-      : h('span', { class: 'muted' }, 'the system answer (no enabled override)'))));
+    h('div', { class: 'k' }, 'Системный резолвер'), h('div', null, sys),
+    h('div', { class: 'k' }, 'CupNet подключается к'), h('div', null, r.override
+      ? [h('b', { class: 'mono ok' }, r.override.ip), h('span', { class: 'muted' }, ` — переопределение ${r.override.host}`)]
+      : h('span', { class: 'muted' }, 'системный ответ (нет включённого переопределения)'))));
 }
 
 $('dnsQ').addEventListener('input', () => renderDns());
@@ -121,7 +121,7 @@ $('dnsExport').addEventListener('click', guard(async () => download((await apiBl
 $('dnsResBtn').addEventListener('click', guard(dnsResolve));
 $('dnsResHost').addEventListener('keydown', (ev) => { if (ev.key === 'Enter') guard(dnsResolve)(); });
 $('dnsActRefresh').addEventListener('click', guard(loadDns));
-$('dnsActClear').addEventListener('click', guard(async () => { dnsApply(await del('/api/dns/activity')); toast('Activity and hit counters cleared', 'ok'); }));
+$('dnsActClear').addEventListener('click', guard(async () => { dnsApply(await del('/api/dns/activity')); toast('Журнал активности и счётчики сброшены', 'ok'); }));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Markdown (notes): a small, safe renderer — DOM nodes only, links limited to http(s) and cupnet:req refs
@@ -129,7 +129,7 @@ $('dnsActClear').addEventListener('click', guard(async () => { dnsApply(await de
 const MD_INLINE = /(`[^`\n]+`)|(\|\|[^|\n]+\|\|)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(\*[^*\s][^*\n]*\*|_[^_\s][^_\n]*_)|(~~[^~\n]+~~)|(==[^=\n]+==)|\[([^\]\n]+)\]\(([^)\s]+)\)|(cupnet:req\/[\w-]+\/\d+)|(https?:\/\/[^\s<>()\]]+[^\s<>()\].,;:!?'"])/g;
 /** Same mask for every secret, so its length is not given away. */
 const MD_MASK = '••••••••';
-const MD_CALLOUTS = { note: 'Note', tip: 'Tip', important: 'Important', warning: 'Warning', caution: 'Caution', danger: 'Danger' };
+const MD_CALLOUTS = { note: 'Заметка', tip: 'Совет', important: 'Важно', warning: 'Предупреждение', caution: 'Осторожно', danger: 'Опасно' };
 /** Stroke icon, 16×16 grid (same look as the nav icons). */
 function svgIcon(...paths) {
   const NS = 'http://www.w3.org/2000/svg';
@@ -148,26 +148,26 @@ function mdSecret(value, block = false) {
   const toggle = (ev) => {
     ev.preventDefault(); ev.stopPropagation();
     shown = !shown; val.textContent = shown ? value : MD_MASK; wrap.classList.toggle('shown', shown);
-    eye.title = shown ? 'Hide' : 'Show';
-    if (block) eye.lastChild.textContent = shown ? 'Hide' : 'Show';
+    eye.title = shown ? 'Скрыть' : 'Показать';
+    if (block) eye.lastChild.textContent = shown ? 'Скрыть' : 'Показать';
   };
-  const eye = h('button', { type: 'button', class: 'md-sb', title: 'Show', onclick: toggle }, svgIcon(...ICON_EYE), block ? h('span', null, 'Show') : null);
-  const cp = h('button', { type: 'button', class: 'md-sb', title: 'Copy without showing', onclick: (ev) => { ev.preventDefault(); ev.stopPropagation(); copy(value, 'Secret copied'); } }, svgIcon(...ICON_COPY), block ? h('span', null, 'Copy') : null);
+  const eye = h('button', { type: 'button', class: 'md-sb', title: 'Показать', onclick: toggle }, svgIcon(...ICON_EYE), block ? h('span', null, 'Показать') : null);
+  const cp = h('button', { type: 'button', class: 'md-sb', title: 'Копировать не показывая', onclick: (ev) => { ev.preventDefault(); ev.stopPropagation(); copy(value, 'Секрет скопирован'); } }, svgIcon(...ICON_COPY), block ? h('span', null, 'Копировать') : null);
   const wrap = block
-    ? h('div', { class: 'md-secret block' }, h('div', { class: 'md-bh' }, svgIcon(...ICON_LOCK), h('span', null, 'Secret'), h('span', { class: 'spacer' }), eye, cp), val)
-    : h('span', { class: 'md-secret', title: 'Secret' }, svgIcon(...ICON_LOCK), val, eye, cp);
+    ? h('div', { class: 'md-secret block' }, h('div', { class: 'md-bh' }, svgIcon(...ICON_LOCK), h('span', null, 'Секрет'), h('span', { class: 'spacer' }), eye, cp), val)
+    : h('span', { class: 'md-secret', title: 'Секрет' }, svgIcon(...ICON_LOCK), val, eye, cp);
   return wrap;
 }
 function mdCode(code, lang) {
   return h('div', { class: 'md-code' },
     h('div', { class: 'md-bh' }, h('span', { class: 'mono' }, lang || 'code'), h('span', { class: 'spacer' }),
-      h('button', { type: 'button', class: 'md-sb', title: 'Copy code', onclick: (ev) => { ev.preventDefault(); copy(code, 'Code copied'); } }, svgIcon(...ICON_COPY), h('span', null, 'Copy'))),
+      h('button', { type: 'button', class: 'md-sb', title: 'Копировать код', onclick: (ev) => { ev.preventDefault(); copy(code, 'Код скопирован'); } }, svgIcon(...ICON_COPY), h('span', null, 'Копировать'))),
     h('pre', { class: 'codebox' }, code));
 }
 function mdRef(ref, label) {
   const m = /^cupnet:req\/([\w-]+)\/(\d+)$/.exec(ref);
   if (!m) return label;
-  return h('a', { href: '#', class: 'md-ref', title: `Request #${m[2]} of session ${m[1]} — show in Traffic`, onclick: (ev) => { ev.preventDefault(); cmpShowInTraffic({ sid: m[1], seq: Number(m[2]) }); } }, label || `#${m[2]}`);
+  return h('a', { href: '#', class: 'md-ref', title: `Запрос #${m[2]} сессии ${m[1]} — показать в Трафике`, onclick: (ev) => { ev.preventDefault(); cmpShowInTraffic({ sid: m[1], seq: Number(m[2]) }); } }, label || `#${m[2]}`);
 }
 function mdLink(href, label) {
   if (/^cupnet:req\//.test(href)) return mdRef(href, label);
@@ -301,23 +301,23 @@ function renderNtList() {
   const sites = [...new Set(NT.notes.map((n) => n.site).filter(Boolean))].sort();
   const sel = $('ntSite');
   const keep = NT.site;
-  append(clear(sel), [h('option', { value: '' }, 'All sites'), h('option', { value: '-' }, 'No site'), sites.map((s) => h('option', { value: s }, s))]);
+  append(clear(sel), [h('option', { value: '' }, 'Все сайты'), h('option', { value: '-' }, 'Без сайта'), sites.map((s) => h('option', { value: s }, s))]);
   sel.value = keep === '-' || sites.includes(keep) ? keep : '';
   NT.site = sel.value;
   const chips = clear($('ntTags'));
   if (NT.tags.length) {
-    chips.append(h('button', { class: `chip${NT.tag ? '' : ' on'}`, onclick: () => { NT.tag = ''; renderNtList(); } }, 'all'));
+    chips.append(h('button', { class: `chip${NT.tag ? '' : ' on'}`, onclick: () => { NT.tag = ''; renderNtList(); } }, 'все'));
     for (const t of NT.tags.slice(0, 40)) chips.append(h('button', { class: `chip${NT.tag === t.tag ? ' on' : ''}`, onclick: () => { NT.tag = NT.tag === t.tag ? '' : t.tag; renderNtList(); } }, `#${t.tag}`, h('b', null, t.count)));
   }
   chips.hidden = !NT.tags.length;
   const list = ntFiltered();
   const box = clear($('ntList'));
-  if (!list.length) box.append(h('div', { class: 'empty' }, NT.notes.length ? 'No note matches.' : 'No notes yet.'));
+  if (!list.length) box.append(h('div', { class: 'empty' }, NT.notes.length ? 'Нет заметок по фильтру.' : 'Пока нет заметок.'));
   for (const n of list) {
     const first = mdMaskSecrets(n.body).split('\n').find((l) => l.trim() && !/^#{1,6}\s/.test(l) && !/^\s*(```|~~~)/.test(l)) || '';
     box.append(h('div', { class: `prow nt-prow${n.id === NT.sel ? ' sel' : ''}`, onclick: guard(async () => { await ntFlush(); NT.sel = n.id; store.set('nt-sel', n.id); renderNotes(true); }) },
       h('div', { class: 'ell' },
-        h('div', { class: 'title' }, n.pinned ? h('span', { class: 'nt-pin', title: 'Pinned' }, '★') : null, h('b', null, n.title || 'Untitled')),
+        h('div', { class: 'title' }, n.pinned ? h('span', { class: 'nt-pin', title: 'Закреплено' }, '★') : null, h('b', null, n.title || 'Без названия')),
         h('div', { class: 'nt-snip ell' }, first.replace(/[#*_`>[\]=]|\[!\w+\]/g, '').slice(0, 160)),
         h('div', { class: 'meta' }, n.site ? h('span', { class: 'mono' }, n.site) : null, n.tags.slice(0, 4).map((t) => h('span', { class: 'faint' }, `#${t}`)), h('span', { class: 'faint' }, fmtAgo(n.updated)))),
       null));
@@ -335,24 +335,24 @@ async function ntFlush() {
   const { id, data } = NT.pending;
   NT.pending = null;
   clearTimeout(_deb.get('ntsave'));
-  NT.saving = true; ntSetState('Saving…');
+  NT.saving = true; ntSetState('Сохранение…');
   try {
     const n = await put(`/api/notes/${id}`, data);
     const i = NT.notes.findIndex((x) => x.id === id);
     if (i >= 0) NT.notes[i] = n;
     NT.notes.sort((a, b) => (b.pinned - a.pinned) || (b.updated - a.updated));
     ntRetag();
-    if (NT.sel === id) { ntSetState(`Saved ${new Date(n.updated).toLocaleTimeString([], { hour12: false })}`); const si = $('ntSiteIn'); if (si) si.classList.remove('bad'); }
+    if (NT.sel === id) { ntSetState(`Сохранено ${new Date(n.updated).toLocaleTimeString([], { hour12: false })}`); const si = $('ntSiteIn'); if (si) si.classList.remove('bad'); }
     if (PAGE === 'notes') renderNtList();
   } catch (e) {
     if (NT.sel === id) { ntSetState(e.message, 'err'); if (/site/i.test(e.message) && $('ntSiteIn')) $('ntSiteIn').classList.add('bad'); }
-    else toast(`Note not saved: ${e.message}`, 'err');
+    else toast(`Заметка не сохранена: ${e.message}`, 'err');
   } finally { NT.saving = false; }
 }
 function ntChanged() {
   if (!NT.sel) return;
   NT.pending = { id: NT.sel, data: ntPayload() };
-  ntSetState('Edited');
+  ntSetState('Изменено');
   debounce('ntsave', 700, () => guard(ntFlush)());
   if (NT.mode !== 'edit') debounce('ntprev', 150, ntPreview);
 }
@@ -370,18 +370,18 @@ async function ntNew(o = {}) {
 }
 function ntMd(n) {
   const meta = [n.site ? `site: ${n.site}` : '', n.tags.length ? `tags: ${n.tags.map((t) => `#${t}`).join(' ')}` : ''].filter(Boolean).join(' · ');
-  return `# ${n.title || 'Untitled'}\n\n${meta ? `_${meta}_\n\n` : ''}${n.body}\n`;
+  return `# ${n.title || 'Без названия'}\n\n${meta ? `_${meta}_\n\n` : ''}${n.body}\n`;
 }
 const ntFileName = (n) => `${(n.title || 'note').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'note'}.md`;
 
 // ── Notes editor: formatting toolbar, shortcuts, templates ──
 /** Built-in templates. {{selection}} {{cursor}} {{date}} {{time}} {{site}} are filled on insert. */
 const NT_BUILTIN = [
-  { id: 'b-endpoint', name: 'Endpoint', body: '## {{cursor}}GET /path\n\n- **Auth:** \n- **Params:** \n- **Response:** \n- **Notes:** {{selection}}\n' },
-  { id: 'b-creds', name: 'Credentials', body: '### {{cursor}}Account\n\n- **Login:** \n- **Password:** ||password||\n\n```secret\n{{selection}}\n```\n' },
-  { id: 'b-finding', name: 'Finding', body: '## {{cursor}}Finding\n\n> [!WARNING] Impact\n> {{selection}}\n\n**Steps**\n1. \n\n**Expected:** \n**Actual:** \n\n_{{date}} · {{site}}_\n' },
-  { id: 'b-check', name: 'Checklist', body: '### Checklist — {{site}}\n\n- [ ] {{cursor}}Login / logout\n- [ ] Rate limits\n- [ ] Cookies and storage\n- [ ] Error responses\n' },
-  { id: 'b-log', name: 'Log entry', body: '**{{date}} {{time}}** — {{cursor}}{{selection}}\n' },
+  { id: 'b-endpoint', name: 'Эндпоинт', body: '## {{cursor}}GET /path\n\n- **Авторизация:** \n- **Параметры:** \n- **Ответ:** \n- **Заметки:** {{selection}}\n' },
+  { id: 'b-creds', name: 'Учётные данные', body: '### {{cursor}}Аккаунт\n\n- **Логин:** \n- **Пароль:** ||пароль||\n\n```secret\n{{selection}}\n```\n' },
+  { id: 'b-finding', name: 'Находка', body: '## {{cursor}}Находка\n\n> [!WARNING] Влияние\n> {{selection}}\n\n**Шаги**\n1. \n\n**Ожидается:** \n**Фактически:** \n\n_{{date}} · {{site}}_\n' },
+  { id: 'b-check', name: 'Чек-лист', body: '### Чек-лист — {{site}}\n\n- [ ] {{cursor}}Вход / выход\n- [ ] Ограничения частоты\n- [ ] Cookies и хранилище\n- [ ] Ответы с ошибками\n' },
+  { id: 'b-log', name: 'Запись журнала', body: '**{{date}} {{time}}** — {{cursor}}{{selection}}\n' },
 ];
 NT.tpls = null;
 const ntTpls = async () => { if (!NT.tpls) NT.tpls = await api('/api/notes/templates'); return NT.tpls; };
@@ -566,26 +566,26 @@ async function ntTemplatesMenu(anchor) {
   const ta = ntTa();
   const hasSel = !!ta && ta.selectionStart !== ta.selectionEnd;
   ntMenu(anchor, [
-    { group: 'Templates' },
+    { group: 'Шаблоны' },
     ...NT_BUILTIN.map((t) => ({ label: t.name, fn: () => ntInsertTemplate(t) })),
-    ...(mine.length ? [{ group: 'My templates' }, ...mine.map((t) => ({ label: t.name, hint: `${t.body.split('\n').length} lines`, fn: () => ntInsertTemplate(t) }))] : []),
+    ...(mine.length ? [{ group: 'Мои шаблоны' }, ...mine.map((t) => ({ label: t.name, hint: `${t.body.split('\n').length} строк`, fn: () => ntInsertTemplate(t) }))] : []),
     null,
-    { label: hasSel ? 'Save selection as template…' : 'New template…', fn: () => ntTemplateModal(null, hasSel ? ta.value.slice(ta.selectionStart, ta.selectionEnd) : '') },
-    ...(mine.length ? [{ label: 'Manage templates…', fn: ntManageTemplates }] : []),
+    { label: hasSel ? 'Сохранить выделение как шаблон…' : 'Новый шаблон…', fn: () => ntTemplateModal(null, hasSel ? ta.value.slice(ta.selectionStart, ta.selectionEnd) : '') },
+    ...(mine.length ? [{ label: 'Управление шаблонами…', fn: ntManageTemplates }] : []),
   ]);
 }
 function ntTemplateModal(t, body = '') {
-  const name = h('input', { type: 'text', value: t?.name || '', placeholder: 'Bug report', maxlength: 80 });
+  const name = h('input', { type: 'text', value: t?.name || '', placeholder: 'Баг-репорт', maxlength: 80 });
   const ta = h('textarea', { class: 'mono code short', spellcheck: false, value: t?.body ?? body });
-  modal(t ? 'Edit template' : 'New template', h('div', { class: 'form' },
-    ...field('Name', name),
-    ...field('Text', ta, 'Markdown. {{cursor}} places the caret; {{selection}}, {{date}}, {{time}} and {{site}} are filled in on insert.', true)), [
-    { label: 'Cancel' },
-    { label: t ? 'Save' : 'Create', cls: 'primary', fn: async () => {
+  modal(t ? 'Изменить шаблон' : 'Новый шаблон', h('div', { class: 'form' },
+    ...field('Название', name),
+    ...field('Текст', ta, 'Markdown. {{cursor}} ставит курсор; {{selection}}, {{date}}, {{time}} и {{site}} подставляются при вставке.', true)), [
+    { label: 'Отмена' },
+    { label: t ? 'Сохранить' : 'Создать', cls: 'primary', fn: async () => {
       const data = { name: name.value, body: ta.value };
       if (t) await put(`/api/notes/templates/${t.id}`, data); else await post('/api/notes/templates', data);
       NT.tpls = null;
-      toast(t ? 'Template saved' : `Template "${data.name.trim()}" created`, 'ok');
+      toast(t ? 'Шаблон сохранён' : `Шаблон «${data.name.trim()}» создан`, 'ok');
       return true;
     } },
   ]);
@@ -595,19 +595,19 @@ async function ntManageTemplates() {
   const body = h('div', { class: 'nt-tpl-list' });
   const draw = () => {
     clear(body);
-    if (!NT.tpls.length) body.append(h('div', { class: 'empty' }, 'No templates of your own yet.'));
+    if (!NT.tpls.length) body.append(h('div', { class: 'empty' }, 'Пока нет своих шаблонов.'));
     for (const t of NT.tpls) {
       body.append(h('div', { class: 'nt-tpl-row' },
         h('div', { class: 'ell' }, h('b', null, t.name), h('div', { class: 'faint ell mono' }, mdMaskSecrets(t.body).split('\n').find((l) => l.trim()) || '')),
-        h('button', { class: 'btn sm', onclick: () => ntTemplateModal(t) }, 'Edit'),
+        h('button', { class: 'btn sm', onclick: () => ntTemplateModal(t) }, 'Изменить'),
         h('button', { class: 'btn sm danger', onclick: guard(async () => {
           await del(`/api/notes/templates/${t.id}`);
           NT.tpls = NT.tpls.filter((x) => x.id !== t.id); draw();
-        }) }, 'Delete')));
+        }) }, 'Удалить')));
     }
   };
   NT.tpls = mine; draw();
-  modal('My templates', body, [{ label: 'Close' }]);
+  modal('Мои шаблоны', body, [{ label: 'Закрыть' }]);
 }
 const NT_KEYS = { b: () => ntWrap('**'), i: () => ntWrap('_'), k: ntLink, e: () => ntWrap('`', '`', 'code'), 'shift+h': () => ntWrap('==', '==', 'highlight'), 'shift+x': ntSecret, 'shift+7': () => ntList('ol'), 'shift+8': () => ntList('ul'), 'shift+9': () => ntList('task') };
 function ntToolbar() {
@@ -618,26 +618,26 @@ function ntToolbar() {
     const b = tb(label, title, () => ntMenu(b, items()), 'menu');
     return b;
   };
-  const tpl = tb('Templates', 'Insert a template · save the selection as a template', () => guard(() => ntTemplatesMenu(tpl))(), 'menu tpl');
+  const tpl = tb('Шаблоны', 'Вставить шаблон · сохранить выделение как шаблон', () => guard(() => ntTemplatesMenu(tpl))(), 'menu tpl');
   return h('div', { class: 'nt-tools', role: 'toolbar' },
-    menuBtn('Heading', 'Heading', () => [1, 2, 3, 4].map((n) => ({ label: `${'#'.repeat(n)} Heading ${n}`, cls: `nt-mh${n}`, fn: () => ntHeading(n) }))),
+    menuBtn('Заголовок', 'Заголовок', () => [1, 2, 3, 4].map((n) => ({ label: `${'#'.repeat(n)} Заголовок ${n}`, cls: `nt-mh${n}`, fn: () => ntHeading(n) }))),
     sep(),
-    tb(h('b', null, 'B'), 'Bold (⌘B)', () => ntWrap('**')),
-    tb(h('i', null, 'I'), 'Italic (⌘I)', () => ntWrap('_')),
-    tb(h('s', null, 'S'), 'Strikethrough', () => ntWrap('~~')),
-    tb(h('mark', null, 'H'), 'Highlight (⌘⇧H)', () => ntWrap('==', '==', 'highlight')),
-    tb(h('code', null, '`c`'), 'Inline code (⌘E)', () => ntWrap('`', '`', 'code')),
-    tb('Link', 'Link (⌘K)', ntLink),
+    tb(h('b', null, 'B'), 'Жирный (⌘B)', () => ntWrap('**')),
+    tb(h('i', null, 'I'), 'Курсив (⌘I)', () => ntWrap('_')),
+    tb(h('s', null, 'S'), 'Зачёркнутый', () => ntWrap('~~')),
+    tb(h('mark', null, 'H'), 'Выделение (⌘⇧H)', () => ntWrap('==', '==', 'highlight')),
+    tb(h('code', null, '`c`'), 'Строчный код (⌘E)', () => ntWrap('`', '`', 'code')),
+    tb('Ссылка', 'Ссылка (⌘K)', ntLink),
     sep(),
-    tb('{ } Code', 'Code block', () => ntBlock('```', '```')),
-    tb([svgIcon(...ICON_LOCK), h('span', null, 'Secret')], 'Secret (⌘⇧X) — masked as •••••••• in the preview; one line → inline, several → block', ntSecret, 'secret'),
-    menuBtn('Callout', 'Callout box', () => Object.entries(MD_CALLOUTS).map(([k, label]) => ({ label, cls: `nt-mc md-${k}`, fn: () => ntCallout(k) }))),
+    tb('{ } Код', 'Блок кода', () => ntBlock('```', '```')),
+    tb([svgIcon(...ICON_LOCK), h('span', null, 'Секрет')], 'Секрет (⌘⇧X) — маскируется как •••••••• в предпросмотре; одна строка → строчный, несколько → блок', ntSecret, 'secret'),
+    menuBtn('Выноска', 'Блок-выноска', () => Object.entries(MD_CALLOUTS).map(([k, label]) => ({ label, cls: `nt-mc md-${k}`, fn: () => ntCallout(k) }))),
     sep(),
-    tb('• List', 'Bulleted list (⌘⇧8)', () => ntList('ul')),
-    tb('1. List', 'Numbered list (⌘⇧7)', () => ntList('ol')),
-    tb('☐ Tasks', 'Task list (⌘⇧9)', () => ntList('task')),
-    tb('❝', 'Quote', ntQuote),
-    tb('—', 'Horizontal rule', ntRule),
+    tb('• Список', 'Маркированный список (⌘⇧8)', () => ntList('ul')),
+    tb('1. Список', 'Нумерованный список (⌘⇧7)', () => ntList('ol')),
+    tb('☐ Задачи', 'Список задач (⌘⇧9)', () => ntList('task')),
+    tb('❝', 'Цитата', ntQuote),
+    tb('—', 'Горизонтальная линия', ntRule),
     h('span', { class: 'spacer' }),
     tpl);
 }
@@ -647,34 +647,34 @@ function renderNtEditor() {
   const n = ntById(NT.sel);
   if (!n) {
     box.append(h('div', { class: 'empty' },
-      h('p', null, h('b', null, 'Notes for the sites you work on.')),
-      h('p', { class: 'muted' }, 'Markdown, tags and a site per note. Reference a request with cupnet:req/<session>/<#> — or use Add to note in Traffic — and it links back to the request.'),
-      h('button', { class: 'btn primary', onclick: guard(() => ntNew()) }, '+ New note')));
+      h('p', null, h('b', null, 'Заметки по сайтам, с которыми вы работаете.')),
+      h('p', { class: 'muted' }, 'Markdown, теги и сайт на заметку. Сошлитесь на запрос через cupnet:req/<session>/<#> — или через «Добавить в заметку» в Трафике — и получите ссылку на запрос.'),
+      h('button', { class: 'btn primary', onclick: guard(() => ntNew()) }, '+ Новая заметка')));
     return;
   }
-  const title = h('input', { type: 'text', id: 'ntTitle', class: 'nt-title', value: n.title, placeholder: 'Untitled', oninput: ntChanged });
-  const pinned = h('button', { class: `btn sm${n.pinned ? ' on' : ''}`, title: 'Pin to the top of the list', onclick: guard(async () => {
+  const title = h('input', { type: 'text', id: 'ntTitle', class: 'nt-title', value: n.title, placeholder: 'Без названия', oninput: ntChanged });
+  const pinned = h('button', { class: `btn sm${n.pinned ? ' on' : ''}`, title: 'Закрепить вверху списка', onclick: guard(async () => {
     await ntFlush();
     const u = await put(`/api/notes/${n.id}`, { pinned: !n.pinned });
     Object.assign(n, u); NT.notes.sort((a, b) => (b.pinned - a.pinned) || (b.updated - a.updated));
     renderNotes(true);
-  }) }, n.pinned ? '★ Pinned' : '☆ Pin');
-  box.append(h('div', { class: 'nt-head' }, title, h('span', { id: 'ntState', class: 'faint' }, `Saved ${fmtAgo(n.updated)}`), pinned,
-    h('button', { class: 'btn sm', title: 'Download as Markdown', onclick: guard(async () => { await ntFlush(); download(new Blob([ntMd(ntById(n.id) || n)], { type: 'text/markdown' }), ntFileName(n)); }) }, '.md'),
+  }) }, n.pinned ? '★ Закреплено' : '☆ Закрепить');
+  box.append(h('div', { class: 'nt-head' }, title, h('span', { id: 'ntState', class: 'faint' }, `Сохранено ${fmtAgo(n.updated)}`), pinned,
+    h('button', { class: 'btn sm', title: 'Скачать как Markdown', onclick: guard(async () => { await ntFlush(); download(new Blob([ntMd(ntById(n.id) || n)], { type: 'text/markdown' }), ntFileName(n)); }) }, '.md'),
     h('button', { class: 'btn sm danger', onclick: guard(async () => {
-      if (!(await confirmBox(`Delete the note "${n.title || 'Untitled'}"?`, 'Delete', true))) return;
+      if (!(await confirmBox(`Удалить заметку «${n.title || 'Без названия'}»?`, 'Удалить', true))) return;
       NT.pending = null;
       await del(`/api/notes/${n.id}`);
       NT.notes = NT.notes.filter((x) => x.id !== n.id); ntRetag();
       NT.sel = NT.notes[0]?.id || null; store.set('nt-sel', NT.sel);
-      renderNotes(true); toast('Note deleted', 'ok');
-    }) }, 'Delete')));
+      renderNotes(true); toast('Заметка удалена', 'ok');
+    }) }, 'Удалить')));
   box.append(h('div', { class: 'nt-meta' },
-    h('label', { class: 'nt-f' }, h('span', { class: 'muted' }, 'Site'), h('input', { type: 'text', id: 'ntSiteIn', class: 'mono', value: n.site, placeholder: 'shop.example.com or *.example.com', spellcheck: false, oninput: ntChanged })),
-    h('label', { class: 'nt-f grow' }, h('span', { class: 'muted' }, 'Tags'), h('input', { type: 'text', id: 'ntTagsIn', value: n.tags.join(', '), placeholder: 'login, api, captcha', oninput: ntChanged })),
-    seg([['edit', 'Edit'], ['split', 'Split'], ['preview', 'Preview']], NT.mode, (v) => { NT.mode = v; store.set('nt-mode', v); renderNtEditor(); }),
-    n.site ? h('button', { class: 'btn sm', title: 'Site map of this site (current session)', onclick: () => { smOpenSite(n.site.replace(/^\*\./, ''), dnsWild(n.site)); } }, 'Site map') : null));
-  const ta = h('textarea', { id: 'ntBody', class: 'mono nt-body', spellcheck: false, value: n.body, placeholder: '# Findings\n\n- Login posts to /api/auth — cupnet:req/<session>/42\n- [ ] check rate limits', oninput: ntChanged });
+    h('label', { class: 'nt-f' }, h('span', { class: 'muted' }, 'Сайт'), h('input', { type: 'text', id: 'ntSiteIn', class: 'mono', value: n.site, placeholder: 'shop.example.com или *.example.com', spellcheck: false, oninput: ntChanged })),
+    h('label', { class: 'nt-f grow' }, h('span', { class: 'muted' }, 'Теги'), h('input', { type: 'text', id: 'ntTagsIn', value: n.tags.join(', '), placeholder: 'вход, api, captcha', oninput: ntChanged })),
+    seg([['edit', 'Правка'], ['split', 'Разделить'], ['preview', 'Предпросмотр']], NT.mode, (v) => { NT.mode = v; store.set('nt-mode', v); renderNtEditor(); }),
+    n.site ? h('button', { class: 'btn sm', title: 'Карта сайта (текущая сессия)', onclick: () => { smOpenSite(n.site.replace(/^\*\./, ''), dnsWild(n.site)); } }, 'Карта сайта') : null));
+  const ta = h('textarea', { id: 'ntBody', class: 'mono nt-body', spellcheck: false, value: n.body, placeholder: '# Находки\n\n- Вход отправляется на /api/auth — cupnet:req/<session>/42\n- [ ] проверить ограничения частоты', oninput: ntChanged });
   ta.addEventListener('keydown', (ev) => {
     if (ev.isComposing) return;
     const mod = ev.metaKey || ev.ctrlKey;
@@ -692,7 +692,7 @@ function renderNtEditor() {
   if (NT.mode !== 'preview') box.append(ntToolbar());
   box.append(h('div', { class: `nt-panes nt-${NT.mode}` }, NT.mode !== 'preview' ? ta : null, NT.mode !== 'edit' ? pv : null));
   if (NT.mode !== 'edit') pv.append(mdRender(n.body));
-  if (NT.mode === 'preview' && !n.body.trim()) pv.append(h('div', { class: 'empty' }, 'Empty note — switch to Edit.'));
+  if (NT.mode === 'preview' && !n.body.trim()) pv.append(h('div', { class: 'empty' }, 'Пустая заметка — переключитесь на Правку.'));
 }
 
 /** "Add to note" from a request in Traffic (or a page of the site map). */
@@ -701,16 +701,16 @@ async function ntAddFrom({ host, line, title }) {
   const matching = NT.notes.filter((n) => ntSiteMatch(n.site, host));
   const others = NT.notes.filter((n) => !matching.includes(n));
   const sel = h('select', { class: 'grow' },
-    h('option', { value: '' }, `+ New note${host ? ` for ${host}` : ''}`),
-    matching.length ? h('optgroup', { label: `For ${host}` }, matching.map((n) => h('option', { value: n.id }, n.title || 'Untitled'))) : null,
-    others.length ? h('optgroup', { label: 'Other notes' }, others.slice(0, 300).map((n) => h('option', { value: n.id }, n.title || 'Untitled'))) : null);
+    h('option', { value: '' }, `+ Новая заметка${host ? ` для ${host}` : ''}`),
+    matching.length ? h('optgroup', { label: `Для ${host}` }, matching.map((n) => h('option', { value: n.id }, n.title || 'Без названия'))) : null,
+    others.length ? h('optgroup', { label: 'Другие заметки' }, others.slice(0, 300).map((n) => h('option', { value: n.id }, n.title || 'Без названия'))) : null);
   if (matching[0]) sel.value = matching[0].id;
   const ta = h('textarea', { class: 'mono code short', spellcheck: false, value: line });
-  modal('Add to note', h('div', null, h('div', { class: 'form' }, ...field('Note', sel), ...field('Text', ta, 'Markdown; the cupnet:req reference links back to the request.', true))), [
-    { label: 'Cancel' },
-    { label: 'Add', cls: 'primary', fn: async () => {
+  modal('Добавить в заметку', h('div', null, h('div', { class: 'form' }, ...field('Заметка', sel), ...field('Текст', ta, 'Markdown; ссылка cupnet:req ведёт обратно к запросу.', true))), [
+    { label: 'Отмена' },
+    { label: 'Добавить', cls: 'primary', fn: async () => {
       let n;
-      if (!sel.value) n = await ntNew({ title: title || host || 'Note', site: host || '', body: `${ta.value.trim()}\n` });
+      if (!sel.value) n = await ntNew({ title: title || host || 'Заметка', site: host || '', body: `${ta.value.trim()}\n` });
       else {
         await ntFlush();
         const cur = ntById(sel.value) || await api(`/api/notes/${sel.value}`);
@@ -718,7 +718,7 @@ async function ntAddFrom({ host, line, title }) {
         const i = NT.notes.findIndex((x) => x.id === n.id); if (i >= 0) NT.notes[i] = n;
         NT.notes.sort((a, b) => (b.pinned - a.pinned) || (b.updated - a.updated));
       }
-      toast(`Added to "${n.title || 'Untitled'}"`, 'ok', { action: { label: 'Open', fn: () => { NT.sel = n.id; store.set('nt-sel', n.id); go('notes'); } } });
+      toast(`Добавлено в «${n.title || 'Без названия'}»`, 'ok', { action: { label: 'Открыть', fn: () => { NT.sel = n.id; store.set('nt-sel', n.id); go('notes'); } } });
       return true;
     } },
   ]);
@@ -731,11 +731,11 @@ $('aNote').addEventListener('click', guard(async () => {
 }));
 /** Analyzer header: notes for the page's host. */
 function ntHostButton(host) {
-  const b = h('button', { class: 'btn sm', title: `Notes for ${host}`, onclick: () => {
+  const b = h('button', { class: 'btn sm', title: `Заметки для ${host}`, onclick: () => {
     const n = NT.notes.find((x) => ntSiteMatch(x.site, host));
     if (n) { NT.sel = n.id; store.set('nt-sel', n.id); go('notes'); } else guard(async () => { await ntNew({ title: host, site: host }); go('notes'); })();
-  } }, 'Notes');
-  const label = () => { const c = NT.notes.filter((x) => ntSiteMatch(x.site, host)).length; b.textContent = c ? `Notes · ${c}` : '+ Note'; };
+  } }, 'Заметки');
+  const label = () => { const c = NT.notes.filter((x) => ntSiteMatch(x.site, host)).length; b.textContent = c ? `Заметки · ${c}` : '+ Заметка'; };
   if (NT.loaded) label(); else ntEnsure().then(label, () => {});
   return b;
 }
@@ -745,7 +745,7 @@ $('ntSite').addEventListener('change', () => { NT.site = $('ntSite').value; rend
 $('ntExport').addEventListener('click', guard(async () => {
   await ntFlush();
   const list = ntFiltered();
-  if (!list.length) { toast('No notes to export', 'warn'); return; }
+  if (!list.length) { toast('Нет заметок для экспорта', 'warn'); return; }
   download(new Blob([list.map(ntMd).join('\n---\n\n')], { type: 'text/markdown' }), 'cupnet-notes.md');
 }));
 window.addEventListener('beforeunload', () => { if (NT.pending) ntFlush(); });
@@ -770,7 +770,7 @@ async function loadSiteMap() {
   const { current: cur, sessions } = await api('/api/sessions');
   const sel = $('smSession');
   const keep = SM.session || cur;
-  append(clear(sel), sessions.map((s) => h('option', { value: s.id }, s.id === cur ? `● Live — ${s.id}` : s.id)));
+  append(clear(sel), sessions.map((s) => h('option', { value: s.id }, s.id === cur ? `● Текущая — ${s.id}` : s.id)));
   sel.value = sessions.some((s) => s.id === keep) ? keep : cur;
   SM.session = sel.value;
   $('smSubs').checked = SM.subs; $('smAuto').checked = SM.auto;
@@ -781,7 +781,7 @@ async function smFetch(quiet = false) {
   if (SM.loading) return;
   SM.loading = true;
   const g = ++SM.gen;
-  if (!quiet) $('smState').textContent = 'Scanning…';
+  if (!quiet) $('smState').textContent = 'Сканирование…';
   try {
     const qs = (site) => `/api/sitemap?session=${encodeURIComponent(SM.session)}${site ? `&site=${encodeURIComponent(site)}&subs=${SM.subs ? 1 : 0}` : ''}`;
     let r = await api(qs(SM.site));
@@ -792,7 +792,7 @@ async function smFetch(quiet = false) {
       if (pick) { SM.site = pick.host; r = await api(qs(SM.site)); if (g !== SM.gen) return; }
     }
     SM.data = r.stats ? r : null;
-    $('smState').textContent = SM.data ? `${SM.data.stats.documents.toLocaleString()} HTML documents scanned` : '';
+    $('smState').textContent = SM.data ? `Просканировано HTML-документов: ${SM.data.stats.documents.toLocaleString()}` : '';
     renderSiteMap();
   } finally { SM.loading = false; }
 }
@@ -814,8 +814,8 @@ function smOpenSite(site, subs) {
 
 function renderSiteMap() {
   const ss = clear($('smSite'));
-  if (!SM.sites.length) ss.append(h('option', { value: '' }, 'No sites yet'));
-  for (const s of SM.sites.slice(0, 500)) ss.append(h('option', { value: s.host }, `${s.host} — ${s.opened} opened${s.linked ? ` · ${s.linked} linked` : ''}`));
+  if (!SM.sites.length) ss.append(h('option', { value: '' }, 'Пока нет сайтов'));
+  for (const s of SM.sites.slice(0, 500)) ss.append(h('option', { value: s.host }, `${s.host} — открыто: ${s.opened}${s.linked ? ` · ссылок: ${s.linked}` : ''}`));
   if (SM.site && !SM.sites.some((s) => s.host === SM.site)) ss.append(h('option', { value: SM.site }, SM.site));
   ss.value = SM.site;
   const d = SM.data;
@@ -825,21 +825,21 @@ function renderSiteMap() {
   if (!d) {
     $('smTabs').hidden = true;
     main.append(h('div', { class: 'empty' },
-      h('p', null, h('b', null, 'Browse a site in the proxied Chrome — its map builds itself from the traffic.')),
-      h('p', { class: 'muted' }, 'Every link on every HTML page that came through CupNet becomes a page of the map: green ones were opened, hollow ones were only linked. Forms are listed with every field, hidden ones in red.')));
+      h('p', null, h('b', null, 'Просматривайте сайт в проксируемом Chrome — его карта строится сама из трафика.')),
+      h('p', { class: 'muted' }, 'Каждая ссылка с каждой HTML-страницы, прошедшей через CupNet, становится страницей карты: зелёные были открыты, пустые — только в ссылках. Формы показаны со всеми полями, скрытые — красным.')));
     return;
   }
   $('smTabs').hidden = false;
   const s = d.stats;
   const t = (v, k, cls, title, fn) => { const el = tile(typeof v === 'number' ? v.toLocaleString() : v, k, cls, title); if (fn) { el.classList.add('sm-tile-btn'); el.addEventListener('click', fn); } return el; };
   tiles.append(
-    t(s.pages, 'pages', '', 'Distinct URLs of this site: opened or linked', () => smSetFilter('all')),
-    t(s.opened, 'opened', 'ok', 'Loaded as a document in this session', () => smSetFilter('opened')),
-    t(s.notOpened, 'not opened', s.notOpened ? 'accent' : '', 'Linked from a page but never loaded', () => smSetFilter('not')),
-    t(s.forms, 'forms', '', 'Distinct forms (same action and fields counted once)', () => { SM.tab = 'forms'; renderSiteMap(); }),
-    t(s.hiddenFields, 'hidden fields', s.hiddenFields ? 'err' : '', 'type=hidden, the hidden attribute, inline display:none / visibility:hidden / off-screen, or inside a hidden element', () => { SM.tab = 'forms'; SM.formHidden = true; renderSiteMap(); }),
-    t(s.likelyHidden, 'likely hidden', s.likelyHidden ? 'warn' : '', 'Hidden by a class name (d-none, sr-only, honeypot…) or aria-hidden — confirm in the Page analyzer', () => { SM.tab = 'forms'; SM.formHidden = true; renderSiteMap(); }),
-    t(d.external.length, 'external hosts', '', 'Other sites this one links to', () => { SM.tab = 'external'; renderSiteMap(); }));
+    t(s.pages, 'страниц', '', 'Уникальные URL этого сайта: открытые или в ссылках', () => smSetFilter('all')),
+    t(s.opened, 'открыто', 'ok', 'Загружены как документ в этой сессии', () => smSetFilter('opened')),
+    t(s.notOpened, 'не открыто', s.notOpened ? 'accent' : '', 'Есть ссылка со страницы, но ни разу не загружалась', () => smSetFilter('not')),
+    t(s.forms, 'форм', '', 'Уникальные формы (одинаковые action и поля считаются один раз)', () => { SM.tab = 'forms'; renderSiteMap(); }),
+    t(s.hiddenFields, 'скрытых полей', s.hiddenFields ? 'err' : '', 'type=hidden, атрибут hidden, инлайновые display:none / visibility:hidden / за экраном, либо внутри скрытого элемента', () => { SM.tab = 'forms'; SM.formHidden = true; renderSiteMap(); }),
+    t(s.likelyHidden, 'возможно скрытых', s.likelyHidden ? 'warn' : '', 'Скрыты через класс (d-none, sr-only, honeypot…) или aria-hidden — проверьте в Анализаторе страницы', () => { SM.tab = 'forms'; SM.formHidden = true; renderSiteMap(); }),
+    t(d.external.length, 'внешних хостов', '', 'Другие сайты, на которые ведут ссылки', () => { SM.tab = 'external'; renderSiteMap(); }));
   const c = { pages: s.pages, forms: s.forms, external: d.external.length };
   document.querySelectorAll('#smTabs button').forEach((b) => { const n = b.querySelector('.tag'); if (n) n.textContent = String(c[b.dataset.t] ?? ''); });
   if (SM.tab === 'forms') smForms(main);
@@ -856,18 +856,18 @@ function smFilteredPages() {
 }
 
 function smPages(main) {
-  const q = h('input', { type: 'search', id: 'smQ', placeholder: 'Filter URL, title, link text…', value: SM.lastQ || '', oninput: () => { SM.lastQ = q.value; debounce('smq', 120, smRenderList); } });
+  const q = h('input', { type: 'search', id: 'smQ', placeholder: 'Фильтр по URL, заголовку, тексту ссылки…', value: SM.lastQ || '', oninput: () => { SM.lastQ = q.value; debounce('smq', 120, smRenderList); } });
   const bar = h('div', { class: 'toolbar sub sm-bar' },
-    seg([['all', 'All'], ['opened', 'Opened'], ['not', 'Not opened'], ['hidden', 'Hidden links only']], SM.filter, (v) => { SM.filter = v; store.set('sm-filter', v); renderSiteMap(); }),
-    h('label', { class: 'chk', title: 'Hide images, scripts, PDFs and other files' }, h('input', { type: 'checkbox', checked: SM.hideFiles, onchange: (ev) => { SM.hideFiles = ev.target.checked; store.set('sm-files', SM.hideFiles); smRenderList(); } }), 'no files'),
+    seg([['all', 'Все'], ['opened', 'Открытые'], ['not', 'Не открытые'], ['hidden', 'Только скрытые ссылки']], SM.filter, (v) => { SM.filter = v; store.set('sm-filter', v); renderSiteMap(); }),
+    h('label', { class: 'chk', title: 'Скрыть изображения, скрипты, PDF и другие файлы' }, h('input', { type: 'checkbox', checked: SM.hideFiles, onchange: (ev) => { SM.hideFiles = ev.target.checked; store.set('sm-files', SM.hideFiles); smRenderList(); } }), 'без файлов'),
     q,
-    seg([['tree', 'Tree'], ['list', 'List']], SM.view, (v) => { SM.view = v; store.set('sm-view', v); renderSiteMap(); }),
-    SM.view === 'tree' ? h('button', { class: 'btn sm', title: 'Expand every folder', onclick: () => { smResetTree('all'); smRenderList(); } }, 'Expand') : null,
-    SM.view === 'tree' ? h('button', { class: 'btn sm', title: 'Collapse every folder', onclick: () => { smResetTree('none'); smRenderList(); } }, 'Collapse') : null,
+    seg([['tree', 'Дерево'], ['list', 'Список']], SM.view, (v) => { SM.view = v; store.set('sm-view', v); renderSiteMap(); }),
+    SM.view === 'tree' ? h('button', { class: 'btn sm', title: 'Развернуть все папки', onclick: () => { smResetTree('all'); smRenderList(); } }, 'Развернуть') : null,
+    SM.view === 'tree' ? h('button', { class: 'btn sm', title: 'Свернуть все папки', onclick: () => { smResetTree('none'); smRenderList(); } }, 'Свернуть') : null,
     h('span', { class: 'spacer' }),
     h('span', { class: 'muted', id: 'smShown' }),
-    h('button', { class: 'btn sm', title: 'Copy the URLs shown, one per line', onclick: () => { const l = smFilteredPages(); copy(l.map((p) => p.url).join('\n'), `${l.length} URLs copied`); } }, 'Copy URLs'),
-    h('button', { class: 'btn sm', title: 'Download the map as JSON', onclick: () => download(new Blob([JSON.stringify(SM.data, null, 2)], { type: 'application/json' }), `cupnet-sitemap-${SM.site}.json`) }, 'JSON'));
+    h('button', { class: 'btn sm', title: 'Копировать показанные URL, по одному на строку', onclick: () => { const l = smFilteredPages(); copy(l.map((p) => p.url).join('\n'), `Скопировано URL: ${l.length}`); } }, 'Копировать URL'),
+    h('button', { class: 'btn sm', title: 'Скачать карту в формате JSON', onclick: () => download(new Blob([JSON.stringify(SM.data, null, 2)], { type: 'application/json' }), `cupnet-sitemap-${SM.site}.json`) }, 'JSON'));
   main.append(bar, h('div', { class: 'split2 sm-split' }, h('div', { class: 'list-pane sm-list', id: 'smList' }), h('div', { class: 'edit-pane sm-detail', id: 'smDetail' })));
   smRenderList();
   smRenderDetail();
@@ -896,25 +896,25 @@ function smPageRow(p, label, depth) {
   const cls = smStatusCls(p);
   const onlyHidden = p.refs > 0 && p.hiddenRefs === p.refs;
   return h('div', { class: `sm-row${SM.sel === p.url ? ' sel' : ''}${p.opened ? '' : ' is-not'}`, style: `--d:${depth}`, title: p.url, onclick: () => { SM.sel = p.url; smRenderList(); smRenderDetail(); } },
-    h('i', { class: `sm-dot ${cls}`, title: p.opened ? `Opened ${p.count}× · ${p.status || 'failed'}` : 'Not opened — only linked' }),
+    h('i', { class: `sm-dot ${cls}`, title: p.opened ? `Открыто ${p.count}× · ${p.status || 'ошибка'}` : 'Не открыто — только в ссылках' }),
     h('span', { class: 'sm-name mono ell' }, label),
     p.title ? h('span', { class: 'sm-ttl ell' }, p.title) : !p.opened && p.text ? h('span', { class: 'sm-ttl ell faint' }, `“${p.text}”`) : null,
     h('span', { class: 'sm-tags' },
       p.opened && p.status && p.status !== 200 ? tag(String(p.status), p.status >= 400 ? 'err' : p.status >= 300 ? 'accent' : '') : null,
-      onlyHidden ? tag('hidden link', 'err') : p.hiddenRefs ? tag(`${p.hiddenRefs} hidden`, 'warn') : null,
-      p.post ? tag('form') : null, p.kinds.includes('iframe') || p.kinds.includes('frame') ? tag('frame') : null,
-      p.file ? tag('file') : null, p.dns ? tag('DNS', 'accent') : null,
-      p.refs ? h('span', { class: 'faint sm-refs', title: `Linked ${p.refs}× from ${p.from.length}${p.from.length >= 20 ? '+' : ''} page(s)` }, `←${p.refs}`) : null));
+      onlyHidden ? tag('скрытая ссылка', 'err') : p.hiddenRefs ? tag(`${p.hiddenRefs} скрыто`, 'warn') : null,
+      p.post ? tag('форма') : null, p.kinds.includes('iframe') || p.kinds.includes('frame') ? tag('frame') : null,
+      p.file ? tag('файл') : null, p.dns ? tag('DNS', 'accent') : null,
+      p.refs ? h('span', { class: 'faint sm-refs', title: `Ссылок ${p.refs}× с ${p.from.length}${p.from.length >= 20 ? '+' : ''} стр.` }, `←${p.refs}`) : null));
 }
 function smRenderList() {
   const box = $('smList');
   if (!box || !SM.data) return;
   clear(box);
   const pages = smFilteredPages();
-  $('smShown').textContent = `${pages.length.toLocaleString()} of ${SM.data.pages.length.toLocaleString()}${SM.data.truncated ? ' (first 20,000)' : ''}`;
-  if (!pages.length) { box.append(h('div', { class: 'empty' }, 'Nothing matches.')); return; }
+  $('smShown').textContent = `${pages.length.toLocaleString()} из ${SM.data.pages.length.toLocaleString()}${SM.data.truncated ? ' (первые 20 000)' : ''}`;
+  if (!pages.length) { box.append(h('div', { class: 'empty' }, 'Ничего не найдено.')); return; }
   let n = 0;
-  const more = () => box.append(h('div', { class: 'empty' }, `… ${(pages.length - n).toLocaleString()} more — narrow the filter.`));
+  const more = () => box.append(h('div', { class: 'empty' }, `… ещё ${(pages.length - n).toLocaleString()} — сузьте фильтр.`));
   const q = ($('smQ')?.value || '').trim();
   if (SM.view === 'list' || q) {
     for (const p of pages) { if (n >= SM_RENDER_MAX) return more(); box.append(smPageRow(p, SM.subs ? `${p.host}${smLabel(p)}` : smLabel(p), 0)); n++; }
@@ -939,8 +939,8 @@ function smRenderList() {
         if (open) { SM.open.delete(k.key); SM.closed.add(k.key); } else { SM.closed.delete(k.key); SM.open.add(k.key); }
         smRenderList();
       };
-      const tw = h('span', { class: 'sm-tw', title: open ? 'Collapse' : 'Expand' }, open ? '▾' : '▸');
-      const bar = [h('span', { class: 'sm-bar-mini', title: `${k.opened} of ${k.total} opened` }, h('i', { style: `width:${Math.round((k.opened / k.total) * 100)}%` })), h('span', { class: 'faint' }, `${k.opened}/${k.total}`)];
+      const tw = h('span', { class: 'sm-tw', title: open ? 'Свернуть' : 'Развернуть' }, open ? '▾' : '▸');
+      const bar = [h('span', { class: 'sm-bar-mini', title: `Открыто ${k.opened} из ${k.total}` }, h('i', { style: `width:${Math.round((k.opened / k.total) * 100)}%` })), h('span', { class: 'faint' }, `${k.opened}/${k.total}`)];
       // A folder that is also a page (/catalog with /catalog/shoes below) is one row: the twisty toggles, the row selects.
       const self = k.host ? null : k.pages.find((p) => !p.query) || null;
       let row;
@@ -969,8 +969,8 @@ const SM_SNAPS = new Map();
 const smCanSnap = (p) => !!(p && p.opened && p.seq && p.status >= 200 && p.status < 300);
 function smSnapView(p) {
   const key = `${SM.session}/${p.seq}`;
-  const info = h('div', { class: 'sm-snapinfo' }, h('span', { class: 'faint' }, 'Building the snapshot…'));
-  const fr = h('iframe', { class: 'sm-frame', sandbox: '', referrerpolicy: 'no-referrer', title: `Snapshot of ${p.url}` });
+  const info = h('div', { class: 'sm-snapinfo' }, h('span', { class: 'faint' }, 'Создание снимка…'));
+  const fr = h('iframe', { class: 'sm-frame', sandbox: '', referrerpolicy: 'no-referrer', title: `Снимок ${p.url}` });
   const box = h('div', { class: 'sm-framebox' }, fr);
   let width = store.get('sm-snapw', 'fit');
   const fit = () => {
@@ -983,15 +983,15 @@ function smSnapView(p) {
   const show = (r) => {
     fr.srcdoc = r.html;
     const st = r.stats;
-    const parts = [st.styles && `${st.styles} style${st.styles === 1 ? '' : 's'}`, st.images && `${st.images} image${st.images === 1 ? '' : 's'}`, st.fonts && `${st.fonts} font${st.fonts === 1 ? '' : 's'}`].filter(Boolean);
+    const parts = [st.styles && `стилей: ${st.styles}`, st.images && `изображений: ${st.images}`, st.fonts && `шрифтов: ${st.fonts}`].filter(Boolean);
     append(clear(info), [
-      h('span', { class: 'faint', title: 'Rebuilt from the captured HTML and the resources the browser loaded. Scripts are removed and nothing is fetched — pages drawn by JavaScript look empty or unstyled here.' },
-        `Offline copy · captured ${fmtAgo(r.ts)}${parts.length ? ` · ${parts.join(', ')}` : ''}${st.scripts ? ` · ${st.scripts} script${st.scripts === 1 ? '' : 's'} off` : ''}`),
-      st.missing ? h('button', { class: 'btn sm ghost sm-miss', title: 'Resources the page uses that were never requested through CupNet', onclick: () => modal(`Not captured (${st.missing})`,
-        h('div', { class: 'sm-misslist mono' }, r.missing.map((u) => h('div', { class: 'ell', title: u }, u)), st.missing > r.missing.length ? h('div', { class: 'faint' }, `… and ${st.missing - r.missing.length} more`) : null), [{ label: 'Close' }]) }, `${st.missing} not captured`) : null,
-      st.skipped ? h('span', { class: 'faint' }, ` · ${st.skipped} too large`) : null,
+      h('span', { class: 'faint', title: 'Восстановлено из захваченного HTML и ресурсов, загруженных браузером. Скрипты удалены и ничего не загружается — страницы, отрисованные JavaScript, выглядят здесь пустыми или без стилей.' },
+        `Офлайн-копия · захвачено ${fmtAgo(r.ts)}${parts.length ? ` · ${parts.join(', ')}` : ''}${st.scripts ? ` · скриптов отключено: ${st.scripts}` : ''}`),
+      st.missing ? h('button', { class: 'btn sm ghost sm-miss', title: 'Ресурсы, используемые страницей, но ни разу не запрошенные через CupNet', onclick: () => modal(`Не захвачено (${st.missing})`,
+        h('div', { class: 'sm-misslist mono' }, r.missing.map((u) => h('div', { class: 'ell', title: u }, u)), st.missing > r.missing.length ? h('div', { class: 'faint' }, `… и ещё ${st.missing - r.missing.length}`) : null), [{ label: 'Закрыть' }]) }, `не захвачено: ${st.missing}`) : null,
+      st.skipped ? h('span', { class: 'faint' }, ` · слишком больших: ${st.skipped}`) : null,
       h('span', { class: 'spacer' }),
-      seg([['fit', 'Fit'], ['1280', '1280'], ['390', 'Phone']], width, (v) => { width = v; store.set('sm-snapw', v); info.querySelectorAll('.seg button').forEach((b, i) => b.classList.toggle('on', ['fit', '1280', '390'][i] === v)); fit(); })]);
+      seg([['fit', 'Вписать'], ['1280', '1280'], ['390', 'Телефон']], width, (v) => { width = v; store.set('sm-snapw', v); info.querySelectorAll('.seg button').forEach((b, i) => b.classList.toggle('on', ['fit', '1280', '390'][i] === v)); fit(); })]);
     fit();
   };
   const cached = SM_SNAPS.get(key);
@@ -1019,8 +1019,8 @@ function smRenderDetail() {
     const s = SM.data.stats;
     box.append(h('div', { class: 'empty' },
       h('p', null, h('b', null, SM.data.site)),
-      h('p', { class: 'muted' }, `${s.opened} of ${s.pages} pages opened (${s.pages ? Math.round((s.opened / s.pages) * 100) : 0}%). Pick a page to see where it is linked from.`),
-      h('p', { class: 'faint' }, 'The map comes from the HTML that passed through CupNet (static parse). Links built by JavaScript only appear once the page that holds them is requested.')));
+      h('p', { class: 'muted' }, `Открыто ${s.opened} из ${s.pages} страниц (${s.pages ? Math.round((s.opened / s.pages) * 100) : 0}%). Выберите страницу, чтобы увидеть, откуда на неё ссылаются.`),
+      h('p', { class: 'faint' }, 'Карта строится из HTML, прошедшего через CupNet (статический разбор). Ссылки, созданные JavaScript, появляются только после запроса страницы, которая их содержит.')));
     return;
   }
   const forms = SM.data.forms.filter((f) => f.pages.some((x) => x.url === p.url));
@@ -1030,46 +1030,46 @@ function smRenderDetail() {
     h('h2', { class: 'ell', title: p.title || p.url }, p.title || smLabel(p))));
   box.append(h('div', { class: 'preview-url sm-url' }, p.url));
   box.append(h('div', { class: 'sm-acts' },
-    h('button', { class: 'btn primary sm', onclick: guard(async () => { await post('/api/chrome', { url: p.url }); toast('Opening in Chrome', 'ok'); }) }, 'Open in Chrome'),
-    p.seq ? h('button', { class: 'btn sm', onclick: () => cmpShowInTraffic({ sid: SM.session, seq: p.seq }) }, `#${p.seq} in Traffic`) : null,
-    h('button', { class: 'btn sm', onclick: () => { rpLoad({ method: 'GET', url: p.url, headers: [['Accept', 'text/html,application/xhtml+xml,*/*;q=0.8']] }); go('repeater'); } }, 'Repeater'),
-    h('button', { class: 'btn sm', onclick: () => copy(p.url, 'URL copied') }, 'Copy URL'),
-    h('button', { class: 'btn sm', onclick: guard(() => ntAddFrom({ host, line: `- ${p.opened ? '' : '(not opened) '}${p.url}${p.title ? ` — ${p.title}` : ''}${p.seq ? ` — cupnet:req/${SM.session}/${p.seq}` : ''}` })) }, 'Add to note')));
+    h('button', { class: 'btn primary sm', onclick: guard(async () => { await post('/api/chrome', { url: p.url }); toast('Открываю в Chrome', 'ok'); }) }, 'Открыть в Chrome'),
+    p.seq ? h('button', { class: 'btn sm', onclick: () => cmpShowInTraffic({ sid: SM.session, seq: p.seq }) }, `#${p.seq} в Трафике`) : null,
+    h('button', { class: 'btn sm', onclick: () => { rpLoad({ method: 'GET', url: p.url, headers: [['Accept', 'text/html,application/xhtml+xml,*/*;q=0.8']] }); go('repeater'); } }, 'Репитер'),
+    h('button', { class: 'btn sm', onclick: () => copy(p.url, 'URL скопирован') }, 'Копировать URL'),
+    h('button', { class: 'btn sm', onclick: guard(() => ntAddFrom({ host, line: `- ${p.opened ? '' : '(не открыто) '}${p.url}${p.title ? ` — ${p.title}` : ''}${p.seq ? ` — cupnet:req/${SM.session}/${p.seq}` : ''}` })) }, 'Добавить в заметку')));
   if (smCanSnap(p)) {
-    box.append(h('div', { class: 'sm-pvtabs' }, seg([['page', 'Page'], ['info', 'Details']], SM.pv, (v) => { SM.pv = v; store.set('sm-pv', v); smRenderDetail(); })));
+    box.append(h('div', { class: 'sm-pvtabs' }, seg([['page', 'Страница'], ['info', 'Детали']], SM.pv, (v) => { SM.pv = v; store.set('sm-pv', v); smRenderDetail(); })));
     if (snapKey) { box.append(smSnapView(p)); return; }
   }
   const onlyHidden = p.refs > 0 && p.hiddenRefs === p.refs;
-  box.append(sect('Page', kvGrid([
-    ['State', p.opened ? `opened ${p.count}× · ${(p.methods || []).join(', ')} · ${p.status || 'failed'}` : 'not opened — linked only'],
-    ...(p.ts ? [['Last load', new Date(p.ts).toLocaleString()]] : []),
-    ...(p.redirect ? [['Redirects to', p.redirect]] : []),
-    ...(p.dns ? [['DNS override', p.dns]] : []),
-    ['Linked', p.refs ? `${p.refs}× from ${p.from.length}${p.from.length >= 20 ? '+' : ''} page(s)` : 'not linked (opened directly)'],
-    ...(p.hiddenRefs ? [['Hidden links', `${p.hiddenRefs} of ${p.refs}${onlyHidden ? ' — reachable only through hidden links' : ''}`]] : []),
-    ...(p.kinds.length ? [['Link kinds', p.kinds.join(', ')]] : []),
-    ...(p.text ? [['Link text', p.text]] : []),
+  box.append(sect('Страница', kvGrid([
+    ['Состояние', p.opened ? `открыто ${p.count}× · ${(p.methods || []).join(', ')} · ${p.status || 'ошибка'}` : 'не открыто — только в ссылках'],
+    ...(p.ts ? [['Последняя загрузка', new Date(p.ts).toLocaleString()]] : []),
+    ...(p.redirect ? [['Редирект на', p.redirect]] : []),
+    ...(p.dns ? [['Подмена DNS', p.dns]] : []),
+    ['Ссылки', p.refs ? `${p.refs}× с ${p.from.length}${p.from.length >= 20 ? '+' : ''} стр.` : 'нет ссылок (открыто напрямую)'],
+    ...(p.hiddenRefs ? [['Скрытые ссылки', `${p.hiddenRefs} из ${p.refs}${onlyHidden ? ' — доступно только через скрытые ссылки' : ''}`]] : []),
+    ...(p.kinds.length ? [['Типы ссылок', p.kinds.join(', ')]] : []),
+    ...(p.text ? [['Текст ссылки', p.text]] : []),
     ...(p.nofollow ? [['rel', 'nofollow']] : []),
-    ...(p.out != null ? [['On the page', `${p.out} link${p.out === 1 ? '' : 's'} · ${p.forms} form${p.forms === 1 ? '' : 's'}`]] : []),
+    ...(p.out != null ? [['На странице', `ссылок: ${p.out} · форм: ${p.forms}`]] : []),
   ])));
-  if (onlyHidden) box.append(h('div', { class: 'note warn' }, 'Every link to this page sits in a hidden element (or has a hiding class) — typical for honeypot traps or admin/debug links.'));
+  if (onlyHidden) box.append(h('div', { class: 'note warn' }, 'Все ссылки на эту страницу находятся в скрытом элементе (или имеют скрывающий класс) — типично для ловушек-honeypot либо admin/debug-ссылок.'));
   if (p.from.length) {
-    box.append(sect('Linked from', h('div', { class: 'sm-from' }, p.from.map((u) => {
+    box.append(sect('Ссылки с', h('div', { class: 'sm-from' }, p.from.map((u) => {
       const fp = smPageByUrl(u);
       return h('div', { class: 'sm-from-row' }, fp ? h('i', { class: `sm-dot ${smStatusCls(fp)}` }) : null,
-        h('a', { href: '#', class: 'mono ell', title: u, onclick: (ev) => { ev.preventDefault(); if (fp) { SM.sel = u; smRenderList(); smRenderDetail(); } else copy(u, 'URL copied'); } }, fp ? smLabel(fp) : u));
+        h('a', { href: '#', class: 'mono ell', title: u, onclick: (ev) => { ev.preventDefault(); if (fp) { SM.sel = u; smRenderList(); smRenderDetail(); } else copy(u, 'URL скопирован'); } }, fp ? smLabel(fp) : u));
     })), true, tag(p.from.length)));
   }
   if (forms.length) {
-    box.append(sect('Forms on this page', h('div', { class: 'sm-from' }, forms.map((f) => h('div', { class: 'sm-from-row' },
-      badge(f.method || 'GET', `m-${f.method || 'GET'}`), h('span', { class: 'mono ell', title: f.action }, f.idx < 0 ? 'fields outside any form' : splitUrl(f.action)[1]),
-      f.counts.hidden ? tag(`${f.counts.hidden} hidden`, 'err') : null, f.counts.likely ? tag(`${f.counts.likely} likely`, 'warn') : null,
+    box.append(sect('Формы на этой странице', h('div', { class: 'sm-from' }, forms.map((f) => h('div', { class: 'sm-from-row' },
+      badge(f.method || 'GET', `m-${f.method || 'GET'}`), h('span', { class: 'mono ell', title: f.action }, f.idx < 0 ? 'поля вне форм' : splitUrl(f.action)[1]),
+      f.counts.hidden ? tag(`${f.counts.hidden} скрытых`, 'err') : null, f.counts.likely ? tag(`${f.counts.likely} возможно`, 'warn') : null,
       h('span', { class: 'spacer' }),
-      h('button', { class: 'btn sm', onclick: () => { SM.formPage = p.url; SM.tab = 'forms'; store.set('sm-tab', 'forms'); renderSiteMap(); } }, 'Fields')))), true, tag(forms.length)));
+      h('button', { class: 'btn sm', onclick: () => { SM.formPage = p.url; SM.tab = 'forms'; store.set('sm-tab', 'forms'); renderSiteMap(); } }, 'Поля')))), true, tag(forms.length)));
   }
 }
 
-const SM_VIS = { hidden: ['hidden', 'err'], likely: ['likely hidden', 'warn'], visible: ['visible', 'ok'] };
+const SM_VIS = { hidden: ['скрыто', 'err'], likely: ['возможно скрыто', 'warn'], visible: ['видно', 'ok'] };
 function smFormRequest(f, pageUrl) {
   const pairs = [];
   for (const x of f.fields) {
@@ -1085,16 +1085,16 @@ function smFormRequest(f, pageUrl) {
   return { method, url: action, headers: [['Content-Type', 'application/x-www-form-urlencoded']], body: enc };
 }
 function smForms(main) {
-  const q = h('input', { type: 'search', placeholder: 'Filter action, field name, label…', value: SM.formQ || '', oninput: () => { SM.formQ = q.value; debounce('smfq', 150, () => smFormCards(list)); } });
+  const q = h('input', { type: 'search', placeholder: 'Фильтр по action, имени поля, подписи…', value: SM.formQ || '', oninput: () => { SM.formQ = q.value; debounce('smfq', 150, () => smFormCards(list)); } });
   const list = h('div', { class: 'sm-forms' });
   main.append(h('div', { class: 'toolbar sub sm-bar' },
     q,
-    h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: SM.formHidden, onchange: (ev) => { SM.formHidden = ev.target.checked; store.set('sm-fhidden', SM.formHidden); smFormCards(list); } }), 'only forms with hidden fields'),
-    h('span', { class: 'muted' }, 'Fields'),
-    seg([['all', 'All'], ['hidden', 'Hidden'], ['visible', 'Visible']], SM.fieldShow, (v) => { SM.fieldShow = v; renderSiteMap(); }),
-    SM.formPage ? h('span', { class: 'tag accent sm-pagechip', title: SM.formPage }, `on ${splitUrl(SM.formPage)[1]}`, h('button', { class: 'icon', title: 'Show forms of every page', onclick: () => { SM.formPage = ''; renderSiteMap(); } }, '✕')) : null,
+    h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: SM.formHidden, onchange: (ev) => { SM.formHidden = ev.target.checked; store.set('sm-fhidden', SM.formHidden); smFormCards(list); } }), 'только формы со скрытыми полями'),
+    h('span', { class: 'muted' }, 'Поля'),
+    seg([['all', 'Все'], ['hidden', 'Скрытые'], ['visible', 'Видимые']], SM.fieldShow, (v) => { SM.fieldShow = v; renderSiteMap(); }),
+    SM.formPage ? h('span', { class: 'tag accent sm-pagechip', title: SM.formPage }, `на ${splitUrl(SM.formPage)[1]}`, h('button', { class: 'icon', title: 'Показать формы всех страниц', onclick: () => { SM.formPage = ''; renderSiteMap(); } }, '✕')) : null,
     h('span', { class: 'spacer' }),
-    h('span', { class: 'faint', title: 'Static parse of the HTML as it arrived. Fields added or hidden by JavaScript or stylesheets are only visible in the Page analyzer (live page).' }, 'Static HTML · CSS/JS hiding → Page analyzer')),
+    h('span', { class: 'faint', title: 'Статический разбор HTML в том виде, в каком он пришёл. Поля, добавленные или скрытые через JavaScript или таблицы стилей, видны только в Анализаторе страницы (живая страница).' }, 'Статический HTML · скрытие через CSS/JS → Анализатор страницы')),
   h('div', { class: 'sm-scroll' }, list));
   smFormCards(list);
 }
@@ -1104,50 +1104,50 @@ function smFormCards(list) {
   const forms = SM.data.forms.filter((f) => (!SM.formHidden || f.counts.hidden + f.counts.likely > 0)
     && (!SM.formPage || f.pages.some((x) => x.url === SM.formPage))
     && (!q || `${f.action} ${f.id} ${f.name} ${f.fields.map((x) => `${x.name} ${x.label || ''} ${x.placeholder || ''} ${x.type}`).join(' ')}`.toLowerCase().includes(q)));
-  if (!forms.length) { list.append(h('div', { class: 'empty' }, SM.data.forms.length ? 'No form matches.' : 'No forms on the opened pages of this site.')); return; }
+  if (!forms.length) { list.append(h('div', { class: 'empty' }, SM.data.forms.length ? 'Ничего не найдено.' : 'На открытых страницах этого сайта нет форм.')); return; }
   for (const f of forms.slice(0, 300)) {
     const fields = f.fields.filter((x) => SM.fieldShow === 'all' || (SM.fieldShow === 'hidden' ? x.vis !== 'visible' : x.vis === 'visible'));
     const page = f.pages[0].url;
     const req = (() => { try { return smFormRequest(f, page); } catch { return null; } })();
-    const pagesEl = h('details', { class: 'sm-fpages' }, h('summary', null, f.pageCount > 1 ? `on ${f.pageCount} pages` : 'on 1 page'),
+    const pagesEl = h('details', { class: 'sm-fpages' }, h('summary', null, f.pageCount > 1 ? `на ${f.pageCount} страницах` : 'на 1 странице'),
       f.pages.map((x) => h('div', null, h('a', { href: '#', class: 'mono', onclick: (ev) => { ev.preventDefault(); SM.sel = x.url; SM.tab = 'pages'; renderSiteMap(); } }, x.url))));
     list.append(h('div', { class: `an-card sm-form${f.vis !== 'visible' ? ' sm-form-hid' : ''}` },
       h('div', { class: 'an-card-h' },
-        f.idx < 0 ? h('b', null, 'Fields outside any form') : [badge(f.method || 'GET', `m-${f.method || 'GET'}`), h('span', { class: 'mono ell', title: f.action }, f.action)],
+        f.idx < 0 ? h('b', null, 'Поля вне форм') : [badge(f.method || 'GET', `m-${f.method || 'GET'}`), h('span', { class: 'mono ell', title: f.action }, f.action)],
         f.id ? tag(`#${f.id}`) : null, f.name ? tag(`name=${f.name}`) : null, f.enctype && f.enctype !== 'application/x-www-form-urlencoded' ? tag(f.enctype) : null,
-        f.vis !== 'visible' ? tag(`form ${SM_VIS[f.vis][0]}${f.why ? `: ${f.why}` : ''}`, SM_VIS[f.vis][1]) : null,
+        f.vis !== 'visible' ? tag(`${SM_VIS[f.vis][0]}${f.why ? `: ${f.why}` : ''}`, SM_VIS[f.vis][1]) : null,
         h('span', { class: 'spacer' }),
-        tag(`${f.counts.visible} visible`, 'ok'),
-        f.counts.hidden ? tag(`${f.counts.hidden} hidden`, 'err') : null,
-        f.counts.likely ? tag(`${f.counts.likely} likely hidden`, 'warn') : null,
-        f.idx >= 0 && req ? h('button', { class: 'btn sm', title: 'Open the submission (default values) in Repeater', onclick: () => { rpLoad(req); go('repeater'); } }, 'Repeater') : null,
-        f.idx >= 0 && req ? h('button', { class: 'btn sm', onclick: () => copy(curlOf(req), 'curl copied') }, 'curl') : null),
+        tag(`${f.counts.visible} видимых`, 'ok'),
+        f.counts.hidden ? tag(`${f.counts.hidden} скрытых`, 'err') : null,
+        f.counts.likely ? tag(`${f.counts.likely} возможно скрытых`, 'warn') : null,
+        f.idx >= 0 && req ? h('button', { class: 'btn sm', title: 'Открыть отправку (значения по умолчанию) в Репитере', onclick: () => { rpLoad(req); go('repeater'); } }, 'Репитер') : null,
+        f.idx >= 0 && req ? h('button', { class: 'btn sm', onclick: () => copy(curlOf(req), 'curl скопирован') }, 'curl') : null),
       h('div', { class: 'sm-fsub' }, pagesEl),
       fields.length ? h('div', { class: 'an-tblwrap' }, h('table', { class: 'tbl sm-ftbl' },
-        h('thead', null, h('tr', null, h('th', { class: 'w-110' }, 'Visibility'), h('th', { class: 'w-110' }, 'Type'), h('th', { class: 'w-150' }, 'Name'), h('th', null, 'Label · placeholder'), h('th', null, 'Value'), h('th', { class: 'w-150' }, 'Flags'))),
+        h('thead', null, h('tr', null, h('th', { class: 'w-110' }, 'Видимость'), h('th', { class: 'w-110' }, 'Тип'), h('th', { class: 'w-150' }, 'Имя'), h('th', null, 'Подпись · placeholder'), h('th', null, 'Значение'), h('th', { class: 'w-150' }, 'Флаги'))),
         h('tbody', null, fields.map((x) => h('tr', { class: `sm-f-${x.vis}` },
           h('td', { title: x.why || '' }, tag(SM_VIS[x.vis][0], SM_VIS[x.vis][1]), x.why ? h('div', { class: 'sm-why' }, x.why) : null),
           h('td', { class: 'mono' }, x.tag === 'input' ? x.type : x.tag === x.type ? x.tag : `${x.tag}:${x.type}`),
           h('td', { class: 'mono', title: x.name }, x.name || h('span', { class: 'faint' }, x.id ? `#${x.id}` : '—')),
           h('td', { title: `${x.label || ''} ${x.placeholder || ''}`.trim() }, x.label || '', x.placeholder ? h('span', { class: 'faint' }, `${x.label ? ' · ' : ''}${x.placeholder}`) : null),
           h('td', { class: 'mono', title: x.options ? x.options.map((o) => `${o.selected ? '● ' : ''}${o.value} — ${o.text}`).join('\n') : x.value || '' },
-            x.options ? `${(x.options.find((o) => o.selected) || x.options[0])?.text || ''} (${x.options.length} options)` : x.value ?? ''),
-          h('td', { class: 'an-flags' }, x.required ? tag('required') : null, x.disabled ? tag('disabled') : null, x.readonly ? tag('readonly') : null, x.checked ? tag('checked') : null, x.autocomplete ? tag(`ac=${x.autocomplete}`) : null)))))) : h('div', { class: 'empty sm-nofields' }, 'No fields of this kind.')));
+            x.options ? `${(x.options.find((o) => o.selected) || x.options[0])?.text || ''} (вариантов: ${x.options.length})` : x.value ?? ''),
+          h('td', { class: 'an-flags' }, x.required ? tag('required') : null, x.disabled ? tag('disabled') : null, x.readonly ? tag('readonly') : null, x.checked ? tag('checked') : null, x.autocomplete ? tag(`ac=${x.autocomplete}`) : null)))))) : h('div', { class: 'empty sm-nofields' }, 'Нет полей этого типа.')));
   }
-  if (forms.length > 300) list.append(h('div', { class: 'empty' }, `… ${forms.length - 300} more forms — narrow the filter.`));
+  if (forms.length > 300) list.append(h('div', { class: 'empty' }, `… ещё ${forms.length - 300} форм — сузьте фильтр.`));
 }
 function smExternal(main) {
   const d = SM.data;
   const box = h('div', { class: 'sm-scroll' });
   main.append(box);
-  if (!d.external.length) { box.append(h('div', { class: 'empty' }, 'This site links to no other host (in the pages seen so far).')); return; }
+  if (!d.external.length) { box.append(h('div', { class: 'empty' }, 'Этот сайт не ссылается на другие хосты (на просмотренных страницах).')); return; }
   box.append(h('table', { class: 'tbl sm-ext' },
-    h('thead', null, h('tr', null, h('th', null, 'Host'), h('th', { class: 'w-110 r-al' }, 'Links'), h('th', { class: 'w-180' }))),
+    h('thead', null, h('tr', null, h('th', null, 'Хост'), h('th', { class: 'w-110 r-al' }, 'Ссылок'), h('th', { class: 'w-180' }))),
     h('tbody', null, d.external.map((x) => {
       const known = SM.sites.some((s) => s.host === x.host && s.opened);
-      return h('tr', null, h('td', { class: 'mono' }, x.host, known ? [' ', tag('opened', 'ok')] : null), h('td', { class: 'r-al' }, x.links.toLocaleString()),
-        h('td', { class: 'r-al' }, h('button', { class: 'btn sm', onclick: () => { SM.site = x.host; store.set('sm-site', x.host); SM.sel = null; SM.tab = 'pages'; guard(smFetch)(); } }, 'Map'),
-          h('button', { class: 'btn sm', onclick: () => ntAddFrom({ host: SM.site, line: `- links to ${x.host} (${x.links}×)` }) }, 'Note')));
+      return h('tr', null, h('td', { class: 'mono' }, x.host, known ? [' ', tag('открыт', 'ok')] : null), h('td', { class: 'r-al' }, x.links.toLocaleString()),
+        h('td', { class: 'r-al' }, h('button', { class: 'btn sm', onclick: () => { SM.site = x.host; store.set('sm-site', x.host); SM.sel = null; SM.tab = 'pages'; guard(smFetch)(); } }, 'Карта'),
+          h('button', { class: 'btn sm', onclick: () => ntAddFrom({ host: SM.site, line: `- ссылается на ${x.host} (${x.links}×)` }) }, 'Заметка')));
     }))));
 }
 document.querySelectorAll('#smTabs button').forEach((b) => b.addEventListener('click', () => { SM.tab = b.dataset.t; store.set('sm-tab', SM.tab); renderSiteMap(); }));
@@ -1168,27 +1168,27 @@ async function shareSession(id, btn) {
     const row = (label, value, opts = {}) => h('div', { class: 'sh-row' },
       h('div', { class: 'sh-k' }, label),
       h('div', { class: 'sh-v mono' }, opts.mask ? `${value.replace(/&k=.*$/, '&k=')}${'•'.repeat(12)}` : value),
-      h('button', { class: 'btn sm', onclick: () => copy(value, 'Link copied') }, 'Copy'),
-      st.running ? h('button', { class: 'btn sm', onclick: () => window.open(value, '_blank', 'noopener') }, 'Open') : null);
+      h('button', { class: 'btn sm', onclick: () => copy(value, 'Ссылка скопирована') }, 'Копировать'),
+      st.running ? h('button', { class: 'btn sm', onclick: () => window.open(value, '_blank', 'noopener') }, 'Открыть') : null);
     box.append(
       h('div', { class: `result ${st.running ? 'ok' : st.error ? 'err' : ''}` },
-        st.running ? ['Local host is serving at ', h('code', null, st.url), ' — only this computer can open it (127.0.0.1).']
-          : st.error ? `Local host failed: ${st.error}` : 'The local host is off. Start it to open the links on this computer.',
+        st.running ? ['Локальный хост обслуживает ', h('code', null, st.url), ' — открыть можно только с этого компьютера (127.0.0.1).']
+          : st.error ? `Не удалось запустить локальный хост: ${st.error}` : 'Локальный хост выключен. Запустите его, чтобы открывать ссылки на этом компьютере.',
         h('div', { class: 'row-end sh-ctl' },
           h('button', { class: `btn sm${st.running ? '' : ' primary'}`, onclick: guard(async (ev) => {
             const s = await busy(ev.target, '…', () => post('/api/settings', { shareHost: !st.running }));
             render(s.share);
-          }) }, st.running ? 'Stop host' : 'Start local host'))),
-      h('p', { class: 'muted' }, `Sealed ${fmtSize(r.bytes)} as `, h('code', null, `${r.id}.cupsess`), '. Pick how the viewer gets the key:'),
-      row('Link + .cupkey file', r.link),
-      h('p', { class: 'faint sh-hint' }, 'Safer: the link alone opens nothing — the viewer asks for the .cupkey file, which you hand over separately.'),
-      r.linkWithKey ? row('Link with the key', r.linkWithKey, { mask: true }) : null,
-      r.linkWithKey ? h('p', { class: 'faint sh-hint' }, 'One link opens the session. The key sits in the #fragment, which browsers never send to the host — but anyone holding the link can read every header, cookie and token in it.') : null,
-      h('p', { class: 'faint' }, 'Hosting is local for now; the same files work on any static host later (viewer.html + sealed/<id>.cupsess).'));
+          }) }, st.running ? 'Остановить хост' : 'Запустить локальный хост'))),
+      h('p', { class: 'muted' }, `Запечатано ${fmtSize(r.bytes)} в `, h('code', null, `${r.id}.cupsess`), '. Выберите, как получатель получит ключ:'),
+      row('Ссылка + файл .cupkey', r.link),
+      h('p', { class: 'faint sh-hint' }, 'Безопаснее: сама по себе ссылка ничего не открывает — получатель запрашивает файл .cupkey, который вы передаёте отдельно.'),
+      r.linkWithKey ? row('Ссылка с ключом', r.linkWithKey, { mask: true }) : null,
+      r.linkWithKey ? h('p', { class: 'faint sh-hint' }, 'Одна ссылка открывает сессию. Ключ находится в #fragment, который браузеры никогда не отправляют хосту — но любой, у кого есть ссылка, может прочитать все заголовки, cookie и токены в ней.') : null,
+      h('p', { class: 'faint' }, 'Пока хостинг локальный; те же файлы позже заработают на любом статическом хосте (viewer.html + sealed/<id>.cupsess).'));
   };
   render(r.host);
-  modal(`Share ${id}`, box, [
+  modal(`Поделиться ${id}`, box, [
     { label: '.cupkey', fn: async () => { download((await apiBlob(`/api/sessions/${id}/key`)).blob, `${r.id}.cupkey`); return false; } },
-    { label: 'Done', cls: 'primary' },
+    { label: 'Готово', cls: 'primary' },
   ]);
 }

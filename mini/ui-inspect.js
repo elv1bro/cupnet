@@ -35,13 +35,13 @@ function renderBanner(box) {
   clear(box);
   if (!PG.loaded || PG.enabled) return;
   box.append(h('div', { class: 'ins-banner' },
-    h('div', null, h('b', null, 'The page agent is off.'), ' ',
-      h('span', { class: 'muted' }, 'With it on, CupNet adds a small script to every HTML page it proxies: it forwards the console to the session log and answers the analyzer and the console prompt. It runs on the MITM path only, and is never written to the logged page.')),
+    h('div', null, h('b', null, 'Агент страницы выключен.'), ' ',
+      h('span', { class: 'muted' }, 'Когда он включён, CupNet добавляет небольшой скрипт на каждую HTML-страницу, которую проксирует: он передаёт консоль в журнал сессии и отвечает анализатору и консольному запросу. Работает только на пути MITM и никогда не записывается в залогированную страницу.')),
     h('button', { class: 'btn primary sm', onclick: guard(async (ev) => {
-      await busy(ev.currentTarget, 'Turning on…', () => post('/api/settings', { pageAgent: true }));
-      toast('Page agent on — reload the pages you want to inspect', 'ok');
+      await busy(ev.currentTarget, 'Включение…', () => post('/api/settings', { pageAgent: true }));
+      toast('Агент страницы включён — перезагрузите страницы, которые хотите инспектировать', 'ok');
       await refreshPages();
-    }) }, 'Turn on')));
+    }) }, 'Включить')));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ function valShort(v) {
     case 'sym': return v.v;
     case 'fn': return 'ƒ';
     case 'cyc': return '[Circular]';
-    case 'hole': return 'empty';
+    case 'hole': return 'пусто';
     case 'get': return '(…)';
     case 'date': return v.v;
     case 're': return v.v;
@@ -105,8 +105,8 @@ function valProps(v) {
   else if (v.t === 'map') (v.entries || []).forEach(([k, x], i) => box.append(h('div', { class: 'v-row' }, h('span', { class: 'v-idx' }, String(i)), ': ', valNode(k), ' => ', valNode(x))));
   else (v.props || []).forEach(([k, x]) => row(k, x));
   const have = v.t === 'map' ? (v.entries || []).length : v.t === 'obj' ? (v.props || []).length : (v.items || []).length;
-  if (v.more) box.append(h('div', { class: 'v-more' }, have ? `… ${(v.n - have).toLocaleString()} more` : 'Not captured (too deep) — inspect it from the console prompt'));
-  else if (!have) box.append(h('div', { class: 'v-more' }, v.err ? 'Could not be read' : 'empty'));
+  if (v.more) box.append(h('div', { class: 'v-more' }, have ? `… ещё ${(v.n - have).toLocaleString()}` : 'Не захвачено (слишком глубоко) — осмотрите через консольный запрос'));
+  else if (!have) box.append(h('div', { class: 'v-more' }, v.err ? 'Не удалось прочитать' : 'пусто'));
   return box;
 }
 /** One value; objects collapse to a one-line preview and fill their children on first open. */
@@ -118,14 +118,14 @@ function valNode(v, o = {}) {
   if (t === 'boolean') return h('span', { class: 'j-b' }, String(v));
   if (t !== 'object') return h('span', null, String(v));
   switch (v.t) {
-    case 's': return h('span', { class: o.top ? 'v-str' : 'j-s', title: `${Number(v.n).toLocaleString()} characters` }, o.top ? v.v : JSON.stringify(v.v), h('span', { class: 'v-cut' }, ` …+${(v.n - String(v.v).length).toLocaleString()}`));
+    case 's': return h('span', { class: o.top ? 'v-str' : 'j-s', title: `${Number(v.n).toLocaleString()} символов` }, o.top ? v.v : JSON.stringify(v.v), h('span', { class: 'v-cut' }, ` …+${(v.n - String(v.v).length).toLocaleString()}`));
     case 'n': return h('span', { class: 'j-n' }, v.v);
     case 'big': return h('span', { class: 'j-n' }, `${v.v}n`);
     case 'u': return h('span', { class: 'j-z' }, 'undefined');
     case 'sym': return h('span', { class: 'v-sym' }, v.v);
     case 'cyc': return h('span', { class: 'j-z' }, '[Circular]');
-    case 'hole': return h('span', { class: 'j-z' }, 'empty');
-    case 'get': return h('span', { class: 'j-z', title: 'Getter — not invoked' }, '(…)');
+    case 'hole': return h('span', { class: 'j-z' }, 'пусто');
+    case 'get': return h('span', { class: 'j-z', title: 'Геттер — не вызывался' }, '(…)');
     case 'date': return h('span', { class: 'v-date' }, v.v);
     case 're': return h('span', { class: 'v-re' }, v.v);
     case 'fn': {
@@ -183,7 +183,7 @@ const CN = {
   r: null, stick: true, target: '', flash: 0,
 };
 const CN_MAX_ROWS = 3000;
-const CN_LEVELS = [['error', 'Errors'], ['warn', 'Warnings'], ['info', 'Info'], ['verbose', 'Verbose']];
+const CN_LEVELS = [['error', 'Ошибки'], ['warn', 'Предупреждения'], ['info', 'Инфо'], ['verbose', 'Подробно']];
 const CN_ICON = { error: '✕', exception: '✕', assert: '✕', resource: '✕', warn: '▲', csp: '⛨', deprecation: '▲', intervention: '▲', info: 'i', debug: '·', command: '›', result: '‹', group: '▾', time: '⏱', trace: '↳', table: '▦' };
 
 function consoleIngest(items) {
@@ -258,7 +258,7 @@ function cnRow(e) {
     src ? h('a', { class: 'cn-src', href: '#', title: e.src, onclick: (ev) => {
       ev.preventDefault(); ev.stopPropagation();
       const seq = findRequestFor(src.url);
-      if (seq) showInTraffic(seq); else toast('That script is not in this session', 'warn');
+      if (seq) showInTraffic(seq); else toast('Этого скрипта нет в этой сессии', 'warn');
     } }, src.label) : null);
   row.append(line);
   line.addEventListener('click', () => {
@@ -276,12 +276,12 @@ function cnInlineValue(row, seq) {
   if (!msg || v === undefined) return;
   clear(msg).append(valNode(v, { top: false, open: false }));
   const via = CN.via.get(seq);
-  if (via) msg.append(' ', tag(via === 'script' ? 'via <script> (page CSP blocks eval)' : via, 'warn'));
+  if (via) msg.append(' ', tag(via === 'script' ? 'через <script> (CSP страницы блокирует eval)' : via, 'warn'));
 }
 async function cnToggle(row, e) {
   if (row.classList.toggle('open')) {
     if (row.querySelector('.cn-detail')) return;
-    const box = h('div', { class: 'cn-detail' }, h('span', { class: 'muted' }, 'Loading…'));
+    const box = h('div', { class: 'cn-detail' }, h('span', { class: 'muted' }, 'Загрузка…'));
     row.append(box);
     try {
       const full = await api(`/api/log/${e.seq}${qs()}`);
@@ -303,16 +303,16 @@ function consoleBody(full, o = {}) {
     out.append(list);
   } else if (!o.compact || text.length > 160 || text.includes('\n')) out.append(h('pre', { class: 'codebox' }, text));
   if (d.stack) out.append(h('pre', { class: 'cn-stack' }, d.stack));
-  const kv = [['Level', `${full.type || 'log'} · ${full.sev || 'info'}`], ['Time', new Date(full.ts).toISOString()], ['Page', full.url || '']];
-  if (full.src) kv.push(['Source', full.src]);
-  if (d.frame) kv.push(['Frame', 'iframe']);
-  if (full.g) kv.push(['Group depth', String(full.g)]);
+  const kv = [['Уровень', `${full.type || 'log'} · ${full.sev || 'info'}`], ['Время', new Date(full.ts).toISOString()], ['Страница', full.url || '']];
+  if (full.src) kv.push(['Источник', full.src]);
+  if (d.frame) kv.push(['Фрейм', 'iframe']);
+  if (full.g) kv.push(['Глубина группы', String(full.g)]);
   const acts = h('div', { class: 'cn-acts' },
-    h('button', { class: 'btn sm', onclick: () => copy(text, 'Message copied') }, 'Copy message'),
-    args.length ? h('button', { class: 'btn sm', onclick: () => copy(args.map((a) => valText(a)).join('\n'), 'Value copied') }, 'Copy value') : null,
-    full.type === 'command' ? h('button', { class: 'btn sm', onclick: () => { go('console'); cnEdit(text); } }, 'Edit in prompt') : null,
-    o.compact ? h('button', { class: 'btn sm', onclick: () => showInTraffic(full.seq) }, `#${full.seq} in Traffic`) : null,
-    !o.compact ? h('button', { class: 'btn sm', onclick: () => cnReveal(full.seq) }, 'Show in Console') : null);
+    h('button', { class: 'btn sm', onclick: () => copy(text, 'Сообщение скопировано') }, 'Копировать сообщение'),
+    args.length ? h('button', { class: 'btn sm', onclick: () => copy(args.map((a) => valText(a)).join('\n'), 'Значение скопировано') }, 'Копировать значение') : null,
+    full.type === 'command' ? h('button', { class: 'btn sm', onclick: () => { go('console'); cnEdit(text); } }, 'Изменить в консоли') : null,
+    o.compact ? h('button', { class: 'btn sm', onclick: () => showInTraffic(full.seq) }, `#${full.seq} в Трафике`) : null,
+    !o.compact ? h('button', { class: 'btn sm', onclick: () => cnReveal(full.seq) }, 'Показать в Консоли') : null);
   out.append(o.compact ? h('div', { class: 'cn-meta' }, kv.map(([k, v]) => h('span', null, h('b', null, k), ' ', v))) : kvGrid(kv), acts);
   return out;
 }
@@ -354,8 +354,8 @@ function renderCn() {
   const list = CN.items.filter(cnMatch);
   cnAppend(list.length > CN_MAX_ROWS ? list.slice(-CN_MAX_ROWS) : list);
   const hint = $('cnEmpty');
-  hint.textContent = CN.items.some(cnLive) ? 'No messages match the filter.'
-    : shown ? 'No console messages in this session.' : 'No console messages yet. With the page agent on, every page you open in the CupNet Chrome sends its console here.';
+  hint.textContent = CN.items.some(cnLive) ? 'Нет сообщений по фильтру.'
+    : shown ? 'В этой сессии нет сообщений консоли.' : 'Пока нет сообщений консоли. Когда агент страницы включён, каждая страница, открытая в CupNet Chrome, присылает свою консоль сюда.';
   renderCnCounts(); renderCnPause();
 }
 function renderCnCounts() {
@@ -363,18 +363,18 @@ function renderCnCounts() {
   for (const e of CN.items) if (cnLive(e) && e.type !== 'command' && e.type !== 'result') c[e.sev || 'info'] = (c[e.sev || 'info'] || 0) + 1;
   const box = clear($('cnLevels'));
   for (const [k, label] of CN_LEVELS) {
-    box.append(h('button', { type: 'button', class: `chip lv-${k}${CN.levels[k] ? ' on' : ''}`, title: 'Click to show/hide · Alt-click to show only this level', onclick: (ev) => {
+    box.append(h('button', { type: 'button', class: `chip lv-${k}${CN.levels[k] ? ' on' : ''}`, title: 'Клик — показать/скрыть · Alt-клик — показать только этот уровень', onclick: (ev) => {
       if (ev.altKey) for (const [x] of CN_LEVELS) CN.levels[x] = x === k;
       else CN.levels[k] = !CN.levels[k];
       store.set('cn-levels', CN.levels); renderCn();
     } }, label, h('b', null, c[k] ? c[k].toLocaleString() : '0')));
   }
-  $('cnShown').textContent = shown ? `session ${shown}` : '';
+  $('cnShown').textContent = shown ? `сессия ${shown}` : '';
 }
 function renderCnPause() {
   const b = $('cnPause');
   b.classList.toggle('on', CN.paused);
-  b.textContent = CN.paused ? (CN.pending ? `Resume · ${CN.pending} new` : 'Resume') : 'Pause';
+  b.textContent = CN.paused ? (CN.pending ? `Продолжить · ${CN.pending} новых` : 'Продолжить') : 'Пауза';
 }
 function renderCnPages() {
   const docs = new Map();
@@ -394,11 +394,11 @@ function renderCnPages() {
     sel.value = list.some((d) => d.id === value) || (first && !value) ? value : (first ? '' : list[0]?.id || '');
   };
   const listAll = [...docs.values()];
-  fill($('cnDoc'), 'All pages', listAll, CN.doc);
+  fill($('cnDoc'), 'Все страницы', listAll, CN.doc);
   if ($('cnDoc').value !== CN.doc) { CN.doc = $('cnDoc').value; renderCn(); }
   const live = listAll.filter((d) => d.live);
   if (!CN.target || !live.some((d) => d.id === CN.target)) CN.target = (CN.doc && live.some((d) => d.id === CN.doc)) ? CN.doc : live[0]?.id || '';
-  fill($('cnTarget'), live.length ? null : 'No live page', live, CN.target);
+  fill($('cnTarget'), live.length ? null : 'Нет активной страницы', live, CN.target);
   $('cnTarget').disabled = !live.length;
   $('cnRun').disabled = !live.length;
 }
@@ -410,7 +410,7 @@ async function cnRun() {
   const t = $('cnCode'), code = t.value;
   if (!code.trim()) return;
   const id = CN.target;
-  if (!id) { toast('No live page — open or reload a page in the CupNet Chrome', 'warn'); return; }
+  if (!id) { toast('Нет активной страницы — откройте или перезагрузите страницу в CupNet Chrome', 'warn'); return; }
   if (CN.hist[CN.hist.length - 1] !== code) { CN.hist.push(code); if (CN.hist.length > 100) CN.hist.shift(); store.set('cn-hist', CN.hist); }
   CN.hpos = -1; t.value = ''; cnAutosize();
   if (CN.paused) { CN.paused = false; renderCnPause(); }
@@ -480,7 +480,7 @@ $('cnPause').addEventListener('click', () => {
 $('cnClear').addEventListener('click', cnClear);
 $('cnExport').addEventListener('click', () => {
   const list = CN.items.filter(cnMatch);
-  if (!list.length) { toast('Nothing to export', 'warn'); return; }
+  if (!list.length) { toast('Нечего экспортировать', 'warn'); return; }
   const text = list.map((e) => `${new Date(e.ts).toISOString()} ${(e.type || 'log').padEnd(9)} ${e.note || ''}${e.src ? `  (${e.src})` : ''}  [${e.url || ''}]`).join('\n');
   download(new Blob([`${text}\n`], { type: 'text/plain' }), `console-${shown || current}.log`);
 });
@@ -506,7 +506,7 @@ const AN = {
   auto: store.get('an-auto', false), timer: 0, epq: '', st: 'local', showGone: store.get('an-gone', false), q: '',
 };
 const AN_AUTO_MS = 5000;
-const AN_TABS = [['overview', 'Overview'], ['forms', 'Forms'], ['captcha', 'Captcha'], ['endpoints', 'Endpoints'], ['storage', 'Storage'], ['cookies', 'Cookies'], ['security', 'Security'], ['meta', 'Meta']];
+const AN_TABS = [['overview', 'Обзор'], ['forms', 'Формы'], ['captcha', 'Captcha'], ['endpoints', 'Эндпоинты'], ['storage', 'Хранилище'], ['cookies', 'Cookies'], ['security', 'Безопасность'], ['meta', 'Meta']];
 
 function anPagesShown() {
   const q = AN.q.toLowerCase();
@@ -522,8 +522,8 @@ function renderAnPages() {
   const gone = PG.list.filter((p) => !p.live).length;
   $('anGoneN').textContent = gone ? `(${gone})` : '';
   if (!list.length) {
-    box.append(h('div', { class: 'empty' }, !PG.enabled ? 'Turn the page agent on, then reload a page.'
-      : PG.list.length ? 'No page matches.' : 'No pages yet. Open or reload a page in the CupNet Chrome.'));
+    box.append(h('div', { class: 'empty' }, !PG.enabled ? 'Включите агент страницы, затем перезагрузите страницу.'
+      : PG.list.length ? 'Нет подходящих страниц.' : 'Пока нет страниц. Откройте или перезагрузите страницу в CupNet Chrome.'));
     return;
   }
   for (const p of list) {
@@ -532,13 +532,13 @@ function renderAnPages() {
       AN.sel = p.id; renderAnPages(); renderAnMain();
       if (!AN.reports.has(p.id) && p.live) guard(anAnalyze)();
     } },
-    h('i', { class: `dot${p.live ? ' ok' : ''}`, title: p.live ? 'Live' : 'Closed or navigated away' }),
+    h('i', { class: `dot${p.live ? ' ok' : ''}`, title: p.live ? 'Активна' : 'Закрыта или ушла на другой адрес' }),
     h('div', { class: 'ell' },
       h('div', { class: 'title' }, p.frame ? tag('iframe') : null, h('b', { title: p.title }, p.title || host)),
       h('div', { class: 'meta' }, h('span', { class: 'mono', title: p.url }, `${host}${path}`))),
     h('div', { class: 'acts' },
       p.errors ? tag(String(p.errors), 'err') : null, p.warnings ? tag(String(p.warnings), 'warn') : null,
-      p.visible === false && p.live ? h('span', { class: 'faint', title: 'Tab in the background' }, '◐') : null)));
+      p.visible === false && p.live ? h('span', { class: 'faint', title: 'Вкладка в фоне' }, '◐') : null)));
   }
 }
 function anCounts(r) {
@@ -567,18 +567,18 @@ function renderAnHead() {
       h('i', { class: `dot${busyNow ? ' busy' : p.live ? ' ok' : ''}` }),
       h('div', { class: 'ell' }, h('div', { class: 'an-name ell', title: p.title }, p.title || splitUrl(p.url)[0]), h('div', { class: 'mono muted ell', title: p.url }, p.url))),
     h('div', { class: 'an-acts' },
-      r ? h('span', { class: 'faint', title: `Scan took ${r.durationMs} ms` }, `scanned ${fmtAgo(r.at)}`) : null,
-      sw(AN.auto, 'Auto', (v) => { AN.auto = v; store.set('an-auto', v); anSchedule(); }, `Re-scan every ${AN_AUTO_MS / 1000} s while this page is open`),
-      h('button', { class: 'btn sm', disabled: !r, onclick: () => copy(JSON.stringify(r, null, 2), 'Report copied') }, 'Copy JSON'),
-      h('button', { class: 'btn sm', onclick: () => { CN.doc = p.id; if (p.live) CN.target = p.id; go('console'); } }, 'Console'),
-      typeof smOpenSite === 'function' && splitUrl(p.url)[0] ? h('button', { class: 'btn sm', title: 'Every link and form seen on this site', onclick: () => smOpenSite(splitUrl(p.url)[0].replace(/:\d+$/, '')) }, 'Site map') : null,
+      r ? h('span', { class: 'faint', title: `Сканирование заняло ${r.durationMs} мс` }, `просканировано ${fmtAgo(r.at)}`) : null,
+      sw(AN.auto, 'Авто', (v) => { AN.auto = v; store.set('an-auto', v); anSchedule(); }, `Пересканировать каждые ${AN_AUTO_MS / 1000} с, пока страница открыта`),
+      h('button', { class: 'btn sm', disabled: !r, onclick: () => copy(JSON.stringify(r, null, 2), 'Отчёт скопирован') }, 'Копировать JSON'),
+      h('button', { class: 'btn sm', onclick: () => { CN.doc = p.id; if (p.live) CN.target = p.id; go('console'); } }, 'Консоль'),
+      typeof smOpenSite === 'function' && splitUrl(p.url)[0] ? h('button', { class: 'btn sm', title: 'Все ссылки и формы, встреченные на этом сайте', onclick: () => smOpenSite(splitUrl(p.url)[0].replace(/:\d+$/, '')) }, 'Карта сайта') : null,
       typeof ntHostButton === 'function' && splitUrl(p.url)[0] ? ntHostButton(splitUrl(p.url)[0].replace(/:\d+$/, '')) : null,
-      h('button', { class: 'btn primary sm', disabled: busyNow || !p.live, title: p.live ? 'Scan the page again' : 'The page is gone — reload it in Chrome', onclick: guard(() => anAnalyze()) }, busyNow ? 'Scanning…' : r ? 'Rescan' : 'Scan')));
+      h('button', { class: 'btn primary sm', disabled: busyNow || !p.live, title: p.live ? 'Сканировать страницу снова' : 'Страница закрыта — перезагрузите её в Chrome', onclick: guard(() => anAnalyze()) }, busyNow ? 'Сканирование…' : r ? 'Пересканировать' : 'Сканировать')));
 }
 function renderAnMain() {
   const main = clear($('anMain'));
   const p = pageById(AN.sel);
-  if (!p) { main.append(h('div', { class: 'empty' }, PG.list.length ? 'Pick a page on the left.' : 'Pages show up here once they load with the page agent on.')); return; }
+  if (!p) { main.append(h('div', { class: 'empty' }, PG.list.length ? 'Выберите страницу слева.' : 'Страницы появятся здесь, как только загрузятся с включённым агентом страницы.')); return; }
   const r = AN.reports.get(p.id);
   main.append(h('div', { class: 'an-head', id: 'anHead' }));
   renderAnHead();
@@ -589,7 +589,7 @@ function renderAnMain() {
   main.append(body);
   const err = AN.errors.get(p.id);
   if (err) body.append(h('div', { class: 'note warn' }, err));
-  if (!r) { if (!err) body.append(h('div', { class: 'empty' }, AN.busy.has(p.id) ? 'Scanning the page…' : p.live ? 'Not scanned yet.' : 'This page is gone — reload it in Chrome to scan it.')); return; }
+  if (!r) { if (!err) body.append(h('div', { class: 'empty' }, AN.busy.has(p.id) ? 'Сканирование страницы…' : p.live ? 'Ещё не просканировано.' : 'Страница закрыта — перезагрузите её в Chrome, чтобы просканировать.')); return; }
   ({ overview: anOverview, forms: anForms, captcha: anCaptcha, endpoints: anEndpoints, storage: anStorage, cookies: anCookies, security: anSecurity, meta: anMeta }[AN.tab] || anOverview)(body, r, p);
 }
 async function anAnalyze(o = {}) {
@@ -626,56 +626,56 @@ function anSchedule() {
 const tile = (v, k, cls = '', title) => h('div', { class: `tile ${cls}`, title }, h('div', { class: 'tile-v' }, v), h('div', { class: 'tile-k' }, k));
 const ms = (n) => (n == null || n < 0 ? '—' : n >= 1000 ? `${(n / 1000).toFixed(2)} s` : `${Math.round(n)} ms`);
 const fmtVal = (v) => (v == null || v === '' ? '—' : Array.isArray(v) ? v.join(', ') : typeof v === 'object' ? Object.entries(v).map(([k, x]) => `${k}: ${Array.isArray(x) ? x.join(', ') : x}`).join(' · ') : String(v));
-const copyBtn = (text, what) => h('button', { class: 'icon', title: 'Copy', onclick: (ev) => { ev.stopPropagation(); copy(text, what); } }, '⧉');
+const copyBtn = (text, what) => h('button', { class: 'icon', title: 'Копировать', onclick: (ev) => { ev.stopPropagation(); copy(text, what); } }, '⧉');
 
 function anOverview(b, r, p) {
   const t = r.extra?.timing || {}, env = r.extra?.env || {}, doc = r.document;
   b.append(h('div', { class: 'ipw-tiles an-tiles' },
-    tile(doc ? String(doc.status || 'ERR') : '—', 'Document', doc && (doc.status >= 400 || !doc.status) ? 'err' : '', doc ? `${doc.mime || ''} · ${fmtSize(doc.resSize) || '0 B'}` : 'The document request is not in this session'),
-    tile(ms(t.ttfb), 'First byte'), tile(ms(t.domContentLoaded), 'DOM ready'), tile(ms(t.load), 'Load'),
-    tile(String(t.resources ?? '—'), 'Resources', '', fmtVal(t.byType)),
-    tile(String(p.errors || 0), 'Console errors', p.errors ? 'err' : ''),
-    tile(env.webdriver ? 'true' : 'false', 'webdriver', env.webdriver ? 'err' : '', 'navigator.webdriver as the page sees it')));
-  const docRows = [['URL', p.url], ['Title', r.meta?.title || p.title || ''], ['Referrer', p.referrer || '—'], ['Protocol', t.protocol || '—'], ['Navigation', t.type || '—'],
-    ['Transfer', `${fmtSize(t.docBytes) || '—'} document (as Chrome received it, incl. CupNet agent) · ${fmtSize(t.resourceBytes) || '0 B'} resources`]];
-  if (doc) docRows.push(['Response', `${doc.status} · ${doc.mime || ''} · ${fmtSize(doc.resSize) || '0 B'} · ${doc.duration ?? '?'} ms`]);
+    tile(doc ? String(doc.status || 'ERR') : '—', 'Документ', doc && (doc.status >= 400 || !doc.status) ? 'err' : '', doc ? `${doc.mime || ''} · ${fmtSize(doc.resSize) || '0 B'}` : 'Запрос документа отсутствует в этой сессии'),
+    tile(ms(t.ttfb), 'Первый байт'), tile(ms(t.domContentLoaded), 'DOM готов'), tile(ms(t.load), 'Загрузка'),
+    tile(String(t.resources ?? '—'), 'Ресурсы', '', fmtVal(t.byType)),
+    tile(String(p.errors || 0), 'Ошибки консоли', p.errors ? 'err' : ''),
+    tile(env.webdriver ? 'true' : 'false', 'webdriver', env.webdriver ? 'err' : '', 'navigator.webdriver, как его видит страница')));
+  const docRows = [['URL', p.url], ['Заголовок', r.meta?.title || p.title || ''], ['Referrer', p.referrer || '—'], ['Протокол', t.protocol || '—'], ['Навигация', t.type || '—'],
+    ['Передано', `${fmtSize(t.docBytes) || '—'} документ (как его получил Chrome, вкл. агент CupNet) · ${fmtSize(t.resourceBytes) || '0 B'} ресурсы`]];
+  if (doc) docRows.push(['Ответ', `${doc.status} · ${doc.mime || ''} · ${fmtSize(doc.resSize) || '0 B'} · ${doc.duration ?? '?'} мс`]);
   const docBox = kvGrid(docRows);
-  b.append(sect('Document', docBox, true, doc ? h('button', { class: 'btn sm', onclick: () => showInTraffic(doc.seq) }, `#${doc.seq} in Traffic`) : null));
+  b.append(sect('Документ', docBox, true, doc ? h('button', { class: 'btn sm', onclick: () => showInTraffic(doc.seq) }, `#${doc.seq} в Трафике`) : null));
   const tech = r.extra?.tech || [];
-  b.append(sect('Technologies', tech.length ? h('div', { class: 'chips' }, tech.map((x) => tag(`${x.name}${x.version ? ` ${x.version}` : ''}`, 'accent'))) : h('div', { class: 'muted' }, 'Nothing recognised'), true, tag(tech.length)));
-  if (r.captcha?.found) b.append(sect('Challenges', h('div', { class: 'chips' }, ['recaptcha', 'hcaptcha', 'turnstile', 'geetest', 'other'].filter((k) => (r.captcha[k] || []).length).map((k) => h('button', { class: 'tag warn an-link', onclick: () => { AN.tab = 'captcha'; renderAnMain(); } }, `${CAPTCHA_NAMES[k]} × ${r.captcha[k].length}`)))));
-  const envRows = Object.entries(env).map(([k, v]) => [k, k === 'webdriver' && v ? h('span', { class: 'err' }, 'true — automation is visible to the page') : fmtVal(v)]);
-  b.append(sect('Environment (as the page sees it)', kvGrid(envRows), true));
-  if (doc) { const hp = pairsOf(doc.headers); b.append(sect('Response headers', kvGrid(hp), false, tag(hp.length))); }
+  b.append(sect('Технологии', tech.length ? h('div', { class: 'chips' }, tech.map((x) => tag(`${x.name}${x.version ? ` ${x.version}` : ''}`, 'accent'))) : h('div', { class: 'muted' }, 'Ничего не распознано'), true, tag(tech.length)));
+  if (r.captcha?.found) b.append(sect('Челленджи', h('div', { class: 'chips' }, ['recaptcha', 'hcaptcha', 'turnstile', 'geetest', 'other'].filter((k) => (r.captcha[k] || []).length).map((k) => h('button', { class: 'tag warn an-link', onclick: () => { AN.tab = 'captcha'; renderAnMain(); } }, `${CAPTCHA_NAMES[k]} × ${r.captcha[k].length}`)))));
+  const envRows = Object.entries(env).map(([k, v]) => [k, k === 'webdriver' && v ? h('span', { class: 'err' }, 'true — автоматизация видна странице') : fmtVal(v)]);
+  b.append(sect('Окружение (как его видит страница)', kvGrid(envRows), true));
+  if (doc) { const hp = pairsOf(doc.headers); b.append(sect('Заголовки ответа', kvGrid(hp), false, tag(hp.length))); }
 }
 
 function anFieldAction(form, f, type, value) {
   return post(`/api/pages/${AN.sel}/action`, { op: 'form', type, form, field: f.index, value }).then((r) => {
-    if (r && r.ok === false) throw new Error(r.text || 'The page refused');
+    if (r && r.ok === false) throw new Error(r.text || 'Страница отклонила действие');
     return r;
   });
 }
 function anFieldRow(formIdx, f) {
   const pw = f.type === 'password' || f._pw;
   const val = h('input', { type: pw && !f._reveal ? 'password' : 'text', class: 'mono an-val', value: f.value || '', placeholder: f.placeholder || '', spellcheck: false });
-  const set = guard(async () => { await anFieldAction(formIdx, f, 'set-value', val.value); f.value = val.value; toast(`${f.name || f.tag} set`, 'ok'); });
+  const set = guard(async () => { await anFieldAction(formIdx, f, 'set-value', val.value); f.value = val.value; toast(`${f.name || f.tag}: значение установлено`, 'ok'); });
   val.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); set(); } });
   const act = (icon, type, title, after, on) => h('button', { class: `btn sm an-fact${on ? ' on' : ''}`, title, 'aria-label': title, onclick: guard(async () => { await anFieldAction(formIdx, f, type); if (after) after(); renderAnMain(); }) }, icon);
-  const flags = [f.hidden || f.type === 'hidden' ? tag('hidden') : null, !f.visible && !f.hidden && f.type !== 'hidden' ? tag('invisible') : null,
-    f.disabled ? tag('disabled', 'warn') : null, f.readonly ? tag('readonly', 'warn') : null, f.required ? tag('required', 'accent') : null];
+  const flags = [f.hidden || f.type === 'hidden' ? tag('скрытое') : null, !f.visible && !f.hidden && f.type !== 'hidden' ? tag('невидимое') : null,
+    f.disabled ? tag('отключено', 'warn') : null, f.readonly ? tag('только чтение', 'warn') : null, f.required ? tag('обязательное', 'accent') : null];
   return h('tr', null,
     h('td', { class: 'faint' }, String(f.index)),
     h('td', { class: 'mono' }, f.tag === 'input' ? f.type || 'text' : f.tag),
     h('td', { class: 'mono', title: `${f.name || ''}${f.id ? ` #${f.id}` : ''}${f.className ? ` .${f.className}` : ''}` }, f.name || h('span', { class: 'faint' }, f.id ? `#${f.id}` : '—')),
-    h('td', { class: 'an-valcell' }, h('div', { class: 'an-valrow' }, val, h('button', { class: 'btn sm', title: 'Write the value into the page (fires input + change)', onclick: set }, 'Set'))),
+    h('td', { class: 'an-valcell' }, h('div', { class: 'an-valrow' }, val, h('button', { class: 'btn sm', title: 'Записать значение в страницу (вызывает input + change)', onclick: set }, 'Задать'))),
     h('td', { class: 'an-flags' }, flags),
     h('td', { class: 'an-facts' }, h('div', { class: 'an-factrow' },
-      act('⌖', 'focus', 'Focus — scroll to the field and focus it'),
-      f.hidden || f.type === 'hidden' || !f.visible ? act('◐', 'show', 'Show — force the field visible (type=hidden → text)', () => { f.hidden = false; f.visible = true; f._shown = true; })
-        : f._shown ? act('◐', 'hide', 'Unshow — undo Show', () => { f._shown = false; }, true) : null,
-      act('⊘', 'toggle-disabled', f.disabled ? 'Enable the field' : 'Disable the field', () => { f.disabled = !f.disabled; }, f.disabled),
-      act('✎', 'toggle-readonly', f.readonly ? 'Make writable' : 'Make read-only', () => { f.readonly = !f.readonly; }, f.readonly),
-      pw ? act('👁', 'toggle-password', f._reveal ? 'Mask — switch the page field back to password' : 'Reveal — switch the page field from password to text', () => { f._pw = true; f._reveal = !f._reveal; }, f._reveal) : null)));
+      act('⌖', 'focus', 'Фокус — прокрутить к полю и сфокусировать его'),
+      f.hidden || f.type === 'hidden' || !f.visible ? act('◐', 'show', 'Показать — принудительно сделать поле видимым (type=hidden → text)', () => { f.hidden = false; f.visible = true; f._shown = true; })
+        : f._shown ? act('◐', 'hide', 'Скрыть — отменить «Показать»', () => { f._shown = false; }, true) : null,
+      act('⊘', 'toggle-disabled', f.disabled ? 'Включить поле' : 'Отключить поле', () => { f.disabled = !f.disabled; }, f.disabled),
+      act('✎', 'toggle-readonly', f.readonly ? 'Сделать редактируемым' : 'Сделать только для чтения', () => { f.readonly = !f.readonly; }, f.readonly),
+      pw ? act('👁', 'toggle-password', f._reveal ? 'Маскировать — вернуть поле в режим password' : 'Раскрыть — переключить поле с password на text', () => { f._pw = true; f._reveal = !f._reveal; }, f._reveal) : null)));
 }
 function formCurl(form) {
   const pairs = (form.fields || []).filter((f) => f.name && f.tag !== 'button' && !['submit', 'button', 'reset', 'image', 'file'].includes(f.type)).map((f) => [f.name, f.value || '']);
@@ -687,50 +687,50 @@ function formCurl(form) {
 }
 function anForms(b, r) {
   const forms = r.forms || [], orphans = r.extra?.orphanFields || [];
-  if (!forms.length && !orphans.length) { b.append(h('div', { class: 'empty' }, 'No forms or inputs on this page.')); return; }
+  if (!forms.length && !orphans.length) { b.append(h('div', { class: 'empty' }, 'На этой странице нет форм или полей ввода.')); return; }
   const table = (formIdx, fields) => h('div', { class: 'an-tblwrap' }, h('table', { class: 'tbl an-ftbl' },
-    h('thead', null, h('tr', null, h('th', { class: 'w-28' }, '#'), h('th', { class: 'w-60' }, 'Type'), h('th', { class: 'w-90' }, 'Name'), h('th', null, 'Value'), h('th', { class: 'w-90' }, 'Flags'), h('th', { class: 'an-facts-h' }, ''))),
+    h('thead', null, h('tr', null, h('th', { class: 'w-28' }, '#'), h('th', { class: 'w-60' }, 'Тип'), h('th', { class: 'w-90' }, 'Имя'), h('th', null, 'Значение'), h('th', { class: 'w-90' }, 'Флаги'), h('th', { class: 'an-facts-h' }, ''))),
     h('tbody', null, fields.map((f) => anFieldRow(formIdx, f)))));
   for (const form of forms) {
     const req = formCurl(form);
     b.append(h('div', { class: 'an-card' },
       h('div', { class: 'an-card-h' },
-        h('b', null, `Form ${form.index}`), badge(req.method, `m-${req.method}`), h('span', { class: 'mono ell', title: form.action }, form.action || '(this page)'),
+        h('b', null, `Форма ${form.index}`), badge(req.method, `m-${req.method}`), h('span', { class: 'mono ell', title: form.action }, form.action || '(эта страница)'),
         form.id ? tag(`#${form.id}`) : null, form.name ? tag(`name=${form.name}`) : null,
         h('span', { class: 'spacer' }),
-        h('button', { class: 'btn sm', title: 'Open the form submission (current values) in Repeater', onclick: () => { rpLoad(req); go('repeater'); } }, 'Repeater'),
-        h('button', { class: 'btn sm', onclick: () => copy(curlOf(req), 'curl copied') }, 'Copy curl')),
+        h('button', { class: 'btn sm', title: 'Открыть отправку формы (текущие значения) в Репитере', onclick: () => { rpLoad(req); go('repeater'); } }, 'Репитер'),
+        h('button', { class: 'btn sm', onclick: () => copy(curlOf(req), 'curl скопирован') }, 'Копировать curl')),
       table(form.index, form.fields || [])));
   }
-  if (orphans.length) b.append(h('div', { class: 'an-card' }, h('div', { class: 'an-card-h' }, h('b', null, 'Fields outside any form'), tag(orphans.length), h('span', { class: 'muted' }, 'Typical for SPAs — the request is built in JS (see Endpoints).')), table(-1, orphans)));
+  if (orphans.length) b.append(h('div', { class: 'an-card' }, h('div', { class: 'an-card-h' }, h('b', null, 'Поля вне форм'), tag(orphans.length), h('span', { class: 'muted' }, 'Типично для SPA — запрос собирается в JS (см. Эндпоинты).')), table(-1, orphans)));
 }
 function curlOf(req) {
   const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
   return [`curl -X ${req.method} ${q(req.url)}`, ...req.headers.map(([k, v]) => `  -H ${q(`${k}: ${v}`)}`), ...(req.body ? [`  --data ${q(req.body)}`] : [])].join(' \\\n');
 }
 
-const CAPTCHA_NAMES = { recaptcha: 'reCAPTCHA', hcaptcha: 'hCaptcha', turnstile: 'Cloudflare Turnstile', geetest: 'GeeTest', other: 'Other' };
+const CAPTCHA_NAMES = { recaptcha: 'reCAPTCHA', hcaptcha: 'hCaptcha', turnstile: 'Cloudflare Turnstile', geetest: 'GeeTest', other: 'Другое' };
 function anCaptcha(b, r) {
   const c = r.captcha || {};
-  if (!c.found) { b.append(h('div', { class: 'empty' }, 'No captcha or challenge widget found in the page DOM.')); return; }
+  if (!c.found) { b.append(h('div', { class: 'empty' }, 'В DOM страницы не найдено капчи или challenge-виджета.')); return; }
   for (const k of Object.keys(CAPTCHA_NAMES)) {
     for (const [i, it] of (c[k] || []).entries()) {
       const rows = Object.entries(it).filter(([, v]) => v !== '' && v != null).map(([kk, v]) => [kk, h('span', { class: 'an-copyable' }, fmtVal(v), copyBtn(fmtVal(v), `${kk} copied`))]);
       b.append(h('div', { class: 'an-card' },
-        h('div', { class: 'an-card-h' }, h('b', null, CAPTCHA_NAMES[k]), (c[k] || []).length > 1 ? tag(`${i + 1}/${c[k].length}`) : null, it.iframe ? tag('in iframe') : null,
+        h('div', { class: 'an-card-h' }, h('b', null, CAPTCHA_NAMES[k]), (c[k] || []).length > 1 ? tag(`${i + 1}/${c[k].length}`) : null, it.iframe ? tag('в iframe') : null,
           h('span', { class: 'spacer' }),
-          it.selector ? h('button', { class: 'btn sm', title: 'Outline the widget in the page', onclick: guard(async () => { const x = await post(`/api/pages/${AN.sel}/action`, { op: 'highlight', selector: it.selector }); if (x && x.ok === false) toast(x.text || 'Not found', 'warn'); }) }, 'Highlight') : null),
+          it.selector ? h('button', { class: 'btn sm', title: 'Подсветить виджет на странице', onclick: guard(async () => { const x = await post(`/api/pages/${AN.sel}/action`, { op: 'highlight', selector: it.selector }); if (x && x.ok === false) toast(x.text || 'Не найдено', 'warn'); }) }, 'Подсветить') : null),
         kvGrid(rows)));
     }
   }
-  b.append(h('p', { class: 'muted' }, 'Detection only: CupNet does not solve or bypass challenges.'));
+  b.append(h('p', { class: 'muted' }, 'Только обнаружение: CupNet не решает и не обходит челленджи.'));
 }
 
 function anEndpoints(b, r) {
   const ep = r.endpoints;
-  if (!ep) { b.append(h('div', { class: 'empty' }, 'The endpoint scan did not run.')); return; }
+  if (!ep) { b.append(h('div', { class: 'empty' }, 'Сканирование эндпоинтов не выполнялось.')); return; }
   const cats = Object.entries(ep.categoryCounts || {}).sort((x, y) => y[1] - x[1]);
-  const q = h('input', { type: 'search', placeholder: 'Filter endpoints…', value: AN.epq });
+  const q = h('input', { type: 'search', placeholder: 'Фильтр эндпоинтов…', value: AN.epq });
   const list = h('tbody');
   const det = ep.endpointsDetailed || [];
   const paint = () => {
@@ -743,31 +743,31 @@ function anEndpoints(b, r) {
         h('td', null, (d.methods || []).map((m) => badge(m, `m-${m}`))),
         h('td', { class: 'mono muted', title: (d.payloadKeys || []).join(', ') }, (d.payloadKeys || []).join(', ')),
         h('td', { class: 'r-al' }, String((d.hits || []).length)),
-        h('td', null, copyBtn(d.path, 'Path copied')));
+        h('td', null, copyBtn(d.path, 'Путь скопирован')));
       const more = h('tr', { class: 'an-hits', hidden: true }, h('td', { colspan: 5 }, (d.hits || []).slice(0, 20).map((x) => h('div', { class: 'mono an-hit' }, h('span', { class: 'faint' }, `${x.source}${x.line ? `:${x.line}` : ''} `), x.preview || ''))));
       tr.addEventListener('click', () => { more.hidden = !more.hidden; tr.classList.toggle('open', !more.hidden); });
       list.append(tr, more);
     }
-    if (!rows.length) list.append(h('tr', null, h('td', { colspan: 5, class: 'muted' }, det.length ? 'No endpoint matches.' : 'No endpoints found.')));
+    if (!rows.length) list.append(h('tr', null, h('td', { colspan: 5, class: 'muted' }, det.length ? 'Нет подходящих эндпоинтов.' : 'Эндпоинты не найдены.')));
   };
   q.addEventListener('input', () => { AN.epq = q.value; paint(); });
   paint();
   const missing = ep.missing || [];
   b.append(h('div', { class: 'an-epbar' }, q,
-    h('span', { class: 'muted' }, `${(ep.endpoints || []).length} endpoints · ${ep.inlineCount || 0} inline + ${ep.fromLog || 0} logged${ep.fetched ? ` + ${ep.fetched} fetched` : ''} scripts`),
+    h('span', { class: 'muted' }, `${(ep.endpoints || []).length} эндпоинтов · скрипты: ${ep.inlineCount || 0} inline + ${ep.fromLog || 0} из журнала${ep.fetched ? ` + ${ep.fetched} загружено` : ''}`),
     h('span', { class: 'spacer' }),
-    h('button', { class: 'btn sm', disabled: !(ep.endpoints || []).length, onclick: () => copy((ep.endpoints || []).join('\n'), 'Endpoints copied') }, 'Copy all')));
+    h('button', { class: 'btn sm', disabled: !(ep.endpoints || []).length, onclick: () => copy((ep.endpoints || []).join('\n'), 'Эндпоинты скопированы') }, 'Копировать все')));
   if (cats.length) b.append(h('div', { class: 'chips an-cats' }, cats.map(([k, n]) => h('span', { class: 'tag' }, k, h('b', null, ` ${n}`)))));
-  b.append(h('table', { class: 'tbl an-eptbl' }, h('thead', null, h('tr', null, h('th', null, 'Path · found in'), h('th', { class: 'w-110' }, 'Methods'), h('th', { class: 'w-180' }, 'Payload keys'), h('th', { class: 'w-60 r-al' }, 'Hits'), h('th', { class: 'w-28' }, ''))), list));
+  b.append(h('table', { class: 'tbl an-eptbl' }, h('thead', null, h('tr', null, h('th', null, 'Путь · найден в'), h('th', { class: 'w-110' }, 'Методы'), h('th', { class: 'w-180' }, 'Ключи payload'), h('th', { class: 'w-60 r-al' }, 'Срабат.'), h('th', { class: 'w-28' }, ''))), list));
   if (missing.length) {
     b.append(h('div', { class: 'note warn an-missing' },
-      h('div', null, h('b', null, `${missing.length} script(s) not in this session`), ' — loaded from cache, or before CupNet started. Fetching them sends GET requests through the current proxy and TLS profile (logged as type ', h('code', null, 'analyzer'), ').'),
-      h('div', { class: 'an-miss-list mono' }, missing.slice(0, 12).map((u) => h('div', { class: 'ell', title: u }, u)), missing.length > 12 ? h('div', { class: 'faint' }, `… ${missing.length - 12} more`) : null),
-      h('button', { class: 'btn sm', onclick: guard(async (ev) => { await busy(ev.currentTarget, 'Fetching…', () => anAnalyze({ fetchMissing: true })); }) }, 'Fetch and rescan')));
+      h('div', null, h('b', null, `${missing.length} скрипт(ов) отсутствует в этой сессии`), ' — загружены из кэша или до запуска CupNet. Их загрузка отправит GET-запросы через текущий прокси и TLS-профиль (логируется как тип ', h('code', null, 'analyzer'), ').'),
+      h('div', { class: 'an-miss-list mono' }, missing.slice(0, 12).map((u) => h('div', { class: 'ell', title: u }, u)), missing.length > 12 ? h('div', { class: 'faint' }, `… ещё ${missing.length - 12}`) : null),
+      h('button', { class: 'btn sm', onclick: guard(async (ev) => { await busy(ev.currentTarget, 'Загрузка…', () => anAnalyze({ fetchMissing: true })); }) }, 'Загрузить и пересканировать')));
   }
   const scanned = ep.scannedScripts || [];
   if (scanned.length) {
-    b.append(sect('Scanned scripts', h('table', { class: 'tbl' }, h('thead', null, h('tr', null, h('th', null, 'Script'), h('th', { class: 'w-60' }, 'Status'), h('th', { class: 'w-90 r-al' }, 'Size'), h('th', { class: 'w-60 r-al' }, 'Hits'))),
+    b.append(sect('Просканированные скрипты', h('table', { class: 'tbl' }, h('thead', null, h('tr', null, h('th', null, 'Скрипт'), h('th', { class: 'w-60' }, 'Статус'), h('th', { class: 'w-90 r-al' }, 'Размер'), h('th', { class: 'w-60 r-al' }, 'Срабат.'))),
       h('tbody', null, scanned.map((s) => {
         const seq = /^https?:/i.test(s.url) ? findRequestFor(s.url) : null;
         return h('tr', null, h('td', { class: 'mono', title: s.url }, seq ? h('a', { href: '#', onclick: (ev) => { ev.preventDefault(); showInTraffic(seq); } }, s.url) : s.url),
@@ -792,14 +792,14 @@ function anStorage(b, r) {
         h('td', null, vIn),
         h('td', { class: 'r-al' }, fmtSize(row.v.length) || '0 B'),
         h('td', { class: 'an-stacts' },
-          pretty ? h('button', { class: 'icon', title: 'Format JSON', onclick: () => { row.v = JSON.stringify(JSON.parse(row.v), null, 2); paint(); mark(); } }, '{}') : null,
-          copyBtn(row.v, 'Value copied'),
-          h('button', { class: 'icon', title: row.del ? 'Keep' : 'Delete', onclick: () => { row.del = !row.del; paint(); mark(); } }, row.del ? '↺' : '✕'))));
+          pretty ? h('button', { class: 'icon', title: 'Форматировать JSON', onclick: () => { row.v = JSON.stringify(JSON.parse(row.v), null, 2); paint(); mark(); } }, '{}') : null,
+          copyBtn(row.v, 'Значение скопировано'),
+          h('button', { class: 'icon', title: row.del ? 'Оставить' : 'Удалить', onclick: () => { row.del = !row.del; paint(); mark(); } }, row.del ? '↺' : '✕'))));
     }
-    if (!rows.length) tbody.append(h('tr', null, h('td', { colspan: 4, class: 'muted' }, `${AN.st === 'local' ? 'localStorage' : 'sessionStorage'} is empty`)));
+    if (!rows.length) tbody.append(h('tr', null, h('td', { colspan: 4, class: 'muted' }, `${AN.st === 'local' ? 'localStorage' : 'sessionStorage'} пусто`)));
   };
-  const save = h('button', { class: 'btn primary sm', disabled: true }, 'Save to page');
-  const revert = h('button', { class: 'btn sm', disabled: true, onclick: () => renderAnMain() }, 'Revert');
+  const save = h('button', { class: 'btn primary sm', disabled: true }, 'Сохранить в страницу');
+  const revert = h('button', { class: 'btn sm', disabled: true, onclick: () => renderAnMain() }, 'Вернуть');
   const changes = () => {
     const out = {};
     for (const row of rows) {
@@ -810,49 +810,49 @@ function anStorage(b, r) {
     }
     return out;
   };
-  const mark = () => { const n = Object.keys(changes()).length; save.disabled = !n; revert.disabled = !n; save.textContent = n ? `Save ${n} change${n > 1 ? 's' : ''}` : 'Save to page'; };
+  const mark = () => { const n = Object.keys(changes()).length; save.disabled = !n; revert.disabled = !n; save.textContent = n ? `Сохранить изменений: ${n}` : 'Сохранить в страницу'; };
   save.addEventListener('click', guard(async () => {
     const data2 = changes();
-    await busy(save, 'Saving…', () => post(`/api/pages/${AN.sel}/action`, { op: 'storage', which: AN.st, data: data2 }));
-    toast('Storage updated in the page', 'ok');
+    await busy(save, 'Сохранение…', () => post(`/api/pages/${AN.sel}/action`, { op: 'storage', which: AN.st, data: data2 }));
+    toast('Хранилище обновлено в странице', 'ok');
     await anAnalyze({ quiet: true });
   }));
   paint();
   b.append(h('div', { class: 'an-epbar' },
     seg([['local', `localStorage · ${Object.keys(st.local || {}).length}`], ['session', `sessionStorage · ${Object.keys(st.session || {}).length}`]], AN.st, (v) => { AN.st = v; renderAnMain(); }),
     h('span', { class: 'spacer' }),
-    h('button', { class: 'btn sm', onclick: () => { rows.push({ k: '', v: '', k0: null, v0: null, del: false }); paint(); mark(); tbody.querySelector('tr:last-child input')?.focus(); } }, '+ Add'),
-    h('button', { class: 'btn sm', disabled: !rows.length, onclick: () => copy(JSON.stringify(data, null, 2), 'Storage copied') }, 'Copy JSON'),
+    h('button', { class: 'btn sm', onclick: () => { rows.push({ k: '', v: '', k0: null, v0: null, del: false }); paint(); mark(); tbody.querySelector('tr:last-child input')?.focus(); } }, '+ Добавить'),
+    h('button', { class: 'btn sm', disabled: !rows.length, onclick: () => copy(JSON.stringify(data, null, 2), 'Хранилище скопировано') }, 'Копировать JSON'),
     revert, save));
-  b.append(h('table', { class: 'tbl an-sttbl' }, h('thead', null, h('tr', null, h('th', { class: 'w-180' }, 'Key'), h('th', null, 'Value'), h('th', { class: 'w-80 r-al' }, 'Size'), h('th', { class: 'w-80' }, ''))), tbody));
+  b.append(h('table', { class: 'tbl an-sttbl' }, h('thead', null, h('tr', null, h('th', { class: 'w-180' }, 'Ключ'), h('th', null, 'Значение'), h('th', { class: 'w-80 r-al' }, 'Размер'), h('th', { class: 'w-80' }, ''))), tbody));
 }
 
 function anCookies(b, r) {
   const list = r.cookies || [];
   b.append(h('div', { class: 'an-epbar' },
-    h('span', { class: 'muted' }, `${list.length} cookie(s) Chrome sends to this host · ${list.filter((c) => c.httpOnly).length} HttpOnly · ${list.filter((c) => c.inJs).length} visible to page JS`),
+    h('span', { class: 'muted' }, `${list.length} cookie Chrome отправляет этому хосту · ${list.filter((c) => c.httpOnly).length} HttpOnly · ${list.filter((c) => c.inJs).length} видны JS страницы`),
     h('span', { class: 'spacer' }),
     h('button', { class: 'btn sm', onclick: () => {
       try { $('ckSiteQ').value = new URL(pageById(AN.sel)?.url || '').hostname.replace(/^www\./, ''); } catch { /* no URL */ }
       CK.site = ''; store.set('ck-site', ''); go('cookies');
-    } }, 'Open in Cookies')));
-  if (!list.length) { b.append(h('div', { class: 'empty' }, 'No cookies for this host in the cookie store.')); return; }
+    } }, 'Открыть в Cookies')));
+  if (!list.length) { b.append(h('div', { class: 'empty' }, 'Для этого хоста нет cookie в хранилище.')); return; }
   b.append(h('table', { class: 'tbl' },
-    h('thead', null, h('tr', null, h('th', { class: 'w-180' }, 'Name'), h('th', null, 'Value'), h('th', { class: 'w-180' }, 'Domain · path'), h('th', { class: 'w-130' }, 'Expires'), h('th', { class: 'w-180' }, 'Flags'))),
+    h('thead', null, h('tr', null, h('th', { class: 'w-180' }, 'Имя'), h('th', null, 'Значение'), h('th', { class: 'w-180' }, 'Домен · путь'), h('th', { class: 'w-130' }, 'Истекает'), h('th', { class: 'w-180' }, 'Флаги'))),
     h('tbody', null, list.map((c) => h('tr', null,
       h('td', { class: 'mono', title: c.name }, c.name),
-      h('td', { class: 'mono', title: c.value }, h('span', { class: 'an-copyable' }, c.value, copyBtn(c.value, 'Value copied'))),
+      h('td', { class: 'mono', title: c.value }, h('span', { class: 'an-copyable' }, c.value, copyBtn(c.value, 'Значение скопировано'))),
       h('td', { class: 'mono muted', title: `${c.domain}${c.path}` }, `${c.hostOnly ? '' : '.'}${c.domain}${c.path || '/'}`),
-      h('td', { class: 'muted' }, c.expires ? new Date(c.expires * (c.expires < 1e11 ? 1000 : 1)).toLocaleString() : 'session'),
-      h('td', null, c.secure ? tag('Secure') : null, c.httpOnly ? tag('HttpOnly', 'accent') : null, c.sameSite ? tag(c.sameSite) : null, c.partitioned ? tag('CHIPS') : null, c.inJs ? tag('in JS', 'ok') : null))))));
+      h('td', { class: 'muted' }, c.expires ? new Date(c.expires * (c.expires < 1e11 ? 1000 : 1)).toLocaleString() : 'сессия'),
+      h('td', null, c.secure ? tag('Secure') : null, c.httpOnly ? tag('HttpOnly', 'accent') : null, c.sameSite ? tag(c.sameSite) : null, c.partitioned ? tag('CHIPS') : null, c.inJs ? tag('в JS', 'ok') : null))))));
 }
 
 // Statuses from page-analyzer.js auditSecurityHeaders.
 const SEC_ICON = { good: ['✓', 'ok'], warn: ['!', 'warn'], bad: ['✕', 'err'], info: ['i', ''] };
 function anSecurity(b, r) {
-  if (!r.security) { b.append(h('div', { class: 'empty' }, 'The document request is not in this session (loaded before CupNet started, or from cache) — reload the page to audit its headers.')); return; }
+  if (!r.security) { b.append(h('div', { class: 'empty' }, 'Запрос документа отсутствует в этой сессии (загружен до запуска CupNet или из кэша) — перезагрузите страницу, чтобы проверить её заголовки.')); return; }
   const n = (s) => r.security.filter((x) => x.status === s).length;
-  b.append(h('div', { class: 'chips an-cats' }, tag(`${n('good')} ok`, 'ok'), tag(`${n('bad')} missing`, 'err'), tag(`${n('warn')} to review`, 'warn'), tag(`${n('info')} info`)));
+  b.append(h('div', { class: 'chips an-cats' }, tag(`${n('good')} ок`, 'ok'), tag(`${n('bad')} отсутствует`, 'err'), tag(`${n('warn')} на проверку`, 'warn'), tag(`${n('info')} инфо`)));
   b.append(h('div', { class: 'an-sec' }, r.security.map((s) => {
     const [ic, cls] = SEC_ICON[s.status] || SEC_ICON.info;
     return h('div', { class: `an-secrow ${cls}` }, h('span', { class: `an-secic ${cls}` }, ic),
@@ -863,17 +863,17 @@ function anSecurity(b, r) {
 
 function anMeta(b, r) {
   const m = r.meta || {};
-  b.append(sect('Page', kvGrid([['Title', m.title || ''], ['URL', m.url || ''], ['Charset', m.charset || '—'], ['Doctype', m.doctype || '—']])));
+  b.append(sect('Страница', kvGrid([['Заголовок', m.title || ''], ['URL', m.url || ''], ['Кодировка', m.charset || '—'], ['Doctype', m.doctype || '—']])));
   const metas = m.meta || [];
-  b.append(sect('Meta tags', kvGrid(metas.map((x) => [x.name || x.property || x.httpEquiv || x['http-equiv'] || '(meta)', x.content || ''])), true, tag(metas.length)));
+  b.append(sect('Meta-теги', kvGrid(metas.map((x) => [x.name || x.property || x.httpEquiv || x['http-equiv'] || '(meta)', x.content || ''])), true, tag(metas.length)));
   const links = m.links || [];
-  if (links.length) b.append(sect('Links', kvGrid(links.map((x) => [x.rel || '(link)', x.href || ''])), true, tag(links.length)));
+  if (links.length) b.append(sect('Ссылки', kvGrid(links.map((x) => [x.rel || '(link)', x.href || ''])), true, tag(links.length)));
   const srcs = m.scripts?.srcs || [];
-  b.append(sect('Scripts', h('div', null,
-    h('div', { class: 'muted' }, `${m.scripts?.external || 0} external · ${m.scripts?.inline || 0} inline`),
+  b.append(sect('Скрипты', h('div', null,
+    h('div', { class: 'muted' }, `${m.scripts?.external || 0} внешних · ${m.scripts?.inline || 0} inline`),
     srcs.map((s) => { const seq = findRequestFor(s); return h('div', { class: 'mono ell an-src', title: s }, seq ? h('a', { href: '#', onclick: (ev) => { ev.preventDefault(); showInTraffic(seq); } }, s) : s); })), true, tag(srcs.length)));
   const ifr = m.iframes || [];
-  b.append(sect('Iframes', ifr.length ? kvGrid(ifr.map((f) => [f.id || f.name || '(anonymous)', f.src || 'about:blank'])) : h('div', { class: 'muted' }, 'None'), true, tag(ifr.length)));
+  b.append(sect('Iframes', ifr.length ? kvGrid(ifr.map((f) => [f.id || f.name || '(без имени)', f.src || 'about:blank'])) : h('div', { class: 'muted' }, 'Нет'), true, tag(ifr.length)));
 }
 
 $('anQ').addEventListener('input', () => { AN.q = $('anQ').value; renderAnPages(); });

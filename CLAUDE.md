@@ -10,7 +10,7 @@ CupNet is a standalone Electron/Chromium browser for web-traffic analysis: real 
 **Hard rules (also in `.cursor/rules/*.mdc`):**
 - In `mitm` traffic mode never register `session.protocol.handle('http'|'https')` for interception — it moves traffic to the JS/fetch path, which Cloudflare/Turnstile can detect. Interception happens on the MITM path (`request-interceptor.js` `planMitmIntercept`/`finalizeMitmInterceptResponse`, called from `mitm-proxy.js`).
 - Prefer implementing outbound HTTP behaviour in MITM, not in Chromium.
-- All user-facing UI text, code, comments and docs in **English**.
+- All user-facing UI text, code, comments and docs in **English** — **except the `mini/` app, whose user-facing UI strings are in Russian** (labels, hints, buttons, placeholders, toasts, titles and the in-app Guide). In `mini/` everything else stays English: variable/function names, object keys, code, comments, `console.*`/logger text, API paths, CSS classes/ids, HTTP methods/headers, and tech proper nouns (CupNet, Chrome, MITM, DNS, JSON, TLS, WebSocket, HAR, curl, …).
 - Add IPC via `main-process/ipc/handlers/*.js` (never `ipcMain.handle` in `cupnet-runtime.js`); privileged handlers must use the `ipc-trusted-sender.js` guard; keep `preload-view.js` (tab preload for untrusted sites) minimal.
 
 **Baseline note:** the working tree has large uncommitted security-hardening WIP; a backup is in git ref `refs/backup/pre-claude-audit-2026-09-23`. Do not commit unless asked.

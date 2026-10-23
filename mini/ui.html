@@ -19,46 +19,46 @@
 </head>
 <body>
 <aside id="side">
-  <div class="brand"><span class="logo">◆</span><span>CupNet <b>mini</b></span><span class="ver mono" id="sideVer" title="Version"></span></div>
+  <div class="brand"><span class="logo">◆</span><span>CupNet <b>mini</b></span><span class="ver mono" id="sideVer" title="Версия"></span></div>
   <nav id="nav">
-    <button data-page="traffic" class="on"><svg viewBox="0 0 16 16"><path d="M2 3h12M2 8h12M2 13h8"/></svg><span>Traffic</span></button>
-    <button data-page="search" title="Search all sessions (⌘⇧F)"><svg viewBox="0 0 16 16"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l4.5 4.5"/></svg><span>Search</span></button>
-    <button data-page="console"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4 6l2.5 2L4 10M8 10.5h4"/></svg><span>Console</span><i class="count err" id="cnCount" hidden></i></button>
-    <button data-page="ws"><svg viewBox="0 0 16 16"><path d="M2 5.5h9l-2.5-2.5M14 10.5H5l2.5 2.5"/></svg><span>WebSockets</span><i class="count accent" id="wsCount" hidden title="Open connections"></i></button>
-    <button data-page="analyzer"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14M5 7h4M7 5v4"/></svg><span>Page analyzer</span></button>
-    <button data-page="sitemap"><svg viewBox="0 0 16 16"><rect x="6" y="1.5" width="4" height="3" rx=".6"/><rect x="1.5" y="11.5" width="4" height="3" rx=".6"/><rect x="10.5" y="11.5" width="4" height="3" rx=".6"/><path d="M8 4.5v3.5M3.5 11.5V8h9v3.5"/></svg><span>Site map</span></button>
-    <button data-page="notes"><svg viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3M5.5 8h5M5.5 10.5h5M5.5 13h3"/></svg><span>Notes</span></button>
-    <button data-page="proxies"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/></svg><span>Proxies</span></button>
-    <button data-page="ipwatch"><svg viewBox="0 0 16 16"><path d="M1.5 9h3l2-5 3 9 2-4h3"/></svg><span>IP monitor</span><i class="count accent" id="ipCount" hidden></i></button>
-    <button data-page="dns"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="2"/><circle cx="12.5" cy="4" r="2"/><circle cx="12.5" cy="12" r="2"/><path d="M5.5 8h3l2-3M8.5 8l2 3"/></svg><span>DNS</span><i class="count accent" id="dnsCount" hidden title="Enabled DNS overrides"></i></button>
-    <button data-page="compare"><svg viewBox="0 0 16 16"><path d="M2 3h5v10H2zM9 3h5v10H9z"/><path d="M4 6h1M4 9h1M11 7h1M11 10h1"/></svg><span>Compare</span></button>
-    <button data-page="mirror"><svg viewBox="0 0 16 16"><path d="M5 2.5H2.5v11H5M11 2.5h2.5v11H11"/><path d="M8 1v14"/><path d="M6 5.5 4.5 8 6 10.5M10 5.5 11.5 8 10 10.5"/></svg><span>Mirror</span><i class="count accent" id="mirCount" hidden title="Mirrored responses captured"></i></button>
-    <button data-page="cookies"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><circle cx="6" cy="6.5" r=".6"/><circle cx="10" cy="7" r=".6"/><circle cx="7" cy="10.5" r=".6"/></svg><span>Cookies</span><i class="count accent" id="ckCount" hidden title="Cookie changes waiting for the next page load"></i></button>
-    <button data-page="repeater"><svg viewBox="0 0 16 16"><path d="M3 6h9l-3-3M13 10H4l3 3"/></svg><span>Repeater</span></button>
-    <button data-page="intruder"><svg viewBox="0 0 16 16"><path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3"/><circle cx="8" cy="8" r="3"/><circle cx="8" cy="8" r=".8"/></svg><span>Intruder</span></button>
-    <button data-page="rules"><svg viewBox="0 0 16 16"><path d="M3 3h10v3H3zM3 10h6v3H3z"/></svg><span>Rules</span></button>
-    <button data-page="paused"><svg viewBox="0 0 16 16"><path d="M5 3v10M11 3v10"/></svg><span>Breakpoints</span><i class="count" id="pausedCount" hidden></i></button>
-    <button data-page="sessions"><svg viewBox="0 0 16 16"><path d="M3 2h7l3 3v9H3z"/><path d="M10 2v3h3"/></svg><span>Sessions</span></button>
-    <button data-page="settings"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg><span>Settings</span></button>
-    <button data-page="guide"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5"/><path d="M6 6.2a2 2 0 1 1 2.6 1.9c-.5.2-.6.5-.6 1v.4"/><circle cx="8" cy="11.6" r=".3"/></svg><span>Guide</span></button>
+    <button data-page="traffic" class="on"><svg viewBox="0 0 16 16"><path d="M2 3h12M2 8h12M2 13h8"/></svg><span>Трафик</span></button>
+    <button data-page="search" title="Поиск по всем сессиям (⌘⇧F)"><svg viewBox="0 0 16 16"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l4.5 4.5"/></svg><span>Поиск</span></button>
+    <button data-page="console"><svg viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4 6l2.5 2L4 10M8 10.5h4"/></svg><span>Консоль</span><i class="count err" id="cnCount" hidden></i></button>
+    <button data-page="ws"><svg viewBox="0 0 16 16"><path d="M2 5.5h9l-2.5-2.5M14 10.5H5l2.5 2.5"/></svg><span>WebSockets</span><i class="count accent" id="wsCount" hidden title="Открытые соединения"></i></button>
+    <button data-page="analyzer"><svg viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14M5 7h4M7 5v4"/></svg><span>Анализатор страницы</span></button>
+    <button data-page="sitemap"><svg viewBox="0 0 16 16"><rect x="6" y="1.5" width="4" height="3" rx=".6"/><rect x="1.5" y="11.5" width="4" height="3" rx=".6"/><rect x="10.5" y="11.5" width="4" height="3" rx=".6"/><path d="M8 4.5v3.5M3.5 11.5V8h9v3.5"/></svg><span>Карта сайта</span></button>
+    <button data-page="notes"><svg viewBox="0 0 16 16"><path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3M5.5 8h5M5.5 10.5h5M5.5 13h3"/></svg><span>Заметки</span></button>
+    <button data-page="proxies"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12"/></svg><span>Прокси</span></button>
+    <button data-page="ipwatch"><svg viewBox="0 0 16 16"><path d="M1.5 9h3l2-5 3 9 2-4h3"/></svg><span>Монитор IP</span><i class="count accent" id="ipCount" hidden></i></button>
+    <button data-page="dns"><svg viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="2"/><circle cx="12.5" cy="4" r="2"/><circle cx="12.5" cy="12" r="2"/><path d="M5.5 8h3l2-3M8.5 8l2 3"/></svg><span>DNS</span><i class="count accent" id="dnsCount" hidden title="Включённые DNS-переопределения"></i></button>
+    <button data-page="compare"><svg viewBox="0 0 16 16"><path d="M2 3h5v10H2zM9 3h5v10H9z"/><path d="M4 6h1M4 9h1M11 7h1M11 10h1"/></svg><span>Сравнение</span></button>
+    <button data-page="mirror"><svg viewBox="0 0 16 16"><path d="M5 2.5H2.5v11H5M11 2.5h2.5v11H11"/><path d="M8 1v14"/><path d="M6 5.5 4.5 8 6 10.5M10 5.5 11.5 8 10 10.5"/></svg><span>Зеркало</span><i class="count accent" id="mirCount" hidden title="Захвачено зеркалированных ответов"></i></button>
+    <button data-page="cookies"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><circle cx="6" cy="6.5" r=".6"/><circle cx="10" cy="7" r=".6"/><circle cx="7" cy="10.5" r=".6"/></svg><span>Cookies</span><i class="count accent" id="ckCount" hidden title="Изменения cookie в ожидании следующей загрузки страницы"></i></button>
+    <button data-page="repeater"><svg viewBox="0 0 16 16"><path d="M3 6h9l-3-3M13 10H4l3 3"/></svg><span>Репитер</span></button>
+    <button data-page="intruder"><svg viewBox="0 0 16 16"><path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3"/><circle cx="8" cy="8" r="3"/><circle cx="8" cy="8" r=".8"/></svg><span>Интрудер</span></button>
+    <button data-page="rules"><svg viewBox="0 0 16 16"><path d="M3 3h10v3H3zM3 10h6v3H3z"/></svg><span>Правила</span></button>
+    <button data-page="paused"><svg viewBox="0 0 16 16"><path d="M5 3v10M11 3v10"/></svg><span>Точки останова</span><i class="count" id="pausedCount" hidden></i></button>
+    <button data-page="sessions"><svg viewBox="0 0 16 16"><path d="M3 2h7l3 3v9H3z"/><path d="M10 2v3h3"/></svg><span>Сессии</span></button>
+    <button data-page="settings"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg><span>Настройки</span></button>
+    <button data-page="guide"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5"/><path d="M6 6.2a2 2 0 1 1 2.6 1.9c-.5.2-.6.5-.6 1v.4"/><circle cx="8" cy="11.6" r=".3"/></svg><span>Гайд</span></button>
   </nav>
   <div class="side-foot">
-    <button class="btn primary wide" id="launch" title="Open the proxied Chrome (dedicated profile)">Open Chrome</button>
-    <button class="btn ghost wide" id="quit" hidden title="Stop the proxy and close CupNet mini">Quit</button>
+    <button class="btn primary wide" id="launch" title="Открыть проксируемый Chrome (отдельный профиль)">Открыть Chrome</button>
+    <button class="btn ghost wide" id="quit" hidden title="Остановить прокси и закрыть CupNet mini">Выход</button>
   </div>
 </aside>
 
 <div id="app">
   <header id="top">
-    <h1 id="pageTitle">Traffic</h1>
-    <button id="egress" class="pill" title="Exit IP of the proxy — click to manage proxies"><i class="dot"></i><span id="egressText">checking…</span></button>
+    <h1 id="pageTitle">Трафик</h1>
+    <button id="egress" class="pill" title="Выходной IP прокси — нажмите, чтобы управлять прокси"><i class="dot"></i><span id="egressText">проверка…</span></button>
     <span id="stats" class="muted mono"></span>
   </header>
 
   <div id="login" hidden>
     <div class="card narrow">
-      <h2>No access token</h2>
-      <p>Open the URL printed by <code>cupnet-mini start</code> (it carries the token), or run <code>cupnet-mini window</code>.</p>
+      <h2>Нет токена доступа</h2>
+      <p>Откройте URL, выведенный командой <code>cupnet-mini start</code> (он содержит токен), или запустите <code>cupnet-mini window</code>.</p>
     </div>
   </div>
 
@@ -66,46 +66,46 @@
     <!-- ── Traffic ── -->
     <section id="page-traffic" class="page">
       <div class="toolbar">
-        <select id="session" title="Session" class="w-session"></select>
-        <input id="q" type="search" placeholder="Filter URL · -exclude · status:4xx method:POST type:xhr mime:json host:example.com">
-        <select id="fKind" title="Entry kind"><option value="request">Requests</option><option value="page-event">Page events</option><option value="ip">IP changes</option><option value="console">Console</option><option value="ws">WebSocket messages</option><option value="">All</option></select>
-        <select id="fMethod" title="Method"><option value="">Method</option></select>
-        <select id="fStatus" title="Status"><option value="">Status</option><option>2xx</option><option>3xx</option><option>4xx</option><option>5xx</option><option value="fail">failed</option></select>
-        <select id="fType" title="Resource type"><option value="">Type</option></select>
-        <label class="chk" title="Hide CORS preflight requests"><input type="checkbox" id="hideOptions" checked> no OPTIONS</label>
-        <label class="chk" title="Keep the newest row in view"><input type="checkbox" id="follow" checked> follow</label>
+        <select id="session" title="Сессия" class="w-session"></select>
+        <input id="q" type="search" placeholder="Фильтр URL · -исключить · status:4xx method:POST type:xhr mime:json host:example.com">
+        <select id="fKind" title="Тип записи"><option value="request">Запросы</option><option value="page-event">События страницы</option><option value="ip">Смена IP</option><option value="console">Консоль</option><option value="ws">Сообщения WebSocket</option><option value="">Все</option></select>
+        <select id="fMethod" title="Метод"><option value="">Метод</option></select>
+        <select id="fStatus" title="Статус"><option value="">Статус</option><option>2xx</option><option>3xx</option><option>4xx</option><option>5xx</option><option value="fail">ошибки</option></select>
+        <select id="fType" title="Тип ресурса"><option value="">Тип</option></select>
+        <label class="chk" title="Скрыть предварительные CORS-запросы"><input type="checkbox" id="hideOptions" checked> без OPTIONS</label>
+        <label class="chk" title="Держать в поле зрения самую новую строку"><input type="checkbox" id="follow" checked> следить</label>
         <span class="spacer"></span>
         <span class="pin-chip" id="pinChip" hidden></span>
         <span class="muted mono" id="count"></span>
-        <button class="btn" id="harBtn" title="Export the filtered rows as HAR 1.2">HAR</button>
+        <button class="btn" id="harBtn" title="Экспортировать отфильтрованные строки в HAR 1.2">HAR</button>
       </div>
       <div id="split">
         <div id="gridWrap">
-          <div class="gh cols"><div>#</div><div>Time</div><div>Method</div><div>Status</div><div>Type</div><div>Host</div><div>Path</div><div class="r-al">Size</div><div class="r-al">Time</div></div>
-          <div id="grid" tabindex="0"><div id="spacer"></div><div id="empty" class="empty" hidden>No requests yet. Click <b>Open Chrome</b> and browse — traffic shows up here live.</div></div>
+          <div class="gh cols"><div>#</div><div>Время</div><div>Метод</div><div>Статус</div><div>Тип</div><div>Хост</div><div>Путь</div><div class="r-al">Размер</div><div class="r-al">Время</div></div>
+          <div id="grid" tabindex="0"><div id="spacer"></div><div id="empty" class="empty" hidden>Пока нет запросов. Нажмите <b>Открыть Chrome</b> и начните просмотр — трафик появится здесь в реальном времени.</div></div>
         </div>
         <div id="resizer" hidden></div>
         <div id="detail" hidden>
           <div class="dhead">
-            <div class="dline"><span id="dMethod" class="badge"></span><span id="dStatus" class="badge"></span><span id="dUrl" class="mono ell"></span><button class="icon" id="dclose" title="Close (Esc)">✕</button></div>
+            <div class="dline"><span id="dMethod" class="badge"></span><span id="dStatus" class="badge"></span><span id="dUrl" class="mono ell"></span><button class="icon" id="dclose" title="Закрыть (Esc)">✕</button></div>
             <div class="dactions">
-              <button class="btn sm" id="aCopyUrl">Copy URL</button>
-              <button class="btn sm" id="aCopyCurl">Copy as curl</button>
-              <button class="btn sm" id="aRepeat" title="Open in Repeater">Repeater</button>
-              <button class="btn sm" id="aIntrude" title="Open in Intruder to fuzz this request">Intruder</button>
-              <button class="btn sm" id="aResend" title="Send again through AzureTLS now">Resend</button>
-              <button class="btn sm" id="aMock" title="Create a mock rule that serves this response">Mock from response</button>
-              <button class="btn sm" id="aBreak" title="Create a rule that pauses this URL">Break on URL</button>
-              <button class="btn sm" id="aPin" title="Keep this request as side A of a comparison">Pin as A</button>
-              <button class="btn sm" id="aCompare" title="Compare with the pinned request, or with the previous request to the same URL (Cmd/Ctrl-click a row to compare it with the selected one)">Compare</button>
-              <button class="btn sm" id="aNote" title="Append this request to a note">Add to note</button>
+              <button class="btn sm" id="aCopyUrl">Копировать URL</button>
+              <button class="btn sm" id="aCopyCurl">Копировать как curl</button>
+              <button class="btn sm" id="aRepeat" title="Открыть в Репитере">Репитер</button>
+              <button class="btn sm" id="aIntrude" title="Открыть в Интрудере для фаззинга этого запроса">Интрудер</button>
+              <button class="btn sm" id="aResend" title="Отправить снова через AzureTLS сейчас">Переотправить</button>
+              <button class="btn sm" id="aMock" title="Создать правило-заглушку, отдающее этот ответ">Заглушка из ответа</button>
+              <button class="btn sm" id="aBreak" title="Создать правило, ставящее этот URL на паузу">Останов по URL</button>
+              <button class="btn sm" id="aPin" title="Закрепить этот запрос как сторону A сравнения">Закрепить как A</button>
+              <button class="btn sm" id="aCompare" title="Сравнить с закреплённым запросом или с предыдущим запросом к тому же URL (Cmd/Ctrl-клик по строке — сравнить её с выбранной)">Сравнить</button>
+              <button class="btn sm" id="aNote" title="Добавить этот запрос в заметку">В заметку</button>
             </div>
             <div class="tabs" id="dtabs">
-              <button data-d="headers" class="on">Headers</button>
-              <button data-d="request">Request</button>
-              <button data-d="response">Response</button>
+              <button data-d="headers" class="on">Заголовки</button>
+              <button data-d="request">Запрос</button>
+              <button data-d="response">Ответ</button>
               <button data-d="cookies">Cookies</button>
-              <button data-d="raw">Raw</button>
+              <button data-d="raw">Как есть</button>
               <button data-d="json">JSON</button>
             </div>
           </div>
@@ -118,29 +118,29 @@
     <section id="page-console" class="page" hidden>
       <div id="cnBanner"></div>
       <div class="toolbar">
-        <input id="cnQ" type="search" placeholder="Filter messages — text or /regex/" spellcheck="false">
-        <select id="cnDoc" title="Page"></select>
+        <input id="cnQ" type="search" placeholder="Фильтр сообщений — текст или /regex/" spellcheck="false">
+        <select id="cnDoc" title="Страница"></select>
         <div class="chips" id="cnLevels"></div>
-        <label class="chk" title="Collapse identical consecutive messages into one row with a counter"><input type="checkbox" id="cnGroup">Group similar</label>
-        <label class="chk"><input type="checkbox" id="cnTimes">Timestamps</label>
+        <label class="chk" title="Схлопывать одинаковые подряд идущие сообщения в одну строку со счётчиком"><input type="checkbox" id="cnGroup">Группировать похожие</label>
+        <label class="chk"><input type="checkbox" id="cnTimes">Метки времени</label>
         <span class="spacer"></span>
         <span class="muted" id="cnShown"></span>
-        <button class="btn sm" id="cnPause" title="Stop scrolling new messages in">Pause</button>
-        <button class="btn sm" id="cnClear" title="Clear the view (Ctrl+L) — the session log keeps everything">Clear</button>
-        <button class="btn sm" id="cnExport" title="Save the shown messages as a .log file">Export</button>
+        <button class="btn sm" id="cnPause" title="Остановить автопрокрутку новых сообщений">Пауза</button>
+        <button class="btn sm" id="cnClear" title="Очистить вид (Ctrl+L) — в логе сессии остаётся всё">Очистить</button>
+        <button class="btn sm" id="cnExport" title="Сохранить показанные сообщения в файл .log">Экспорт</button>
       </div>
       <div class="cn-wrap">
         <div id="cnList" class="cn-list"></div>
         <div id="cnEmpty" class="empty cn-empty"></div>
-        <button class="btn sm cn-jump" id="cnJump" hidden>↓ Newest</button>
+        <button class="btn sm cn-jump" id="cnJump" hidden>↓ К новым</button>
       </div>
       <div class="cn-prompt">
         <span class="cn-caret">›</span>
-        <textarea id="cnCode" rows="1" spellcheck="false" autocomplete="off" placeholder="Run JavaScript in the page — Enter runs, Shift+Enter new line, ↑/↓ history"></textarea>
+        <textarea id="cnCode" rows="1" spellcheck="false" autocomplete="off" placeholder="Выполнить JavaScript на странице — Enter запускает, Shift+Enter новая строка, ↑/↓ история"></textarea>
         <i class="dot busy" id="cnRunDot" hidden></i>
-        <select id="cnTarget" title="Page to run in"></select>
-        <label class="chk" title="Wait for a returned promise; top-level await works either way"><input type="checkbox" id="cnAwait">await</label>
-        <button class="btn primary sm" id="cnRun">Run</button>
+        <select id="cnTarget" title="Страница для выполнения"></select>
+        <label class="chk" title="Ждать возвращённый промис; await верхнего уровня работает в любом случае"><input type="checkbox" id="cnAwait">await</label>
+        <button class="btn primary sm" id="cnRun">Выполнить</button>
       </div>
     </section>
 
@@ -151,21 +151,21 @@
         <div class="sr-qrow">
           <label class="sr-qbox"><svg viewBox="0 0 16 16"><circle cx="6.5" cy="6.5" r="4.5"/><path d="M10 10l4.5 4.5"/></svg><input id="srQ" type="search" spellcheck="false" autocomplete="off"></label>
           <span id="srMode"></span>
-          <button type="button" class="chip sr-case" id="srCase" title="Match case">Aa</button>
-          <button class="btn primary" id="srGo">Search</button>
-          <button class="btn" id="srStop" hidden>Stop</button>
+          <button type="button" class="chip sr-case" id="srCase" title="Учитывать регистр">Aa</button>
+          <button class="btn primary" id="srGo">Поиск</button>
+          <button class="btn" id="srStop" hidden>Стоп</button>
         </div>
         <div class="sr-orow">
-          <span class="sr-lbl">In</span><div class="chips" id="srFields"></div>
-          <span class="sr-lbl">Kinds</span><div class="chips" id="srKinds"></div>
-          <span class="sr-lbl">Host</span><input id="srHost" class="sr-host" type="search" placeholder="any host" spellcheck="false" autocomplete="off">
-          <span class="sr-lbl">Sessions</span><span id="srScope"></span>
+          <span class="sr-lbl">В</span><div class="chips" id="srFields"></div>
+          <span class="sr-lbl">Типы</span><div class="chips" id="srKinds"></div>
+          <span class="sr-lbl">Хост</span><input id="srHost" class="sr-host" type="search" placeholder="любой хост" spellcheck="false" autocomplete="off">
+          <span class="sr-lbl">Сессии</span><span id="srScope"></span>
         </div>
       </div>
       <div class="sr-status" id="srStatus" hidden></div>
       <div class="sr-scroll">
         <div id="srResults"></div>
-        <div id="srEmpty" class="empty">Search every saved session at once — URLs, request and response headers, bodies, WebSocket and console messages. Headers match as <code>name: value</code>; binary bodies are skipped. <span class="faint">⌘⇧F from anywhere.</span></div>
+        <div id="srEmpty" class="empty">Поиск сразу по всем сохранённым сессиям — URL, заголовки запросов и ответов, тела, сообщения WebSocket и консоли. Заголовки сопоставляются как <code>name: value</code>; бинарные тела пропускаются. <span class="faint">⌘⇧F из любого места.</span></div>
       </div>
     </section>
 
@@ -173,22 +173,22 @@
       <div class="split2">
         <div class="list-pane ws-conns">
           <div class="toolbar">
-            <input id="wsConnQ" type="search" placeholder="Filter connections…" spellcheck="false">
-            <label class="chk"><input type="checkbox" id="wsOpenOnly">Open only</label>
+            <input id="wsConnQ" type="search" placeholder="Фильтр соединений…" spellcheck="false">
+            <label class="chk"><input type="checkbox" id="wsOpenOnly">Только открытые</label>
           </div>
           <div id="wsConns" class="plist"></div>
         </div>
         <div class="ws-main">
-          <div id="wsNone" class="empty">Pick a connection on the left.</div>
+          <div id="wsNone" class="empty">Выберите соединение слева.</div>
           <div id="wsPane" class="ws-pane" hidden>
             <div class="ws-head" id="wsHead"></div>
             <div class="toolbar">
-              <input id="wsQ" type="search" placeholder="Filter messages — text or /regex/ (first 300 characters)" spellcheck="false">
+              <input id="wsQ" type="search" placeholder="Фильтр сообщений — текст или /regex/ (первые 300 символов)" spellcheck="false">
               <span id="wsDir"></span>
               <div class="chips" id="wsTypes"></div>
               <span class="spacer"></span>
               <span class="muted" id="wsShown"></span>
-              <label class="chk" title="Scroll to new messages"><input type="checkbox" id="wsFollow" checked>Follow</label>
+              <label class="chk" title="Прокручивать к новым сообщениям"><input type="checkbox" id="wsFollow" checked>Следить</label>
             </div>
             <div class="ws-body">
               <div class="ws-listwrap">
@@ -200,10 +200,10 @@
             <div class="ws-compose" id="wsCompose" hidden>
               <div class="ws-compose-bar">
                 <span id="wsCDir"></span>
-                <select id="wsCType" title="Message type"><option value="text">Text</option><option value="hex">Binary · hex</option><option value="base64">Binary · base64</option><option value="ping">Ping</option></select>
+                <select id="wsCType" title="Тип сообщения"><option value="text">Текст</option><option value="hex">Бинарное · hex</option><option value="base64">Бинарное · base64</option><option value="ping">Ping</option></select>
                 <span class="faint" id="wsComposeHint" hidden></span>
                 <span class="spacer"></span>
-                <button class="btn primary sm" id="wsSend">Send</button>
+                <button class="btn primary sm" id="wsSend">Отправить</button>
               </div>
               <textarea id="wsData" class="code" rows="3" spellcheck="false" autocomplete="off"></textarea>
             </div>
@@ -217,7 +217,7 @@
       <div id="anBanner"></div>
       <div class="split2">
         <div class="list-pane an-pages">
-          <div class="toolbar"><input id="anQ" type="search" placeholder="Filter pages…"><label class="chk" title="Also list pages that were closed or navigated away"><input type="checkbox" id="anGone">Closed <span id="anGoneN" class="faint"></span></label></div>
+          <div class="toolbar"><input id="anQ" type="search" placeholder="Фильтр страниц…"><label class="chk" title="Также показывать закрытые страницы или те, с которых ушли"><input type="checkbox" id="anGone">Закрытые <span id="anGoneN" class="faint"></span></label></div>
           <div id="anList" class="plist"></div>
         </div>
         <div class="an-main" id="anMain"></div>
@@ -227,20 +227,20 @@
     <!-- ── Site map ── -->
     <section id="page-sitemap" class="page" hidden>
       <div class="toolbar">
-        <select id="smSession" class="w-300" title="Session to map"></select>
-        <select id="smSite" class="sm-site" title="Site"></select>
-        <label class="chk" title="Include subdomains of the site"><input type="checkbox" id="smSubs">Subdomains</label>
-        <button class="btn sm" id="smRefresh">Refresh</button>
-        <label class="chk" title="Update every few seconds while you browse (live session only)"><input type="checkbox" id="smAuto">Live</label>
+        <select id="smSession" class="w-300" title="Сессия для карты"></select>
+        <select id="smSite" class="sm-site" title="Сайт"></select>
+        <label class="chk" title="Включить поддомены сайта"><input type="checkbox" id="smSubs">Поддомены</label>
+        <button class="btn sm" id="smRefresh">Обновить</button>
+        <label class="chk" title="Обновлять каждые несколько секунд во время просмотра (только для активной сессии)"><input type="checkbox" id="smAuto">Эфир</label>
         <span class="spacer"></span>
         <span class="faint" id="smState"></span>
       </div>
       <div class="sm-top">
         <div class="ipw-tiles sm-tiles" id="smTiles"></div>
         <div class="tabs sm-tabs" id="smTabs" hidden>
-          <button data-t="pages" class="on">Pages <span class="tag"></span></button>
-          <button data-t="forms">Forms <span class="tag"></span></button>
-          <button data-t="external">External <span class="tag"></span></button>
+          <button data-t="pages" class="on">Страницы <span class="tag"></span></button>
+          <button data-t="forms">Формы <span class="tag"></span></button>
+          <button data-t="external">Внешние <span class="tag"></span></button>
         </div>
       </div>
       <div class="sm-main" id="smMain"></div>
@@ -251,14 +251,14 @@
       <div class="split2">
         <div class="list-pane nt-side">
           <div class="toolbar">
-            <input id="ntQ" type="search" placeholder="Search notes…">
-            <button class="btn primary sm" id="ntNew">+ New</button>
+            <input id="ntQ" type="search" placeholder="Поиск заметок…">
+            <button class="btn primary sm" id="ntNew">+ Новая</button>
           </div>
           <div class="toolbar sub">
-            <select id="ntSite" title="Filter by site"></select>
+            <select id="ntSite" title="Фильтр по сайту"></select>
             <span class="spacer"></span>
             <span class="muted" id="ntCount"></span>
-            <button class="btn sm" id="ntExport" title="Download the notes shown as one Markdown file">Export</button>
+            <button class="btn sm" id="ntExport" title="Скачать показанные заметки одним файлом Markdown">Экспорт</button>
           </div>
           <div class="chips nt-tags" id="ntTags" hidden></div>
           <div id="ntList" class="plist"></div>
@@ -271,41 +271,41 @@
     <section id="page-dns" class="page scroll" hidden>
       <div class="card">
         <div class="card-head">
-          <h2>DNS overrides</h2>
-          <input id="dnsQ" type="search" placeholder="Filter host, IP, note…">
+          <h2>DNS-переопределения</h2>
+          <input id="dnsQ" type="search" placeholder="Фильтр по хосту, IP, заметке…">
           <span class="spacer"></span>
           <span class="muted" id="dnsShown"></span>
-          <button class="btn sm" id="dnsImport" title="Import a hosts file">Import</button>
-          <button class="btn sm" id="dnsExport" title="Download the rules as a hosts file">Export</button>
-          <button class="btn primary sm" id="dnsAdd">+ Add rule</button>
+          <button class="btn sm" id="dnsImport" title="Импортировать файл hosts">Импорт</button>
+          <button class="btn sm" id="dnsExport" title="Скачать правила как файл hosts">Экспорт</button>
+          <button class="btn primary sm" id="dnsAdd">+ Добавить правило</button>
         </div>
-        <p class="muted">Send a host to another IP without touching the system hosts file. CupNet keeps the URL, so the TLS SNI, the <code>Host</code> header and HTTP/2 stay those of the real site — only the TCP connection goes to the override (like <code>curl --connect-to</code>). Tunnelled passthrough hosts follow the same rules. Changes apply to new connections.</p>
+        <p class="muted">Направьте хост на другой IP, не трогая системный файл hosts. CupNet сохраняет URL, поэтому TLS SNI, заголовок <code>Host</code> и HTTP/2 остаются от настоящего сайта — на переопределённый адрес идёт только TCP-соединение (как <code>curl --connect-to</code>). Туннелируемые passthrough-хосты подчиняются тем же правилам. Изменения применяются к новым соединениям.</p>
         <table class="tbl dns-tbl">
-          <thead><tr><th class="w-60">On</th><th class="dns-h">Host</th><th class="w-130">IP</th><th class="w-130">Options</th><th>Note</th><th class="w-80 r-al">Hits</th><th class="w-130"></th></tr></thead>
+          <thead><tr><th class="w-60">Вкл</th><th class="dns-h">Хост</th><th class="w-130">IP</th><th class="w-130">Опции</th><th>Заметка</th><th class="w-80 r-al">Срабат.</th><th class="w-130"></th></tr></thead>
           <tbody id="dnsRows"></tbody>
         </table>
         <div class="empty" id="dnsEmpty" hidden></div>
       </div>
       <div class="card">
-        <div class="card-head"><h2>Test a host</h2></div>
+        <div class="card-head"><h2>Проверить хост</h2></div>
         <div class="toolbar dns-res">
           <input id="dnsResHost" type="text" class="mono" placeholder="api.example.com" spellcheck="false">
-          <button class="btn" id="dnsResBtn">Resolve</button>
+          <button class="btn" id="dnsResBtn">Разрешить</button>
         </div>
         <div id="dnsResOut"></div>
       </div>
       <div class="card">
         <div class="card-head">
-          <h2>Activity</h2><span class="muted">requests sent to an override since start</span>
+          <h2>Активность</h2><span class="muted">запросы, отправленные на переопределение с момента запуска</span>
           <span class="spacer"></span>
-          <button class="btn sm" id="dnsActRefresh">Refresh</button>
-          <button class="btn sm danger" id="dnsActClear" title="Clear the list and the hit counters">Clear</button>
+          <button class="btn sm" id="dnsActRefresh">Обновить</button>
+          <button class="btn sm danger" id="dnsActClear" title="Очистить список и счётчики срабатываний">Очистить</button>
         </div>
         <div class="ipw-scroll"><table class="tbl">
-          <thead><tr><th class="w-110">Time</th><th class="w-80">Method</th><th class="w-80">Status</th><th class="w-300">Host → IP</th><th>Path</th><th class="w-80"></th></tr></thead>
+          <thead><tr><th class="w-110">Время</th><th class="w-80">Метод</th><th class="w-80">Статус</th><th class="w-300">Хост → IP</th><th>Путь</th><th class="w-80"></th></tr></thead>
           <tbody id="dnsAct"></tbody>
         </table></div>
-        <div class="empty" id="dnsActEmpty" hidden>No request has used an override yet.</div>
+        <div class="empty" id="dnsActEmpty" hidden>Ни один запрос ещё не использовал переопределение.</div>
       </div>
     </section>
 
@@ -313,35 +313,35 @@
     <section id="page-proxies" class="page" hidden>
       <div class="conn" id="conn">
         <div class="conn-main">
-          <div class="conn-label">Connection</div>
-          <div class="conn-name" id="connName">Direct</div>
+          <div class="conn-label">Соединение</div>
+          <div class="conn-name" id="connName">Прямое</div>
           <div class="conn-sub mono" id="connSub"></div>
         </div>
         <div class="conn-egress">
-          <div class="conn-label">Exit IP</div>
+          <div class="conn-label">Выходной IP</div>
           <div class="conn-ip mono" id="connIp">—</div>
           <div class="conn-sub" id="connGeo"></div>
         </div>
         <div class="conn-actions">
-          <button class="btn" id="pCheck" title="Check the exit IP now">Check IP</button>
-          <button class="btn" id="pNewIp" title="New sticky session → new exit IP">New IP</button>
-          <button class="btn danger" id="pDisconnect">Disconnect</button>
-          <label class="switch" title="Block all traffic when no proxy is connected (no accidental direct connections)"><input type="checkbox" id="pKill"><span></span>Kill switch</label>
+          <button class="btn" id="pCheck" title="Проверить выходной IP сейчас">Проверить IP</button>
+          <button class="btn" id="pNewIp" title="Новая sticky-сессия → новый выходной IP">Новый IP</button>
+          <button class="btn danger" id="pDisconnect">Отключить</button>
+          <label class="switch" title="Блокировать весь трафик, когда прокси не подключён (без случайных прямых соединений)"><input type="checkbox" id="pKill"><span></span>Аварийный выключатель</label>
         </div>
       </div>
       <div class="split2">
         <div class="list-pane">
           <div class="toolbar">
-            <input id="pq" type="search" placeholder="Search name, host, group, IP…">
-            <select id="pfProvider" title="Provider"><option value="">All providers</option></select>
-            <select id="pfCountry" title="Country"><option value="">All countries</option></select>
-            <select id="pfStatus" title="Last test"><option value="">Any status</option><option value="ok">Working</option><option value="fail">Failing</option><option value="untested">Untested</option></select>
-            <select id="pfGroup" title="Group"><option value="">All groups</option></select>
+            <input id="pq" type="search" placeholder="Поиск по названию, хосту, группе, IP…">
+            <select id="pfProvider" title="Провайдер"><option value="">Все провайдеры</option></select>
+            <select id="pfCountry" title="Страна"><option value="">Все страны</option></select>
+            <select id="pfStatus" title="Последняя проверка"><option value="">Любой статус</option><option value="ok">Рабочие</option><option value="fail">С ошибкой</option><option value="untested">Не проверены</option></select>
+            <select id="pfGroup" title="Группа"><option value="">Все группы</option></select>
           </div>
           <div class="toolbar sub">
-            <button class="btn primary sm" id="pAdd">+ Add proxy</button>
-            <button class="btn sm" id="pImport">Import list</button>
-            <button class="btn sm" id="pTestAll" title="Test every proxy shown">Test all</button>
+            <button class="btn primary sm" id="pAdd">+ Добавить прокси</button>
+            <button class="btn sm" id="pImport">Импорт списка</button>
+            <button class="btn sm" id="pTestAll" title="Проверить все показанные прокси">Проверить все</button>
             <span class="spacer"></span>
             <span class="muted" id="pCount"></span>
           </div>
@@ -355,74 +355,100 @@
     <section id="page-ipwatch" class="page scroll" hidden>
       <div class="card ipw-hero" id="ipwHero">
         <div class="ipw-now">
-          <div class="conn-label">Exit IP now</div>
+          <div class="conn-label">Выходной IP сейчас</div>
           <div class="ipw-ip mono" id="ipwIp">—</div>
           <div class="ipw-geo" id="ipwGeo"></div>
           <div class="ipw-meta" id="ipwMeta"></div>
         </div>
         <div class="ipw-ctl">
           <div class="ipw-ctl-row" id="ipwSwitch"></div>
-          <div class="ipw-ctl-row"><span class="muted">Every</span><span id="ipwInterval"></span></div>
-          <div class="ipw-ctl-row"><button class="btn primary" id="ipwCheck">Check now</button><span class="ipw-next mono muted" id="ipwNext"></span></div>
+          <div class="ipw-ctl-row"><span class="muted">Каждые</span><span id="ipwInterval"></span></div>
+          <div class="ipw-ctl-row"><button class="btn primary" id="ipwCheck">Проверить сейчас</button><span class="ipw-next mono muted" id="ipwNext"></span></div>
           <div class="ipw-ring" aria-hidden="true"><i id="ipwBar"></i></div>
         </div>
       </div>
       <div class="ipw-tiles" id="ipwTiles"></div>
       <div class="card">
-        <div class="card-head"><h2>Timeline</h2><span class="spacer"></span><span id="ipwRange"></span></div>
+        <div class="card-head"><h2>Хронология</h2><span class="spacer"></span><span id="ipwRange"></span></div>
         <div class="ipw-band" id="ipwBand"></div>
         <div class="ipw-axis mono" id="ipwAxis"></div>
         <div class="ipw-legend" id="ipwLegend"></div>
       </div>
       <div class="card">
         <div class="card-head">
-          <h2>History</h2><span id="ipwFilter"></span>
-          <input id="ipwQ" type="search" placeholder="Filter IP, city, org, connection…">
+          <h2>История</h2><span id="ipwFilter"></span>
+          <input id="ipwQ" type="search" placeholder="Фильтр по IP, городу, организации, соединению…">
           <span class="spacer"></span>
           <span class="muted" id="ipwShown"></span>
-          <button class="btn sm" id="ipwCsv" title="Download the history as CSV">CSV</button>
-          <button class="btn sm danger" id="ipwClear" title="Delete the whole IP history">Clear</button>
+          <button class="btn sm" id="ipwCsv" title="Скачать историю в CSV">CSV</button>
+          <button class="btn sm danger" id="ipwClear" title="Удалить всю историю IP">Очистить</button>
         </div>
         <div class="ipw-scroll"><table class="tbl ipw-tbl">
-          <thead><tr><th class="w-150">Time</th><th class="w-90">Event</th><th class="w-130">IP</th><th class="w-130">Previous</th><th>Location</th><th>Network</th><th class="w-130">Connection</th><th class="w-80 r-al">Held</th></tr></thead>
+          <thead><tr><th class="w-150">Время</th><th class="w-90">Событие</th><th class="w-130">IP</th><th class="w-130">Предыдущий</th><th>Расположение</th><th>Сеть</th><th class="w-130">Соединение</th><th class="w-80 r-al">Длит.</th></tr></thead>
           <tbody id="ipwRows"></tbody>
         </table></div>
-        <div class="empty" id="ipwEmpty" hidden>No IP history yet — the first check runs a few seconds after start.</div>
+        <div class="empty" id="ipwEmpty" hidden>Истории IP пока нет — первая проверка запускается через несколько секунд после старта.</div>
       </div>
-      <p class="muted ipw-foot">Each check is one small HTTPS request through the current connection on a fresh tunnel (HTTP/1.1, <code>Connection: close</code>), so a rotating proxy shows its rotation. Location is looked up once per new IP through the same connection. History is kept in <code>ip-history.jsonl</code> in the data folder; changes are also written to the session log (kind <code>ip</code>).</p>
+      <p class="muted ipw-foot">Каждая проверка — это один небольшой HTTPS-запрос через текущее соединение по новому туннелю (HTTP/1.1, <code>Connection: close</code>), поэтому ротационный прокси показывает свою ротацию. Расположение определяется один раз на каждый новый IP через то же соединение. История хранится в <code>ip-history.jsonl</code> в папке данных; изменения также пишутся в лог сессии (тип <code>ip</code>).</p>
     </section>
 
     <!-- ── Compare ── -->
     <section id="page-compare" class="page" hidden>
       <div class="toolbar">
-        <span class="muted">A</span><input id="cmpA" type="number" min="1" class="w-num" title="Request # of side A">
-        <button class="icon" id="cmpSwap" title="Swap A and B">⇄</button>
-        <span class="muted">B</span><input id="cmpB" type="number" min="1" class="w-num" title="Request # of side B">
-        <button class="btn sm" id="cmpLoad" title="Compare these two requests of the session shown in Traffic">Compare</button>
+        <span class="muted">A</span><input id="cmpA" type="number" min="1" class="w-num" title="Номер запроса стороны A">
+        <button class="icon" id="cmpSwap" title="Поменять A и B местами">⇄</button>
+        <span class="muted">B</span><input id="cmpB" type="number" min="1" class="w-num" title="Номер запроса стороны B">
+        <button class="btn sm" id="cmpLoad" title="Сравнить эти два запроса сессии, показанной в Трафике">Сравнить</button>
         <span class="spacer"></span>
         <span id="cmpOpts"></span>
       </div>
       <div id="cmpBody" class="cmp-body">
-        <div class="empty">Pick two requests: <b>Pin as A</b> on one and <b>Compare</b> on another in Traffic, Cmd/Ctrl-click a second row, or type two request numbers above.</div>
+        <div class="empty">Выберите два запроса: <b>Закрепить как A</b> на одном и <b>Сравнить</b> на другом в Трафике, Cmd/Ctrl-клик по второй строке или введите два номера запросов выше.</div>
       </div>
     </section>
 
     <!-- ── Mirror ── -->
     <section id="page-mirror" class="page" hidden>
-      <div class="split2">
-        <div class="list-pane mir-list">
-          <div class="toolbar">
-            <input id="mirQ" type="search" placeholder="Filter host or path…">
-            <button class="icon" id="mirRefresh" title="Refresh">↻</button>
-            <button class="btn sm danger" id="mirClear" title="Erase the whole mirror trail">Clear</button>
-            <span class="spacer"></span>
-            <span class="muted" id="mirShown"></span>
-          </div>
-          <div id="mirRows" class="plist"></div>
+      <div class="toolbar">
+        <div class="seg" id="mirView">
+          <button type="button" data-v="hosts" class="on">Зеркала хостов</button>
+          <button type="button" data-v="log">Журнал<i class="count accent" id="mirLogCount" hidden></i></button>
         </div>
-        <div class="mir-main">
-          <div id="mirBody" class="cmp-body">
-            <div class="empty">A <b>Mirror host</b> rule serves an upstream host under the matched host and rewrites its response back. Each mirrored response is captured here — pick one on the left to see the before/after diff.</div>
+        <span class="spacer"></span>
+        <span class="muted">Подменяет апстрим-хост под хостом клиента: загружает апстрим, затем переписывает тело, Location и Set-Cookie обратно на хост клиента.</span>
+      </div>
+
+      <!-- Зеркала: создание и настройка -->
+      <div id="mirHosts" class="mir-view">
+        <div class="split2">
+          <div class="list-pane">
+            <div class="toolbar">
+              <input id="mhQ" type="search" placeholder="Поиск зеркал…">
+              <button class="btn primary sm" id="mhNew">+ Новое зеркало</button>
+            </div>
+            <div id="mhList" class="plist"></div>
+          </div>
+          <div class="edit-pane" id="mhEditor"></div>
+        </div>
+      </div>
+
+      <!-- Журнал: захваченные ответы до/после -->
+      <div id="mirLog" class="mir-view" hidden>
+        <div class="split2">
+          <div class="list-pane mir-list">
+            <div class="toolbar">
+              <input id="mirQ" type="search" placeholder="Фильтр по хосту или пути…">
+              <button class="icon" id="mirRefresh" title="Обновить">↻</button>
+              <button class="btn sm danger" id="mirClear" title="Очистить весь журнал зеркал">Очистить</button>
+              <span class="spacer"></span>
+              <span class="muted" id="mirShown"></span>
+            </div>
+            <div id="mirRows" class="plist"></div>
+          </div>
+          <div class="mir-main">
+            <div id="mirBody" class="cmp-body">
+              <div class="empty">Каждый зеркалированный ответ попадает сюда — выберите слева, чтобы увидеть diff «до/после».</div>
+            </div>
           </div>
         </div>
       </div>
@@ -432,17 +458,17 @@
     <section id="page-cookies" class="page" hidden>
       <div class="split2">
         <div class="list-pane ck-sites">
-          <div class="toolbar"><input id="ckSiteQ" type="search" placeholder="Filter sites…"></div>
+          <div class="toolbar"><input id="ckSiteQ" type="search" placeholder="Фильтр сайтов…"></div>
           <div id="ckSites" class="plist"></div>
         </div>
         <div class="ck-main">
           <div class="toolbar">
-            <input id="ckQ" type="search" placeholder="Filter name or value…">
-            <select id="ckShow" title="Which cookies"><option value="live">Live</option><option value="all">All, with deleted</option><option value="deleted">Deleted</option><option value="inferred">Seen in requests only</option><option value="overridden">With wire rules</option></select>
-            <button class="btn primary sm" id="ckAdd" title="Write a new cookie into Chrome">+ Add cookie</button>
-            <button class="btn sm" id="ckRule" title="Pin, strip or block cookies on the wire">+ Wire rule</button>
-            <button class="btn sm" id="ckImport">Import</button>
-            <button class="btn sm" id="ckExport">Export</button>
+            <input id="ckQ" type="search" placeholder="Фильтр по имени или значению…">
+            <select id="ckShow" title="Какие cookie"><option value="live">Активные</option><option value="all">Все, с удалёнными</option><option value="deleted">Удалённые</option><option value="inferred">Только замеченные в запросах</option><option value="overridden">С правилами на лету</option></select>
+            <button class="btn primary sm" id="ckAdd" title="Записать новый cookie в Chrome">+ Добавить cookie</button>
+            <button class="btn sm" id="ckRule" title="Закрепить, удалять или блокировать cookie на лету">+ Правило на лету</button>
+            <button class="btn sm" id="ckImport">Импорт</button>
+            <button class="btn sm" id="ckExport">Экспорт</button>
             <span class="spacer"></span>
             <span class="muted" id="ckShown"></span>
           </div>
@@ -450,7 +476,7 @@
           <div class="ck-scroll" id="ckScroll">
             <div id="ckCards"></div>
             <table class="tbl ck-tbl">
-              <thead><tr><th class="w-28"><input type="checkbox" id="ckAll" title="Select all shown"></th><th class="w-180">Name</th><th>Value</th><th class="w-180">Domain · path</th><th class="w-130">Expires</th><th class="w-180">Flags</th><th class="w-90 r-al">Seen</th><th class="w-110"></th></tr></thead>
+              <thead><tr><th class="w-28"><input type="checkbox" id="ckAll" title="Выбрать все показанные"></th><th class="w-180">Имя</th><th>Значение</th><th class="w-180">Домен · путь</th><th class="w-130">Истекает</th><th class="w-180">Флаги</th><th class="w-90 r-al">Замечен</th><th class="w-110"></th></tr></thead>
               <tbody id="ckRows"></tbody>
             </table>
             <div class="empty" id="ckEmpty" hidden></div>
@@ -464,24 +490,24 @@
       <div class="toolbar">
         <select id="rpMethod" class="w-method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option></select>
         <input id="rpUrl" class="mono grow" placeholder="https://example.com/api" spellcheck="false">
-        <label class="chk"><input type="checkbox" id="rpFollow"> follow redirects</label>
-        <button class="btn primary" id="rpSend">Send</button>
-        <button class="btn" id="rpIntrude" title="Send this request to Intruder to fuzz it">To Intruder</button>
-        <button class="btn" id="rpCurl" title="Paste a curl command">Import curl</button>
+        <label class="chk"><input type="checkbox" id="rpFollow"> следовать редиректам</label>
+        <button class="btn primary" id="rpSend">Отправить</button>
+        <button class="btn" id="rpIntrude" title="Отправить этот запрос в Интрудер для фаззинга">В Интрудер</button>
+        <button class="btn" id="rpCurl" title="Вставить команду curl">Импорт curl</button>
       </div>
       <div class="split2 even">
         <div class="col">
-          <div class="tabs" id="rpTabs"><button data-t="headers" class="on">Headers</button><button data-t="body">Body</button><button data-t="code">Code</button></div>
+          <div class="tabs" id="rpTabs"><button data-t="headers" class="on">Заголовки</button><button data-t="body">Тело</button><button data-t="code">Код</button></div>
           <div class="tabbody" id="rpHeaders"></div>
-          <div class="tabbody" id="rpBodyWrap" hidden><textarea id="rpBody" class="mono code" spellcheck="false" placeholder="Request body"></textarea></div>
+          <div class="tabbody" id="rpBodyWrap" hidden><textarea id="rpBody" class="mono code" spellcheck="false" placeholder="Тело запроса"></textarea></div>
           <div class="tabbody" id="rpCodeWrap" hidden>
-            <div class="toolbar sub"><select id="rpLang"><option value="curl">curl</option><option value="fetch">fetch</option><option value="axios">axios</option><option value="python">Python requests</option><option value="go">Go</option><option value="php">PHP</option></select><button class="btn sm" id="rpCopyCode">Copy</button></div>
+            <div class="toolbar sub"><select id="rpLang"><option value="curl">curl</option><option value="fetch">fetch</option><option value="axios">axios</option><option value="python">Python requests</option><option value="go">Go</option><option value="php">PHP</option></select><button class="btn sm" id="rpCopyCode">Копировать</button></div>
             <pre id="rpCode" class="codebox"></pre>
           </div>
         </div>
         <div class="col">
-          <div class="resp-head" id="rpRespHead"><span class="muted">Send a request — it goes through AzureTLS with the current proxy and TLS profile, and is logged as type <code>repeater</code>.</span></div>
-          <div class="tabs" id="rpRespTabs" hidden><button data-t="body" class="on">Body</button><button data-t="headers">Headers</button></div>
+          <div class="resp-head" id="rpRespHead"><span class="muted">Отправьте запрос — он пойдёт через AzureTLS с текущим прокси и TLS-профилем и будет записан с типом <code>repeater</code>.</span></div>
+          <div class="tabs" id="rpRespTabs" hidden><button data-t="body" class="on">Тело</button><button data-t="headers">Заголовки</button></div>
           <div class="tabbody" id="rpResp"></div>
         </div>
       </div>
@@ -492,34 +518,34 @@
       <div class="toolbar">
         <select id="inMethod" class="w-method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option></select>
         <input id="inUrl" class="mono grow" placeholder="https://example.com/api?q=§term§" spellcheck="false">
-        <button class="btn" id="inAddPos" title="Wrap the selected text in § … § as a payload position">Add §position§</button>
-        <button class="btn" id="inClearPos" title="Remove every § marker">Clear §</button>
+        <button class="btn" id="inAddPos" title="Обернуть выделенный текст в § … § как позицию payload">Добавить §позицию§</button>
+        <button class="btn" id="inClearPos" title="Убрать все маркеры §">Очистить §</button>
       </div>
       <div class="split2 even">
         <div class="col in-left">
-          <div class="tabs" id="inTabs"><button data-t="headers" class="on">Headers</button><button data-t="body">Body</button></div>
+          <div class="tabs" id="inTabs"><button data-t="headers" class="on">Заголовки</button><button data-t="body">Тело</button></div>
           <div class="tabbody" id="inHeaders"></div>
-          <div class="tabbody" id="inBodyWrap" hidden><textarea id="inBody" class="mono code" spellcheck="false" placeholder="Request body — mark positions with § … §"></textarea></div>
+          <div class="tabbody" id="inBodyWrap" hidden><textarea id="inBody" class="mono code" spellcheck="false" placeholder="Тело запроса — отметьте позиции через § … §"></textarea></div>
           <div class="in-opts">
-            <div class="in-orow"><span class="in-olbl">Attack</span><span id="inType"></span></div>
+            <div class="in-orow"><span class="in-olbl">Атака</span><span id="inType"></span></div>
             <p class="in-help muted" id="inHelp"></p>
             <div class="in-plwrap" id="inPayloads"></div>
             <div class="in-orow">
-              <label class="chk" title="Apply encodeURIComponent to every payload"><input type="checkbox" id="inEncode"> URL-encode payloads</label>
-              <label class="chk" title="Follow redirects when you open one result in Traffic"><input type="checkbox" id="inFollow"> follow redirects</label>
+              <label class="chk" title="Применять encodeURIComponent к каждому payload"><input type="checkbox" id="inEncode"> URL-кодировать payload</label>
+              <label class="chk" title="Следовать редиректам при открытии результата в Трафике"><input type="checkbox" id="inFollow"> следовать редиректам</label>
             </div>
             <div class="in-orow">
               <span class="in-olbl">Grep</span>
-              <input id="inGrep" class="mono grow" placeholder="flag any response that contains…" spellcheck="false">
-              <button type="button" class="chip" id="inGrepRe" title="Treat the grep text as a regular expression">.*</button>
+              <input id="inGrep" class="mono grow" placeholder="отмечать любой ответ, содержащий…" spellcheck="false">
+              <button type="button" class="chip" id="inGrepRe" title="Трактовать текст grep как регулярное выражение">.*</button>
             </div>
             <div class="in-orow in-run">
-              <span class="in-olbl">Threads</span>
+              <span class="in-olbl">Потоки</span>
               <input id="inConc" type="number" min="1" max="32" class="w-num">
               <span class="spacer"></span>
               <span class="in-plan mono" id="inPlan"></span>
-              <button class="btn primary" id="inGo" disabled>Start attack</button>
-              <button class="btn danger" id="inStop" hidden>Stop</button>
+              <button class="btn primary" id="inGo" disabled>Запустить атаку</button>
+              <button class="btn danger" id="inStop" hidden>Стоп</button>
             </div>
           </div>
         </div>
@@ -530,7 +556,7 @@
               <thead id="inHead"></thead>
               <tbody id="inResults"></tbody>
             </table>
-            <div class="empty" id="inEmpty">Load a request — from Traffic or Repeater, or type one above — then mark one or more <b>§ positions</b>, add payloads and start. Results stream in; click any row to open it in Traffic.</div>
+            <div class="empty" id="inEmpty">Загрузите запрос — из Трафика или Репитера, либо введите выше — затем отметьте одну или несколько <b>§ позиций</b>, добавьте payload и запустите. Результаты появляются потоком; нажмите любую строку, чтобы открыть её в Трафике.</div>
           </div>
         </div>
       </div>
@@ -541,10 +567,10 @@
       <div class="split2">
         <div class="list-pane">
           <div class="toolbar">
-            <input id="rq" type="search" placeholder="Search rules…">
-            <button class="btn primary sm" id="rNew">+ New rule</button>
-            <button class="btn sm" id="rExport">Export</button>
-            <button class="btn sm" id="rImport">Import</button>
+            <input id="rq" type="search" placeholder="Поиск правил…">
+            <button class="btn primary sm" id="rNew">+ Новое правило</button>
+            <button class="btn sm" id="rExport">Экспорт</button>
+            <button class="btn sm" id="rImport">Импорт</button>
           </div>
           <div id="rlist" class="plist"></div>
         </div>
@@ -556,19 +582,19 @@
     <section id="page-paused" class="page" hidden>
       <div class="split2">
         <div class="list-pane">
-          <div class="toolbar"><span class="muted">Requests held by rules with <b>Pause</b> on. They continue unchanged after 2 minutes.</span></div>
+          <div class="toolbar"><span class="muted">Запросы, удерживаемые правилами с включённой <b>Паузой</b>. Через 2 минуты они продолжаются без изменений.</span></div>
           <div id="bplist" class="plist"></div>
         </div>
-        <div class="edit-pane" id="bpEditor"><div class="empty">Nothing paused. Add a rule with <b>Pause (breakpoint)</b>, or use <b>Break on URL</b> in Traffic.</div></div>
+        <div class="edit-pane" id="bpEditor"><div class="empty">Ничего не на паузе. Добавьте правило с <b>Паузой (точкой останова)</b> или используйте <b>Останов по URL</b> в Трафике.</div></div>
       </div>
     </section>
 
     <!-- ── Sessions ── -->
     <section id="page-sessions" class="page scroll" hidden>
       <div class="card">
-        <p class="muted">Each run writes one JSONL file with everything captured: headers, full bodies and page events. Sessions hold cookies and tokens — treat them as secrets. <b>Seal</b> encrypts a session with its own key: the <code>.cupkey</code> file opens the matching <code>.cupsess</code> in <code>viewer.html</code>.</p>
+        <p class="muted">Каждый запуск пишет один JSONL-файл со всем захваченным: заголовки, полные тела и события страниц. Сессии содержат cookie и токены — относитесь к ним как к секретам. <b>Запечатать</b> шифрует сессию отдельным ключом: файл <code>.cupkey</code> открывает соответствующий <code>.cupsess</code> в <code>viewer.html</code>.</p>
         <table class="tbl">
-          <thead><tr><th>Session</th><th class="w-110">Size</th><th class="w-180">Modified</th><th class="w-80">Sealed</th><th class="w-300"></th></tr></thead>
+          <thead><tr><th>Сессия</th><th class="w-110">Размер</th><th class="w-180">Изменена</th><th class="w-80">Запечатана</th><th class="w-300"></th></tr></thead>
           <tbody id="sessions"></tbody>
         </table>
       </div>
@@ -577,31 +603,31 @@
     <!-- ── Settings ── -->
     <section id="page-settings" class="page scroll" hidden>
       <div class="card">
-        <h2>TLS fingerprint</h2>
-        <p class="muted">The AzureTLS profile the MITM uses towards sites (TLS ClientHello, HTTP/2 settings). Chrome sends its own headers and JS, so keep it on a Chromium profile.</p>
+        <h2>TLS-отпечаток</h2>
+        <p class="muted">Профиль AzureTLS, который MITM использует в сторону сайтов (TLS ClientHello, настройки HTTP/2). Chrome отправляет свои собственные заголовки и JS, поэтому держите профиль из семейства Chromium.</p>
         <div id="tlsProfiles" class="radios"></div>
-        <p class="warn" id="tlsCli" hidden>Started with <code>--browser</code>: picking a profile here overrides it and is saved.</p>
+        <p class="warn" id="tlsCli" hidden>Запущено с <code>--browser</code>: выбор профиля здесь переопределяет его и сохраняется.</p>
       </div>
       <div class="card">
-        <h2>Connection</h2>
-        <label class="switch"><input type="checkbox" id="sCors"><span></span>Add permissive CORS headers to every response</label>
-        <label class="switch"><input type="checkbox" id="sH1"><span></span>Force HTTP/1.1 upstream</label>
-        <label class="switch" title="Ask which exit IP a new connection gets and record every change"><input type="checkbox" id="sIpWatch"><span></span>Monitor the exit IP every <input type="number" id="sIpSec" min="5" max="3600" step="1" class="w-num"> seconds</label>
+        <h2>Соединение</h2>
+        <label class="switch"><input type="checkbox" id="sCors"><span></span>Добавлять разрешающие CORS-заголовки к каждому ответу</label>
+        <label class="switch"><input type="checkbox" id="sH1"><span></span>Принудительно использовать HTTP/1.1 к апстриму</label>
+        <label class="switch" title="Запрашивать, какой выходной IP получает новое соединение, и записывать каждое изменение"><input type="checkbox" id="sIpWatch"><span></span>Следить за выходным IP каждые <input type="number" id="sIpSec" min="5" max="3600" step="1" class="w-num"> секунд</label>
         <h3>TLS passthrough</h3>
-        <p class="muted">Hosts tunnelled without MITM (not logged, not changed) — e.g. Turnstile, certificate-pinned APIs. One per line, <code>*.example.com</code> allowed.</p>
+        <p class="muted">Хосты, туннелируемые без MITM (не логируются, не изменяются) — например Turnstile, API с привязкой сертификата. По одному в строке, допускается <code>*.example.com</code>.</p>
         <textarea id="sPass" class="mono code short" spellcheck="false"></textarea>
-        <h3>Page agent</h3>
-        <label class="switch" title="Powers Console and Page analyzer"><input type="checkbox" id="sAgent"><span></span>Add the page agent to proxied HTML pages (console capture, prompt, analyzer)</label>
-        <p class="muted">Inserted on the MITM path only and stripped from the logged document. Strict CSPs get a narrow <code>connect-src</code> exception for <code>/__cupnet/</code>. Pages already open need a reload. Hosts to leave untouched, one per line:</p>
+        <h3>Агент страницы</h3>
+        <label class="switch" title="Обеспечивает работу Консоли и Анализатора страницы"><input type="checkbox" id="sAgent"><span></span>Добавлять агент страницы в проксируемые HTML-страницы (захват консоли, ввод команд, анализатор)</label>
+        <p class="muted">Вставляется только на MITM-пути и вырезается из записываемого документа. Для строгих CSP добавляется узкое исключение <code>connect-src</code> для <code>/__cupnet/</code>. Уже открытые страницы нужно перезагрузить. Хосты, которые не трогать, по одному в строке:</p>
         <textarea id="sAgentEx" class="mono code short" spellcheck="false"></textarea>
-        <div class="row-end"><button class="btn primary" id="sSave">Save settings</button></div>
+        <div class="row-end"><button class="btn primary" id="sSave">Сохранить настройки</button></div>
       </div>
       <div class="card">
-        <h2>Local share host</h2>
-        <p class="muted">Serves <code>viewer.html</code> and the sealed sessions (<code>.cupsess</code>, encrypted) on <code>127.0.0.1</code> so a <b>Share</b> link opens in a browser on this computer. Keys are never served: they stay in the <code>.cupkey</code> file or in the link's <code>#fragment</code>.</p>
-        <label class="switch"><input type="checkbox" id="sShare"><span></span>Run the share host on port <input type="number" id="sSharePort" min="1024" max="65535" step="1" class="w-num"></label>
+        <h2>Локальный хост для шаринга</h2>
+        <p class="muted">Отдаёт <code>viewer.html</code> и запечатанные сессии (<code>.cupsess</code>, зашифрованы) на <code>127.0.0.1</code>, чтобы ссылка <b>Поделиться</b> открывалась в браузере на этом компьютере. Ключи никогда не отдаются: они остаются в файле <code>.cupkey</code> или в <code>#fragment</code> ссылки.</p>
+        <label class="switch"><input type="checkbox" id="sShare"><span></span>Запускать хост шаринга на порту <input type="number" id="sSharePort" min="1024" max="65535" step="1" class="w-num"></label>
         <p class="muted" id="sShareState"></p>
-        <div class="row-end"><button class="btn primary" id="sSave2">Save settings</button></div>
+        <div class="row-end"><button class="btn primary" id="sSave2">Сохранить настройки</button></div>
       </div>
       <div class="card" id="setup"></div>
     </section>
@@ -609,72 +635,81 @@
     <section id="page-guide" class="page scroll" hidden>
       <div class="card gd-hero">
         <div class="gd-title"><span class="logo">◆</span><h2>CupNet <b>mini</b></h2></div>
-        <p class="muted">A standalone traffic-analysis workbench: real Google Chrome driven through an embedded MITM proxy, with every request fingerprinted by the Go AzureTLS worker, logged to local sessions, and open to inspection, replay and rewriting — no browser extension, no Electron.</p>
+        <p class="muted">Автономная мастерская для анализа трафика: настоящий Google Chrome, которым управляют через встроенный MITM-прокси; каждый запрос получает отпечаток от Go-воркера AzureTLS, пишется в локальные сессии и доступен для инспекции, повтора и переписывания — без расширения браузера и без Electron.</p>
         <div class="gd-meta mono">
-          <span class="pill">Version <b id="guideVer">0.1</b></span>
-          <span class="pill">Released <b id="guideDate">2026-10-22</b></span>
+          <span class="pill">Версия <b id="guideVer">0.1</b></span>
+          <span class="pill">Выпуск <b id="guideDate">2026-10-22</b></span>
           <span class="pill" id="guideSess" hidden></span>
         </div>
       </div>
 
       <div class="card">
-        <h2>Getting started</h2>
+        <h2>С чего начать</h2>
         <ol class="gd-steps">
-          <li>Click <b>Open Chrome</b> (bottom-left) to launch the dedicated, proxied Chrome profile.</li>
-          <li>Browse normally — requests stream into <b>Traffic</b> as they happen.</li>
-          <li>Click any row to see full headers, body and timing; from there send it to <b>Repeater</b> or <b>Intruder</b>, or <b>⌘/Ctrl-click</b> two rows to <b>Compare</b> them.</li>
-          <li>Add standing changes in <b>Rules</b> (block, redirect, rewrite, Mirror a host); pause requests mid-flight with <b>Breakpoints</b>.</li>
-          <li>Route through an upstream proxy in <b>Proxies</b>; everything is saved to encrypted <b>Sessions</b> you can export or share.</li>
+          <li>Нажмите <b>Открыть Chrome</b> (внизу слева), чтобы запустить выделенный проксируемый профиль Chrome.</li>
+          <li>Просматривайте сайты как обычно — запросы в реальном времени появляются в <b>Трафике</b>.</li>
+          <li>Нажмите на любую строку, чтобы увидеть полные заголовки, тело и тайминги; оттуда отправьте запрос в <b>Репитер</b> или <b>Интрудер</b>, либо <b>⌘/Ctrl-кликните</b> по двум строкам, чтобы сравнить их в <b>Сравнении</b>.</li>
+          <li>Добавляйте постоянные изменения в <b>Правилах</b> (блокировка, редирект, переписывание заголовков и тела, паузы); останавливайте запросы на лету в <b>Точках останова</b>.</li>
+          <li>Подменяйте целый хост другим во вкладке <b>Зеркало</b>; направляйте трафик через внешний прокси в <b>Прокси</b>. Всё сохраняется в зашифрованные <b>Сессии</b>, которые можно экспортировать или раздать.</li>
         </ol>
-        <p class="muted">Interception happens on the MITM path, so sites see a genuine Chrome and a real TLS fingerprint — nothing is moved onto a JS/fetch path.</p>
+        <p class="muted">Перехват происходит на MITM-пути, поэтому сайты видят настоящий Chrome и реальный TLS-отпечаток — ничего не переносится на путь JS/fetch.</p>
       </div>
 
       <div class="card">
-        <h2>Tools</h2>
-        <p class="muted">Everything in the left sidebar, top to bottom.</p>
+        <h2>Инструменты</h2>
+        <p class="muted">Всё из левой панели, сверху вниз.</p>
 
-        <h3 class="gd-grp">Capture &amp; inspect</h3>
+        <h3 class="gd-grp">Захват и инспекция</h3>
         <dl class="gd-tools">
-          <dt>Traffic</dt><dd>The live request/response log for everything Chrome sends through the proxy. Filter, open a row for full detail, copy as curl/fetch, and hand a request off to Repeater, Intruder or Compare.</dd>
-          <dt>Search</dt><dd>Full-text search across <em>every</em> recorded session at once (<span class="mono">⌘⇧F</span>). Matches URLs, headers and bodies and streams results as it scans.</dd>
-          <dt>Console</dt><dd>Captures the proxied page's own console output (log / warn / error) and lets you run a one-off expression in the page. Requires the Page agent (enable it in Settings).</dd>
-          <dt>WebSockets</dt><dd>Inspects <span class="mono">wss</span> traffic frame by frame — direction, opcode and payload — and can inject a frame or close a live connection.</dd>
-          <dt>Page analyzer</dt><dd>Reads the current page's response headers, detected technologies and security posture (CSP, cookie flags, disclosed server/framework versions).</dd>
-          <dt>Site map</dt><dd>A tree of hosts and paths showing which pages were actually opened versus only linked, plus every form and its fields (including hidden and likely-hidden ones). Can save an offline snapshot of a page.</dd>
-          <dt>Compare</dt><dd>Diffs two captured requests side by side — headers and bodies, line by line. Start it by <span class="mono">⌘/Ctrl-clicking</span> two rows in Traffic.</dd>
+          <dt>Трафик</dt><dd>Живой журнал запросов и ответов для всего, что Chrome отправляет через прокси. Фильтруйте, открывайте строку для полных деталей, копируйте как curl/fetch и передавайте запрос в Репитер, Интрудер или Сравнение.</dd>
+          <dt>Поиск</dt><dd>Полнотекстовый поиск сразу по <em>всем</em> записанным сессиям (<span class="mono">⌘⇧F</span>). Ищет по URL, заголовкам и телам и выдаёт результаты потоком по мере сканирования.</dd>
+          <dt>Консоль</dt><dd>Перехватывает собственный вывод консоли проксируемой страницы (log / warn / error) и позволяет выполнить разовое выражение на странице. Требует Page-агента (включается в Настройках).</dd>
+          <dt>WebSockets</dt><dd>Инспектирует трафик <span class="mono">wss</span> кадр за кадром — направление, opcode и payload — и может внедрить кадр или закрыть активное соединение.</dd>
+          <dt>Анализатор страницы</dt><dd>Читает заголовки ответа текущей страницы, определяет используемые технологии и оценивает безопасность (CSP, флаги cookie, раскрытые версии сервера и фреймворков).</dd>
+          <dt>Карта сайта</dt><dd>Дерево хостов и путей: какие страницы действительно открывались, а какие лишь упоминались в ссылках, плюс каждая форма и её поля (включая скрытые и вероятно скрытые). Умеет сохранять офлайн-снимок страницы.</dd>
+          <dt>Сравнение</dt><dd>Сравнивает два захваченных запроса бок о бок — заголовки и тела, построчно. Запускается <span class="mono">⌘/Ctrl-кликом</span> по двум строкам в Трафике.</dd>
         </dl>
 
-        <h3 class="gd-grp">Manipulate traffic</h3>
+        <h3 class="gd-grp">Управление трафиком</h3>
         <dl class="gd-tools">
-          <dt>Rules</dt><dd>Standing intercept rules applied on the MITM path: block, redirect, rewrite headers or body, set status, add delay, and <b>Mirror host</b>. Edited as plain forms.</dd>
-          <dt>Mirror</dt><dd>Serves an upstream host A under a client host B: fetches A through the egress worker, then rewrites the body, <span class="mono">Location</span> and <span class="mono">Set-Cookie</span> back to B, with optional find/replace. This page is the before/after trail with a line diff of each capture.</dd>
-          <dt>Cookies</dt><dd>A cookie jar for the MITM: track cookies and pin / strip / block them by rule. Queued changes are injected as <span class="mono">Set-Cookie</span> on the next first-party response. Import / export supported.</dd>
-          <dt>Repeater</dt><dd>Resend any captured request, edit any part of it, and compare responses. Repeater traffic is not written to the session log.</dd>
-          <dt>Intruder</dt><dd>Fuzz a request: mark positions with <span class="mono">§…§</span>, pick sniper / battering-ram / pitchfork / cluster-bomb, feed payload lists, and grep the responses. Up to 20 positions and 10,000 requests.</dd>
-          <dt>Breakpoints</dt><dd>Pause matching requests or responses mid-flight so you can edit or drop them before they continue.</dd>
+          <dt>Правила</dt><dd>Постоянные правила перехвата на MITM-пути: блокировка, редирект, переписывание заголовков или тела, подмена статуса, задержка, внедрение JS, скрипт-хуки и пауза. Редактируются обычными формами.</dd>
+          <dt>Зеркало</dt><dd>Отдаёт апстрим-хост A под клиентским хостом B: забирает A через egress-воркер, затем переписывает тело, <span class="mono">Location</span> и <span class="mono">Set-Cookie</span> обратно на B, с необязательной заменой текста (найти/заменить). <b>Вся настройка зеркала — создание конфигурации, правила замены текста и всё остальное — собрана здесь, в этой вкладке</b>, а не в Правилах. Страница также показывает хронику «до/после» с построчным diff каждого захвата.</dd>
+          <dt>Cookies</dt><dd>Хранилище cookie для MITM: отслеживайте cookie и закрепляйте / срезайте / блокируйте их правилами. Изменения из очереди внедряются как <span class="mono">Set-Cookie</span> в следующем ответе первой стороны. Поддерживается импорт / экспорт.</dd>
+          <dt>Репитер</dt><dd>Повторно отправьте любой захваченный запрос, отредактируйте любую его часть и сравните ответы. Трафик Репитера не пишется в журнал сессии.</dd>
+          <dt>Интрудер</dt><dd>Фаззинг запроса: отметьте позиции <span class="mono">§…§</span>, выберите sniper / battering-ram / pitchfork / cluster-bomb, подайте списки payload и грепайте ответы. До 20 позиций и 10 000 запросов.</dd>
+          <dt>Точки останова</dt><dd>Останавливают подходящие запросы или ответы на лету, чтобы вы могли отредактировать или отбросить их перед продолжением.</dd>
         </dl>
 
-        <h3 class="gd-grp">Network &amp; identity</h3>
+        <h3 class="gd-grp">Сеть и личность</h3>
         <dl class="gd-tools">
-          <dt>Proxies</dt><dd>Encrypted upstream-proxy profiles: test, connect, and a kill switch that blocks direct egress if the proxy drops. Import your existing list.</dd>
-          <dt>IP monitor</dt><dd>Watches the proxy's exit IP on an interval and records every change with a timestamp.</dd>
-          <dt>DNS</dt><dd>DNS overrides — pin a host to a specific IP and the egress worker dials that address directly.</dd>
+          <dt>Прокси</dt><dd>Зашифрованные профили внешних прокси: тест, подключение и аварийный выключатель, который блокирует прямой выход, если прокси отвалился. Импортируйте свой готовый список.</dd>
+          <dt>Монитор IP</dt><dd>С заданным интервалом следит за внешним IP прокси и записывает каждое изменение с меткой времени.</dd>
+          <dt>DNS</dt><dd>Переопределения DNS — закрепите хост за конкретным IP, и egress-воркер будет дозваниваться прямо на этот адрес.</dd>
         </dl>
 
-        <h3 class="gd-grp">Organise &amp; configure</h3>
+        <h3 class="gd-grp">Организация и настройка</h3>
         <dl class="gd-tools">
-          <dt>Notes</dt><dd>Markdown notes with <span class="mono">cupnet:req/&lt;sid&gt;/&lt;seq&gt;</span> links back to requests, collapsible secret blocks, and reusable templates.</dd>
-          <dt>Sessions</dt><dd>Recorded sessions as sealed, encrypted <span class="mono">.cupsess</span> files with a per-session key: export, open in the viewer, or share through the local host. Also exports HAR.</dd>
-          <dt>Settings</dt><dd>TLS fingerprint profile, connection options (CORS, forced HTTP/1.1, TLS passthrough hosts), the Page agent toggle, and the local share host.</dd>
+          <dt>Заметки</dt><dd>Заметки в Markdown со ссылками <span class="mono">cupnet:req/&lt;sid&gt;/&lt;seq&gt;</span> обратно на запросы, сворачиваемыми блоками секретов и переиспользуемыми шаблонами.</dd>
+          <dt>Сессии</dt><dd>Записанные сессии как запечатанные, зашифрованные файлы <span class="mono">.cupsess</span> с ключом на каждую сессию: экспорт, открытие в просмотрщике или раздача через локальный хост. Также экспорт в HAR.</dd>
+          <dt>Настройки</dt><dd>Профиль TLS-отпечатка, параметры соединения (CORS, принудительный HTTP/1.1, хосты TLS passthrough), переключатель Page-агента и локальный хост раздачи.</dd>
         </dl>
       </div>
 
       <div class="card">
-        <h2>Good to know</h2>
+        <h2>Горячие клавиши</h2>
+        <dl class="gd-tools">
+          <dt><span class="mono">⌘⇧F</span></dt><dd>Поиск по всем сессиям.</dd>
+          <dt><span class="mono">⌘/Ctrl-клик</span></dt><dd>Отметить две строки в Трафике и открыть их в Сравнении.</dd>
+          <dt><span class="mono">Esc</span></dt><dd>Закрыть открытое модальное окно.</dd>
+        </dl>
+      </div>
+
+      <div class="card">
+        <h2>Полезно знать</h2>
         <ul class="gd-notes muted">
-          <li>All processing is local. The UI is served on <span class="mono">127.0.0.1</span> and every API call is authenticated with the token carried in the page URL.</li>
-          <li>Certificate-pinned or bot-sensitive hosts (e.g. Turnstile) can be listed under <b>Settings → TLS passthrough</b> to tunnel them untouched and unlogged.</li>
-          <li>Console and Page analyzer rely on the optional <b>Page agent</b>, which is off by default and injected only on the MITM path.</li>
+          <li>Вся обработка — локальная. Интерфейс отдаётся на <span class="mono">127.0.0.1</span>, и каждый вызов API аутентифицируется токеном из URL страницы.</li>
+          <li>Хосты с закреплённым сертификатом или чувствительные к ботам (например, Turnstile) можно указать в <b>Настройки → TLS passthrough</b>, чтобы туннелировать их нетронутыми и без логирования.</li>
+          <li>Консоль и Анализатор страницы опираются на необязательный <b>Page-агент</b>, который по умолчанию выключен и внедряется только на MITM-пути.</li>
         </ul>
       </div>
     </section>

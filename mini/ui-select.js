@@ -89,8 +89,8 @@
   const pop = el('div', 'cs-pop');
   pop.hidden = true;
   const q = el('input', 'cs-q');
-  q.type = 'search'; q.placeholder = 'Search…'; q.spellcheck = false; q.autocomplete = 'off';
-  q.setAttribute('aria-label', 'Search options');
+  q.type = 'search'; q.placeholder = 'Поиск…'; q.spellcheck = false; q.autocomplete = 'off';
+  q.setAttribute('aria-label', 'Поиск по вариантам');
   const list = el('div', 'cs-list');
   list.setAttribute('role', 'listbox');
   const foot = el('div', 'cs-foot');
@@ -157,8 +157,8 @@
       list.append(row);
       shown++;
     }
-    if (!open.items.length) list.append(el('div', 'cs-none', needle ? 'Nothing matches' : 'No options'));
-    foot.textContent = shown > RENDER_MAX ? `${RENDER_MAX} of ${shown} shown — type to narrow` : needle ? `${Math.min(shown, RENDER_MAX)} of ${total}` : '';
+    if (!open.items.length) list.append(el('div', 'cs-none', needle ? 'Ничего не найдено' : 'Нет вариантов'));
+    foot.textContent = shown > RENDER_MAX ? `показано ${RENDER_MAX} из ${shown} — уточните ввод` : needle ? `${Math.min(shown, RENDER_MAX)} из ${total}` : '';
     foot.hidden = !foot.textContent;
     if (needle || activeIdx < 0 || open.items[activeIdx].row.classList.contains('dis')) activeIdx = nextEnabled(-1, 1);
     setActive(activeIdx, scrollToSelected ? 'center' : true);

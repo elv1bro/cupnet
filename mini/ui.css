@@ -479,6 +479,7 @@ input.w-num { width: 64px; height: 22px; margin: 0 4px; padding: 0 6px; }
 .ln-skip:hover { background: var(--bg3); }
 
 /* ── mirror ── */
+.mir-view { flex: 1; min-height: 0; display: flex; }
 .mir-list { width: 46%; min-width: 360px; flex: none; }
 .mir-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .mir-head { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }

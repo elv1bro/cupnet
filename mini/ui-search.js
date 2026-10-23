@@ -6,10 +6,10 @@ const SR = {
   opts: Object.assign({ regex: false, caseSensitive: false, fields: ['url', 'headers', 'bodies'], kinds: ['request', 'ws', 'console'], scope: 'all', host: '' }, store.get('sr-opts', {})),
   ctl: null, groups: new Map(), hits: 0, total: 0, bytes: 0, t0: 0, running: false, last: null,
 };
-const SR_FIELDS = [['url', 'URL'], ['headers', 'Headers'], ['bodies', 'Bodies']];
-const SR_KINDS = [['request', 'Requests'], ['ws', 'WebSocket'], ['console', 'Console']];
-const SR_SCOPES = [['all', 'All'], ['week', '7 days'], ['day', '24 h'], ['shown', 'This session']];
-const SR_LABEL = { url: 'URL', reqHeaders: 'Request headers', reqBody: 'Request body', resHeaders: 'Response headers', resBody: 'Response body' };
+const SR_FIELDS = [['url', 'URL'], ['headers', 'Заголовки'], ['bodies', 'Тела']];
+const SR_KINDS = [['request', 'Запросы'], ['ws', 'WebSocket'], ['console', 'Консоль']];
+const SR_SCOPES = [['all', 'Все'], ['week', '7 дней'], ['day', '24 ч'], ['shown', 'Эта сессия']];
+const SR_LABEL = { url: 'URL', reqHeaders: 'Заголовки запроса', reqBody: 'Тело запроса', resHeaders: 'Заголовки ответа', resBody: 'Тело ответа' };
 /** Detail tab to open for a match in this field. */
 const SR_TAB = { url: 'headers', reqHeaders: 'headers', resHeaders: 'headers', reqBody: 'request', resBody: 'response' };
 
@@ -23,15 +23,22 @@ function srToggle(list, k) {
   const i = list.indexOf(k);
   if (i >= 0) { if (list.length > 1) list.splice(i, 1); } else list.push(k);
 }
+/** Russian plural: pick one/few/many form by count. */
+function srPlural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
 
 function renderSrOpts() {
   const o = SR.opts;
-  clear($('srMode')).append(seg([['text', 'Text'], ['regex', 'Regex']], o.regex ? 'regex' : 'text', (v) => { o.regex = v === 'regex'; srSave(); renderSrOpts(); }));
+  clear($('srMode')).append(seg([['text', 'Текст'], ['regex', 'Regex']], o.regex ? 'regex' : 'text', (v) => { o.regex = v === 'regex'; srSave(); renderSrOpts(); }));
   $('srCase').classList.toggle('on', o.caseSensitive);
   clear($('srFields')).append(...SR_FIELDS.map(([k, label]) => h('button', { type: 'button', class: `chip${o.fields.includes(k) ? ' on' : ''}`, onclick: () => { srToggle(o.fields, k); srSave(); renderSrOpts(); } }, label)));
   clear($('srKinds')).append(...SR_KINDS.map(([k, label]) => h('button', { type: 'button', class: `chip${o.kinds.includes(k) ? ' on' : ''}`, onclick: () => { srToggle(o.kinds, k); srSave(); renderSrOpts(); } }, label)));
   clear($('srScope')).append(seg(SR_SCOPES, o.scope, (v) => { o.scope = v; srSave(); renderSrOpts(); }));
-  $('srQ').placeholder = o.regex ? 'Regular expression, e.g. "token"\\s*:\\s*"[^"]+"' : 'Text in URLs, headers, bodies and messages — e.g. a token, an email, an id';
+  $('srQ').placeholder = o.regex ? 'Регулярное выражение, напр. "token"\\s*:\\s*"[^"]+"' : 'Текст в URL, заголовках, телах и сообщениях — напр. токен, email, id';
 }
 
 /** Session ids in the chosen scope (newest first) and their total size. */
@@ -64,7 +71,7 @@ async function srRun() {
   SR.ctl = ctl;
   const { cur, list, bytes } = await srSessions();
   if (ctl.signal.aborted) return;
-  if (!list.length) { toast('No sessions in this range', 'warn'); SR.ctl = null; return; }
+  if (!list.length) { toast('Нет сессий в этом диапазоне', 'warn'); SR.ctl = null; return; }
   SR.groups = new Map(); SR.hits = 0; SR.total = list.length; SR.bytes = bytes; SR.done = 0; SR.read = 0; SR.t0 = Date.now(); SR.cur = cur;
   SR.running = true; SR.last = { q, regex: SR.opts.regex };
   clear($('srResults'));
@@ -115,19 +122,19 @@ function srStatus({ end, error, stopped }) {
   const box = clear($('srStatus'));
   box.hidden = false;
   const pct = SR.bytes ? Math.min(100, Math.round((SR.read / SR.bytes) * 100)) : 0;
-  const hits = `${SR.hits.toLocaleString()} match${SR.hits === 1 ? '' : 'es'}`;
-  const where = `${SR.done} of ${SR.total} session${SR.total === 1 ? '' : 's'}`;
+  const hits = `${SR.hits.toLocaleString()} ${srPlural(SR.hits, 'совпадение', 'совпадения', 'совпадений')}`;
+  const where = `${SR.done} из ${SR.total} сессий`;
   if (error) { append(box, [h('span', { class: 'err' }, error)]); return; }
   if (end) {
-    const ms = end.ms < 1000 ? `${end.ms} ms` : `${(end.ms / 1000).toFixed(1)} s`;
-    append(box, [h('b', null, hits), h('span', { class: 'muted' }, ` in ${end.scanned} of ${end.sessions} session${end.sessions === 1 ? '' : 's'} · ${fmtSize(end.bytes) || '0 B'} · ${ms}`),
-      end.truncated ? tag(`first ${end.hits} shown — narrow the query`, 'warn') : null,
-      end.timedOut ? tag('stopped after the time limit — narrow the sessions or the query', 'warn') : null]);
-    if (!SR.hits) { $('srEmpty').hidden = false; $('srEmpty').textContent = 'Nothing found. Binary bodies are not searched; try Regex, other kinds, or All sessions.'; }
+    const ms = end.ms < 1000 ? `${end.ms} мс` : `${(end.ms / 1000).toFixed(1)} с`;
+    append(box, [h('b', null, hits), h('span', { class: 'muted' }, ` — в ${end.scanned} из ${end.sessions} сессий · ${fmtSize(end.bytes) || '0 B'} · ${ms}`),
+      end.truncated ? tag(`показаны первые ${end.hits} — уточните запрос`, 'warn') : null,
+      end.timedOut ? tag('остановлено по тайм-ауту — сузьте выбор сессий или запрос', 'warn') : null]);
+    if (!SR.hits) { $('srEmpty').hidden = false; $('srEmpty').textContent = 'Ничего не найдено. Бинарные тела не ищутся; попробуйте Regex, другие типы или Все сессии.'; }
     return;
   }
-  if (stopped) { append(box, [h('b', null, hits), h('span', { class: 'muted' }, ` · stopped after ${where}`)]); return; }
-  append(box, [h('span', { class: 'sr-spin' }), h('b', null, hits), h('span', { class: 'muted' }, ` · searching ${where} · ${fmtSize(SR.read) || '0 B'} of ${fmtSize(SR.bytes) || '0 B'}`),
+  if (stopped) { append(box, [h('b', null, hits), h('span', { class: 'muted' }, ` · остановлено на ${where}`)]); return; }
+  append(box, [h('span', { class: 'sr-spin' }), h('b', null, hits), h('span', { class: 'muted' }, ` · поиск ${where} · ${fmtSize(SR.read) || '0 B'} из ${fmtSize(SR.bytes) || '0 B'}`),
     h('span', { class: 'sr-bar' }, h('i', { style: `width:${pct}%` }))]);
 }
 
@@ -140,11 +147,11 @@ function srGroup(id) {
   const head = h('div', { class: 'sr-ghead' },
     h('span', { class: 'sr-caret' }, '▾'),
     h('b', { class: 'mono' }, id),
-    id === SR.cur ? tag('live', 'ok') : null,
+    id === SR.cur ? tag('активна', 'ok') : null,
     d ? h('span', { class: 'muted' }, d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })) : null,
     count,
     h('span', { class: 'spacer' }),
-    h('button', { type: 'button', class: 'btn sm ghost', title: 'Show this session in Traffic', onclick: (ev) => { ev.stopPropagation(); openSession(id); go('traffic'); } }, 'Open session'));
+    h('button', { type: 'button', class: 'btn sm ghost', title: 'Показать эту сессию в Трафике', onclick: (ev) => { ev.stopPropagation(); openSession(id); go('traffic'); } }, 'Открыть сессию'));
   const box = h('div', { class: 'sr-group' }, head, rows);
   head.addEventListener('click', () => { box.classList.toggle('closed'); });
   $('srResults').append(box);
@@ -155,7 +162,7 @@ function srGroup(id) {
 
 function srFieldLabel(hit, f) {
   if (f !== 'message') return SR_LABEL[f] || f;
-  return hit.kind === 'ws' ? `WS ${hit.dir === 'out' ? '↑ sent' : hit.dir === 'in' ? '↓ received' : 'message'}` : `Console ${hit.type || ''}`.trim();
+  return hit.kind === 'ws' ? `WS ${hit.dir === 'out' ? '↑ отпр.' : hit.dir === 'in' ? '↓ получ.' : 'сообщение'}` : `Консоль ${hit.type || ''}`.trim();
 }
 
 function srAddHit(hit) {
@@ -165,8 +172,8 @@ function srAddHit(hit) {
   const [hostPart, pathPart] = splitUrl(hit.url || '');
   const lead = hit.kind === 'request'
     ? [badge(hit.method || '?', `m-${hit.method}`), badge(String(hit.status || 'ERR'), stCls(hit.status))]
-    : [tag(hit.kind === 'ws' ? 'ws' : 'console', hit.kind === 'ws' ? 'accent' : '')];
-  const row = h('div', { class: 'sr-row', tabindex: 0, title: 'Show in Traffic' },
+    : [tag(hit.kind === 'ws' ? 'ws' : 'консоль', hit.kind === 'ws' ? 'accent' : '')];
+  const row = h('div', { class: 'sr-row', tabindex: 0, title: 'Показать в Трафике' },
     h('div', { class: 'sr-line' }, lead,
       h('span', { class: 'sr-url ell mono' }, hostPart ? h('b', null, hostPart) : null, pathPart),
       h('span', { class: 'faint mono' }, `#${hit.seq}`),

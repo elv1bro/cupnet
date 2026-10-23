@@ -71,7 +71,7 @@ function download(blob, name) {
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
-async function copy(text, what = 'Copied') {
+async function copy(text, what = 'Скопировано') {
   try { await navigator.clipboard.writeText(text); }
   catch {
     const t = h('textarea', { value: text }); document.body.append(t); t.select();
@@ -151,8 +151,8 @@ function confirmBox(text, okLabel = 'OK', danger = false) {
   return new Promise((resolve) => {
     let done = false;
     const fin = (v) => { if (!done) { done = true; resolve(v); } };
-    modal('Confirm', h('p', null, text), [
-      { label: 'Cancel', fn: () => fin(false) },
+    modal('Подтверждение', h('p', null, text), [
+      { label: 'Отмена', fn: () => fin(false) },
       { label: okLabel, cls: danger ? 'danger' : 'primary', fn: () => fin(true) },
     ]);
     const obs = new MutationObserver(() => { if ($('modalWrap').hidden) { obs.disconnect(); fin(false); } });
@@ -163,7 +163,7 @@ function confirmBox(text, okLabel = 'OK', danger = false) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Navigation
 // ─────────────────────────────────────────────────────────────────────────────
-const TITLES = { traffic: 'Traffic', search: 'Search', console: 'Console', ws: 'WebSockets', analyzer: 'Page analyzer', proxies: 'Proxies', ipwatch: 'IP monitor', dns: 'DNS overrides', sitemap: 'Site map', notes: 'Notes', compare: 'Compare', mirror: 'Mirror', cookies: 'Cookies', repeater: 'Repeater', intruder: 'Intruder', rules: 'Rules', paused: 'Breakpoints', sessions: 'Sessions', settings: 'Settings', guide: 'Guide' };
+const TITLES = { traffic: 'Трафик', search: 'Поиск', console: 'Консоль', ws: 'WebSockets', analyzer: 'Анализатор страницы', proxies: 'Прокси', ipwatch: 'Монитор IP', dns: 'Переопределения DNS', sitemap: 'Карта сайта', notes: 'Заметки', compare: 'Сравнение', mirror: 'Зеркало', cookies: 'Cookies', repeater: 'Репитер', intruder: 'Интрудер', rules: 'Правила', paused: 'Точки останова', sessions: 'Сессии', settings: 'Настройки', guide: 'Гайд' };
 let PAGE = 'traffic';
 function go(page) {
   if (!TITLES[page]) page = 'traffic';
@@ -175,10 +175,10 @@ function go(page) {
   if (load) guard(load)();
 }
 document.querySelectorAll('#nav button').forEach((b) => b.addEventListener('click', () => go(b.dataset.page)));
-$('launch').addEventListener('click', guard(async () => { await post('/api/chrome', {}); toast('Chrome is starting with the CupNet proxy', 'ok'); }));
+$('launch').addEventListener('click', guard(async () => { await post('/api/chrome', {}); toast('Chrome запускается с прокси CupNet', 'ok'); }));
 $('quit').addEventListener('click', guard(async () => {
-  if (!(await confirmBox('Stop CupNet mini? The session is sealed on exit.', 'Quit', true))) return;
-  await post('/api/quit'); $('stats').textContent = 'stopped'; window.close();
+  if (!(await confirmBox('Остановить CupNet mini? Сессия будет запечатана при выходе.', 'Выход', true))) return;
+  await post('/api/quit'); $('stats').textContent = 'остановлено'; window.close();
 }));
 $('egress').addEventListener('click', () => go('proxies'));
 document.addEventListener('keydown', (ev) => {
@@ -209,9 +209,9 @@ async function checkEgress(force = false) {
 }
 function connLabel(px) {
   if (!px) return '—';
-  if (px.mode === 'proxy') return px.active?.name || 'Proxy';
-  if (px.mode === 'cli') return 'CLI upstream';
-  return 'Direct';
+  if (px.mode === 'proxy') return px.active?.name || 'Прокси';
+  if (px.mode === 'cli') return 'CLI-апстрим';
+  return 'Напрямую';
 }
 function geoText(e) {
   if (!e || !e.ok) return '';
@@ -220,11 +220,11 @@ function geoText(e) {
 function renderEgress() {
   const px = ST?.proxy; const pill = $('egress'); const dot = pill.querySelector('.dot');
   const label = connLabel(px);
-  let cls = '', text = label, title = 'Exit IP — click to manage proxies';
-  if (px?.blocked && px.mode === 'direct') { cls = 'err'; text = 'Blocked — kill switch is on, no proxy'; }
-  else if (EG.data?.ok) { cls = px?.mode === 'direct' ? 'warn' : 'ok'; text = `${label} · ${flag(EG.data.country)} ${EG.data.ip}`; title = `${EG.data.ip} · ${geoText(EG.data)}${EG.data.org ? ` · ${EG.data.org}` : ''}${ST?.ipWatch?.enabled ? `\nIP monitor: ${ST.ipWatch.changes1h} change(s) in the last hour` : ''}\nClick to manage proxies`; }
-  else if (EG.pending || (ST?.ipWatch?.enabled && !EG.data)) { text = `${label} · checking…`; }
-  else if (EG.data && !EG.data.ok) { cls = 'err'; text = `${label} · ${EG.data.error || 'check failed'}`; }
+  let cls = '', text = label, title = 'Внешний IP — нажмите, чтобы управлять прокси';
+  if (px?.blocked && px.mode === 'direct') { cls = 'err'; text = 'Заблокировано — kill switch включён, прокси нет'; }
+  else if (EG.data?.ok) { cls = px?.mode === 'direct' ? 'warn' : 'ok'; text = `${label} · ${flag(EG.data.country)} ${EG.data.ip}`; title = `${EG.data.ip} · ${geoText(EG.data)}${EG.data.org ? ` · ${EG.data.org}` : ''}${ST?.ipWatch?.enabled ? `\nМонитор IP: ${ST.ipWatch.changes1h} изменений за последний час` : ''}\nНажмите, чтобы управлять прокси`; }
+  else if (EG.pending || (ST?.ipWatch?.enabled && !EG.data)) { text = `${label} · проверка…`; }
+  else if (EG.data && !EG.data.ok) { cls = 'err'; text = `${label} · ${EG.data.error || 'проверка не удалась'}`; }
   pill.className = `pill ${cls}`;
   dot.className = `dot ${EG.pending && !EG.data ? 'busy' : ''}`;
   $('egressText').textContent = text; pill.title = title;
@@ -237,22 +237,22 @@ async function pollStatus() {
     if (st.version) { const sv = $('sideVer'); if (sv) sv.textContent = `v${st.version}`; }
     $('quit').hidden = !st.canQuit;
     const s = st.stats;
-    const parts = [`proxy 127.0.0.1:${st.mitmPort}`];
+    const parts = [`прокси 127.0.0.1:${st.mitmPort}`];
     if (s) {
-      parts.push(`${s.requests.toLocaleString()} req`);
-      if (s.reqPerSec) parts.push(`${s.reqPerSec}/s`);
-      if (s.avgMs) parts.push(`avg ${Math.round(s.avgMs)} ms`);
-      if (s.errors) parts.push(`${s.errors} err`);
-      if (!s.workerReady) parts.push('TLS worker starting…');
+      parts.push(`${s.requests.toLocaleString()} запр.`);
+      if (s.reqPerSec) parts.push(`${s.reqPerSec}/с`);
+      if (s.avgMs) parts.push(`сред. ${Math.round(s.avgMs)} мс`);
+      if (s.errors) parts.push(`${s.errors} ошиб.`);
+      if (!s.workerReady) parts.push('TLS-воркер запускается…');
     }
-    if (st.writeErrors) parts.push(`${st.writeErrors} write errors`);
+    if (st.writeErrors) parts.push(`${st.writeErrors} ошибок записи`);
     $('stats').textContent = parts.join(' · ');
     $('stats').className = `mono ${st.writeErrors || (s && !s.workerReady) ? 'warn' : 'muted'}`;
     const pc = $('pausedCount');
     pc.hidden = !st.paused; pc.textContent = st.paused || '';
     const dc = $('dnsCount');
     dc.hidden = !st.dns?.enabled; dc.textContent = st.dns?.enabled || '';
-    if (st.paused > _lastPaused && PAGE !== 'paused') toast(`${st.paused} request(s) paused by a breakpoint`, 'warn', { action: { label: 'Open', fn: () => go('paused') } });
+    if (st.paused > _lastPaused && PAGE !== 'paused') toast(`${st.paused} запрос(ов) остановлено точкой останова`, 'warn', { action: { label: 'Открыть', fn: () => go('paused') } });
     _lastPaused = st.paused;
     const key = egressKey(st.proxy);
     const w = st.ipWatch;
@@ -268,7 +268,7 @@ async function pollStatus() {
     renderEgress();
     if (PAGE === 'proxies') { P.status = st.proxy; renderConn(); }
   } catch (e) {
-    $('stats').textContent = `disconnected: ${e.message}`; $('stats').className = 'mono err';
+    $('stats').textContent = `нет соединения: ${e.message}`; $('stats').className = 'mono err';
   }
 }
 
@@ -484,7 +484,7 @@ async function fillSessionSelect() {
   current = cur;
   const sel = $('session'); const keep = sel.value || cur;
   clear(sel);
-  for (const s of sessions) sel.append(h('option', { value: s.id }, s.id === cur ? `● Live — ${s.id}` : `${s.id} · ${fmtSize(s.bytes) || '0 B'}`));
+  for (const s of sessions) sel.append(h('option', { value: s.id }, s.id === cur ? `● Эфир — ${s.id}` : `${s.id} · ${fmtSize(s.bytes) || '0 B'}`));
   sel.value = sessions.some((s) => s.id === keep) ? keep : cur;
   return sessions;
 }
@@ -504,17 +504,17 @@ $('harBtn').addEventListener('click', guard(async () => {
   const sid = shown || current;
   const reqs = view.map((i) => all[i]).filter((e) => e.kind === 'request');
   const total = all.reduce((n, e) => n + (e.kind === 'request' ? 1 : 0), 0);
-  if (!reqs.length) { toast('No requests to export', 'warn'); return; }
+  if (!reqs.length) { toast('Нет запросов для экспорта', 'warn'); return; }
   let q = '';
   if (reqs.length !== total) {
     q = `?seqs=${compressSeqs(reqs.map((e) => e.seq).sort((x, y) => x - y))}`;
-    if (q.length > 12000) { toast('Too many scattered rows for one export — narrow the filter, or clear it to export the whole session', 'warn'); return; }
+    if (q.length > 12000) { toast('Слишком много разрозненных строк для одного экспорта — сузьте фильтр или очистите его, чтобы экспортировать всю сессию', 'warn'); return; }
   }
   await busy($('harBtn'), 'HAR…', async () => {
     const { blob } = await apiBlob(`/api/sessions/${encodeURIComponent(sid)}/har${q}`);
     download(blob, `cupnet-${sid}${q ? '-filtered' : ''}.har`);
   });
-  toast(`Exported ${reqs.length.toLocaleString()} requests as HAR`, 'ok');
+  toast(`Экспортировано ${reqs.length.toLocaleString()} запросов в HAR`, 'ok');
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -534,7 +534,7 @@ async function select(seq) {
     dEntry = e; renderDetail();
   } catch (err) { clear($('dbody')).append(h('div', { class: 'note warn' }, err.message)); }
 }
-function kvGrid(pairs, empty = '(none)') {
+function kvGrid(pairs, empty = '(нет)') {
   const g = h('div', { class: 'kv' });
   if (!pairs.length) g.append(h('div', { class: 'k dim' }, empty), h('div'));
   for (const [k, v] of pairs) g.append(h('div', { class: 'k' }, k), h('div', null, v));
@@ -554,28 +554,28 @@ function renderDetail() {
   if (e.kind === 'console' && typeof renderConsoleDetail === 'function') { $('dMethod').textContent = e.type || 'console'; renderConsoleDetail(d, e); return; }
   if (e.kind === 'ws' && typeof renderWsDetail === 'function') { $('dMethod').textContent = `ws ${e.type}`; renderWsDetail(d, e); return; }
   if (!isReq) {
-    d.append(sect('Event', kvGrid([['Kind', e.kind], ['URL', e.url || ''], ['Time', new Date(e.ts).toISOString()]])), sect('Data', jsonPre(JSON.stringify(e.data ?? e, null, 2))));
+    d.append(sect('Событие', kvGrid([['Тип', e.kind], ['URL', e.url || ''], ['Время', new Date(e.ts).toISOString()]])), sect('Данные', jsonPre(JSON.stringify(e.data ?? e, null, 2))));
     return;
   }
   ({ headers: tabHeaders, request: tabRequest, response: tabResponse, cookies: tabCookies, raw: tabRaw, json: tabJson }[dTab] || tabHeaders)(d, e);
 }
 function tabHeaders(d, e) {
-  d.append(sect('General', kvGrid([
-    ['URL', e.url], ['Method', e.method], ['Status', String(e.status || 'failed')], ['Type', e.type || ''],
-    ['Duration', e.duration != null ? `${e.duration} ms` : ''], ['Time', new Date(e.ts).toLocaleString()],
-    ['Request body', fmtSize(e.reqSize) || '—'], ['Response body', fmtSize(e.resSize) || '—'],
-    ...(e.dns ? [['DNS override', h('span', null, h('span', { class: 'mono' }, `${e.dns.host} → ${e.dns.ip}`), ' ', h('button', { class: 'btn sm', onclick: () => go('dns') }, 'Rules'))]] : []),
-    ...(e.error ? [['Error', String(e.error)]] : []),
-    ...(e.status === 101 && e.type === 'websocket' && typeof wsReveal === 'function' ? [['WebSocket', h('button', { class: 'btn sm', onclick: () => wsReveal(e.seq) }, 'Open messages')]] : []),
+  d.append(sect('Общее', kvGrid([
+    ['URL', e.url], ['Метод', e.method], ['Статус', String(e.status || 'ошибка')], ['Тип', e.type || ''],
+    ['Длительность', e.duration != null ? `${e.duration} мс` : ''], ['Время', new Date(e.ts).toLocaleString()],
+    ['Тело запроса', fmtSize(e.reqSize) || '—'], ['Тело ответа', fmtSize(e.resSize) || '—'],
+    ...(e.dns ? [['Переопределение DNS', h('span', null, h('span', { class: 'mono' }, `${e.dns.host} → ${e.dns.ip}`), ' ', h('button', { class: 'btn sm', onclick: () => go('dns') }, 'Правила'))]] : []),
+    ...(e.error ? [['Ошибка', String(e.error)]] : []),
+    ...(e.status === 101 && e.type === 'websocket' && typeof wsReveal === 'function' ? [['WebSocket', h('button', { class: 'btn sm', onclick: () => wsReveal(e.seq) }, 'Открыть сообщения')]] : []),
   ])));
   const rs = pairsOf(e.responseHeaders), rq = pairsOf(e.requestHeaders);
-  d.append(sect('Response headers', kvGrid(rs), true, tag(rs.length)), sect('Request headers', kvGrid(rq), true, tag(rq.length)));
+  d.append(sect('Заголовки ответа', kvGrid(rs), true, tag(rs.length)), sect('Заголовки запроса', kvGrid(rq), true, tag(rq.length)));
 }
 function tabRequest(d, e) {
   let qp = [];
   try { qp = [...new URL(e.url).searchParams.entries()]; } catch { /* not a URL */ }
-  if (qp.length) d.append(sect('Query string', kvGrid(qp), true, tag(qp.length)));
-  d.append(sect('Body', bodyView(e, 'request', qs())));
+  if (qp.length) d.append(sect('Строка запроса', kvGrid(qp), true, tag(qp.length)));
+  d.append(sect('Тело', bodyView(e, 'request', qs())));
 }
 function tabResponse(d, e) { d.append(bodyView(e, 'response', qs())); }
 function parseSetCookie(line) {
@@ -592,34 +592,34 @@ function tabCookies(d, e) {
   }
   const set = [];
   for (const [k, v] of pairsOf(e.responseHeaders)) if (k.toLowerCase() === 'set-cookie') for (const line of v.split('\n')) if (line.trim()) set.push(parseSetCookie(line));
-  d.append(sect('Request cookies', kvGrid(reqCookies, 'No Cookie header'), true, tag(reqCookies.length)));
-  const tbl = h('table', { class: 'tbl' }, h('thead', null, h('tr', null, h('th', { class: 'w-180' }, 'Name'), h('th', null, 'Value'), h('th', null, 'Attributes'))),
+  d.append(sect('Cookie запроса', kvGrid(reqCookies, 'Нет заголовка Cookie'), true, tag(reqCookies.length)));
+  const tbl = h('table', { class: 'tbl' }, h('thead', null, h('tr', null, h('th', { class: 'w-180' }, 'Имя'), h('th', null, 'Значение'), h('th', null, 'Атрибуты'))),
     h('tbody', null, set.length ? set.map((c) => h('tr', null, h('td', { class: 'mono', title: c.name }, c.name), h('td', { class: 'mono', title: c.value }, c.value), h('td', { class: 'muted', title: c.attrs }, c.attrs)))
-      : h('tr', null, h('td', { colspan: 3, class: 'muted' }, 'No Set-Cookie headers'))));
-  d.append(sect('Set by the response', tbl, true, tag(set.length)));
+      : h('tr', null, h('td', { colspan: 3, class: 'muted' }, 'Нет заголовков Set-Cookie'))));
+  d.append(sect('Установлены ответом', tbl, true, tag(set.length)));
 }
 function bodyText(body) {
   if (body == null || body === '') return '';
   const s = String(body);
-  return s.startsWith('__b64__:') ? `[binary body, ${fmtSize(Math.floor((s.length - 8) * 3 / 4))}]` : s;
+  return s.startsWith('__b64__:') ? `[бинарное тело, ${fmtSize(Math.floor((s.length - 8) * 3 / 4))}]` : s;
 }
 function rawHttp(e, maxBody = 512 * 1024) {
   const [, path] = splitUrl(e.url);
-  const cut = (s) => (s.length > maxBody ? `${s.slice(0, maxBody)}\n… [${fmtSize(s.length - maxBody)} more — use Download]` : s);
+  const cut = (s) => (s.length > maxBody ? `${s.slice(0, maxBody)}\n… [ещё ${fmtSize(s.length - maxBody)} — используйте «Скачать»]` : s);
   const hasHost = pairsOf(e.requestHeaders).some(([k]) => /^(host|:authority)$/i.test(k));
   const req = [`${e.method} ${path} HTTP/1.1`, ...(hasHost ? [] : [`Host: ${splitUrl(e.url)[0]}`]), ...pairsOf(e.requestHeaders).map(([k, v]) => `${k}: ${v}`)].join('\n');
   const res = [`HTTP/1.1 ${e.status || 0}`, ...pairsOf(e.responseHeaders).map(([k, v]) => `${k}: ${v}`)].join('\n');
-  return `${req}\n\n${cut(bodyText(e.requestBody))}${e.requestBodyTruncated ? '\n… [truncated]' : ''}\n\n${res}\n\n${cut(bodyText(e.responseBody))}${e.responseBodyTruncated ? '\n… [truncated]' : ''}`;
+  return `${req}\n\n${cut(bodyText(e.requestBody))}${e.requestBodyTruncated ? '\n… [обрезано]' : ''}\n\n${res}\n\n${cut(bodyText(e.responseBody))}${e.responseBodyTruncated ? '\n… [обрезано]' : ''}`;
 }
 function tabRaw(d, e) {
   const text = rawHttp(e);
-  d.append(h('div', { class: 'bodybar' }, h('span', { class: 'muted' }, 'Request and response as HTTP/1.1 text'), h('span', { class: 'spacer' }),
-    h('button', { class: 'btn sm', onclick: () => copy(rawHttp(e, Infinity), 'Raw HTTP copied') }, 'Copy')), h('pre', { class: 'codebox' }, text));
+  d.append(h('div', { class: 'bodybar' }, h('span', { class: 'muted' }, 'Запрос и ответ в виде текста HTTP/1.1'), h('span', { class: 'spacer' }),
+    h('button', { class: 'btn sm', onclick: () => copy(rawHttp(e, Infinity), 'Сырой HTTP скопирован') }, 'Копировать')), h('pre', { class: 'codebox' }, text));
 }
 function tabJson(d, e) {
   const text = JSON.stringify(e, null, 2);
-  d.append(h('div', { class: 'bodybar' }, h('span', { class: 'muted' }, 'The full log entry'), h('span', { class: 'spacer' }),
-    h('button', { class: 'btn sm', onclick: () => copy(text, 'JSON copied') }, 'Copy')), jsonPre(text));
+  d.append(h('div', { class: 'bodybar' }, h('span', { class: 'muted' }, 'Полная запись лога'), h('span', { class: 'spacer' }),
+    h('button', { class: 'btn sm', onclick: () => copy(text, 'JSON скопирован') }, 'Копировать')), jsonPre(text));
 }
 
 // ── body viewer (traffic detail + repeater) ──
@@ -666,14 +666,14 @@ function bodyView(e, which, sessQs) {
   const ct = headerOf(hdrs, 'content-type').toLowerCase();
   const size = which === 'request' ? e.reqSize : e.resSize;
   const bodyUrl = `/api/log/${e.seq}/body/${which}${sessQs}`;
-  const bar = h('div', { class: 'bodybar' }, tag(ct.split(';')[0] || 'no content-type'), h('span', { class: 'muted' }, fmtSize(size) || '0 B'));
+  const bar = h('div', { class: 'bodybar' }, tag(ct.split(';')[0] || 'без content-type'), h('span', { class: 'muted' }, fmtSize(size) || '0 B'));
   box.append(bar);
-  if (body == null || body === '') { box.append(h('div', { class: 'empty' }, 'No body')); return box; }
-  const dl = h('button', { class: 'btn sm', onclick: guard(async () => { const { blob } = await apiBlob(bodyUrl); download(blob, `cupnet-${e.seq}-${which}${extFor(ct)}`); }) }, 'Download');
+  if (body == null || body === '') { box.append(h('div', { class: 'empty' }, 'Нет тела')); return box; }
+  const dl = h('button', { class: 'btn sm', onclick: guard(async () => { const { blob } = await apiBlob(bodyUrl); download(blob, `cupnet-${e.seq}-${which}${extFor(ct)}`); }) }, 'Скачать');
   const isB64 = String(body).startsWith('__b64__:');
   if (isB64 && /^(image|video|audio)\//.test(ct)) {
     bar.append(h('span', { class: 'spacer' }), dl);
-    const pv = h('div', { class: 'preview' }, 'loading…'); box.append(pv);
+    const pv = h('div', { class: 'preview' }, 'загрузка…'); box.append(pv);
     apiBlob(bodyUrl).then(({ blob }) => {
       const url = URL.createObjectURL(new Blob([blob], { type: ct.split(';')[0] }));
       const t = ct.startsWith('image/') ? 'img' : ct.startsWith('video/') ? 'video' : 'audio';
@@ -681,28 +681,28 @@ function bodyView(e, which, sessQs) {
     }).catch((err) => { pv.textContent = err.message; });
     return box;
   }
-  if (isB64) { bar.append(h('span', { class: 'spacer' }), dl); box.append(h('div', { class: 'note' }, 'Binary body. Use Download to get the bytes.')); return box; }
+  if (isB64) { bar.append(h('span', { class: 'spacer' }), dl); box.append(h('div', { class: 'note' }, 'Бинарное тело. Используйте «Скачать», чтобы получить байты.')); return box; }
 
   let text = String(body);
   let truncated = which === 'request' ? e.requestBodyTruncated : e.responseBodyTruncated;
   const isJson = /json/.test(ct) || /^\s*[[{]/.test(text.slice(0, 64));
   const isForm = /x-www-form-urlencoded/.test(ct);
-  const modes = isJson ? [['pretty', 'Pretty'], ['raw', 'Raw']] : isForm ? [['form', 'Form'], ['raw', 'Raw']] : [];
+  const modes = isJson ? [['pretty', 'Красиво'], ['raw', 'Сырой']] : isForm ? [['form', 'Форма'], ['raw', 'Сырой']] : [];
   let mode = modes.length ? modes[0][0] : 'raw';
   let q = '', marks = [], cur = -1;
   if (bodyFindSeed && bodyFindSeed.seq === e.seq && bodyFindSeed.which === which) { q = bodyFindSeed.q; bodyFindSeed = null; }
   const segBox = h('span');
-  const find = h('input', { type: 'search', placeholder: 'Find in body…', value: q });
+  const find = h('input', { type: 'search', placeholder: 'Поиск в теле…', value: q });
   const cnt = h('span', { class: 'muted mono' });
   const content = h('div');
-  const copyBtn = h('button', { class: 'btn sm', onclick: () => copy(text, 'Body copied') }, 'Copy');
+  const copyBtn = h('button', { class: 'btn sm', onclick: () => copy(text, 'Тело скопировано') }, 'Копировать');
   bar.append(segBox, find, cnt, h('span', { class: 'spacer' }), copyBtn, dl);
   const renderSeg = () => { clear(segBox); if (modes.length) segBox.append(seg(modes, mode, (v) => { mode = v; renderSeg(); paint(); })); };
   const paint = () => {
     clear(content); marks = []; cur = -1;
     if (truncated) {
-      content.append(h('div', { class: 'note warn' }, `Showing the first ${fmtSize(text.length)}. `,
-        h('button', { class: 'btn sm', onclick: guard(async (ev) => { await busy(ev.target, 'Loading…', async () => { text = await (await apiBlob(bodyUrl)).blob.text(); truncated = false; }); paint(); }) }, 'Load full body')));
+      content.append(h('div', { class: 'note warn' }, `Показаны первые ${fmtSize(text.length)}. `,
+        h('button', { class: 'btn sm', onclick: guard(async (ev) => { await busy(ev.target, 'Загрузка…', async () => { text = await (await apiBlob(bodyUrl)).blob.text(); truncated = false; }); paint(); }) }, 'Загрузить всё тело')));
     }
     if (mode === 'form' && !q) {
       content.append(kvGrid([...new URLSearchParams(text).entries()]));
@@ -713,7 +713,7 @@ function bodyView(e, which, sessQs) {
     } else {
       const r = markPre(text, q); marks = r.marks; content.append(r.pre);
     }
-    cnt.textContent = q ? `${marks.length >= 5000 ? '5000+' : marks.length} found` : '';
+    cnt.textContent = q ? `${marks.length >= 5000 ? '5000+' : marks.length} найдено` : '';
     if (marks.length) step(0);
   };
   const step = (dir) => {
@@ -739,13 +739,13 @@ async function fullBodyText(e, which) {
   return (await apiBlob(`/api/log/${e.seq}/body/${which}${qs()}`)).blob.text();
 }
 const isB64Body = (b) => String(b ?? '').startsWith('__b64__:');
-$('aCopyUrl').addEventListener('click', () => dEntry && copy(dEntry.url, 'URL copied'));
+$('aCopyUrl').addEventListener('click', () => dEntry && copy(dEntry.url, 'URL скопирован'));
 $('aCopyCurl').addEventListener('click', guard(async () => {
   const e = dEntry; if (!e) return;
-  if (!window.CupNetCodegen) throw new Error('Code generator did not load');
+  if (!window.CupNetCodegen) throw new Error('Генератор кода не загрузился');
   const body = isB64Body(e.requestBody) ? '' : await fullBodyText(e, 'request');
   const code = window.CupNetCodegen.generateRequestCode('curl', { method: e.method, url: e.url, headers: Object.fromEntries(sendableHeaders(e.requestHeaders)), body });
-  copy(code, isB64Body(e.requestBody) ? 'curl copied (binary body left out)' : 'curl copied');
+  copy(code, isB64Body(e.requestBody) ? 'curl скопирован (бинарное тело пропущено)' : 'curl скопирован');
 }));
 $('aRepeat').addEventListener('click', guard(async () => {
   const e = dEntry; if (!e) return;
@@ -758,29 +758,29 @@ $('aIntrude').addEventListener('click', guard(async () => {
 }));
 $('aResend').addEventListener('click', guard(async () => {
   const e = dEntry; if (!e) return;
-  if (isB64Body(e.requestBody)) throw new Error('Binary request bodies cannot be resent yet');
-  const r = await busy($('aResend'), 'Sending…', async () => post('/api/replay', { method: e.method, url: e.url, headers: sendableHeaders(e.requestHeaders), body: await fullBodyText(e, 'request') }));
-  if (r.error) toast(`Resend failed: ${r.error}`, 'err');
-  else toast(`Resent → ${r.status} in ${r.duration} ms (#${r.seq})`, r.status >= 400 ? 'warn' : 'ok', shown ? {} : { action: { label: 'Show', fn: () => select(r.seq) } });
+  if (isB64Body(e.requestBody)) throw new Error('Бинарные тела запросов пока нельзя переотправить');
+  const r = await busy($('aResend'), 'Отправка…', async () => post('/api/replay', { method: e.method, url: e.url, headers: sendableHeaders(e.requestHeaders), body: await fullBodyText(e, 'request') }));
+  if (r.error) toast(`Переотправка не удалась: ${r.error}`, 'err');
+  else toast(`Переотправлено → ${r.status} за ${r.duration} мс (#${r.seq})`, r.status >= 400 ? 'warn' : 'ok', shown ? {} : { action: { label: 'Показать', fn: () => select(r.seq) } });
 }));
 $('aMock').addEventListener('click', guard(async () => {
   const e = dEntry; if (!e) return;
-  if (isB64Body(e.responseBody)) throw new Error('Only text responses can be mocked from the log');
+  if (isB64Body(e.responseBody)) throw new Error('Из лога можно сделать заглушку только для текстовых ответов');
   const body = await fullBodyText(e, 'response');
   const [, path] = splitUrl(originPath(e.url));
   const rule = {
-    name: `Mock ${e.method} ${path}`.slice(0, 120), type: 'mock', url_pattern: originPath(e.url), method: e.method, enabled: true,
+    name: `Заглушка ${e.method} ${path}`.slice(0, 120), type: 'mock', url_pattern: originPath(e.url), method: e.method, enabled: true,
     params: { status: e.status || 200, mimeType: headerOf(e.responseHeaders, 'content-type') || 'text/plain', body },
   };
   const { id } = await post('/api/rules', rule);
-  toast('Mock rule created and enabled', 'ok');
+  toast('Правило-заглушка создано и включено', 'ok');
   R.sel = id; R.ed = null; go('rules');
 }));
 $('aBreak').addEventListener('click', guard(async () => {
   const e = dEntry; if (!e) return;
   const [, path] = splitUrl(originPath(e.url));
-  const { id } = await post('/api/rules', { name: `Pause ${e.method} ${path}`.slice(0, 120), type: 'modifyHeaders', url_pattern: originPath(e.url), method: e.method, params: {}, breakpoint_enabled: true, enabled: true });
-  toast(`Next ${e.method} to this URL will pause in Breakpoints`, 'ok', { action: { label: 'Edit rule', fn: () => { R.sel = id; R.ed = null; go('rules'); } } });
+  const { id } = await post('/api/rules', { name: `Пауза ${e.method} ${path}`.slice(0, 120), type: 'modifyHeaders', url_pattern: originPath(e.url), method: e.method, params: {}, breakpoint_enabled: true, enabled: true });
+  toast(`Следующий ${e.method} к этому URL остановится в «Точках останова»`, 'ok', { action: { label: 'Изменить правило', fn: () => { R.sel = id; R.ed = null; go('rules'); } } });
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -808,22 +808,22 @@ function renderConn() {
   const nameBox = clear($('connName'));
   nameBox.append(h('i', { class: `dot ${px.mode === 'direct' ? (px.blocked ? 'err' : 'warn') : 'ok'}` }), connLabel(px));
   if (px.active?.sticky) nameBox.append(tag('sticky', 'accent'));
-  $('connSub').textContent = px.mode === 'proxy' ? px.active.display : px.mode === 'cli' ? `${px.cliUpstream} (--upstream)` : (px.blocked ? px.blockReason : 'No proxy — sites see this machine\'s IP');
+  $('connSub').textContent = px.mode === 'proxy' ? px.active.display : px.mode === 'cli' ? `${px.cliUpstream} (--upstream)` : (px.blocked ? px.blockReason : 'Без прокси — сайты видят IP этой машины');
   $('connSub').title = $('connSub').textContent;
   const eg = EG.data;
-  if (px.blocked && px.mode === 'direct') { $('connIp').textContent = 'Blocked'; $('connGeo').textContent = 'Kill switch is on'; }
-  else if (EG.pending && !eg) { $('connIp').textContent = 'checking…'; $('connGeo').textContent = ''; }
+  if (px.blocked && px.mode === 'direct') { $('connIp').textContent = 'Заблокировано'; $('connGeo').textContent = 'Kill switch включён'; }
+  else if (EG.pending && !eg) { $('connIp').textContent = 'проверка…'; $('connGeo').textContent = ''; }
   else if (eg?.ok) { $('connIp').textContent = `${flag(eg.country)} ${eg.ip}`; $('connGeo').textContent = [geoText(eg), eg.org, eg.latencyMs ? `${eg.latencyMs} ms` : ''].filter(Boolean).join(' · '); }
   else { $('connIp').textContent = '—'; $('connGeo').textContent = eg?.error || ''; }
   $('pNewIp').disabled = !(px.mode === 'proxy' && px.active?.sticky);
-  $('pNewIp').title = $('pNewIp').disabled ? 'Only for sticky sessions ({SID} / sticky mode) — rotating proxies change IP on every connection' : 'New sticky session → new exit IP';
+  $('pNewIp').title = $('pNewIp').disabled ? 'Только для sticky-сессий ({SID} / режим sticky) — ротационные прокси меняют IP при каждом соединении' : 'Новая sticky-сессия → новый внешний IP';
   $('pDisconnect').disabled = px.mode === 'direct';
   $('pKill').checked = !!px.killSwitch;
 }
 $('pCheck').addEventListener('click', () => checkEgress(true));
-$('pNewIp').addEventListener('click', guard(async () => { applyListing(await post('/api/proxies/new-ip')); toast('New session — checking the exit IP…', 'ok'); checkEgress(true); }));
-$('pDisconnect').addEventListener('click', guard(async () => { applyListing(await post('/api/proxies/disconnect')); toast(P.status.killSwitch ? 'Disconnected — kill switch blocks traffic' : 'Disconnected — traffic goes direct', 'warn'); }));
-$('pKill').addEventListener('change', guard(async (ev) => { applyListing(await post('/api/proxies/kill-switch', { enabled: ev.target.checked })); toast(ev.target.checked ? 'Kill switch on: no direct connections' : 'Kill switch off', ev.target.checked ? 'ok' : 'warn'); }));
+$('pNewIp').addEventListener('click', guard(async () => { applyListing(await post('/api/proxies/new-ip')); toast('Новая сессия — проверяю внешний IP…', 'ok'); checkEgress(true); }));
+$('pDisconnect').addEventListener('click', guard(async () => { applyListing(await post('/api/proxies/disconnect')); toast(P.status.killSwitch ? 'Отключено — kill switch блокирует трафик' : 'Отключено — трафик идёт напрямую', 'warn'); }));
+$('pKill').addEventListener('change', guard(async (ev) => { applyListing(await post('/api/proxies/kill-switch', { enabled: ev.target.checked })); toast(ev.target.checked ? 'Kill switch включён: прямых соединений нет' : 'Kill switch выключен', ev.target.checked ? 'ok' : 'warn'); }));
 
 const pCountry = (p) => (p.country || p.lastTest?.country || '').toLowerCase();
 const pStatus = (p) => (P.testing.has(p.id) ? 'testing' : !p.lastTest ? 'untested' : p.lastTest.ok ? 'ok' : 'fail');
@@ -839,9 +839,9 @@ function renderPFilters() {
     const cc = pCountry(p); if (cc) countries.set(cc, p.countryName || cc.toUpperCase());
     if (p.group) groups.add(p.group);
   }
-  fillSelect($('pfProvider'), [...provs].sort((a, b) => a[1].localeCompare(b[1])), 'All providers');
-  fillSelect($('pfCountry'), [...countries].sort((a, b) => a[1].localeCompare(b[1])).map(([c, n]) => [c, `${flag(c)} ${n}`]), 'All countries');
-  fillSelect($('pfGroup'), [...groups].sort().map((g) => [g, g]), 'All groups');
+  fillSelect($('pfProvider'), [...provs].sort((a, b) => a[1].localeCompare(b[1])), 'Все провайдеры');
+  fillSelect($('pfCountry'), [...countries].sort((a, b) => a[1].localeCompare(b[1])).map(([c, n]) => [c, `${flag(c)} ${n}`]), 'Все страны');
+  fillSelect($('pfGroup'), [...groups].sort().map((g) => [g, g]), 'Все группы');
 }
 function pFiltered() {
   const q = $('pq').value.trim().toLowerCase(), prov = $('pfProvider').value, cc = $('pfCountry').value, st = $('pfStatus').value, grp = $('pfGroup').value;
@@ -862,24 +862,24 @@ const PLIST_MAX = 1000;
 function renderPList() {
   const list = pFiltered();
   const box = clear($('plist'));
-  $('pCount').textContent = list.length === P.profiles.length ? `${P.profiles.length} proxies` : `${list.length} of ${P.profiles.length}`;
+  $('pCount').textContent = list.length === P.profiles.length ? `${P.profiles.length} прокси` : `${list.length} из ${P.profiles.length}`;
   const px = P.status;
   if (!$('pq').value && !$('pfProvider').value && !$('pfCountry').value && !$('pfStatus').value && !$('pfGroup').value) {
     const isDirect = px?.mode === 'direct';
     box.append(h('div', { class: `prow direct${isDirect ? ' sel' : ''}` },
       h('i', { class: `dot ${isDirect ? (px.blocked ? 'err' : 'warn') : ''}` }),
-      h('div', null, h('div', { class: 'title' }, h('b', null, 'Direct'), isDirect ? tag(px.blocked ? 'blocked' : 'active', px.blocked ? 'err' : 'warn') : null),
-        h('div', { class: 'meta' }, h('span', null, px?.killSwitch ? 'Blocked while the kill switch is on' : 'No proxy — your own IP'))),
-      h('div', { class: 'acts' }, isDirect ? null : h('button', { class: 'btn sm', onclick: guard(async (ev) => { ev.stopPropagation(); applyListing(await post('/api/proxies/disconnect')); }) }, 'Use'))));
+      h('div', null, h('div', { class: 'title' }, h('b', null, 'Напрямую'), isDirect ? tag(px.blocked ? 'заблокировано' : 'активно', px.blocked ? 'err' : 'warn') : null),
+        h('div', { class: 'meta' }, h('span', null, px?.killSwitch ? 'Заблокировано, пока включён kill switch' : 'Без прокси — ваш собственный IP'))),
+      h('div', { class: 'acts' }, isDirect ? null : h('button', { class: 'btn sm', onclick: guard(async (ev) => { ev.stopPropagation(); applyListing(await post('/api/proxies/disconnect')); }) }, 'Использовать'))));
   }
   if (!P.profiles.length) {
-    box.append(h('div', { class: 'empty' }, h('p', null, 'No proxies yet.'), h('p', { class: 'muted' }, 'Add a provider account (Decodo, Oxylabs, IPRoyal, NodeMaven), paste a proxy URL, or import a list.'),
-      h('button', { class: 'btn primary', onclick: () => openPEditor('new') }, '+ Add proxy'), ' ', h('button', { class: 'btn', onclick: openImport }, 'Import list')));
+    box.append(h('div', { class: 'empty' }, h('p', null, 'Пока нет прокси.'), h('p', { class: 'muted' }, 'Добавьте аккаунт провайдера (Decodo, Oxylabs, IPRoyal, NodeMaven), вставьте URL прокси или импортируйте список.'),
+      h('button', { class: 'btn primary', onclick: () => openPEditor('new') }, '+ Добавить прокси'), ' ', h('button', { class: 'btn', onclick: openImport }, 'Импорт списка')));
     return;
   }
-  if (!list.length) { box.append(h('div', { class: 'empty' }, 'Nothing matches the filter.')); return; }
+  if (!list.length) { box.append(h('div', { class: 'empty' }, 'Ничего не подходит под фильтр.')); return; }
   for (const p of list.slice(0, PLIST_MAX)) box.append(pRow(p));
-  if (list.length > PLIST_MAX) box.append(h('div', { class: 'empty' }, `Showing the first ${PLIST_MAX} — refine the filter.`));
+  if (list.length > PLIST_MAX) box.append(h('div', { class: 'empty' }, `Показаны первые ${PLIST_MAX} — уточните фильтр.`));
 }
 function pRow(p) {
   const st = pStatus(p), t = p.lastTest;
@@ -887,24 +887,24 @@ function pRow(p) {
   const meta = [h('span', { class: 'mono' }, p.host ? `${p.scheme}://${p.host}${port ? `:${port}` : ''}` : '')];
   const cc = pCountry(p);
   if (cc && cc !== 'random') meta.push(h('span', null, `${flag(cc)} ${p.countryName || cc.toUpperCase()}`));
-  if (st === 'testing') meta.push(h('span', { class: 'muted' }, 'testing…'));
-  else if (t?.ok) meta.push(h('span', { class: 'mono ok' }, t.ip), h('span', null, `${t.latencyMs} ms`), h('span', { class: 'faint' }, fmtAgo(t.at)));
-  else if (t) meta.push(h('span', { class: 'err', title: t.error }, t.error || 'failed'));
+  if (st === 'testing') meta.push(h('span', { class: 'muted' }, 'проверка…'));
+  else if (t?.ok) meta.push(h('span', { class: 'mono ok' }, t.ip), h('span', null, `${t.latencyMs} мс`), h('span', { class: 'faint' }, fmtAgo(t.at)));
+  else if (t) meta.push(h('span', { class: 'err', title: t.error }, t.error || 'ошибка'));
   const row = h('div', { class: `prow${P.sel === p.id ? ' sel' : ''}`, onclick: () => openPEditor(p.id) },
-    h('i', { class: `dot ${st === 'testing' ? 'busy' : st === 'ok' ? 'ok' : st === 'fail' ? 'err' : ''}`, title: st }),
+    h('i', { class: `dot ${st === 'testing' ? 'busy' : st === 'ok' ? 'ok' : st === 'fail' ? 'err' : ''}`, title: ({ testing: 'проверка', ok: 'работает', fail: 'ошибка', untested: 'не проверен' }[st] || st) }),
     h('div', { style: 'min-width:0' },
-      h('div', { class: 'title' }, h('b', { title: p.name }, p.name), p.active ? tag('connected', 'ok') : null, tag(p.providerName, p.kind === 'provider' ? 'accent' : ''),
+      h('div', { class: 'title' }, h('b', { title: p.name }, p.name), p.active ? tag('подключён', 'ok') : null, tag(p.providerName, p.kind === 'provider' ? 'accent' : ''),
         p.sticky ? tag('sticky') : null, p.group ? tag(p.group) : null),
       h('div', { class: 'meta' }, meta)),
     h('div', { class: 'acts' },
-      h('button', { class: 'btn sm', disabled: st === 'testing', title: 'Check IP, geo and latency through this proxy', onclick: (ev) => { ev.stopPropagation(); testProxies([p.id]); } }, 'Test'),
-      p.active ? h('button', { class: 'btn sm', disabled: true }, 'Connected')
-        : h('button', { class: 'btn sm primary', onclick: guard(async (ev) => { ev.stopPropagation(); await connectProxy(p.id); }) }, 'Connect')));
+      h('button', { class: 'btn sm', disabled: st === 'testing', title: 'Проверить IP, гео и задержку через этот прокси', onclick: (ev) => { ev.stopPropagation(); testProxies([p.id]); } }, 'Тест'),
+      p.active ? h('button', { class: 'btn sm', disabled: true }, 'Подключён')
+        : h('button', { class: 'btn sm primary', onclick: guard(async (ev) => { ev.stopPropagation(); await connectProxy(p.id); }) }, 'Подключить')));
   return row;
 }
 async function connectProxy(id) {
   applyListing(await post(`/api/proxies/${id}/connect`));
-  toast(`Connected: ${P.status.active?.name || 'proxy'} — new requests use it`, 'ok');
+  toast(`Подключено: ${P.status.active?.name || 'прокси'} — новые запросы идут через него`, 'ok');
   checkEgress(true);
 }
 /** Tests run TEST_PARALLEL at a time from here so each row updates as soon as its own check finishes. */
@@ -931,17 +931,17 @@ async function testProxies(ids) {
   await Promise.all(Array.from({ length: Math.min(TEST_PARALLEL, ids.length) }, worker));
   if (ids.length === 1) {
     const t = results[0];
-    toast(t.ok ? `Works: ${flag(t.country)} ${t.ip} · ${t.latencyMs} ms` : `Failed: ${t.error}`, t.ok ? 'ok' : 'err');
+    toast(t.ok ? `Работает: ${flag(t.country)} ${t.ip} · ${t.latencyMs} мс` : `Ошибка: ${t.error}`, t.ok ? 'ok' : 'err');
   } else {
     const ok = results.filter((x) => x.ok).length;
-    toast(`Tested ${results.length}: ${ok} working, ${results.length - ok} failing`, ok === results.length ? 'ok' : 'warn');
+    toast(`Проверено ${results.length}: ${ok} работают, ${results.length - ok} с ошибкой`, ok === results.length ? 'ok' : 'warn');
   }
 }
 $('pAdd').addEventListener('click', () => openPEditor('new'));
 $('pTestAll').addEventListener('click', guard(async () => {
   const ids = pFiltered().map((p) => p.id);
-  if (!ids.length) { toast('No proxies to test', 'warn'); return; }
-  await busy($('pTestAll'), `Testing ${ids.length}…`, () => testProxies(ids));
+  if (!ids.length) { toast('Нет прокси для проверки', 'warn'); return; }
+  await busy($('pTestAll'), `Проверка ${ids.length}…`, () => testProxies(ids));
 }));
 
 // ── proxy editor ──
@@ -967,7 +967,7 @@ const edPayload = (ed) => ({ kind: ed.kind, provider: ed.provider, name: ed.name
   country: ed.country, sessionMode: ed.sessionMode, durationMin: ed.durationMin, options: ed.options, template: ed.template, vars: ed.vars });
 const edDirty = () => P.ed && JSON.stringify(edPayload(P.ed)) !== P.edInit;
 async function openPEditor(id) {
-  if (edDirty() && P.sel !== id && !(await confirmBox('Discard unsaved changes to this proxy?', 'Discard', true))) return;
+  if (edDirty() && P.sel !== id && !(await confirmBox('Отменить несохранённые изменения этого прокси?', 'Отменить', true))) return;
   P.sel = id;
   P.ed = edFromProfile(id === 'new' ? null : P.profiles.find((p) => p.id === id));
   P.edInit = JSON.stringify(edPayload(P.ed));
@@ -985,10 +985,10 @@ function renderPEditor() {
   const ed = P.ed;
   if (!P.sel || !ed) {
     box.append(h('div', { class: 'empty' },
-      h('p', null, h('b', null, 'Pick a proxy to edit it, or add a new one.')),
-      h('p', { class: 'muted' }, 'Proxies apply to all traffic of the proxied Chrome. Passwords are stored encrypted in the data dir and never shown again.'),
-      h('button', { class: 'btn primary', onclick: () => openPEditor('new') }, '+ Add proxy'), ' ',
-      h('button', { class: 'btn', onclick: openImport }, 'Import list')));
+      h('p', null, h('b', null, 'Выберите прокси для изменения или добавьте новый.')),
+      h('p', { class: 'muted' }, 'Прокси применяются ко всему трафику проксируемого Chrome. Пароли хранятся в зашифрованном виде в каталоге данных и больше не показываются.'),
+      h('button', { class: 'btn primary', onclick: () => openPEditor('new') }, '+ Добавить прокси'), ' ',
+      h('button', { class: 'btn', onclick: openImport }, 'Импорт списка')));
     return;
   }
   const prof = ed.id ? P.profiles.find((p) => p.id === ed.id) : null;
@@ -996,16 +996,16 @@ function renderPEditor() {
   const changed = () => { schedulePreview(); markDirty(); };
   const rerender = () => { renderPEditor(); schedulePreview(); };
 
-  box.append(h('div', { class: 'edit-head' }, h('h2', { class: 'ell' }, ed.id ? (prof?.name || 'Proxy') : 'New proxy'),
-    prof?.active ? tag('connected', 'ok') : null,
-    ed.id ? h('button', { class: 'btn sm', onclick: guard(async () => { const r = await post(`/api/proxies/${ed.id}/duplicate`); P.ed = null; applyListing(r); openPEditor(r.profile.id); toast('Duplicated', 'ok'); }) }, 'Duplicate') : null,
+  box.append(h('div', { class: 'edit-head' }, h('h2', { class: 'ell' }, ed.id ? (prof?.name || 'Прокси') : 'Новый прокси'),
+    prof?.active ? tag('подключён', 'ok') : null,
+    ed.id ? h('button', { class: 'btn sm', onclick: guard(async () => { const r = await post(`/api/proxies/${ed.id}/duplicate`); P.ed = null; applyListing(r); openPEditor(r.profile.id); toast('Дублировано', 'ok'); }) }, 'Дублировать') : null,
     ed.id ? h('button', { class: 'btn sm danger', onclick: guard(async () => {
-      if (!(await confirmBox(`Delete proxy "${prof?.name}"?${prof?.active ? ' It is connected — traffic will go direct.' : ''}`, 'Delete', true))) return;
-      const r = await del(`/api/proxies/${ed.id}`); P.sel = null; P.ed = null; applyListing(r); toast('Deleted', 'ok');
-    }) }, 'Delete') : null));
+      if (!(await confirmBox(`Удалить прокси «${prof?.name}»?${prof?.active ? ' Он подключён — трафик пойдёт напрямую.' : ''}`, 'Удалить', true))) return;
+      const r = await del(`/api/proxies/${ed.id}`); P.sel = null; P.ed = null; applyListing(r); toast('Удалено', 'ok');
+    }) }, 'Удалить') : null));
 
   const form = h('div', { class: 'form' });
-  form.append(...field('Type', seg([['provider', 'Provider account'], ['custom', 'Proxy URL']], ed.kind, (v) => { ed.kind = v; rerender(); markDirty(); })));
+  form.append(...field('Тип', seg([['provider', 'Аккаунт провайдера'], ['custom', 'URL прокси']], ed.kind, (v) => { ed.kind = v; rerender(); markDirty(); })));
 
   if (ed.kind === 'provider') {
     const provSel = h('select', { onchange: (ev) => {
@@ -1014,24 +1014,24 @@ function renderPEditor() {
       if (m && !m.session?.[ed.sessionMode]) ed.sessionMode = m.session?.rotating ? 'rotating' : 'sticky';
       rerender(); markDirty();
     } }, P.providers.map((p) => h('option', { value: p.id, selected: p.id === ed.provider }, `${p.name} · ${p.type}`)));
-    form.append(...field('Provider', provSel));
-    form.append(...field('Username', h('input', { value: ed.username, placeholder: 'Account username (without user- / country prefixes)', spellcheck: false, autocomplete: 'off', oninput: (ev) => { ed.username = ev.target.value; changed(); } })));
-    form.append(...field('Password', h('input', { type: 'password', value: ed.password, autocomplete: 'new-password', placeholder: ed.hasPassword ? '•••••• saved — type to replace' : 'Account password', oninput: (ev) => { ed.password = ev.target.value; changed(); } })));
+    form.append(...field('Провайдер', provSel));
+    form.append(...field('Имя пользователя', h('input', { value: ed.username, placeholder: 'Имя пользователя аккаунта (без префиксов user- / страны)', spellcheck: false, autocomplete: 'off', oninput: (ev) => { ed.username = ev.target.value; changed(); } })));
+    form.append(...field('Пароль', h('input', { type: 'password', value: ed.password, autocomplete: 'new-password', placeholder: ed.hasPassword ? '•••••• сохранён — введите, чтобы заменить' : 'Пароль аккаунта', oninput: (ev) => { ed.password = ev.target.value; changed(); } })));
     const regions = new Map();
-    for (const c of meta?.countries || []) { const r = c.region || 'Other'; if (!regions.has(r)) regions.set(r, []); regions.get(r).push(c); }
+    for (const c of meta?.countries || []) { const r = c.region || 'Прочее'; if (!regions.has(r)) regions.set(r, []); regions.get(r).push(c); }
     const cSel = h('select', { onchange: (ev) => { ed.country = ev.target.value; changed(); } },
       [...regions].map(([r, cs]) => h('optgroup', { label: r }, cs.map((c) => h('option', { value: c.code, selected: c.code === ed.country }, `${flag(c.code)} ${c.name}`)))));
-    form.append(...field('Country', cSel));
+    form.append(...field('Страна', cSel));
     const modes = [];
-    if (meta?.session?.rotating !== false) modes.push(['rotating', 'Rotating']);
+    if (meta?.session?.rotating !== false) modes.push(['rotating', 'Ротационный']);
     if (meta?.session?.sticky) modes.push(['sticky', 'Sticky']);
-    const sessHint = ed.sessionMode === 'sticky' ? 'Same exit IP for the session length; New IP starts a fresh session.' : 'A new exit IP for every connection.';
-    form.append(...field('Session', seg(modes, ed.sessionMode, (v) => { ed.sessionMode = v; rerender(); markDirty(); }), sessHint));
+    const sessHint = ed.sessionMode === 'sticky' ? 'Один внешний IP на время сессии; «Новый IP» начинает новую сессию.' : 'Новый внешний IP при каждом соединении.';
+    form.append(...field('Сессия', seg(modes, ed.sessionMode, (v) => { ed.sessionMode = v; rerender(); markDirty(); }), sessHint));
     if (ed.sessionMode === 'sticky' && meta?.duration?.supported) {
       const d = meta.duration;
-      form.append(...field('Session length', h('div', { class: 'inline' },
+      form.append(...field('Длина сессии', h('div', { class: 'inline' },
         h('input', { type: 'number', min: d.min, max: d.max, value: ed.durationMin ?? d.default, oninput: (ev) => { ed.durationMin = Number(ev.target.value) || d.default; changed(); } }),
-        h('span', { class: 'muted' }, `${d.unit || 'min'} (${d.min}–${d.max})`))));
+        h('span', { class: 'muted' }, `${d.unit || 'мин'} (${d.min}–${d.max})`))));
     }
     for (const f of meta?.optionFields || []) {
       const val = ed.options[f.key];
@@ -1056,17 +1056,17 @@ function renderPEditor() {
   }
   const groups = [...new Set(P.profiles.map((p) => p.group).filter(Boolean))];
   form.append(h('datalist', { id: 'pGroups' }, groups.map((g) => h('option', { value: g }))));
-  form.append(...field('Name', h('input', { value: ed.name, placeholder: 'Auto (provider · country · mode)', oninput: (ev) => { ed.name = ev.target.value; markDirty(); } })));
-  form.append(...field('Group', h('input', { value: ed.group, list: 'pGroups', placeholder: 'e.g. US residential', oninput: (ev) => { ed.group = ev.target.value; markDirty(); } })));
-  form.append(...field('Notes', h('textarea', { rows: 2, value: ed.notes, oninput: (ev) => { ed.notes = ev.target.value; markDirty(); } }), null, true));
-  form.append(...field('Connects as', h('div', { id: 'pPreview', class: 'preview-url' }, P.preview || '…')));
+  form.append(...field('Название', h('input', { value: ed.name, placeholder: 'Авто (провайдер · страна · режим)', oninput: (ev) => { ed.name = ev.target.value; markDirty(); } })));
+  form.append(...field('Группа', h('input', { value: ed.group, list: 'pGroups', placeholder: 'напр. US residential', oninput: (ev) => { ed.group = ev.target.value; markDirty(); } })));
+  form.append(...field('Заметки', h('textarea', { rows: 2, value: ed.notes, oninput: (ev) => { ed.notes = ev.target.value; markDirty(); } }), null, true));
+  form.append(...field('Подключается как', h('div', { id: 'pPreview', class: 'preview-url' }, P.preview || '…')));
   box.append(form);
 
-  const saveBtn = h('button', { class: 'btn', id: 'pSave', onclick: guard(() => busy(saveBtn, 'Saving…', () => saveProxy(false))) }, 'Save');
-  const connBtn = h('button', { class: 'btn primary', onclick: guard(() => busy(connBtn, 'Connecting…', () => saveProxy(true))) }, prof?.active ? 'Save & reconnect' : 'Save & connect');
-  const testBtn = h('button', { class: 'btn', onclick: guard(() => busy(testBtn, 'Testing…', async () => { const id = edDirty() || !ed.id ? await saveProxy(false) : ed.id; if (id) await testProxies([id]); })) }, 'Test');
-  const newIp = ed.id && prof?.sticky ? h('button', { class: 'btn', title: 'Re-roll the sticky session', onclick: guard(async () => { applyListing(await post(`/api/proxies/${ed.id}/new-ip`)); toast('New session id', 'ok'); if (prof.active) checkEgress(true); schedulePreview(); }) }, 'New IP') : null;
-  box.append(h('div', { class: 'row-end', style: 'justify-content:flex-start' }, connBtn, saveBtn, testBtn, newIp, h('span', { id: 'pDirty', class: 'muted', hidden: true }, 'unsaved changes')));
+  const saveBtn = h('button', { class: 'btn', id: 'pSave', onclick: guard(() => busy(saveBtn, 'Сохранение…', () => saveProxy(false))) }, 'Сохранить');
+  const connBtn = h('button', { class: 'btn primary', onclick: guard(() => busy(connBtn, 'Подключение…', () => saveProxy(true))) }, prof?.active ? 'Сохранить и переподключить' : 'Сохранить и подключить');
+  const testBtn = h('button', { class: 'btn', onclick: guard(() => busy(testBtn, 'Проверка…', async () => { const id = edDirty() || !ed.id ? await saveProxy(false) : ed.id; if (id) await testProxies([id]); })) }, 'Тест');
+  const newIp = ed.id && prof?.sticky ? h('button', { class: 'btn', title: 'Перевыпустить sticky-сессию', onclick: guard(async () => { applyListing(await post(`/api/proxies/${ed.id}/new-ip`)); toast('Новый id сессии', 'ok'); if (prof.active) checkEgress(true); schedulePreview(); }) }, 'Новый IP') : null;
+  box.append(h('div', { class: 'row-end', style: 'justify-content:flex-start' }, connBtn, saveBtn, testBtn, newIp, h('span', { id: 'pDirty', class: 'muted', hidden: true }, 'несохранённые изменения')));
   box.append(h('div', { id: 'pResult' }));
   renderPResult(); markDirty(); schedulePreview(0);
 }
@@ -1077,7 +1077,7 @@ function renderPResult() {
   const t = P.result; if (!t) return;
   if (t.ok) {
     box.append(h('div', { class: 'result ok' }, h('b', null, `${flag(t.country)} ${t.ip}`), ' · ', geoText(t), t.org ? ` · ${t.org}` : '', ` · ${t.latencyMs} ms`, t.timezone ? ` · ${t.timezone}` : '', h('span', { class: 'faint' }, ` · tested ${fmtAgo(t.at)}`)));
-  } else box.append(h('div', { class: 'result err' }, h('b', null, 'Test failed: '), t.error || 'unknown error', t.at ? h('span', { class: 'faint' }, ` · ${fmtAgo(t.at)}`) : null));
+  } else box.append(h('div', { class: 'result err' }, h('b', null, 'Проверка не удалась: '), t.error || 'неизвестная ошибка', t.at ? h('span', { class: 'faint' }, ` · ${fmtAgo(t.at)}`) : null));
 }
 function schedulePreview(ms = 350) {
   debounce('pPreview', ms, async () => {
@@ -1096,31 +1096,31 @@ async function saveProxy(andConnect) {
   P.ed = edFromProfile(r.profile); P.edInit = JSON.stringify(edPayload(P.ed));
   renderPList(); renderPEditor();
   if (andConnect) await connectProxy(id);
-  else toast('Saved', 'ok');
+  else toast('Сохранено', 'ok');
   return id;
 }
 
 // ── bulk import ──
 function openImport() {
-  const ta = h('textarea', { class: 'code', spellcheck: false, placeholder: 'One proxy per line:\nhost:port\nhost:port:user:pass\nuser:pass@host:port\nsocks5://user:pass@host:1080' });
-  const group = h('input', { placeholder: 'Group (optional)' });
-  const prefix = h('input', { placeholder: 'Name prefix (optional)' });
+  const ta = h('textarea', { class: 'code', spellcheck: false, placeholder: 'По одному прокси в строке:\nhost:port\nhost:port:user:pass\nuser:pass@host:port\nsocks5://user:pass@host:1080' });
+  const group = h('input', { placeholder: 'Группа (необязательно)' });
+  const prefix = h('input', { placeholder: 'Префикс имени (необязательно)' });
   const out = h('div');
   const preview = async () => {
     const r = await post('/api/proxies/import', { text: ta.value, group: group.value, namePrefix: prefix.value, dryRun: true });
-    clear(out).append(h('p', null, h('b', null, `${r.added.length} new`), ` · ${r.duplicates} duplicates · ${r.errors.length} errors · ${r.total} lines`));
-    if (r.added.length) out.append(h('pre', { class: 'codebox', style: 'max-height:180px' }, r.added.slice(0, 50).map((a) => `${a.name}  ${a.display}`).join('\n') + (r.added.length > 50 ? `\n… ${r.added.length - 50} more` : '')));
-    if (r.errors.length) out.append(h('pre', { class: 'codebox err', style: 'max-height:120px' }, r.errors.slice(0, 50).map((e) => `line ${e.line}: ${e.reason}`).join('\n')));
+    clear(out).append(h('p', null, h('b', null, `${r.added.length} новых`), ` · ${r.duplicates} дубликатов · ${r.errors.length} ошибок · ${r.total} строк`));
+    if (r.added.length) out.append(h('pre', { class: 'codebox', style: 'max-height:180px' }, r.added.slice(0, 50).map((a) => `${a.name}  ${a.display}`).join('\n') + (r.added.length > 50 ? `\n… ещё ${r.added.length - 50}` : '')));
+    if (r.errors.length) out.append(h('pre', { class: 'codebox err', style: 'max-height:120px' }, r.errors.slice(0, 50).map((e) => `строка ${e.line}: ${e.reason}`).join('\n')));
     return r;
   };
   ta.addEventListener('input', () => debounce('imp', 500, guard(preview)));
-  modal('Import proxies', h('div', null, ta, h('div', { class: 'toolbar sub', style: 'padding:8px 0' }, group, prefix), out), [
-    { label: 'Cancel' },
-    { label: 'Import', cls: 'primary', fn: async () => {
+  modal('Импорт прокси', h('div', null, ta, h('div', { class: 'toolbar sub', style: 'padding:8px 0' }, group, prefix), out), [
+    { label: 'Отмена' },
+    { label: 'Импорт', cls: 'primary', fn: async () => {
       const r = await post('/api/proxies/import', { text: ta.value, group: group.value, namePrefix: prefix.value });
       applyListing(r);
-      toast(`Imported ${r.added.length} proxies${r.duplicates ? ` · ${r.duplicates} duplicates skipped` : ''}${r.errors.length ? ` · ${r.errors.length} bad lines` : ''}`, r.added.length ? 'ok' : 'warn');
-      if (r.added.length && await confirmBox(`Test the ${r.added.length} imported proxies now?`, 'Test')) testProxies(r.added.map((a) => a.id));
+      toast(`Импортировано прокси: ${r.added.length}${r.duplicates ? ` · пропущено дубликатов: ${r.duplicates}` : ''}${r.errors.length ? ` · ошибочных строк: ${r.errors.length}` : ''}`, r.added.length ? 'ok' : 'warn');
+      if (r.added.length && await confirmBox(`Проверить импортированные прокси (${r.added.length}) сейчас?`, 'Проверить')) testProxies(r.added.map((a) => a.id));
       return true;
     } },
   ]);
@@ -1135,12 +1135,12 @@ const IPW = {
   range: store.get('ipw-range', 3600000), filter: store.get('ipw-filter', 'all'),
 };
 const IPW_TYPES = {
-  start: ['Started', 'accent'], switch: ['Switched', 'accent'], change: ['Changed', 'warn'], error: ['Error', 'err'],
-  recovered: ['Recovered', 'ok'], blocked: ['Blocked', 'err'], stop: ['Stopped', ''],
+  start: ['Запущено', 'accent'], switch: ['Переключено', 'accent'], change: ['Изменено', 'warn'], error: ['Ошибка', 'err'],
+  recovered: ['Восстановлено', 'ok'], blocked: ['Заблокировано', 'err'], stop: ['Остановлено', ''],
 };
 const IPW_INTERVALS = [[5, '5s'], [15, '15s'], [30, '30s'], [60, '1m'], [300, '5m']];
 const IPW_RANGES = [[3600000, '1h'], [6 * 3600000, '6h'], [24 * 3600000, '24h'], [7 * 24 * 3600000, '7d']];
-const MODE_LABEL = { rotating: 'rotating', sticky: 'sticky', static: 'static', direct: 'direct', cli: 'CLI' };
+const MODE_LABEL = { rotating: 'ротационный', sticky: 'sticky', static: 'статический', direct: 'напрямую', cli: 'CLI' };
 const fmtDur = (ms) => {
   if (ms == null || ms < 0) return '';
   const s = Math.round(ms / 1000);
@@ -1153,6 +1153,8 @@ const fmtStamp = (at) => new Date(at).toLocaleString([], { month: 'short', day: 
 const ipColor = (ip) => { let x = 0; for (const c of String(ip)) x = (x * 31 + c.charCodeAt(0)) >>> 0; return `hsl(${x % 360} 60% 58%)`; };
 const placeOf = (e) => [e.city, e.region && e.region !== e.city ? e.region : '', e.country].filter(Boolean).join(', ');
 const isChange = (e) => e.type === 'change' || e.type === 'switch' || e.type === 'start';
+// Russian plural for "событие" (event)
+const ipwPlural = (n) => { const a = Math.abs(n) % 100, b = a % 10; if (a > 10 && a < 20) return 'событий'; if (b > 1 && b < 5) return 'события'; if (b === 1) return 'событие'; return 'событий'; };
 
 async function syncIpHistory(full = false) {
   if (IPW.syncing) return [];
@@ -1177,7 +1179,7 @@ async function syncIpHistory(full = false) {
 function onIpStatus(w) {
   const badge = $('ipCount');
   badge.hidden = !w?.changes1h; badge.textContent = w?.changes1h || '';
-  badge.title = w ? `${w.changes1h} IP change(s) in the last hour` : '';
+  badge.title = w ? `Изменений IP за последний час: ${w.changes1h}` : '';
   if (!w) return;
   IPW.state = w;
   const resync = !IPW.loaded || w.epoch !== IPW.epoch || w.lastEventId < IPW.lastId;
@@ -1197,12 +1199,12 @@ function notifyIp(fresh) {
   const failed = fresh.filter((e) => e.type === 'error');
   if ((!changed.length && !failed.length) || Date.now() - IPW.toastAt < 20000) return;
   IPW.toastAt = Date.now();
-  const open = { label: 'Open', fn: () => go('ipwatch') };
+  const open = { label: 'Открыть', fn: () => go('ipwatch') };
   if (changed.length) {
     const e = changed[0];
-    toast(`Exit IP changed: ${e.prevIp || '?'} → ${flag(e.country)} ${e.ip}${placeOf(e) ? ` · ${placeOf(e)}` : ''}`, 'warn', { action: open, ms: 9000 });
+    toast(`Внешний IP изменился: ${e.prevIp || '?'} → ${flag(e.country)} ${e.ip}${placeOf(e) ? ` · ${placeOf(e)}` : ''}`, 'warn', { action: open, ms: 9000 });
   } else {
-    toast(`IP check failed: ${failed[0].error || 'error'}`, 'err', { action: open });
+    toast(`Проверка IP не удалась: ${failed[0].error || 'ошибка'}`, 'err', { action: open });
   }
 }
 
@@ -1230,30 +1232,30 @@ function renderIpwHero() {
   const cls = !w.enabled ? 'off' : w.blocked || failing ? 'err' : w.ip ? (w.mode === 'direct' ? 'warn' : 'ok') : '';
   $('ipwHero').className = `card ipw-hero${cls ? ` is-${cls}` : ''}`;
   const ipEl = clear($('ipwIp'));
-  if (w.blocked) ipEl.append('Blocked');
-  else if (w.ip) ipEl.append(h('span', { class: 'flag' }, flag(w.country)), ' ', h('span', { class: failing ? 'faint' : '', title: 'Click to copy', onclick: () => copy(w.ip, 'IP copied') }, w.ip));
-  else ipEl.append(w.enabled ? 'checking…' : '—');
-  $('ipwGeo').textContent = w.blocked ? (w.lastError || 'Kill switch is on and no proxy is connected')
-    : failing ? `Last check failed: ${w.lastError}` : [placeOf(w), w.org].filter(Boolean).join(' · ');
+  if (w.blocked) ipEl.append('Заблокировано');
+  else if (w.ip) ipEl.append(h('span', { class: 'flag' }, flag(w.country)), ' ', h('span', { class: failing ? 'faint' : '', title: 'Нажмите, чтобы скопировать', onclick: () => copy(w.ip, 'IP скопирован') }, w.ip));
+  else ipEl.append(w.enabled ? 'проверка…' : '—');
+  $('ipwGeo').textContent = w.blocked ? (w.lastError || 'Kill switch включён, прокси не подключён')
+    : failing ? `Последняя проверка не удалась: ${w.lastError}` : [placeOf(w), w.org].filter(Boolean).join(' · ');
   $('ipwGeo').className = `ipw-geo${w.blocked || failing ? ' err' : ''}`;
   const meta = clear($('ipwMeta'));
-  meta.append(tag(w.label || 'Direct', 'accent'));
+  meta.append(tag(w.label || 'Напрямую', 'accent'));
   if (MODE_LABEL[w.mode]) meta.append(tag(MODE_LABEL[w.mode], w.mode === 'direct' ? 'warn' : ''));
-  if (w.ip && w.since && !w.blocked) meta.append(h('span', null, 'held ', h('b', null, fmtDur(now - w.since))));
-  if (w.lastOkAt) meta.append(h('span', null, `checked ${fmtAgo(w.lastOkAt)}`));
-  if (w.latencyMs) meta.append(h('span', null, `${w.latencyMs} ms`));
+  if (w.ip && w.since && !w.blocked) meta.append(h('span', null, 'держится ', h('b', null, fmtDur(now - w.since))));
+  if (w.lastOkAt) meta.append(h('span', null, `проверено ${fmtAgo(w.lastOkAt)}`));
+  if (w.latencyMs) meta.append(h('span', null, `${w.latencyMs} мс`));
 
   const swBox = clear($('ipwSwitch'));
-  swBox.append(sw(w.enabled, 'Monitor exit IP', (v) => setIpw({ ipWatch: v }), 'Check the exit IP on a timer and record every change'));
+  swBox.append(sw(w.enabled, 'Мониторинг внешнего IP', (v) => setIpw({ ipWatch: v }), 'Проверять внешний IP по таймеру и записывать каждое изменение'));
   const sec = Math.round(w.intervalMs / 1000);
   const opts = IPW_INTERVALS.some(([v]) => v === sec) ? IPW_INTERVALS : [...IPW_INTERVALS, [sec, `${sec}s`]];
   clear($('ipwInterval')).append(seg(opts, sec, (v) => setIpw({ ipWatch: true, ipWatchSec: v })));
   let next = 'off', frac = 0;
   if (w.enabled) {
-    if (w.running) next = 'checking…';
+    if (w.running) next = 'проверка…';
     else if (w.nextCheckAt) {
       const left = Math.max(0, w.nextCheckAt - now);
-      next = `next in ${Math.ceil(left / 1000)}s`;
+      next = `следующая через ${Math.ceil(left / 1000)} с`;
       frac = 1 - Math.min(1, left / w.intervalMs);
     }
   }
@@ -1268,12 +1270,12 @@ function renderIpwTiles() {
   const avg = holds.length ? holds.reduce((a, b) => a + b, 0) / holds.length : null;
   const tile = (v, k, cls = '', title = '') => h('div', { class: `tile ${cls}`, title }, h('div', { class: 'tile-v' }, v), h('div', { class: 'tile-k' }, k));
   clear($('ipwTiles')).append(
-    tile(String(w.changes1h), 'changes · 1h', w.changes1h ? 'warn' : ''),
-    tile(String(w.changes24h), 'changes · 24h'),
-    tile(String(w.uniqueIps24h), 'unique IPs · 24h'),
-    tile(avg == null ? '—' : fmtDur(avg), `avg hold · ${IPW_RANGES.find(([v]) => v === IPW.range)?.[1] || ''}`, '', 'Average time an IP lasted before it changed by itself'),
-    tile(w.checks.toLocaleString(), 'checks this run'),
-    tile(String(w.failures), 'failed checks', w.failures ? 'err' : ''),
+    tile(String(w.changes1h), 'изменений · 1ч', w.changes1h ? 'warn' : ''),
+    tile(String(w.changes24h), 'изменений · 24ч'),
+    tile(String(w.uniqueIps24h), 'уникальных IP · 24ч'),
+    tile(avg == null ? '—' : fmtDur(avg), `сред. удержание · ${IPW_RANGES.find(([v]) => v === IPW.range)?.[1] || ''}`, '', 'Среднее время, что IP держался до самостоятельной смены'),
+    tile(w.checks.toLocaleString(), 'проверок за запуск'),
+    tile(String(w.failures), 'неуспешных проверок', w.failures ? 'err' : ''),
   );
 }
 
@@ -1308,7 +1310,7 @@ function renderIpwTimeline() {
     const left = ((a - from) / IPW.range) * 100, width = ((b - a) / IPW.range) * 100;
     const geo = s.ev ? placeOf(s.ev) : '';
     const title = s.err
-      ? `Checks failing: ${s.ev.error || ''}\n${fmtStamp(s.from)} – ${fmtStamp(s.to)} (${fmtDur(s.to - s.from)})`
+      ? `Проверки не проходят: ${s.ev.error || ''}\n${fmtStamp(s.from)} – ${fmtStamp(s.to)} (${fmtDur(s.to - s.from)})`
       : `${s.ip}${geo ? ` · ${geo}` : ''}${s.ev.org ? ` · ${s.ev.org}` : ''}\n${fmtStamp(s.from)} – ${fmtStamp(s.to)} (${fmtDur(s.to - s.from)})`;
     const seg_ = h('div', { class: `ipw-span${s.err ? ' err' : ''}`, title });
     seg_.style.left = `${left}%`; seg_.style.width = `max(2px, ${width}%)`;
@@ -1318,11 +1320,11 @@ function renderIpwTimeline() {
     }
     band.append(seg_);
   }
-  if (!spans.length) band.append(h('div', { class: 'ipw-band-empty' }, 'No data in this range'));
+  if (!spans.length) band.append(h('div', { class: 'ipw-band-empty' }, 'Нет данных за этот период'));
   const axis = clear($('ipwAxis'));
   for (let i = 0; i <= 4; i++) {
     const at = from + (IPW.range * i) / 4;
-    const lbl = h('span', null, i === 4 ? 'now' : IPW.range > 24 * 3600000
+    const lbl = h('span', null, i === 4 ? 'сейчас' : IPW.range > 24 * 3600000
       ? new Date(at).toLocaleDateString([], { month: 'short', day: 'numeric' })
       : new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }));
     lbl.style.left = `${i * 25}%`;
@@ -1335,7 +1337,7 @@ function renderIpwTimeline() {
     legend.append(h('span', { class: 'ipw-leg', title: [placeOf(t.ev), t.ev.org].filter(Boolean).join(' · ') },
       sw_, flag(t.ev.country), ' ', h('span', { class: 'mono' }, ip), h('span', { class: 'faint' }, fmtDur(t.ms))));
   }
-  if (items.length > 16) legend.append(h('span', { class: 'faint' }, `+${items.length - 16} more`));
+  if (items.length > 16) legend.append(h('span', { class: 'faint' }, `+ ещё ${items.length - 16}`));
 }
 
 function ipwRows() {
@@ -1349,7 +1351,7 @@ function ipwRows() {
 }
 
 function renderIpwTable() {
-  clear($('ipwFilter')).append(seg([['all', 'All'], ['changes', 'Changes'], ['errors', 'Errors']], IPW.filter, (v) => {
+  clear($('ipwFilter')).append(seg([['all', 'Все'], ['changes', 'Изменения'], ['errors', 'Ошибки']], IPW.filter, (v) => {
     IPW.filter = v; store.set('ipw-filter', v); renderIpwTable();
   }));
   const rows = ipwRows();
@@ -1357,7 +1359,7 @@ function renderIpwTable() {
   const ipCell = (ip) => {
     if (!ip) return h('td', { class: 'faint' }, '—');
     const dot = h('i', { class: 'ipw-dot' }); dot.style.background = ipColor(ip);
-    return h('td', { class: 'mono', title: 'Click to copy', onclick: () => copy(ip, 'IP copied') }, dot, ip);
+    return h('td', { class: 'mono', title: 'Нажмите, чтобы скопировать', onclick: () => copy(ip, 'IP скопирован') }, dot, ip);
   };
   for (const e of rows.slice().reverse().slice(0, 1000)) {
     const [label, cls] = IPW_TYPES[e.type] || [e.type, ''];
@@ -1370,15 +1372,15 @@ function renderIpwTable() {
         : e.note && !e.ip ? h('span', { class: 'muted' }, e.note) : [flag(e.country), ' ', placeOf(e)]),
       h('td', { class: 'muted', title: e.org || '' }, e.org || ''),
       h('td', { title: e.mode ? `${e.label || ''} (${MODE_LABEL[e.mode] || e.mode})` : (e.label || '') }, e.label || '', e.mode && MODE_LABEL[e.mode] ? h('span', { class: 'faint' }, ` · ${MODE_LABEL[e.mode]}`) : null),
-      h('td', { class: 'r-al mono', title: e.heldMs != null ? 'How long the previous IP lasted' : '' }, fmtDur(e.heldMs)),
+      h('td', { class: 'r-al mono', title: e.heldMs != null ? 'Сколько держался предыдущий IP' : '' }, fmtDur(e.heldMs)),
     ));
   }
   $('ipwEmpty').hidden = IPW.events.length > 0;
-  $('ipwShown').textContent = rows.length === IPW.events.length ? `${rows.length.toLocaleString()} event${rows.length === 1 ? '' : 's'}` : `${rows.length.toLocaleString()} / ${IPW.events.length.toLocaleString()}`;
+  $('ipwShown').textContent = rows.length === IPW.events.length ? `${rows.length.toLocaleString()} ${ipwPlural(rows.length)}` : `${rows.length.toLocaleString()} / ${IPW.events.length.toLocaleString()}`;
 }
 $('ipwQ').addEventListener('input', () => debounce('ipwq', 120, renderIpwTable));
 $('ipwCheck').addEventListener('click', guard(async () => {
-  await busy($('ipwCheck'), 'Checking…', async () => {
+  await busy($('ipwCheck'), 'Проверка…', async () => {
     const r = await post('/api/ip-history/check');
     IPW.state = r.state;
     await syncIpHistory();
@@ -1386,9 +1388,9 @@ $('ipwCheck').addEventListener('click', guard(async () => {
   await pollStatus();
   renderIpw();
   const w = IPW.state;
-  if (w.blocked) toast(w.lastError || 'Blocked', 'err');
-  else if (w.consecutiveFailures) toast(`IP check failed: ${w.lastError}`, 'err');
-  else toast(`Exit IP ${w.ip}${placeOf(w) ? ` · ${placeOf(w)}` : ''}`, 'ok');
+  if (w.blocked) toast(w.lastError || 'Заблокировано', 'err');
+  else if (w.consecutiveFailures) toast(`Проверка IP не удалась: ${w.lastError}`, 'err');
+  else toast(`Внешний IP ${w.ip}${placeOf(w) ? ` · ${placeOf(w)}` : ''}`, 'ok');
 }));
 $('ipwCsv').addEventListener('click', () => {
   const cols = ['id', 'at', 'type', 'ip', 'prevIp', 'country', 'region', 'city', 'org', 'label', 'mode', 'via', 'latencyMs', 'heldMs', 'error'];
@@ -1397,11 +1399,11 @@ $('ipwCsv').addEventListener('click', () => {
   download(new Blob([`${lines.join('\n')}\n`], { type: 'text/csv' }), `cupnet-ip-history-${new Date().toISOString().slice(0, 10)}.csv`);
 });
 $('ipwClear').addEventListener('click', guard(async () => {
-  if (!(await confirmBox('Delete the whole IP history? The session logs keep their copies.', 'Delete', true))) return;
+  if (!(await confirmBox('Удалить всю историю IP? В логах сессий копии сохранятся.', 'Удалить', true))) return;
   await del('/api/ip-history');
   await syncIpHistory(true);
   renderIpw();
-  toast('IP history cleared', 'ok');
+  toast('История IP очищена', 'ok');
 }));
 setInterval(() => { if (PAGE === 'ipwatch' && IPW.state) renderIpwHero(); }, 1000);
 
@@ -1413,8 +1415,8 @@ function headerTable(rows, onChange = () => {}) {
   let bulk = false;
   const paint = () => {
     clear(box);
-    const bar = h('div', { class: 'bodybar' }, h('span', { class: 'muted' }, `${rows.filter((r) => r[2] !== false && r[0]).length} headers`), h('span', { class: 'spacer' }),
-      h('button', { class: 'btn sm', onclick: () => { bulk = !bulk; paint(); } }, bulk ? 'Table' : 'Bulk edit'));
+    const bar = h('div', { class: 'bodybar' }, h('span', { class: 'muted' }, `заголовков: ${rows.filter((r) => r[2] !== false && r[0]).length}`), h('span', { class: 'spacer' }),
+      h('button', { class: 'btn sm', onclick: () => { bulk = !bulk; paint(); } }, bulk ? 'Таблица' : 'Массовое редактирование'));
     box.append(bar);
     if (bulk) {
       const ta = h('textarea', { class: 'code', spellcheck: false, value: rows.map(([k, v, on]) => `${on === false ? '# ' : ''}${k}: ${v}`).join('\n'),
@@ -1427,18 +1429,18 @@ function headerTable(rows, onChange = () => {}) {
           }
           onChange();
         } });
-      box.append(ta, h('div', { class: 'hint muted' }, 'One "Name: value" per line; # disables a line.'));
+      box.append(ta, h('div', { class: 'hint muted' }, 'По одному «Имя: значение» в строке; # отключает строку.'));
       return;
     }
     const tb = h('tbody');
     rows.forEach((r, i) => {
       tb.append(h('tr', { class: r[2] === false ? 'off' : '' },
         h('td', null, h('input', { type: 'checkbox', checked: r[2] !== false, onchange: (ev) => { r[2] = ev.target.checked; ev.target.closest('tr').className = r[2] ? '' : 'off'; onChange(); } })),
-        h('td', null, h('input', { type: 'text', value: r[0], placeholder: 'Name', spellcheck: false, oninput: (ev) => { r[0] = ev.target.value; onChange(); } })),
-        h('td', null, h('input', { type: 'text', value: r[1], placeholder: 'Value', spellcheck: false, oninput: (ev) => { r[1] = ev.target.value; onChange(); } })),
-        h('td', null, h('button', { class: 'icon', title: 'Remove', onclick: () => { rows.splice(i, 1); paint(); onChange(); } }, '✕'))));
+        h('td', null, h('input', { type: 'text', value: r[0], placeholder: 'Имя', spellcheck: false, oninput: (ev) => { r[0] = ev.target.value; onChange(); } })),
+        h('td', null, h('input', { type: 'text', value: r[1], placeholder: 'Значение', spellcheck: false, oninput: (ev) => { r[1] = ev.target.value; onChange(); } })),
+        h('td', null, h('button', { class: 'icon', title: 'Убрать', onclick: () => { rows.splice(i, 1); paint(); onChange(); } }, '✕'))));
     });
-    box.append(h('table', { class: 'htable' }, tb), h('button', { class: 'btn sm ghost', onclick: () => { rows.push(['', '', true]); paint(); box.querySelector('tr:last-child input[type=text]')?.focus(); } }, '+ Add header'));
+    box.append(h('table', { class: 'htable' }, tb), h('button', { class: 'btn sm ghost', onclick: () => { rows.push(['', '', true]); paint(); box.querySelector('tr:last-child input[type=text]')?.focus(); } }, '+ Добавить заголовок'));
   };
   paint();
   return box;
@@ -1467,42 +1469,42 @@ function rpShowTab(t) {
 document.querySelectorAll('#rpTabs button').forEach((b) => b.addEventListener('click', () => rpShowTab(b.dataset.t)));
 function rpRequest() { return { method: $('rpMethod').value, url: $('rpUrl').value.trim(), headers: enabledPairs(RP.rows), body: $('rpBody').value }; }
 function renderRpCode() {
-  if (!window.CupNetCodegen) { $('rpCode').textContent = 'Code generator did not load.'; return; }
+  if (!window.CupNetCodegen) { $('rpCode').textContent = 'Генератор кода не загрузился.'; return; }
   const r = rpRequest();
   $('rpCode').textContent = window.CupNetCodegen.generateRequestCode($('rpLang').value, { ...r, headers: Object.fromEntries(r.headers) });
 }
 $('rpLang').addEventListener('change', renderRpCode);
 for (const id of ['rpUrl', 'rpBody']) $(id).addEventListener('input', () => debounce('rpcode', 300, renderRpCode));
 $('rpMethod').addEventListener('change', renderRpCode);
-$('rpCopyCode').addEventListener('click', () => copy($('rpCode').textContent, 'Code copied'));
+$('rpCopyCode').addEventListener('click', () => copy($('rpCode').textContent, 'Код скопирован'));
 $('rpCurl').addEventListener('click', () => {
   const ta = h('textarea', { class: 'code', spellcheck: false, placeholder: "curl 'https://example.com/api' -H 'Accept: application/json' --data-raw '{…}'" });
-  modal('Import curl', ta, [{ label: 'Cancel' }, { label: 'Import', cls: 'primary', fn: () => {
+  modal('Импорт curl', ta, [{ label: 'Отмена' }, { label: 'Импорт', cls: 'primary', fn: () => {
     const r = window.CupNetParseCurl ? window.CupNetParseCurl(ta.value) : null;
-    if (!r || !r.url) throw new Error('Could not parse that curl command');
+    if (!r || !r.url) throw new Error('Не удалось разобрать эту команду curl');
     rpLoad({ method: r.method, url: r.url, headers: pairsOf(r.headers), body: r.body || '' });
-    toast('Imported', 'ok');
+    toast('Импортировано', 'ok');
   } }]);
 });
 async function rpSend() {
   const r = rpRequest();
-  if (!/^https?:\/\//i.test(r.url)) { toast('Enter an http(s) URL', 'warn'); $('rpUrl').focus(); return; }
+  if (!/^https?:\/\//i.test(r.url)) { toast('Введите http(s) URL', 'warn'); $('rpUrl').focus(); return; }
   const head = clear($('rpRespHead'));
   head.append(h('i', { class: 'dot busy' }), h('span', { class: 'muted' }, ` ${r.method} ${r.url}`));
   $('rpRespTabs').hidden = true; clear($('rpResp'));
-  const res = await busy($('rpSend'), 'Sending…', () => post('/api/replay', { ...r, followRedirects: $('rpFollow').checked }));
+  const res = await busy($('rpSend'), 'Отправка…', () => post('/api/replay', { ...r, followRedirects: $('rpFollow').checked }));
   RP.last = res.seq ? await api(`/api/log/${res.seq}`).catch(() => null) : null;
   renderRpResponse(res);
 }
 function renderRpResponse(res) {
   const head = clear($('rpRespHead'));
   if (res.error && !res.status) {
-    head.append(badge('failed', 'sf'), ' ', h('span', { class: 'err' }, res.error));
+    head.append(badge('ошибка', 'sf'), ' ', h('span', { class: 'err' }, res.error));
     return;
   }
   const e = RP.last;
-  append(head, [badge(res.status || 'ERR', stCls(res.status)), h('span', { class: 'mono' }, `${res.duration} ms`), e ? h('span', { class: 'muted' }, fmtSize(e.resSize) || '0 B') : null,
-    h('span', { class: 'spacer' }), res.seq ? h('button', { class: 'btn sm', title: 'Show in Traffic (live session)', onclick: () => { if (shown) openSession(current); go('traffic'); setTimeout(() => select(res.seq), 50); } }, `#${res.seq} in Traffic`) : null]);
+  append(head, [badge(res.status || 'ERR', stCls(res.status)), h('span', { class: 'mono' }, `${res.duration} мс`), e ? h('span', { class: 'muted' }, fmtSize(e.resSize) || '0 B') : null,
+    h('span', { class: 'spacer' }), res.seq ? h('button', { class: 'btn sm', title: 'Показать в Трафике (эфирная сессия)', onclick: () => { if (shown) openSession(current); go('traffic'); setTimeout(() => select(res.seq), 50); } }, `#${res.seq} в Трафике`) : null]);
   if (res.error) head.append(h('span', { class: 'err' }, res.error));
   $('rpRespTabs').hidden = !e;
   renderRpRespTab();
@@ -1523,15 +1525,16 @@ document.addEventListener('keydown', (ev) => { if (PAGE === 'repeater' && ev.key
 // Rules
 // ─────────────────────────────────────────────────────────────────────────────
 const RULE_TYPES = [
-  ['inject', 'Inject JS into HTML', 'Adds your script to matching HTML pages (in <head> before the page scripts, or at the end of <body>).'],
-  ['mock', 'Mock response', 'Answers with your status and body; the request never reaches the site.'],
-  ['block', 'Block', 'Fails the request; nothing is sent.'],
-  ['modifyHeaders', 'Modify headers', 'Sets or removes request headers before sending and response headers before Chrome sees them.'],
-  ['script', 'Script hooks', 'JS that edits the request before sending (ctx.url, ctx.method, ctx.headers, ctx.body, ctx.shortCircuit) and the response after (ctx.request, ctx.response.statusCode / headers / body).'],
-  ['mirror', 'Mirror host', 'Serves an upstream host under the matched host: fetches the upstream, then rewrites the body, Location and Set-Cookie back to the client host. Optional find/replace on the content.'],
-  ['pause', 'Pause only (breakpoint)', 'Holds matching requests in Breakpoints so you can edit, forward or block them.'],
+  ['inject', 'Внедрить JS в HTML', 'Добавляет ваш скрипт в подходящие HTML-страницы (в <head> перед скриптами страницы или в конец <body>).'],
+  ['mock', 'Заглушка ответа', 'Отвечает вашим статусом и телом; запрос не доходит до сайта.'],
+  ['block', 'Блокировка', 'Прерывает запрос; ничего не отправляется.'],
+  ['modifyHeaders', 'Изменить заголовки', 'Задаёт или удаляет заголовки запроса перед отправкой и заголовки ответа до того, как их увидит Chrome.'],
+  ['script', 'Скрипт-хуки', 'JS, который правит запрос перед отправкой (ctx.url, ctx.method, ctx.headers, ctx.body, ctx.shortCircuit) и ответ после (ctx.request, ctx.response.statusCode / headers / body).'],
+  ['pause', 'Только пауза (точка останова)', 'Задерживает подходящие запросы в «Точках останова», чтобы их можно было изменить, пропустить или заблокировать.'],
 ];
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'];
+// Russian plural for "срабатывание" (hit)
+const rHitPlural = (n) => { const a = Math.abs(n) % 100, b = a % 10; if (a > 10 && a < 20) return 'срабатываний'; if (b > 1 && b < 5) return 'срабатывания'; if (b === 1) return 'срабатывание'; return 'срабатываний'; };
 const R = { rules: [], sel: null, ed: null, edInit: '' };
 const isEmptyHeaderParams = (p) => !Object.keys(p.requestHeaders || {}).length && !(p.removeRequestHeaders || []).length && !Object.keys(p.responseHeaders || {}).length && !(p.removeResponseHeaders || []).length;
 const uiType = (r) => (r.type === 'modifyHeaders' && r.breakpoint_enabled && isEmptyHeaderParams(r.params || {}) ? 'pause' : r.type);
@@ -1541,7 +1544,6 @@ const RULE_TEMPLATES = {
   block: () => ({}),
   modifyHeaders: () => ({ requestHeaders: {}, removeRequestHeaders: [], responseHeaders: {}, removeResponseHeaders: [] }),
   script: () => ({ beforeSource: '// ctx.headers["x-example"] = "1";\n', afterSource: '' }),
-  mirror: () => ({ upstreamHost: '', upstreamPort: 0, replace: [] }),
   pause: () => ({}),
 };
 function edFromRule(r) {
@@ -1572,28 +1574,29 @@ async function loadRules() {
 $('rq').addEventListener('input', () => renderRList());
 function renderRList() {
   const q = $('rq').value.trim().toLowerCase();
-  const list = R.rules.filter((r) => !q || `${r.name} ${r.url_pattern} ${r.type} ${r.group_name || ''}`.toLowerCase().includes(q));
+  const base = R.rules.filter((r) => r.type !== 'mirror'); // mirror rules live on the Mirror tab
+  const list = base.filter((r) => !q || `${r.name} ${r.url_pattern} ${r.type} ${r.group_name || ''}`.toLowerCase().includes(q));
   const box = clear($('rlist'));
-  if (!R.rules.length) {
-    box.append(h('div', { class: 'empty' }, h('p', null, 'No rules yet.'), h('p', { class: 'muted' }, 'Rules inject JS into pages, mock or block requests, rewrite headers and pause requests for editing.'),
-      h('button', { class: 'btn primary', onclick: () => openRule('new') }, '+ New rule')));
+  if (!base.length) {
+    box.append(h('div', { class: 'empty' }, h('p', null, 'Пока нет правил.'), h('p', { class: 'muted' }, 'Правила внедряют JS в страницы, подменяют или блокируют запросы, переписывают заголовки и останавливают запросы для редактирования.'),
+      h('button', { class: 'btn primary', onclick: () => openRule('new') }, '+ Новое правило')));
     return;
   }
   for (const r of list) {
     const t = uiType(r);
     box.append(h('div', { class: `prow${R.sel === r.id ? ' sel' : ''}${r.enabled ? '' : ' off'}`, onclick: () => openRule(r.id) },
-      h('input', { type: 'checkbox', checked: !!r.enabled, title: r.enabled ? 'Enabled' : 'Disabled', onclick: (ev) => ev.stopPropagation(),
+      h('input', { type: 'checkbox', checked: !!r.enabled, title: r.enabled ? 'Включено' : 'Выключено', onclick: (ev) => ev.stopPropagation(),
         onchange: guard(async (ev) => { await post(`/api/rules/${r.id}/enabled`, { enabled: ev.target.checked }); r.enabled = ev.target.checked; renderRList(); }) }),
       h('div', { style: 'min-width:0' },
         h('div', { class: 'title' }, h('b', { title: r.name }, r.name), tag((RULE_TYPES.find((x) => x[0] === t) || [, t])[1], t === 'pause' ? 'warn' : 'accent'),
-          r.breakpoint_enabled && t !== 'pause' ? tag('pause', 'warn') : null, r.method && r.method !== '*' ? tag(r.method) : null, r.group_name ? tag(r.group_name) : null),
+          r.breakpoint_enabled && t !== 'pause' ? tag('пауза', 'warn') : null, r.method && r.method !== '*' ? tag(r.method) : null, r.group_name ? tag(r.group_name) : null),
         h('div', { class: 'meta' }, h('span', { class: 'mono', title: r.url_pattern }, r.url_pattern), r.last_error ? h('span', { class: 'err', title: r.last_error }, r.last_error) : null)),
-      h('div', { class: 'acts muted mono', title: r.last_hit_at ? `last hit ${new Date(r.last_hit_at).toLocaleString()}` : 'never matched' }, `${r.hit_count || 0} hit${r.hit_count === 1 ? '' : 's'}`)));
+      h('div', { class: 'acts muted mono', title: r.last_hit_at ? `последнее срабатывание ${new Date(r.last_hit_at).toLocaleString()}` : 'ни разу не сработало' }, `${r.hit_count || 0} ${rHitPlural(r.hit_count || 0)}`)));
   }
-  if (!list.length) box.append(h('div', { class: 'empty' }, 'Nothing matches.'));
+  if (!list.length) box.append(h('div', { class: 'empty' }, 'Ничего не найдено.'));
 }
 async function openRule(id) {
-  if (rDirty() && R.sel !== id && !(await confirmBox('Discard unsaved changes to this rule?', 'Discard', true))) return;
+  if (rDirty() && R.sel !== id && !(await confirmBox('Отменить несохранённые изменения этого правила?', 'Отменить', true))) return;
   R.sel = id;
   R.ed = edFromRule(id === 'new' ? null : R.rules.find((r) => r.id === id));
   R.edInit = JSON.stringify(ruleRow(R.ed));
@@ -1613,83 +1616,54 @@ function renderREditor() {
   const box = clear($('rEditor'));
   const ed = R.ed;
   if (R.sel == null || !ed) {
-    box.append(h('div', { class: 'empty' }, h('p', null, h('b', null, 'Pick a rule to edit it, or create one.')),
-      h('p', { class: 'muted' }, 'Rules run in the MITM for every matching request of the proxied Chrome. Higher priority runs first.'),
-      h('button', { class: 'btn primary', onclick: () => openRule('new') }, '+ New rule')));
+    box.append(h('div', { class: 'empty' }, h('p', null, h('b', null, 'Выберите правило для изменения или создайте новое.')),
+      h('p', { class: 'muted' }, 'Правила выполняются в MITM для каждого подходящего запроса проксируемого Chrome. Чем выше приоритет, тем раньше выполнение.'),
+      h('button', { class: 'btn primary', onclick: () => openRule('new') }, '+ Новое правило')));
     return;
   }
   const changed = () => { const d = $('rDirty'); if (d) d.hidden = !rDirty(); };
   const p = ed.params;
-  box.append(h('div', { class: 'edit-head' }, h('h2', { class: 'ell' }, ed.id != null ? ed.name || 'Rule' : 'New rule'),
-    ed.id != null ? h('button', { class: 'btn sm', onclick: guard(async () => { const row = ruleRow(ed); delete row.id; row.name = `${row.name} (copy)`; const { id } = await post('/api/rules', row); R.sel = id; R.ed = null; await loadRules(); toast('Duplicated', 'ok'); }) }, 'Duplicate') : null,
-    ed.id != null ? h('button', { class: 'btn sm danger', onclick: guard(async () => { if (!(await confirmBox(`Delete rule "${ed.name}"?`, 'Delete', true))) return; await del(`/api/rules/${ed.id}`); R.sel = null; R.ed = null; await loadRules(); toast('Deleted', 'ok'); }) }, 'Delete') : null));
+  box.append(h('div', { class: 'edit-head' }, h('h2', { class: 'ell' }, ed.id != null ? ed.name || 'Правило' : 'Новое правило'),
+    ed.id != null ? h('button', { class: 'btn sm', onclick: guard(async () => { const row = ruleRow(ed); delete row.id; row.name = `${row.name} (копия)`; const { id } = await post('/api/rules', row); R.sel = id; R.ed = null; await loadRules(); toast('Дублировано', 'ok'); }) }, 'Дублировать') : null,
+    ed.id != null ? h('button', { class: 'btn sm danger', onclick: guard(async () => { if (!(await confirmBox(`Удалить правило «${ed.name}»?`, 'Удалить', true))) return; await del(`/api/rules/${ed.id}`); R.sel = null; R.ed = null; await loadRules(); toast('Удалено', 'ok'); }) }, 'Удалить') : null));
 
   const form = h('div', { class: 'form' });
-  form.append(...field('Enabled', sw(ed.enabled, '', (v) => { ed.enabled = v; changed(); })));
-  form.append(...field('Name', h('input', { value: ed.name, placeholder: 'What this rule does', oninput: (ev) => { ed.name = ev.target.value; changed(); } })));
+  form.append(...field('Включено', sw(ed.enabled, '', (v) => { ed.enabled = v; changed(); })));
+  form.append(...field('Название', h('input', { value: ed.name, placeholder: 'Что делает это правило', oninput: (ev) => { ed.name = ev.target.value; changed(); } })));
   const typeSel = h('select', { onchange: (ev) => { ed.type = ev.target.value; ed.params = RULE_TEMPLATES[ed.type](); renderREditor(); changed(); } },
     RULE_TYPES.map(([v, l]) => h('option', { value: v, selected: v === ed.type }, l)));
-  form.append(...field('Action', typeSel, (RULE_TYPES.find((t) => t[0] === ed.type) || [])[2]));
-  form.append(...field('URL pattern', h('input', { class: 'mono', value: ed.url_pattern, spellcheck: false, placeholder: 'https://example.com/api/  ·  *://*.example.com/*  ·  *',
-    oninput: (ev) => { ed.url_pattern = ev.target.value; changed(); } }), 'A URL without * matches that origin and path prefix (query ignored). * is a wildcard over the whole URL.'));
+  form.append(...field('Действие', typeSel, (RULE_TYPES.find((t) => t[0] === ed.type) || [])[2]));
+  form.append(...field('Шаблон URL', h('input', { class: 'mono', value: ed.url_pattern, spellcheck: false, placeholder: 'https://example.com/api/  ·  *://*.example.com/*  ·  *',
+    oninput: (ev) => { ed.url_pattern = ev.target.value; changed(); } }), 'URL без * совпадает с этим origin и префиксом пути (строка запроса игнорируется). * — подстановка по всему URL.'));
   const mBox = h('div', { class: 'inline' });
   const paintMethods = () => {
-    append(clear(mBox), [h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !ed.methods.length, onchange: () => { ed.methods = []; paintMethods(); changed(); } }), 'Any'),
+    append(clear(mBox), [h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !ed.methods.length, onchange: () => { ed.methods = []; paintMethods(); changed(); } }), 'Любой'),
       METHODS.map((m) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: ed.methods.includes(m), onchange: (ev) => {
         ed.methods = ev.target.checked ? [...ed.methods, m] : ed.methods.filter((x) => x !== m); paintMethods(); changed();
       } }), h('span', { class: `m m-${m}` }, m)))]);
   };
   paintMethods();
-  form.append(...field('Methods', mBox));
+  form.append(...field('Методы', mBox));
 
   // ── action-specific ──
   if (ed.type === 'inject') {
-    form.append(...field('Position', seg([['head', 'Start of <head>'], ['body-end', 'End of <body>']], p.position || 'head', (v) => { p.position = v; renderREditor(); changed(); })));
-    form.append(...field('Script', h('textarea', { class: 'code', spellcheck: false, value: p.source || '', oninput: (ev) => { p.source = ev.target.value; changed(); } }), null, true));
+    form.append(...field('Позиция', seg([['head', 'Начало <head>'], ['body-end', 'Конец <body>']], p.position || 'head', (v) => { p.position = v; renderREditor(); changed(); })));
+    form.append(...field('Скрипт', h('textarea', { class: 'code', spellcheck: false, value: p.source || '', oninput: (ev) => { p.source = ev.target.value; changed(); } }), null, true));
   } else if (ed.type === 'mock') {
-    form.append(...field('Status', h('input', { type: 'number', min: 100, max: 599, value: p.status ?? 200, oninput: (ev) => { p.status = Number(ev.target.value) || 200; changed(); } })));
+    form.append(...field('Статус', h('input', { type: 'number', min: 100, max: 599, value: p.status ?? 200, oninput: (ev) => { p.status = Number(ev.target.value) || 200; changed(); } })));
     form.append(h('datalist', { id: 'mimes' }, ['application/json', 'text/html; charset=utf-8', 'text/plain; charset=utf-8', 'application/javascript', 'text/css', 'image/svg+xml'].map((m) => h('option', { value: m }))));
     form.append(...field('Content-Type', h('input', { class: 'mono', list: 'mimes', value: p.mimeType || '', oninput: (ev) => { p.mimeType = ev.target.value; changed(); } })));
-    form.append(...field('Body', h('textarea', { class: 'code', spellcheck: false, value: p.body || '', oninput: (ev) => { p.body = ev.target.value; changed(); } }), null, true));
+    form.append(...field('Тело', h('textarea', { class: 'code', spellcheck: false, value: p.body || '', oninput: (ev) => { p.body = ev.target.value; changed(); } }), null, true));
   } else if (ed.type === 'modifyHeaders') {
     for (const k of ['requestHeaders', 'responseHeaders']) p[k] = p[k] || {};
     for (const k of ['removeRequestHeaders', 'removeResponseHeaders']) p[k] = p[k] || [];
-    form.append(...field('Set on request', kvObjEditor(p.requestHeaders, changed), null, true));
-    form.append(...field('Remove from request', listEditor(p.removeRequestHeaders, changed, 'One header name per line'), null, true));
-    form.append(...field('Set on response', kvObjEditor(p.responseHeaders, changed), null, true));
-    form.append(...field('Remove from response', listEditor(p.removeResponseHeaders, changed, 'e.g. content-security-policy'), null, true));
+    form.append(...field('Задать в запросе', kvObjEditor(p.requestHeaders, changed), null, true));
+    form.append(...field('Убрать из запроса', listEditor(p.removeRequestHeaders, changed, 'По одному имени заголовка в строке'), null, true));
+    form.append(...field('Задать в ответе', kvObjEditor(p.responseHeaders, changed), null, true));
+    form.append(...field('Убрать из ответа', listEditor(p.removeResponseHeaders, changed, 'напр. content-security-policy'), null, true));
   } else if (ed.type === 'script') {
-    form.append(...field('Before request', h('textarea', { class: 'code short', spellcheck: false, value: p.beforeSource || '', oninput: (ev) => { p.beforeSource = ev.target.value; changed(); } }), 'ctx.url, ctx.method, ctx.headers, ctx.body; set ctx.shortCircuit = { statusCode, headers, body } to answer without the network.', true));
-    form.append(...field('After response', h('textarea', { class: 'code short', spellcheck: false, value: p.afterSource || '', oninput: (ev) => { p.afterSource = ev.target.value; changed(); } }), 'ctx.request, ctx.response.statusCode, ctx.response.headers, ctx.response.bodyBase64 (or set ctx.response.body).', true));
-  } else if (ed.type === 'mirror') {
-    form.append(...field('Upstream host', h('input', { class: 'mono', value: p.upstreamHost || '', spellcheck: false, placeholder: 'origin.example.com',
-      oninput: (ev) => { p.upstreamHost = ev.target.value; changed(); } }), 'The real host to fetch. Its body, Location and Set-Cookie are rewritten back to the host in the URL pattern.'));
-    form.append(...field('Upstream port', h('input', { type: 'number', min: 0, max: 65535, value: p.upstreamPort || 0,
-      oninput: (ev) => { p.upstreamPort = Number(ev.target.value) || 0; changed(); } }), '0 = same as the client (443).'));
-    if (!Array.isArray(p.replace)) p.replace = [];
-    const repBox = h('div');
-    const paintReplace = () => {
-      clear(repBox);
-      p.replace.forEach((r, i) => {
-        const isUrl = r.kind === 'url';
-        const row = h('div', { class: 'sect', style: 'margin-bottom:6px' },
-          h('div', { class: 'inline' },
-            h('select', { onchange: (ev) => { r.kind = ev.target.value === 'url' ? 'url' : 'word'; if (r.kind === 'url') { r.regex = r.urls = r.tags = false; } paintReplace(); changed(); } },
-              [['word', 'Find / replace'], ['url', 'Swap path']].map(([v, l]) => h('option', { value: v, selected: (r.kind || 'word') === v }, l))),
-            h('input', { class: 'mono grow', value: r.from || '', placeholder: isUrl ? '/client/path' : 'find', oninput: (ev) => { r.from = ev.target.value; changed(); } }),
-            h('span', { class: 'muted' }, '→'),
-            h('input', { class: 'mono grow', value: r.to || '', placeholder: isUrl ? '/upstream/path' : 'replace', oninput: (ev) => { r.to = ev.target.value; changed(); } }),
-            h('button', { class: 'icon', title: 'Remove', onclick: () => { p.replace.splice(i, 1); paintReplace(); changed(); } }, '✕')),
-          isUrl ? null : h('div', { class: 'inline', style: 'margin-top:4px' },
-            h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!r.regex, onchange: (ev) => { r.regex = ev.target.checked; changed(); } }), 'Regex ($1 groups)'),
-            h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!r.urls, onchange: (ev) => { r.urls = ev.target.checked; changed(); } }), 'In URL attributes'),
-            h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: !!r.tags, onchange: (ev) => { r.tags = ev.target.checked; changed(); } }), 'Whole document (incl. tags)')));
-        repBox.append(row);
-      });
-      repBox.append(h('button', { class: 'btn sm ghost', onclick: () => { p.replace.push({ from: '', to: '', kind: 'word', regex: false, urls: false, tags: false }); paintReplace(); } }, '+ Replace rule'));
-    };
-    paintReplace();
-    form.append(...field('Content rewrite', repBox, 'Applied to text responses. "Find / replace" edits text (word-aware); "Swap path" fetches one path as another.', true));
+    form.append(...field('Перед запросом', h('textarea', { class: 'code short', spellcheck: false, value: p.beforeSource || '', oninput: (ev) => { p.beforeSource = ev.target.value; changed(); } }), 'ctx.url, ctx.method, ctx.headers, ctx.body; задайте ctx.shortCircuit = { statusCode, headers, body }, чтобы ответить без сети.', true));
+    form.append(...field('После ответа', h('textarea', { class: 'code short', spellcheck: false, value: p.afterSource || '', oninput: (ev) => { p.afterSource = ev.target.value; changed(); } }), 'ctx.request, ctx.response.statusCode, ctx.response.headers, ctx.response.bodyBase64 (или задайте ctx.response.body).', true));
   }
 
   // ── conditions + behaviour ──
@@ -1699,62 +1673,62 @@ function renderREditor() {
     ed.matchHeaders.forEach((m, i) => {
       mhBox.append(h('div', { class: 'inline', style: 'margin-bottom:4px' },
         h('input', { class: 'mono', value: m.key || '', placeholder: 'header', style: 'width:150px', oninput: (ev) => { m.key = ev.target.value; changed(); } }),
-        h('select', { onchange: (ev) => { m.op = ev.target.value; paintMh(); changed(); } }, [['eq', 'equals'], ['contains', 'contains'], ['regex', 'matches regex'], ['exists', 'exists'], ['notexists', 'is missing']].map(([v, l]) => h('option', { value: v, selected: (m.op || 'eq') === v }, l))),
-        /exists/.test(m.op || '') ? null : h('input', { class: 'mono grow', value: m.value || '', placeholder: 'value', oninput: (ev) => { m.value = ev.target.value; changed(); } }),
+        h('select', { onchange: (ev) => { m.op = ev.target.value; paintMh(); changed(); } }, [['eq', 'равно'], ['contains', 'содержит'], ['regex', 'соответствует regex'], ['exists', 'присутствует'], ['notexists', 'отсутствует']].map(([v, l]) => h('option', { value: v, selected: (m.op || 'eq') === v }, l))),
+        /exists/.test(m.op || '') ? null : h('input', { class: 'mono grow', value: m.value || '', placeholder: 'значение', oninput: (ev) => { m.value = ev.target.value; changed(); } }),
         h('button', { class: 'icon', onclick: () => { ed.matchHeaders.splice(i, 1); paintMh(); changed(); } }, '✕')));
     });
-    mhBox.append(h('button', { class: 'btn sm ghost', onclick: () => { ed.matchHeaders.push({ key: '', op: 'eq', value: '' }); paintMh(); } }, '+ Header condition'));
+    mhBox.append(h('button', { class: 'btn sm ghost', onclick: () => { ed.matchHeaders.push({ key: '', op: 'eq', value: '' }); paintMh(); } }, '+ Условие по заголовку'));
   };
   paintMh();
   const cond = h('div', { class: 'form' });
-  cond.append(...field('Request headers', mhBox, null, true));
-  cond.append(...field('Request body', h('div', { class: 'inline' },
-    h('select', { onchange: (ev) => { ed.matchBody.mode = ev.target.value; changed(); } }, [['', 'any body'], ['contains', 'contains'], ['regex', 'matches regex']].map(([v, l]) => h('option', { value: v, selected: ed.matchBody.mode === v }, l))),
-    h('input', { class: 'mono grow', value: ed.matchBody.value || '', placeholder: 'text or regex', oninput: (ev) => { ed.matchBody.value = ev.target.value; changed(); } }))));
-  cond.append(...field('Priority', h('input', { type: 'number', value: ed.priority, oninput: (ev) => { ed.priority = Number(ev.target.value) || 0; changed(); } }), 'Higher runs first.'));
-  cond.append(...field('Delay', h('div', { class: 'inline' }, h('input', { type: 'number', min: 0, max: 60000, value: ed.delay_ms, oninput: (ev) => { ed.delay_ms = Number(ev.target.value) || 0; changed(); } }), h('span', { class: 'muted' }, 'ms before the action'))));
-  cond.append(...field('Stop on match', sw(ed.stop_on_match, 'Do not run lower-priority rules after this one', (v) => { ed.stop_on_match = v; changed(); })));
-  if (ed.type !== 'pause') cond.append(...field('Pause', sw(ed.breakpoint_enabled, 'Also hold matching requests in Breakpoints', (v) => { ed.breakpoint_enabled = v; changed(); })));
-  cond.append(...field('Group', h('input', { value: ed.group_name, placeholder: 'optional', oninput: (ev) => { ed.group_name = ev.target.value; changed(); } })));
+  cond.append(...field('Заголовки запроса', mhBox, null, true));
+  cond.append(...field('Тело запроса', h('div', { class: 'inline' },
+    h('select', { onchange: (ev) => { ed.matchBody.mode = ev.target.value; changed(); } }, [['', 'любое тело'], ['contains', 'содержит'], ['regex', 'соответствует regex']].map(([v, l]) => h('option', { value: v, selected: ed.matchBody.mode === v }, l))),
+    h('input', { class: 'mono grow', value: ed.matchBody.value || '', placeholder: 'текст или regex', oninput: (ev) => { ed.matchBody.value = ev.target.value; changed(); } }))));
+  cond.append(...field('Приоритет', h('input', { type: 'number', value: ed.priority, oninput: (ev) => { ed.priority = Number(ev.target.value) || 0; changed(); } }), 'Чем выше, тем раньше выполнение.'));
+  cond.append(...field('Задержка', h('div', { class: 'inline' }, h('input', { type: 'number', min: 0, max: 60000, value: ed.delay_ms, oninput: (ev) => { ed.delay_ms = Number(ev.target.value) || 0; changed(); } }), h('span', { class: 'muted' }, 'мс перед действием'))));
+  cond.append(...field('Остановиться при совпадении', sw(ed.stop_on_match, 'Не выполнять правила с меньшим приоритетом после этого', (v) => { ed.stop_on_match = v; changed(); })));
+  if (ed.type !== 'pause') cond.append(...field('Пауза', sw(ed.breakpoint_enabled, 'Также задерживать подходящие запросы в «Точках останова»', (v) => { ed.breakpoint_enabled = v; changed(); })));
+  cond.append(...field('Группа', h('input', { value: ed.group_name, placeholder: 'необязательно', oninput: (ev) => { ed.group_name = ev.target.value; changed(); } })));
 
   const adv = h('textarea', { class: 'code short', spellcheck: false, value: JSON.stringify(ruleRow(ed).params, null, 2) });
-  const advBox = h('details', { class: 'sect' }, h('summary', null, 'Params JSON (advanced)'), adv,
+  const advBox = h('details', { class: 'sect' }, h('summary', null, 'Params JSON (продвинутое)'), adv,
     h('div', { class: 'row-end' }, h('button', { class: 'btn sm', onclick: guard(() => {
       const obj = JSON.parse(adv.value || '{}');
       const next = edFromRule({ ...ruleRow(ed), params: obj, id: ed.id });
       next.type = ed.type; Object.assign(ed, { params: next.params, matchHeaders: next.matchHeaders, matchBody: next.matchBody });
-      renderREditor(); changed(); toast('Params applied', 'ok');
-    }) }, 'Apply JSON')));
+      renderREditor(); changed(); toast('Параметры применены', 'ok');
+    }) }, 'Применить JSON')));
   advBox.addEventListener('toggle', () => { if (advBox.open) adv.value = JSON.stringify(ruleRow(ed).params, null, 2); });
 
-  box.append(form, h('h3', null, 'Conditions & behaviour'), cond, advBox);
-  const saveBtn = h('button', { class: 'btn primary', onclick: guard(() => busy(saveBtn, 'Saving…', async () => {
+  box.append(form, h('h3', null, 'Условия и поведение'), cond, advBox);
+  const saveBtn = h('button', { class: 'btn primary', onclick: guard(() => busy(saveBtn, 'Сохранение…', async () => {
     const row = ruleRow(ed);
-    if (!row.name) throw new Error('Give the rule a name');
-    if (!row.url_pattern) throw new Error('URL pattern is required');
+    if (!row.name) throw new Error('Дайте правилу название');
+    if (!row.url_pattern) throw new Error('Шаблон URL обязателен');
     const { id } = await post('/api/rules', row);
-    R.sel = id; R.ed = null; await loadRules(); toast('Rule saved', 'ok');
-  })) }, 'Save rule');
-  box.append(h('div', { class: 'row-end', style: 'justify-content:flex-start' }, saveBtn, h('span', { id: 'rDirty', class: 'muted', hidden: !rDirty() }, 'unsaved changes')));
+    R.sel = id; R.ed = null; await loadRules(); toast('Правило сохранено', 'ok');
+  })) }, 'Сохранить правило');
+  box.append(h('div', { class: 'row-end', style: 'justify-content:flex-start' }, saveBtn, h('span', { id: 'rDirty', class: 'muted', hidden: !rDirty() }, 'несохранённые изменения')));
 }
 $('rExport').addEventListener('click', guard(async () => {
   const rules = (await api('/api/rules')).map(({ id, hit_count, last_hit_at, last_error, created_at, ...r }) => r);
   download(new Blob([JSON.stringify({ cupnetRules: 1, rules }, null, 2)], { type: 'application/json' }), 'cupnet-rules.json');
 }));
 $('rImport').addEventListener('click', () => {
-  const ta = h('textarea', { class: 'code', spellcheck: false, placeholder: 'Paste exported rules JSON, or pick a file' });
+  const ta = h('textarea', { class: 'code', spellcheck: false, placeholder: 'Вставьте экспортированный JSON правил или выберите файл' });
   const file = h('input', { type: 'file', accept: '.json,application/json', onchange: async (ev) => { const f = ev.target.files[0]; if (f) ta.value = await f.text(); } });
-  modal('Import rules', h('div', null, file, ta), [{ label: 'Cancel' }, { label: 'Import', cls: 'primary', fn: async () => {
+  modal('Импорт правил', h('div', null, file, ta), [{ label: 'Отмена' }, { label: 'Импорт', cls: 'primary', fn: async () => {
     const j = JSON.parse(ta.value);
     const list = Array.isArray(j) ? j : Array.isArray(j?.rules) ? j.rules : null;
-    if (!list) throw new Error('Expected an array of rules or { rules: [...] }');
+    if (!list) throw new Error('Ожидался массив правил или { rules: [...] }');
     let ok = 0; const errs = [];
     for (const r of list) {
       const { id, hit_count, last_hit_at, last_error, created_at, ...row } = r || {};
       try { await post('/api/rules', row); ok++; } catch (e) { errs.push(`${row.name || '?'}: ${e.message}`); }
     }
     await loadRules();
-    toast(`Imported ${ok} rule(s)${errs.length ? ` · ${errs.length} failed: ${errs.slice(0, 2).join('; ')}` : ''}`, errs.length ? 'warn' : 'ok');
+    toast(`Импортировано правил: ${ok}${errs.length ? ` · с ошибкой: ${errs.length}: ${errs.slice(0, 2).join('; ')}` : ''}`, errs.length ? 'warn' : 'ok');
   } }]);
 });
 
@@ -1770,14 +1744,14 @@ async function loadPaused() {
 }
 function renderBpList() {
   const box = clear($('bplist'));
-  if (!BP.items.length) { box.append(h('div', { class: 'empty' }, 'No paused requests.')); return; }
+  if (!BP.items.length) { box.append(h('div', { class: 'empty' }, 'Нет остановленных запросов.')); return; }
   for (const b of BP.items) {
     const left = Math.max(0, Math.round((b.timeoutMs - (Date.now() - b.at)) / 1000));
     const [host, path] = splitUrl(b.url);
     box.append(h('div', { class: `prow${BP.sel === b.id ? ' sel' : ''}`, onclick: () => openBp(b.id) },
       h('i', { class: 'dot warn' }),
       h('div', { style: 'min-width:0' }, h('div', { class: 'title' }, h('span', { class: `m m-${b.method}` }, b.method), h('b', { title: b.url }, path)),
-        h('div', { class: 'meta' }, h('span', null, host), h('span', { class: 'faint' }, `rule: ${b.ruleName}`))),
+        h('div', { class: 'meta' }, h('span', null, host), h('span', { class: 'faint' }, `правило: ${b.ruleName}`))),
       h('div', { class: 'acts mono muted' }, `${left}s`)));
   }
 }
@@ -1790,22 +1764,22 @@ function openBp(id) {
 function renderBpEditor() {
   const box = clear($('bpEditor'));
   const ed = BP.ed;
-  if (!ed) { box.append(h('div', { class: 'empty' }, 'Nothing paused. Add a rule with ', h('b', null, 'Pause'), ', or use ', h('b', null, 'Break on URL'), ' in Traffic.')); return; }
+  if (!ed) { box.append(h('div', { class: 'empty' }, 'Ничего не остановлено. Добавьте правило с действием ', h('b', null, 'Пауза'), ' или используйте ', h('b', null, 'Остановить на URL'), ' в Трафике.')); return; }
   const resume = (action, edited) => guard(async () => {
     const body = edited ? { action, method: ed.method, url: ed.url, headers: enabledPairs(ed.rows), ...(ed.binary ? {} : { body: ed.body }) } : { action };
     await post(`/api/breakpoints/${BP.sel}`, body);
-    toast(action === 'block' ? 'Blocked' : edited ? 'Forwarded with your edits' : 'Forwarded', action === 'block' ? 'warn' : 'ok');
+    toast(action === 'block' ? 'Заблокировано' : edited ? 'Пропущено с вашими изменениями' : 'Пропущено', action === 'block' ? 'warn' : 'ok');
     BP.sel = null; BP.ed = null; renderBpEditor(); await loadPaused(); pollStatus();
   });
-  box.append(h('div', { class: 'edit-head' }, h('h2', null, 'Paused request'),
-    h('button', { class: 'btn primary', onclick: resume('forward', true) }, 'Forward'),
-    h('button', { class: 'btn', onclick: resume('forward', false) }, 'Forward unchanged'),
-    h('button', { class: 'btn danger', onclick: resume('block', false) }, 'Block')));
+  box.append(h('div', { class: 'edit-head' }, h('h2', null, 'Остановленный запрос'),
+    h('button', { class: 'btn primary', onclick: resume('forward', true) }, 'Пропустить'),
+    h('button', { class: 'btn', onclick: resume('forward', false) }, 'Пропустить без изменений'),
+    h('button', { class: 'btn danger', onclick: resume('block', false) }, 'Заблокировать')));
   const form = h('div', { class: 'form' });
-  form.append(...field('Method', h('input', { class: 'mono', value: ed.method, style: 'width:120px', oninput: (ev) => { ed.method = ev.target.value.toUpperCase(); } })));
+  form.append(...field('Метод', h('input', { class: 'mono', value: ed.method, style: 'width:120px', oninput: (ev) => { ed.method = ev.target.value.toUpperCase(); } })));
   form.append(...field('URL', h('input', { class: 'mono', value: ed.url, spellcheck: false, oninput: (ev) => { ed.url = ev.target.value; } })));
-  form.append(...field('Headers', headerTable(ed.rows), null, true));
-  form.append(...field('Body', ed.binary ? h('div', { class: 'note' }, 'Binary body — forwarded unchanged.') : h('textarea', { class: 'code short', spellcheck: false, value: ed.body, oninput: (ev) => { ed.body = ev.target.value; } }), null, true));
+  form.append(...field('Заголовки', headerTable(ed.rows), null, true));
+  form.append(...field('Тело', ed.binary ? h('div', { class: 'note' }, 'Бинарное тело — пропускается без изменений.') : h('textarea', { class: 'code short', spellcheck: false, value: ed.body, oninput: (ev) => { ed.body = ev.target.value; } }), null, true));
   box.append(form);
 }
 setInterval(() => {
@@ -1823,21 +1797,21 @@ async function loadSessions() {
     const viewing = (shown || current) === s.id;
     const btn = (label, fn, title) => h('button', { class: 'btn sm', title, onclick: guard(fn) }, label);
     tb.append(h('tr', null,
-      h('td', { title: s.keyId ? `key id ${s.keyId}` : '' }, h('span', { class: 'mono' }, s.id), isLive ? [' ', tag('live', 'ok')] : null, viewing ? [' ', tag('viewing', 'accent')] : null),
+      h('td', { title: s.keyId ? `id ключа ${s.keyId}` : '' }, h('span', { class: 'mono' }, s.id), isLive ? [' ', tag('эфир', 'ok')] : null, viewing ? [' ', tag('просмотр', 'accent')] : null),
       h('td', null, fmtSize(s.bytes) || '0 B'),
       h('td', null, new Date(s.mtime).toLocaleString()),
-      h('td', null, s.sealed ? tag('sealed', 'ok') : ''),
+      h('td', null, s.sealed ? tag('запечатана', 'ok') : ''),
       h('td', null,
-        btn('Open', () => { openSession(s.id); go('traffic'); }),
-        btn('HAR', async (ev) => busy(ev.target, '…', async () => download((await apiBlob(`/api/sessions/${s.id}/har`)).blob, `cupnet-${s.id}.har`)), 'Export as HAR 1.2'),
-        btn('JSONL', async () => download((await apiBlob(`/api/sessions/${s.id}`)).blob, `cupnet-${s.id}.jsonl`), 'Raw session log'),
-        btn('Seal', async () => {
+        btn('Открыть', () => { openSession(s.id); go('traffic'); }),
+        btn('HAR', async (ev) => busy(ev.target, '…', async () => download((await apiBlob(`/api/sessions/${s.id}/har`)).blob, `cupnet-${s.id}.har`)), 'Экспорт в HAR 1.2'),
+        btn('JSONL', async () => download((await apiBlob(`/api/sessions/${s.id}`)).blob, `cupnet-${s.id}.jsonl`), 'Сырой лог сессии'),
+        btn('Запечатать', async () => {
           const r = await post(`/api/sessions/${s.id}/seal`);
           for (const [what, name] of [['key', `${r.id}.cupkey`], ['sealed', `${r.id}.cupsess`]]) download((await apiBlob(`/api/sessions/${s.id}/${what}`)).blob, name);
-          toast('Sealed: keep the .cupkey separate from the .cupsess', 'ok');
+          toast('Запечатано: храните .cupkey отдельно от .cupsess', 'ok');
           loadSessions();
-        }, 'Encrypt with this session\'s own key and download both files'),
-        btn('Share', (ev) => shareSession(s.id, ev.target), 'Seal and get a link for the local share host (viewer.html)'))));
+        }, 'Зашифровать собственным ключом сессии и скачать оба файла'),
+        btn('Поделиться', (ev) => shareSession(s.id, ev.target), 'Запечатать и получить ссылку для локального хоста обмена (viewer.html)'))));
   }
 }
 
@@ -1852,7 +1826,7 @@ async function loadGuide() {
   const sess = $('guideSess');
   if (sess) {
     sess.hidden = !st.sessionId;
-    if (st.sessionId) clear(sess).append('Session ', h('b', null, cutText(st.sessionId, 16)));
+    if (st.sessionId) clear(sess).append('Сессия ', h('b', null, cutText(st.sessionId, 16)));
   }
 }
 
@@ -1870,16 +1844,16 @@ async function loadSettings() {
   const st = ST || await api('/api/status');
   const setup = clear($('setup'));
   const row = (k, v) => [h('div', null, k), h('div', null, v)];
-  setup.append(h('h2', null, 'Setup'), h('div', { class: 'setup-grid' },
-    row('Proxy for Chrome', h('code', null, `http://127.0.0.1:${st.mitmPort}`)),
-    row('Certificate trust', st.trust === 'spki' ? 'SPKI pin on the dedicated Chrome profile (nothing installed system-wide)' : 'CupNet CA in the OS trust store'),
-    row('CA file', h('code', null, st.ca.certPath)),
+  setup.append(h('h2', null, 'Настройка'), h('div', { class: 'setup-grid' },
+    row('Прокси для Chrome', h('code', null, `http://127.0.0.1:${st.mitmPort}`)),
+    row('Доверие к сертификату', st.trust === 'spki' ? 'SPKI-пин в выделенном профиле Chrome (ничего не ставится в систему)' : 'CupNet CA в системном хранилище доверия'),
+    row('Файл CA', h('code', null, st.ca.certPath)),
     row('CA SHA-256', h('code', null, st.ca.sha256)),
     row('CA SPKI', h('code', null, st.ca.spki)),
-    row('Rules file', h('code', null, st.rulesFile)),
-    row('Data dir', h('code', null, st.dataDir))),
-  h('h3', null, 'Install the CA system-wide (only for --trust system; run it yourself)'), h('pre', { class: 'codebox' }, st.ca.commands.install),
-  h('h3', null, 'Remove it again'), h('pre', { class: 'codebox' }, st.ca.commands.remove));
+    row('Файл правил', h('code', null, st.rulesFile)),
+    row('Каталог данных', h('code', null, st.dataDir))),
+  h('h3', null, 'Установить CA в систему (только для --trust system; выполните сами)'), h('pre', { class: 'codebox' }, st.ca.commands.install),
+  h('h3', null, 'Удалить его'), h('pre', { class: 'codebox' }, st.ca.commands.remove));
 }
 function renderTls() {
   const box = clear($('tlsProfiles'));
@@ -1892,9 +1866,9 @@ function renderShareState(s) {
   const sh = s.share || {};
   $('sShare').checked = !!s.shareHost; $('sSharePort').value = s.sharePort || sh.port || 8879;
   const el = clear($('sShareState'));
-  if (sh.running) el.append('Serving at ', h('code', null, sh.url), ' (this computer only).');
-  else if (sh.error) el.append(h('span', { class: 'err' }, `Not running: ${sh.error}`));
-  else el.append('Off.');
+  if (sh.running) el.append('Раздаётся по ', h('code', null, sh.url), ' (только этот компьютер).');
+  else if (sh.error) el.append(h('span', { class: 'err' }, `Не запущено: ${sh.error}`));
+  else el.append('Выключено.');
 }
 async function saveSettings(btn) {
   const patch = {
@@ -1903,12 +1877,12 @@ async function saveSettings(btn) {
     pageAgent: $('sAgent').checked, pageAgentExclude: $('sAgentEx').value.split(/[\n,]/).map((x) => x.trim()).filter(Boolean),
     shareHost: $('sShare').checked, sharePort: Number($('sSharePort').value) || 8879 };
   if (S.browser && S.browser !== S.data?.browser) patch.browser = S.browser;
-  await busy(btn, 'Saving…', async () => { S.data = await post('/api/settings', patch); });
+  await busy(btn, 'Сохранение…', async () => { S.data = await post('/api/settings', patch); });
   renderShareState(S.data);
   S.browser = S.data.browser; renderTls(); $('tlsCli').hidden = !S.data.browserFromCli;
   $('sPass').value = (S.data.tlsPassthrough || []).join('\n');
   $('sAgentEx').value = (S.data.pageAgentExclude || []).join('\n');
-  toast('Settings saved — they apply to new connections', 'ok');
+  toast('Настройки сохранены — применяются к новым соединениям', 'ok');
 }
 $('sSave').addEventListener('click', guard(() => saveSettings($('sSave'))));
 $('sSave2').addEventListener('click', guard(() => saveSettings($('sSave2'))));
@@ -1926,9 +1900,9 @@ function renderPinChip() {
   const c = clear($('pinChip'));
   c.hidden = !PIN;
   if (!PIN) return;
-  c.title = `Side A of the next comparison (session ${PIN.sid})`;
+  c.title = `Сторона A следующего сравнения (сессия ${PIN.sid})`;
   c.append(h('b', null, 'A'), h('span', { class: 'mono ell' }, PIN.label),
-    h('button', { class: 'icon', title: 'Unpin', onclick: () => { PIN = null; renderPinChip(); } }, '✕'));
+    h('button', { class: 'icon', title: 'Открепить', onclick: () => { PIN = null; renderPinChip(); } }, '✕'));
 }
 function openCompare(a, b) {
   CMP.a = a; CMP.b = b; CMP.modes = {};
@@ -1946,14 +1920,14 @@ $('aPin').addEventListener('click', () => {
   const e = dEntry; if (!e) return;
   PIN = { seq: e.seq, sid: shown || current, label: sideLabel(e) };
   renderPinChip();
-  toast(`#${e.seq} pinned as A — select another request and click Compare`, 'ok');
+  toast(`#${e.seq} закреплён как A — выберите другой запрос и нажмите «Сравнить»`, 'ok');
 });
 $('aCompare').addEventListener('click', () => {
   const e = dEntry; if (!e) return;
   const sid = shown || current;
   if (PIN && !(PIN.seq === e.seq && PIN.sid === sid)) { openCompare({ seq: PIN.seq, sid: PIN.sid }, { seq: e.seq, sid }); return; }
   const prev = previousSame(e);
-  if (!prev) { toast('Nothing to compare with: pin a request as A first, or Cmd/Ctrl-click a second row', 'warn'); return; }
+  if (!prev) { toast('Не с чем сравнивать: сначала закрепите запрос как A или нажмите Cmd/Ctrl по второй строке', 'warn'); return; }
   openCompare({ seq: prev.seq, sid }, { seq: e.seq, sid });
 });
 $('cmpSwap').addEventListener('click', () => {
@@ -1965,7 +1939,7 @@ $('cmpSwap').addEventListener('click', () => {
 });
 const cmpFromInputs = () => {
   const a = Number($('cmpA').value), b = Number($('cmpB').value);
-  if (!(a > 0 && b > 0)) { toast('Type two request numbers', 'warn'); return; }
+  if (!(a > 0 && b > 0)) { toast('Введите два номера запросов', 'warn'); return; }
   const sid = shown || current;
   openCompare({ seq: a, sid }, { seq: b, sid });
 };
@@ -1974,9 +1948,9 @@ for (const id of ['cmpA', 'cmpB']) $(id).addEventListener('keydown', (ev) => { i
 
 function renderCmpOpts() {
   clear($('cmpOpts')).append(
-    sw(CMP.only, 'Only differences', (v) => { CMP.only = v; store.set('cmp-only', v); renderCompare(); }, 'Hide identical rows and unchanged body lines'),
+    sw(CMP.only, 'Только различия', (v) => { CMP.only = v; store.set('cmp-only', v); renderCompare(); }, 'Скрыть одинаковые строки и неизменные строки тела'),
     ' ',
-    sw(CMP.vol, 'Ignore volatile headers', (v) => { CMP.vol = v; store.set('cmp-vol', v); renderCompare(); }, 'Date, ETag, CF-Ray, request ids, Content-Length and other headers that change every time'));
+    sw(CMP.vol, 'Игнорировать изменчивые заголовки', (v) => { CMP.vol = v; store.set('cmp-vol', v); renderCompare(); }, 'Date, ETag, CF-Ray, id запросов, Content-Length и другие заголовки, меняющиеся каждый раз'));
 }
 async function loadCompare() {
   renderCmpOpts();
@@ -1985,12 +1959,12 @@ async function loadCompare() {
   const key = `${sideKey(CMP.a)}|${sideKey(CMP.b)}`;
   if (key === CMP.key && CMP.ea && CMP.eb) { renderCompare(); return; }
   const my = ++CMP.gen;
-  clear($('cmpBody')).append(h('div', { class: 'empty' }, 'Loading…'));
+  clear($('cmpBody')).append(h('div', { class: 'empty' }, 'Загрузка…'));
   const get = (s) => api(`/api/log/${s.seq}?session=${encodeURIComponent(s.sid)}`);
   try {
     const [ea, eb] = await Promise.all([get(CMP.a), get(CMP.b)]);
     if (my !== CMP.gen) return;
-    if (ea.kind !== 'request' || eb.kind !== 'request') throw new Error('Only requests can be compared — one of these is an event');
+    if (ea.kind !== 'request' || eb.kind !== 'request') throw new Error('Сравнивать можно только запросы — один из этих элементов является событием');
     CMP.ea = ea; CMP.eb = eb; CMP.key = key;
     renderCompare();
   } catch (err) {
@@ -2011,13 +1985,13 @@ function inlineDiff(x, y, ctx = 160, midMax = 4000) {
   const side = (t) => {
     const from = Math.max(0, p - ctx), end = t.length - s, to = Math.min(t.length, end + ctx);
     const mid = t.slice(p, end);
-    return [from > 0 ? h('span', { class: 'muted' }, `…${from.toLocaleString()} chars… `) : null, t.slice(from, p),
-      mid ? h('span', { class: 'ihl' }, mid.length > midMax ? `${mid.slice(0, midMax)}… [${(mid.length - midMax).toLocaleString()} more]` : mid) : null,
-      t.slice(end, to), to < t.length ? h('span', { class: 'muted' }, ` …${(t.length - to).toLocaleString()} chars…`) : null];
+    return [from > 0 ? h('span', { class: 'muted' }, `…${from.toLocaleString()} симв… `) : null, t.slice(from, p),
+      mid ? h('span', { class: 'ihl' }, mid.length > midMax ? `${mid.slice(0, midMax)}… [ещё ${(mid.length - midMax).toLocaleString()}]` : mid) : null,
+      t.slice(end, to), to < t.length ? h('span', { class: 'muted' }, ` …${(t.length - to).toLocaleString()} симв…`) : null];
   };
   return [side(x), side(y)];
 }
-const cutText = (t, max = 4000) => (t.length > max ? [t.slice(0, max), h('span', { class: 'muted' }, ` … [${(t.length - max).toLocaleString()} more chars]`)] : t);
+const cutText = (t, max = 4000) => (t.length > max ? [t.slice(0, max), h('span', { class: 'muted' }, ` … [ещё ${(t.length - max).toLocaleString()} симв.]`)] : t);
 const DMARK = { same: '', changed: '~', added: '+', removed: '−', info: '' };
 
 /** Name / A / B table of diffPairs-style rows ({name, a: string[]|null, b: string[]|null, state}). */
@@ -2027,12 +2001,12 @@ function diffTable(rows, o = {}) {
   const cell = (v, other, state) => {
     if (v == null) return h('span', { class: 'muted' }, '—');
     if (state === 'changed' && other && v.length === 1 && other.length === 1) return null;
-    return v.map((x) => h('div', { class: 'dv' }, x === '' ? h('span', { class: 'muted' }, '(empty)') : cutText(x)));
+    return v.map((x) => h('div', { class: 'dv' }, x === '' ? h('span', { class: 'muted' }, '(пусто)') : cutText(x)));
   };
   if (vis.length) {
     box.append(h('table', { class: 'tbl dtbl' },
       h('colgroup', null, h('col', { class: 'w-18' }), h('col', { class: o.wide ? 'w-300' : 'w-180' }), h('col'), h('col')),
-      h('thead', null, h('tr', null, h('th'), h('th', null, o.name || 'Name'), h('th', null, 'A'), h('th', null, 'B'))),
+      h('thead', null, h('tr', null, h('th'), h('th', null, o.name || 'Имя'), h('th', null, 'A'), h('th', null, 'B'))),
       h('tbody', null, vis.map((r) => {
         let ca = cell(r.a, r.b, r.state), cb = cell(r.b, r.a, r.state);
         if (ca === null) { const [x, y] = inlineDiff(r.a[0], r.b[0]); ca = h('div', { class: 'dv' }, x); cb = h('div', { class: 'dv' }, y); }
@@ -2040,32 +2014,34 @@ function diffTable(rows, o = {}) {
       }))));
   }
   const hidden = rows.length - vis.length;
-  if (!rows.length) box.append(h('div', { class: 'muted pad' }, o.empty || 'None on either side'));
-  else if (!vis.length) box.append(h('div', { class: 'muted pad' }, `All ${rows.length} identical`));
-  else if (hidden) box.append(h('div', { class: 'muted pad' }, `${hidden} identical not shown`));
+  if (!rows.length) box.append(h('div', { class: 'muted pad' }, o.empty || 'Нет ни с одной стороны'));
+  else if (!vis.length) box.append(h('div', { class: 'muted pad' }, `Все ${rows.length} одинаковы`));
+  else if (hidden) box.append(h('div', { class: 'muted pad' }, `${hidden} одинаковых скрыто`));
   return box;
 }
 const toRows = (r) => r.rows;
-const cntTag = (n) => (n == null ? tag('…') : n ? tag(`${n} diff${n > 1 ? 's' : ''}`, 'warn') : tag('same', 'ok'));
+const cntTag = (n) => (n == null ? tag('…') : n ? tag(`${n} ${cmpDiffPlural(n)}`, 'warn') : tag('одинаково', 'ok'));
+// Russian plural for "различие" (difference)
+const cmpDiffPlural = (n) => { const a = Math.abs(n) % 100, b = a % 10; if (a > 10 && a < 20) return 'различий'; if (b > 1 && b < 5) return 'различия'; if (b === 1) return 'различие'; return 'различий'; };
 
 function renderCompare() {
   const a = CMP.ea, b = CMP.eb, D = window.CupNetDiff;
   if (!a || !b) return;
   const root = clear($('cmpBody'));
-  if (!D) { root.append(h('div', { class: 'note warn' }, 'The diff library did not load (/lib/diff.js)')); return; }
+  if (!D) { root.append(h('div', { class: 'note warn' }, 'Библиотека diff не загрузилась (/lib/diff.js)')); return; }
   const vol = (extra) => new Set([...(CMP.vol ? D.VOLATILE : []), ...extra]);
 
   // ── both sides ──
   const sideCard = (e, s, letter) => h('div', { class: 'cmp-side' },
     h('div', { class: 'cmp-line' }, h('b', { class: `cmp-k k-${letter}` }, letter), badge(e.method, `m-${e.method}`), badge(String(e.status || 'ERR'), stCls(e.status)),
       h('span', { class: 'muted mono' }, `#${e.seq}`), h('span', { class: 'muted' }, fmtTime(e.ts)), e.duration != null ? h('span', { class: 'muted' }, `${e.duration} ms`) : null,
-      s.sid !== (shown || current) ? tag(s.sid === current ? 'live session' : s.sid, 'accent') : null,
+      s.sid !== (shown || current) ? tag(s.sid === current ? 'эфирная сессия' : s.sid, 'accent') : null,
       h('span', { class: 'spacer' }),
-      h('button', { class: 'btn sm', title: 'Show this request in Traffic', onclick: () => cmpShowInTraffic(s) }, 'Traffic'),
-      h('button', { class: 'btn sm', title: 'Open this request in Repeater', onclick: guard(async () => {
+      h('button', { class: 'btn sm', title: 'Показать этот запрос в Трафике', onclick: () => cmpShowInTraffic(s) }, 'Трафик'),
+      h('button', { class: 'btn sm', title: 'Открыть этот запрос в Репитере', onclick: guard(async () => {
         rpLoad({ method: e.method, url: e.url, headers: sendableHeaders(e.requestHeaders), body: isB64Body(e.requestBody) ? '' : await cmpBodyText(e, 'request', s.sid) });
         go('repeater');
-      }) }, 'Repeater')),
+      }) }, 'Репитер')),
     h('div', { class: 'mono cmp-url', title: e.url }, e.url));
   root.append(h('div', { class: 'cmp-sides' }, sideCard(a, CMP.a, 'A'), sideCard(b, CMP.b, 'B')));
   const nav = h('div', { class: 'cmp-nav' });
@@ -2088,35 +2064,37 @@ function renderCompare() {
   };
 
   // Overview: sizes as sizes; duration and size only inform.
+  // summaryRows returns English keys as names; map them to Russian display labels here.
+  const OV_LABELS = { Method: 'Метод', URL: 'URL', Status: 'Статус', Type: 'Тип', MIME: 'MIME', Duration: 'Длительность', 'Request body': 'Тело запроса', 'Response body': 'Тело ответа' };
   const ov = D.summaryRows(a, b).map((r) => {
     const size = /body$/.test(r.name);
-    const row = { name: r.name, a: [size ? fmtSize(Number(r.a)) || '0 B' : r.a], b: [size ? fmtSize(Number(r.b)) || '0 B' : r.b], state: r.state };
+    const row = { name: OV_LABELS[r.name] || r.name, a: [size ? fmtSize(Number(r.a)) || '0 B' : r.a], b: [size ? fmtSize(Number(r.b)) || '0 B' : r.b], state: r.state };
     if ((size || r.name === 'Duration') && r.state === 'changed') row.state = 'info';
     return row;
   });
-  if (a.error || b.error) ov.push({ name: 'Error', a: [String(a.error || '')], b: [String(b.error || '')], state: String(a.error || '') === String(b.error || '') ? 'same' : 'changed' });
-  section('overview', 'Overview', ov.filter((r) => r.state === 'changed').length, diffTable(ov, { name: 'Field' }));
+  if (a.error || b.error) ov.push({ name: 'Ошибка', a: [String(a.error || '')], b: [String(b.error || '')], state: String(a.error || '') === String(b.error || '') ? 'same' : 'changed' });
+  section('overview', 'Обзор', ov.filter((r) => r.state === 'changed').length, diffTable(ov, { name: 'Поле' }));
 
   const q = D.diffPairs(D.queryPairs(a.url), D.queryPairs(b.url), { caseless: false });
-  section('query', 'Query string', q.differences, diffTable(q.rows, { name: 'Parameter', empty: 'No query string on either side' }));
+  section('query', 'Строка запроса', q.differences, diffTable(q.rows, { name: 'Параметр', empty: 'Строки запроса нет ни с одной стороны' }));
 
   const rh = D.diffPairs(D.pairsOf(a.requestHeaders), D.pairsOf(b.requestHeaders), { ignore: vol(['cookie']) });
   const ord = D.orderDiff(D.pairsOf(a.requestHeaders).map(([k]) => k), D.pairsOf(b.requestHeaders).map(([k]) => k));
-  const rhBox = h('div', null, diffTable(rh.rows, { empty: 'No request headers' }), orderView(ord));
-  section('reqh', 'Request headers', rh.differences + (ord.same ? 0 : 1), rhBox, 'Cookie is compared below');
+  const rhBox = h('div', null, diffTable(rh.rows, { empty: 'Нет заголовков запроса' }), orderView(ord));
+  section('reqh', 'Заголовки запроса', rh.differences + (ord.same ? 0 : 1), rhBox, 'Cookie сравнивается ниже');
 
   const ck = D.diffPairs(D.cookiePairs(a.requestHeaders), D.cookiePairs(b.requestHeaders), { caseless: false });
-  section('cookies', 'Request cookies', ck.differences, diffTable(ck.rows, { name: 'Cookie', empty: 'No Cookie header on either side' }));
+  section('cookies', 'Cookie запроса', ck.differences, diffTable(ck.rows, { name: 'Cookie', empty: 'Заголовка Cookie нет ни с одной стороны' }));
 
-  const setReqBody = section('reqb', 'Request body', null, bodyDiff(a, b, 'request', (n) => setReqBody(n)));
+  const setReqBody = section('reqb', 'Тело запроса', null, bodyDiff(a, b, 'request', (n) => setReqBody(n)));
 
   const sh = D.diffPairs(D.pairsOf(a.responseHeaders), D.pairsOf(b.responseHeaders), { ignore: vol(['set-cookie']) });
-  section('resh', 'Response headers', sh.differences, diffTable(sh.rows, { empty: 'No response headers' }), CMP.vol ? 'volatile headers ignored' : null);
+  section('resh', 'Заголовки ответа', sh.differences, diffTable(sh.rows, { empty: 'Нет заголовков ответа' }), CMP.vol ? 'изменчивые заголовки игнорируются' : null);
 
   const sc = D.diffPairs(D.setCookiePairs(a.responseHeaders), D.setCookiePairs(b.responseHeaders), { caseless: false });
-  section('setc', 'Set-Cookie', sc.differences, diffTable(sc.rows, { name: 'Cookie', empty: 'No Set-Cookie on either side' }));
+  section('setc', 'Set-Cookie', sc.differences, diffTable(sc.rows, { name: 'Cookie', empty: 'Set-Cookie нет ни с одной стороны' }));
 
-  const setResBody = section('resb', 'Response body', null, bodyDiff(a, b, 'response', (n) => setResBody(n)));
+  const setResBody = section('resb', 'Тело ответа', null, bodyDiff(a, b, 'response', (n) => setResBody(n)));
 }
 function cmpShowInTraffic(s) {
   if (s.sid !== (shown || current)) openSession(s.sid);
@@ -2125,13 +2103,13 @@ function cmpShowInTraffic(s) {
   select(s.seq);
 }
 function orderView(o) {
-  if (o.same) return h('div', { class: 'muted pad' }, 'Header order: same for the headers both requests send');
+  if (o.same) return h('div', { class: 'muted pad' }, 'Порядок заголовков: одинаков для заголовков, которые отправляют оба запроса');
   const list = (names, other) => {
     const inOther = new Set(other);
     return h('ol', { class: 'ord mono' }, names.map((n) => h('li', { class: o.moved.has(n) ? 'moved' : inOther.has(n) ? '' : 'only' }, n)));
   };
-  return h('details', { class: 'sect ord-wrap', open: true }, h('summary', null, 'Header order differs ', tag(`${o.moved.size} moved`, 'warn')),
-    h('p', { class: 'muted' }, 'Anti-bot systems fingerprint header order. Moved headers are marked; dimmed ones exist on one side only.'),
+  return h('details', { class: 'sect ord-wrap', open: true }, h('summary', null, 'Порядок заголовков различается ', tag(`перемещено: ${o.moved.size}`, 'warn')),
+    h('p', { class: 'muted' }, 'Анти-бот системы снимают отпечаток с порядка заголовков. Перемещённые заголовки отмечены; приглушённые есть только с одной стороны.'),
     h('div', { class: 'ord-cols' }, h('div', null, h('b', null, 'A'), list(o.a, o.b)), h('div', null, h('b', null, 'B'), list(o.b, o.a))));
 }
 
@@ -2147,37 +2125,37 @@ async function cmpBodyHash(e, which, sid) {
   return [...d].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
 function bodyDiff(a, b, which, setCount) {
-  const box = h('div', null, h('div', { class: 'muted pad' }, 'Loading bodies…'));
+  const box = h('div', null, h('div', { class: 'muted pad' }, 'Загрузка тел…'));
   const sa = CMP.a.sid, sb = CMP.b.sid;
   const size = (e) => (which === 'request' ? e.reqSize : e.resSize) || 0;
   const ct = (e) => headerOf(which === 'request' ? e.requestHeaders : e.responseHeaders, 'content-type').toLowerCase();
   const raw = (e) => (which === 'request' ? e.requestBody : e.responseBody);
   const meta = h('div', { class: 'bodybar' },
-    h('b', { class: 'cmp-k k-A' }, 'A'), tag(ct(a).split(';')[0] || 'no content-type'), h('span', { class: 'muted' }, fmtSize(size(a)) || '0 B'),
-    h('b', { class: 'cmp-k k-B' }, 'B'), tag(ct(b).split(';')[0] || 'no content-type'), h('span', { class: 'muted' }, fmtSize(size(b)) || '0 B'));
+    h('b', { class: 'cmp-k k-A' }, 'A'), tag(ct(a).split(';')[0] || 'нет content-type'), h('span', { class: 'muted' }, fmtSize(size(a)) || '0 B'),
+    h('b', { class: 'cmp-k k-B' }, 'B'), tag(ct(b).split(';')[0] || 'нет content-type'), h('span', { class: 'muted' }, fmtSize(size(b)) || '0 B'));
   const done = (n, ...nodes) => { clear(box).append(meta, ...nodes); setCount(n); };
   (async () => {
     await null; // let the caller keep the section's setter before the first count arrives
     const ra = raw(a), rb = raw(b);
     const emptyA = ra == null || ra === '', emptyB = rb == null || rb === '';
-    if (emptyA && emptyB) return done(0, h('div', { class: 'muted pad' }, 'No body on either side'));
+    if (emptyA && emptyB) return done(0, h('div', { class: 'muted pad' }, 'Тела нет ни с одной стороны'));
     if (isB64Body(ra) || isB64Body(rb)) {
-      if (emptyA || emptyB) return done(1, h('div', { class: 'note' }, `Only ${emptyA ? 'B' : 'A'} has a body (binary).`));
+      if (emptyA || emptyB) return done(1, h('div', { class: 'note' }, `Тело (бинарное) есть только у ${emptyA ? 'B' : 'A'}.`));
       const [ha, hb] = await Promise.all([cmpBodyHash(a, which, sa), cmpBodyHash(b, which, sb)]);
-      return done(ha === hb ? 0 : 1, h('div', { class: `note ${ha === hb ? '' : 'warn'}` }, ha === hb ? 'Binary bodies are identical' : 'Binary bodies differ',
+      return done(ha === hb ? 0 : 1, h('div', { class: `note ${ha === hb ? '' : 'warn'}` }, ha === hb ? 'Бинарные тела идентичны' : 'Бинарные тела различаются',
         h('div', { class: 'mono muted' }, `A sha256 ${ha.slice(0, 16)}…  B sha256 ${hb.slice(0, 16)}…`)));
     }
     if (size(a) > CMP_TEXT_MAX || size(b) > CMP_TEXT_MAX) {
       const [ha, hb] = await Promise.all([cmpBodyHash(a, which, sa), cmpBodyHash(b, which, sb)]);
-      return done(ha === hb ? 0 : 1, h('div', { class: 'note' }, `Too large to diff in the page (over ${fmtSize(CMP_TEXT_MAX)}). Bodies are ${ha === hb ? 'identical' : 'different'}.`));
+      return done(ha === hb ? 0 : 1, h('div', { class: 'note' }, `Слишком велико, чтобы сравнивать на странице (больше ${fmtSize(CMP_TEXT_MAX)}). Тела ${ha === hb ? 'идентичны' : 'различаются'}.`));
     }
     const [ta, tb] = await Promise.all([cmpBodyText(a, which, sa), cmpBodyText(b, which, sb)]);
-    if (ta === tb) return done(0, h('div', { class: 'muted pad' }, `Identical (${fmtSize(ta.length) || '0 B'})`));
+    if (ta === tb) return done(0, h('div', { class: 'muted pad' }, `Идентично (${fmtSize(ta.length) || '0 B'})`));
     const D = window.CupNetDiff;
     const ja = D.tryJson(ta), jb = D.tryJson(tb);
     const isJson = ja !== undefined && jb !== undefined;
     const isForm = /x-www-form-urlencoded/.test(ct(a)) && /x-www-form-urlencoded/.test(ct(b));
-    const modes = isJson ? [['struct', 'Structure'], ['lines', 'Lines']] : isForm ? [['fields', 'Fields'], ['lines', 'Lines']] : [];
+    const modes = isJson ? [['struct', 'Структура'], ['lines', 'Строки']] : isForm ? [['fields', 'Поля'], ['lines', 'Строки']] : [];
     const mk = `${which}`;
     let mode = CMP.modes[mk] || (modes[0]?.[0] ?? 'lines');
     const content = h('div');
@@ -2187,22 +2165,22 @@ function bodyDiff(a, b, which, setCount) {
       if (mode === 'struct') {
         const r = D.jsonDiff(ja, jb);
         const rows = r.rows.map((x) => ({ name: x.path, a: x.a === undefined ? null : [x.a], b: x.b === undefined ? null : [x.b], state: x.kind === 'type' ? 'changed' : x.kind }));
-        content.append(diffTable(rows, { name: 'Path', wide: true, empty: 'Same JSON' }));
-        if (r.truncated) content.append(h('div', { class: 'note warn' }, `Showing the first ${rows.length.toLocaleString()} differences`));
+        content.append(diffTable(rows, { name: 'Путь', wide: true, empty: 'Одинаковый JSON' }));
+        if (r.truncated) content.append(h('div', { class: 'note warn' }, `Показаны первые ${rows.length.toLocaleString()} различий`));
         return rows.length;
       }
       if (mode === 'fields') {
         const r = D.diffPairs([...new URLSearchParams(ta)], [...new URLSearchParams(tb)], { caseless: false });
-        content.append(diffTable(r.rows, { name: 'Field' }));
+        content.append(diffTable(r.rows, { name: 'Поле' }));
         return r.differences;
       }
       const pa = isJson ? JSON.stringify(ja, null, 2) : ta, pb = isJson ? JSON.stringify(jb, null, 2) : tb;
       const r = D.lineDiff(pa, pb);
       if (r.tooBig) {
-        content.append(h('div', { class: 'note' }, 'Too different to diff line by line.'));
+        content.append(h('div', { class: 'note' }, 'Слишком разные, чтобы сравнивать построчно.'));
         return 1;
       }
-      content.append(h('div', { class: 'muted pad' }, h('span', { class: 'ok' }, `+${r.added}`), ' ', h('span', { class: 'err' }, `−${r.removed}`), ' lines', isJson ? ' (pretty-printed JSON)' : ''),
+      content.append(h('div', { class: 'muted pad' }, h('span', { class: 'ok' }, `+${r.added}`), ' ', h('span', { class: 'err' }, `−${r.removed}`), ' строк', isJson ? ' (форматированный JSON)' : ''),
         lineDiffView(r.ops));
       return r.added + r.removed;
     };
@@ -2213,6 +2191,8 @@ function bodyDiff(a, b, which, setCount) {
   })().catch((err) => done(null, h('div', { class: 'note warn' }, err.message)));
   return box;
 }
+// Russian plural for "строка" (line)
+const lnPlural = (n) => { const a = Math.abs(n) % 100, b = a % 10; if (a > 10 && a < 20) return 'строк'; if (b > 1 && b < 5) return 'строки'; if (b === 1) return 'строка'; return 'строк'; };
 function lineDiffView(ops) {
   const D = window.CupNetDiff;
   const MAX = 6000;
@@ -2234,12 +2214,12 @@ function lineDiffView(ops) {
     let dels = [], adds = [], n = 0;
     const flush = () => { if (dels.length || adds.length) { into.append(...run(dels, adds)); dels = []; adds = []; } };
     for (const o of list) {
-      if (++n > MAX) { flush(); into.append(h('div', { class: 'ln ln-skip' }, `… ${(list.length - MAX).toLocaleString()} more lines not shown`)); return; }
+      if (++n > MAX) { flush(); into.append(h('div', { class: 'ln ln-skip' }, `… ещё ${(list.length - MAX).toLocaleString()} строк не показано`)); return; }
       if (o.t === '-') { if (adds.length) flush(); dels.push(o); continue; }
       if (o.t === '+') { adds.push(o); continue; }
       flush();
       if (o.t === 'skip') {
-        const sk = h('div', { class: 'ln ln-skip', title: 'Show these lines' }, `⋯ ${o.count.toLocaleString()} unchanged line${o.count > 1 ? 's' : ''}`);
+        const sk = h('div', { class: 'ln ln-skip', title: 'Показать эти строки' }, `⋯ ${o.count.toLocaleString()} ${lnPlural(o.count)} без изменений`);
         sk.addEventListener('click', () => { const f = document.createDocumentFragment(); emit(ops.slice(o.from, o.from + o.count), f); sk.replaceWith(f); });
         into.append(sk);
       } else into.append(line(o));
@@ -2262,8 +2242,8 @@ const ckSiteKey = (d) => d.split('.').reverse().join('.');
 const ckExpired = (c) => c.expires != null && c.expires < Date.now();
 const ckPendingFor = (c) => (CK.data?.ops || []).filter((o) => o.state === 'pending' && o.key === c.id);
 const ckRulesFor = (c) => (CK.data?.overrides || []).filter((o) => (o.name === '*' || o.name === c.name) && (o.domain === '*' || ckDomainMatch(c.domain, o.domain) || ckDomainMatch(o.domain, c.domain)));
-const ckOpenSite = guard(async (domain) => { await post('/api/chrome', { url: `https://${domain}/` }); toast(`Opening ${domain} in Chrome`, 'ok'); });
-const ckQueued = (domain, what = 'Queued') => toast(`${what} — lands in Chrome on the next page load from ${domain}`, 'ok', { action: { label: 'Open site', fn: () => ckOpenSite(domain) }, ms: 6000 });
+const ckOpenSite = guard(async (domain) => { await post('/api/chrome', { url: `https://${domain}/` }); toast(`Открываю ${domain} в Chrome`, 'ok'); });
+const ckQueued = (domain, what = 'В очереди') => toast(`${what} — применится в Chrome при следующей загрузке страницы с ${domain}`, 'ok', { action: { label: 'Открыть сайт', fn: () => ckOpenSite(domain) }, ms: 6000 });
 
 async function loadCookies() {
   CK.loading = true;
@@ -2279,7 +2259,7 @@ function applyCookies(s) {
 function onCookieStatus(c) {
   const b = $('ckCount');
   b.hidden = !c?.pending; b.textContent = c?.pending || '';
-  b.title = c?.pending ? `${c.pending} cookie change(s) waiting for the next page load` : '';
+  b.title = c?.pending ? `Изменений cookie в ожидании следующей загрузки страницы: ${c.pending}` : '';
   // The jar changes with every logged request; refresh the open page at most every few seconds.
   if (PAGE === 'cookies' && c && !CK.loading && (c.rev !== CK.rev || c.epoch !== CK.epoch) && Date.now() - CK.loadedAt > 3000 && $('modalWrap').hidden) guard(loadCookies)();
 }
@@ -2324,16 +2304,16 @@ function renderCkSites() {
   const q = $('ckSiteQ').value.trim().toLowerCase();
   const sites = ckSites();
   if (CK.site && !sites.some((s) => s.domain === CK.site)) { CK.site = ''; store.set('ck-site', ''); }
-  const row = (key, title, meta, extra = null) => h('div', { class: `prow ck-prow${CK.site === key ? ' sel' : ''}`, title: key || 'Every tracked cookie', onclick: () => { CK.site = key; store.set('ck-site', key); CK.checked.clear(); renderCookies(); $('ckScroll').scrollTop = 0; } },
+  const row = (key, title, meta, extra = null) => h('div', { class: `prow ck-prow${CK.site === key ? ' sel' : ''}`, title: key || 'Все отслеживаемые cookie', onclick: () => { CK.site = key; store.set('ck-site', key); CK.checked.clear(); renderCookies(); $('ckScroll').scrollTop = 0; } },
     h('div', { class: 'ell' }, h('div', { class: 'title' }, h('b', null, title)), h('div', { class: 'meta' }, meta)), extra);
   const live = CK.data.list.reduce((n, c) => n + (c.deleted ? 0 : 1), 0);
   const box = clear($('ckSites'));
-  box.append(row('', 'All sites', [h('span', null, `${live.toLocaleString()} cookies`), h('span', null, `${sites.length} sites`)]));
+  box.append(row('', 'Все сайты', [h('span', null, `cookies: ${live.toLocaleString()}`), h('span', null, `сайтов: ${sites.length}`)]));
   for (const s of sites) {
     if (q && !s.domain.includes(q)) continue;
     box.append(row(s.domain, s.domain,
-      [h('span', null, `${s.live} live`), s.deleted ? h('span', null, `${s.deleted} deleted`) : null, s.lastSeen ? h('span', null, fmtAgo(s.lastSeen)) : null],
-      s.pending ? tag(`${s.pending} pending`, 'accent') : null));
+      [h('span', null, `${s.live} активных`), s.deleted ? h('span', null, `${s.deleted} удалённых`) : null, s.lastSeen ? h('span', null, fmtAgo(s.lastSeen)) : null],
+      s.pending ? tag(`${s.pending} в очереди`, 'accent') : null));
   }
 }
 function renderCkCards() {
@@ -2341,47 +2321,47 @@ function renderCkCards() {
   const site = CK.site, d = CK.data;
   if (site) {
     const own = d.list.filter((c) => c.domain === site && !c.deleted);
-    box.append(h('div', { class: 'card ck-card' }, h('div', { class: 'card-head' }, h('h2', { class: 'mono' }, site), tag(`${own.length} live`), h('span', { class: 'spacer' }),
-      h('button', { class: 'btn sm', onclick: () => ckOpenSite(site) }, 'Open site'),
-      h('button', { class: 'btn sm', disabled: !own.length, title: 'Queue deleting every live cookie of this domain in Chrome', onclick: guard(async () => {
-        if (!(await confirmBox(`Delete ${own.length} cookie(s) of ${site} in Chrome? It happens on the next page load from the site.`, 'Delete', true))) return;
-        await ckCall('/api/cookies/ops', { op: 'delete', ids: own.map((c) => c.id) }); ckQueued(site, `${own.length} deletion(s) queued`);
-      }) }, 'Delete these in Chrome'),
-      h('button', { class: 'btn sm', title: 'Clear-Site-Data: "cookies" — Chrome drops every cookie of the site, including ones CupNet never saw (HTTPS only)', onclick: guard(async () => {
-        if (!(await confirmBox(`Clear all cookies of ${site} in Chrome (Clear-Site-Data)? Works on HTTPS pages only.`, 'Clear', true))) return;
-        await ckCall('/api/cookies/ops', { op: 'clear', domain: site }); ckQueued(site, 'Site clear queued');
-      }) }, 'Clear site data'),
-      h('button', { class: 'btn sm ghost', title: 'Drop the tracked copies from CupNet; Chrome keeps the cookies', onclick: guard(async () => {
-        const r = await ckCall('/api/cookies', { domain: site }, 'DELETE'); toast(`Forgot ${r.forgotten} cookie(s)`, 'ok');
-      }) }, 'Forget')),
+    box.append(h('div', { class: 'card ck-card' }, h('div', { class: 'card-head' }, h('h2', { class: 'mono' }, site), tag(`${own.length} активных`), h('span', { class: 'spacer' }),
+      h('button', { class: 'btn sm', onclick: () => ckOpenSite(site) }, 'Открыть сайт'),
+      h('button', { class: 'btn sm', disabled: !own.length, title: 'Поставить в очередь удаление всех активных cookie этого домена в Chrome', onclick: guard(async () => {
+        if (!(await confirmBox(`Удалить ${own.length} cookie домена ${site} в Chrome? Это произойдёт при следующей загрузке страницы с сайта.`, 'Удалить', true))) return;
+        await ckCall('/api/cookies/ops', { op: 'delete', ids: own.map((c) => c.id) }); ckQueued(site, `Удаление (${own.length}) в очереди`);
+      }) }, 'Удалить их в Chrome'),
+      h('button', { class: 'btn sm', title: 'Clear-Site-Data: "cookies" — Chrome удаляет все cookie сайта, включая те, что CupNet не видел (только HTTPS)', onclick: guard(async () => {
+        if (!(await confirmBox(`Очистить все cookie домена ${site} в Chrome (Clear-Site-Data)? Работает только на HTTPS-страницах.`, 'Очистить', true))) return;
+        await ckCall('/api/cookies/ops', { op: 'clear', domain: site }); ckQueued(site, 'Очистка сайта в очереди');
+      }) }, 'Очистить данные сайта'),
+      h('button', { class: 'btn sm ghost', title: 'Удалить отслеживаемые копии из CupNet; в Chrome cookie останутся', onclick: guard(async () => {
+        const r = await ckCall('/api/cookies', { domain: site }, 'DELETE'); toast(`Забыто cookie: ${r.forgotten}`, 'ok');
+      }) }, 'Забыть')),
     ));
   }
   const rules = d.overrides.filter((o) => !site || o.domain === '*' || ckDomainMatch(site, o.domain) || ckDomainMatch(o.domain, site));
   if (rules.length) {
-    box.append(h('div', { class: 'card ck-card' }, h('div', { class: 'card-head' }, h('h2', null, 'Wire rules'), h('span', { class: 'muted' }, 'rewrite cookies between Chrome and the site; Chrome\'s own store is untouched')),
+    box.append(h('div', { class: 'card ck-card' }, h('div', { class: 'card-head' }, h('h2', null, 'Правила на лету'), h('span', { class: 'muted' }, 'переписывают cookie между Chrome и сайтом; собственное хранилище Chrome не трогается')),
       h('table', { class: 'tbl' }, h('tbody', null, rules.map((o) => h('tr', { class: o.enabled ? '' : 'off' },
         h('td', { class: 'ck-c-sw' }, sw(o.enabled, '', guard(async (v) => { await ckCall(`/api/cookies/overrides/${o.id}`, { enabled: v }); }))),
         h('td', { class: 'ck-c-tag' }, tag(o.action, o.action === 'pin' ? 'accent' : 'warn')),
         h('td', { class: 'mono ell', title: ckRuleText(o) }, ckRuleText(o), o.note ? h('span', { class: 'muted' }, ` — ${o.note}`) : null),
-        h('td', { class: 'ck-c-hits muted', title: o.lastHitAt ? `last ${fmtStamp(o.lastHitAt)}` : 'never used yet' }, `${(o.hits || 0).toLocaleString()} hit${o.hits === 1 ? '' : 's'}`),
-        h('td', { class: 'ck-c-edit r-al' }, h('button', { class: 'btn sm', onclick: () => ckRuleModal(o) }, 'Edit'))))))));
+        h('td', { class: 'ck-c-hits muted', title: o.lastHitAt ? `последнее ${fmtStamp(o.lastHitAt)}` : 'ещё ни разу' }, `${(o.hits || 0).toLocaleString()} ${rHitPlural(o.hits || 0)}`),
+        h('td', { class: 'ck-c-edit r-al' }, h('button', { class: 'btn sm', onclick: () => ckRuleModal(o) }, 'Изменить'))))))));
   }
   const ops = d.ops.filter((o) => !site || ckDomainMatch(o.domain, site) || ckDomainMatch(site, o.domain)).slice(0, 50);
   if (ops.length) {
-    const opText = (o) => (o.op === 'clear' ? `clear all cookies of ${o.domain}` : `${o.op} ${o.cookie.name}${o.op === 'set' ? `=${o.cookie.value.length > 60 ? `${o.cookie.value.slice(0, 60)}…` : o.cookie.value}` : ''} · ${o.cookie.hostOnly ? '' : '.'}${o.cookie.domain}${o.cookie.path}`);
+    const opText = (o) => (o.op === 'clear' ? `очистить все cookie домена ${o.domain}` : `${o.op} ${o.cookie.name}${o.op === 'set' ? `=${o.cookie.value.length > 60 ? `${o.cookie.value.slice(0, 60)}…` : o.cookie.value}` : ''} · ${o.cookie.hostOnly ? '' : '.'}${o.cookie.domain}${o.cookie.path}`);
     const stCls2 = { pending: 'accent', applied: 'ok', cancelled: '', expired: 'warn', replaced: '' };
     const pending = ops.filter((o) => o.state === 'pending').length;
-    box.append(h('div', { class: 'card ck-card' }, h('div', { class: 'card-head' }, h('h2', null, 'Changes for Chrome'),
-      pending ? h('span', { class: 'muted' }, 'they land on the next page load from the site — open or reload it') : null, h('span', { class: 'spacer' }),
-      ops.length > pending ? h('button', { class: 'btn sm ghost', onclick: guard(() => ckCall('/api/cookies/ops', { op: 'clear-done' })) }, 'Clear finished') : null),
+    box.append(h('div', { class: 'card ck-card' }, h('div', { class: 'card-head' }, h('h2', null, 'Изменения для Chrome'),
+      pending ? h('span', { class: 'muted' }, 'применятся при следующей загрузке страницы с сайта — откройте или перезагрузите её') : null, h('span', { class: 'spacer' }),
+      ops.length > pending ? h('button', { class: 'btn sm ghost', onclick: guard(() => ckCall('/api/cookies/ops', { op: 'clear-done' })) }, 'Очистить завершённые') : null),
       h('table', { class: 'tbl' }, h('tbody', null, ops.map((o) => h('tr', null,
         h('td', { class: 'ck-c-tag' }, tag(o.state, stCls2[o.state])),
         h('td', { class: 'mono ell', title: opText(o) }, opText(o)),
-        h('td', { class: 'ck-c-when muted ell', title: o.appliedUrl || '' }, o.appliedAt ? `applied ${fmtAgo(o.appliedAt)}` : `queued ${fmtAgo(o.createdAt)}`),
-        h('td', { class: 'ck-c-acts r-al' }, o.state === 'pending' ? [h('button', { class: 'btn sm', onclick: () => ckOpenSite(o.domain) }, 'Open'), h('button', { class: 'btn sm ghost', onclick: guard(() => ckCall(`/api/cookies/ops/${o.id}`, undefined, 'DELETE')) }, 'Cancel')] : null)))))));
+        h('td', { class: 'ck-c-when muted ell', title: o.appliedUrl || '' }, o.appliedAt ? `применено ${fmtAgo(o.appliedAt)}` : `в очереди ${fmtAgo(o.createdAt)}`),
+        h('td', { class: 'ck-c-acts r-al' }, o.state === 'pending' ? [h('button', { class: 'btn sm', onclick: () => ckOpenSite(o.domain) }, 'Открыть'), h('button', { class: 'btn sm ghost', onclick: guard(() => ckCall(`/api/cookies/ops/${o.id}`, undefined, 'DELETE')) }, 'Отмена')] : null)))))));
   }
 }
-const ckRuleText = (o) => (o.action === 'pin' ? `${o.name}=${o.value} → ${o.domain}` : `${o.name} ${o.action === 'strip' ? 'not sent to' : 'not stored from'} ${o.domain}`);
+const ckRuleText = (o) => (o.action === 'pin' ? `${o.name}=${o.value} → ${o.domain}` : `${o.name} ${o.action === 'strip' ? 'не отправляется на' : 'не сохраняется с'} ${o.domain}`);
 
 function renderCkRows() {
   const list = ckVisible();
@@ -2391,29 +2371,29 @@ function renderCkRows() {
     const rules = ckRulesFor(c), pend = ckPendingFor(c);
     const parent = CK.site && c.domain !== CK.site;
     const chk = h('input', { type: 'checkbox', checked: CK.checked.has(c.id), onclick: (ev) => ev.stopPropagation(), onchange: (ev) => { if (ev.target.checked) CK.checked.add(c.id); else CK.checked.delete(c.id); renderCkBulk(); } });
-    const exp = c.expires == null ? h('span', { class: 'muted' }, 'Session') : h('span', { title: new Date(c.expires).toString() }, fmtStamp(c.expires));
+    const exp = c.expires == null ? h('span', { class: 'muted' }, 'Сессия') : h('span', { title: new Date(c.expires).toString() }, fmtStamp(c.expires));
     tb.append(h('tr', { class: `ck-row${c.deleted ? ' is-deleted' : ''}`, onclick: () => ckEditor(c) },
       h('td', null, chk),
-      h('td', { class: 'mono ell', title: c.name }, c.name, c.inferred ? [' ', tag('inferred', '')] : null),
-      h('td', { class: 'mono ell ck-val', title: c.value.length > 2000 ? `${c.value.slice(0, 2000)}…` : c.value }, c.value === '' ? h('span', { class: 'muted' }, '(empty)') : c.value),
-      h('td', { class: 'mono ell', title: `${c.hostOnly ? 'host-only' : 'domain and subdomains'} · path ${c.path}` }, `${c.hostOnly ? '' : '.'}${c.domain}`, h('span', { class: 'muted' }, c.path), parent ? [' ', tag('parent')] : null),
-      h('td', { class: 'ell' }, c.deleted ? tag('deleted', 'err') : [exp, ckExpired(c) ? [' ', tag('expired', 'warn')] : null]),
+      h('td', { class: 'mono ell', title: c.name }, c.name, c.inferred ? [' ', tag('выведен', '')] : null),
+      h('td', { class: 'mono ell ck-val', title: c.value.length > 2000 ? `${c.value.slice(0, 2000)}…` : c.value }, c.value === '' ? h('span', { class: 'muted' }, '(пусто)') : c.value),
+      h('td', { class: 'mono ell', title: `${c.hostOnly ? 'только хост' : 'домен и поддомены'} · путь ${c.path}` }, `${c.hostOnly ? '' : '.'}${c.domain}`, h('span', { class: 'muted' }, c.path), parent ? [' ', tag('родитель')] : null),
+      h('td', { class: 'ell' }, c.deleted ? tag('удалён', 'err') : [exp, ckExpired(c) ? [' ', tag('истёк', 'warn')] : null]),
       h('td', { class: 'ck-flags' }, c.secure ? tag('Secure') : null, c.httpOnly ? tag('HttpOnly') : null, c.sameSite ? tag(c.sameSite) : null, c.partitioned ? tag('CHIPS') : null,
-        rules.map((o) => tag(o.action === 'pin' ? 'pinned' : o.action === 'strip' ? 'stripped' : 'blocked', o.enabled ? 'accent' : '')),
-        pend.map((o) => tag(`${o.op} pending`, 'warn'))),
-      h('td', { class: 'r-al muted', title: `set ${c.setCount}× · sent ${c.sentCount}×${c.blockedCount ? ` · blocked ${c.blockedCount}×` : ''}${c.lastUrl ? `\n${c.lastUrl}` : ''}` }, fmtAgo(c.lastSeen)),
+        rules.map((o) => tag(o.action === 'pin' ? 'закреплён' : o.action === 'strip' ? 'срезан' : 'заблокирован', o.enabled ? 'accent' : '')),
+        pend.map((o) => tag(`${o.op} в очереди`, 'warn'))),
+      h('td', { class: 'r-al muted', title: `задан ${c.setCount}× · отправлен ${c.sentCount}×${c.blockedCount ? ` · заблокирован ${c.blockedCount}×` : ''}${c.lastUrl ? `\n${c.lastUrl}` : ''}` }, fmtAgo(c.lastSeen)),
       h('td', { class: 'r-al', onclick: (ev) => ev.stopPropagation() },
-        h('button', { class: 'icon', title: 'Copy value', onclick: () => copy(c.value, 'Value copied') }, '⧉'),
-        c.deleted ? null : h('button', { class: 'icon', title: 'Delete in Chrome', onclick: guard(async () => { await ckCall('/api/cookies/ops', { op: 'delete', ids: [c.id] }); ckQueued(c.domain, `Deleting ${c.name}`); }) }, '🗑'))));
+        h('button', { class: 'icon', title: 'Копировать значение', onclick: () => copy(c.value, 'Значение скопировано') }, '⧉'),
+        c.deleted ? null : h('button', { class: 'icon', title: 'Удалить в Chrome', onclick: guard(async () => { await ckCall('/api/cookies/ops', { op: 'delete', ids: [c.id] }); ckQueued(c.domain, `Удаление ${c.name}`); }) }, '🗑'))));
   }
-  $('ckShown').textContent = list.length > CK_ROWS_MAX ? `${CK_ROWS_MAX.toLocaleString()} of ${list.length.toLocaleString()} shown — filter to narrow` : `${list.length.toLocaleString()} cookie${list.length === 1 ? '' : 's'}`;
+  $('ckShown').textContent = list.length > CK_ROWS_MAX ? `показано ${CK_ROWS_MAX.toLocaleString()} из ${list.length.toLocaleString()} — уточните фильтр` : `${list.length.toLocaleString()} cookie`;
   $('ckAll').checked = shownList.length > 0 && shownList.every((c) => CK.checked.has(c.id));
   const empty = $('ckEmpty');
   empty.hidden = list.length > 0;
   if (!list.length) {
     append(clear(empty), [CK.data.list.length
-      ? h('p', null, 'No cookies match the filter.')
-      : [h('p', null, h('b', null, 'No cookies yet.')), h('p', { class: 'muted' }, 'Cookies appear here as Chrome sends or receives them through CupNet. Browse a site in the proxied Chrome, or add one with + Add cookie.')]]);
+      ? h('p', null, 'Под фильтр не попало ни одного cookie.')
+      : [h('p', null, h('b', null, 'Пока нет cookie.')), h('p', { class: 'muted' }, 'Cookie появляются здесь по мере того, как Chrome отправляет или получает их через CupNet. Откройте сайт в проксируемом Chrome или добавьте cookie кнопкой + Добавить cookie.')]]);
   }
   renderCkBulk();
 }
@@ -2423,18 +2403,18 @@ function renderCkBulk() {
   bar.hidden = !ids.length;
   if (!ids.length) return;
   const sel = CK.data.list.filter((c) => CK.checked.has(c.id));
-  bar.append(h('b', null, `${ids.length} selected`),
+  bar.append(h('b', null, `Выбрано: ${ids.length}`),
     h('button', { class: 'btn sm danger', onclick: guard(async () => {
       const live = sel.filter((c) => !c.deleted);
-      if (!live.length) { toast('Only deleted cookies are selected', 'warn'); return; }
+      if (!live.length) { toast('Выбраны только удалённые cookie', 'warn'); return; }
       await ckCall('/api/cookies/ops', { op: 'delete', ids: live.map((c) => c.id) });
       CK.checked.clear(); renderCookies();
-      ckQueued([...new Set(live.map((c) => c.domain))].join(', '), `${live.length} deletion(s) queued`);
-    }) }, 'Delete in Chrome'),
-    h('button', { class: 'btn sm', onclick: () => ckExportModal(true) }, 'Export…'),
-    h('button', { class: 'btn sm ghost', title: 'Drop the tracked copies; Chrome keeps the cookies', onclick: guard(async () => { const r = await ckCall('/api/cookies', { ids }, 'DELETE'); CK.checked.clear(); renderCookies(); toast(`Forgot ${r.forgotten} cookie(s)`, 'ok'); }) }, 'Forget'),
+      ckQueued([...new Set(live.map((c) => c.domain))].join(', '), `Удаление (${live.length}) в очереди`);
+    }) }, 'Удалить в Chrome'),
+    h('button', { class: 'btn sm', onclick: () => ckExportModal(true) }, 'Экспорт…'),
+    h('button', { class: 'btn sm ghost', title: 'Удалить отслеживаемые копии; в Chrome cookie останутся', onclick: guard(async () => { const r = await ckCall('/api/cookies', { ids }, 'DELETE'); CK.checked.clear(); renderCookies(); toast(`Забыто cookie: ${r.forgotten}`, 'ok'); }) }, 'Забыть'),
     h('span', { class: 'spacer' }),
-    h('button', { class: 'btn sm ghost', onclick: () => { CK.checked.clear(); renderCkRows(); } }, 'Clear selection'));
+    h('button', { class: 'btn sm ghost', onclick: () => { CK.checked.clear(); renderCkRows(); } }, 'Снять выделение'));
 }
 
 const ckLocalInput = (ms) => { const d = new Date(ms); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };
@@ -2445,13 +2425,13 @@ function ckEditor(c) {
     name: h('input', { type: 'text', value: base.name, placeholder: 'session_id', spellcheck: false }),
     value: h('textarea', { class: 'code', rows: 4, spellcheck: false }, base.value),
     domain: h('input', { type: 'text', value: base.domain, placeholder: 'example.com', spellcheck: false }),
-    scope: h('select', null, h('option', { value: 'host' }, 'This host only'), h('option', { value: 'domain' }, 'Domain and its subdomains')),
+    scope: h('select', null, h('option', { value: 'host' }, 'Только этот хост'), h('option', { value: 'domain' }, 'Домен и его поддомены')),
     path: h('input', { type: 'text', value: base.path, spellcheck: false }),
     session: h('input', { type: 'checkbox', checked: base.expires == null }),
     expires: h('input', { type: 'datetime-local', value: ckLocalInput(base.expires ?? Date.now() + 365 * 86400000) }),
     secure: h('input', { type: 'checkbox', checked: !!base.secure }),
     httpOnly: h('input', { type: 'checkbox', checked: !!base.httpOnly }),
-    sameSite: h('select', null, h('option', { value: '' }, 'Not set (Chrome: Lax)'), ['Lax', 'Strict', 'None'].map((v) => h('option', { value: v }, v))),
+    sameSite: h('select', null, h('option', { value: '' }, 'Не задано (Chrome: Lax)'), ['Lax', 'Strict', 'None'].map((v) => h('option', { value: v }, v))),
     partitioned: h('input', { type: 'checkbox', checked: !!base.partitioned }),
   };
   f.scope.value = base.hostOnly ? 'host' : 'domain';
@@ -2465,41 +2445,41 @@ function ckEditor(c) {
   });
   const chk = (input, label) => h('label', { class: 'chk' }, input, label);
   const body = h('div', null,
-    c && c.inferred ? h('div', { class: 'note' }, 'Seen only in a Cookie request header, so its domain, path and flags are guesses until the site sets it.') : null,
+    c && c.inferred ? h('div', { class: 'note' }, 'Встречен только в заголовке запроса Cookie, поэтому его домен, путь и флаги — предположение, пока сайт его не установит.') : null,
     h('div', { class: 'form ck-form' },
-      field('Name', f.name),
-      field('Value', f.value, null, true),
-      field('Domain', f.domain),
-      field('Scope', f.scope, 'Host-only cookies have no Domain attribute; __Host- cookies must be host-only.'),
-      field('Path', f.path),
-      field('Expires', h('div', { class: 'inline' }, chk(f.session, 'Session cookie'), f.expires)),
-      field('Flags', h('div', { class: 'inline' }, chk(f.secure, 'Secure'), chk(f.httpOnly, 'HttpOnly'), chk(f.partitioned, 'Partitioned (CHIPS)'))),
+      field('Имя', f.name),
+      field('Значение', f.value, null, true),
+      field('Домен', f.domain),
+      field('Область', f.scope, 'У host-only cookie нет атрибута Domain; cookie с префиксом __Host- должны быть host-only.'),
+      field('Путь', f.path),
+      field('Истекает', h('div', { class: 'inline' }, chk(f.session, 'Сессионный cookie'), f.expires)),
+      field('Флаги', h('div', { class: 'inline' }, chk(f.secure, 'Secure'), chk(f.httpOnly, 'HttpOnly'), chk(f.partitioned, 'Partitioned (CHIPS)'))),
       field('SameSite', f.sameSite)));
   if (c) {
     body.append(h('div', { class: 'muted ck-stats' },
-      `First seen ${fmtStamp(c.firstSeen)} · set by the site ${c.setCount}× · sent ${c.sentCount}×${c.blockedCount ? ` · blocked ${c.blockedCount}×` : ''}`,
+      `Впервые встречен ${fmtStamp(c.firstSeen)} · установлен сайтом ${c.setCount}× · отправлен ${c.sentCount}×${c.blockedCount ? ` · заблокирован ${c.blockedCount}×` : ''}`,
       c.lastUrl ? h('div', { class: 'mono ell' }, c.lastUrl) : null));
     if (c.history?.length) {
-      body.append(sect(`History (${c.history.length})`, h('table', { class: 'tbl ck-hist' }, h('tbody', null, c.history.map((x) => h('tr', null,
+      body.append(sect(`История (${c.history.length})`, h('table', { class: 'tbl ck-hist' }, h('tbody', null, c.history.map((x) => h('tr', null,
         h('td', { class: 'w-130 muted' }, fmtStamp(x.at)), h('td', { class: 'w-90' }, tag(x.via, x.via.includes('delete') ? 'err' : x.via === 'manual' ? 'accent' : '')),
-        h('td', { class: 'mono ell', title: x.value }, x.value === '' ? h('span', { class: 'muted' }, '(empty)') : x.value),
+        h('td', { class: 'mono ell', title: x.value }, x.value === '' ? h('span', { class: 'muted' }, '(пусто)') : x.value),
         h('td', { class: 'mono ell muted w-180', title: x.url || '' }, x.url || ''))))), c.history.length <= 6));
     }
   }
-  modal(isNew ? 'Add cookie' : `Cookie ${c.name}`, body, [
-    { label: 'Cancel' },
-    c && !c.deleted ? { label: 'Delete in Chrome', cls: 'danger', fn: async () => { await ckCall('/api/cookies/ops', { op: 'delete', ids: [c.id] }); ckQueued(c.domain, `Deleting ${c.name}`); } } : null,
-    { label: 'Pin on wire', fn: async () => {
+  modal(isNew ? 'Добавить cookie' : `Cookie ${c.name}`, body, [
+    { label: 'Отмена' },
+    c && !c.deleted ? { label: 'Удалить в Chrome', cls: 'danger', fn: async () => { await ckCall('/api/cookies/ops', { op: 'delete', ids: [c.id] }); ckQueued(c.domain, `Удаление ${c.name}`); } } : null,
+    { label: 'Закрепить на лету', fn: async () => {
       const s = spec();
       await ckCall('/api/cookies/overrides', { action: 'pin', domain: s.domain, name: s.name, value: s.value, note: 'from cookie editor' });
-      toast(`Requests to ${s.domain} now send ${s.name} with this value, whatever Chrome has`, 'ok');
+      toast(`Запросы к ${s.domain} теперь отправляют ${s.name} с этим значением, что бы ни было в Chrome`, 'ok');
     } },
-    { label: isNew ? 'Add to Chrome' : 'Save to Chrome', cls: 'primary', fn: async () => {
+    { label: isNew ? 'Добавить в Chrome' : 'Сохранить в Chrome', cls: 'primary', fn: async () => {
       const s = spec();
       await ckCall('/api/cookies/ops', { op: 'set', cookie: s });
       // A changed identity is a different cookie: drop the old one so Chrome does not keep both.
       if (c && !c.deleted && (c.name !== s.name || c.domain !== s.domain.toLowerCase().replace(/^\./, '') || c.path !== s.path || c.hostOnly !== s.hostOnly)) await ckCall('/api/cookies/ops', { op: 'delete', ids: [c.id] });
-      ckQueued(s.domain, `${s.name} queued`);
+      ckQueued(s.domain, `${s.name} в очереди`);
     } },
   ].filter(Boolean));
 }
@@ -2507,40 +2487,40 @@ function ckEditor(c) {
 function ckRuleModal(o) {
   const ed = { action: o?.action || 'pin', domain: o?.domain ?? (CK.site || ''), name: o?.name || '', value: o?.value || '', note: o?.note || '', enabled: o ? o.enabled : true };
   const HELP = {
-    pin: 'Send this value to the site instead of the one Chrome has (adds the cookie if Chrome has none). Chrome\'s store is not changed.',
-    strip: 'Remove the cookie from requests to the site. Use * as the name to send no cookies at all.',
-    block: 'Drop matching Set-Cookie lines from responses, so Chrome never stores the cookie.',
+    pin: 'Отправлять это значение на сайт вместо того, что есть в Chrome (добавляет cookie, если в Chrome его нет). Хранилище Chrome не меняется.',
+    strip: 'Убирать cookie из запросов к сайту. Укажите * в имени, чтобы вообще не отправлять cookie.',
+    block: 'Удалять подходящие строки Set-Cookie из ответов, чтобы Chrome никогда не сохранял этот cookie.',
   };
   const segBox = h('div'), help = h('div', { class: 'hint' });
-  const name = h('input', { type: 'text', value: ed.name, placeholder: 'name, or * for every cookie', spellcheck: false, oninput: (ev) => { ed.name = ev.target.value; } });
+  const name = h('input', { type: 'text', value: ed.name, placeholder: 'имя или * для всех cookie', spellcheck: false, oninput: (ev) => { ed.name = ev.target.value; } });
   const value = h('input', { type: 'text', value: ed.value, spellcheck: false, oninput: (ev) => { ed.value = ev.target.value; } });
-  const valueRow = field('Value', value);
+  const valueRow = field('Значение', value);
   const paint = () => {
-    clear(segBox).append(seg([['pin', 'Pin value'], ['strip', 'Strip from requests'], ['block', 'Block Set-Cookie']], ed.action, (v) => { ed.action = v; paint(); }));
+    clear(segBox).append(seg([['pin', 'Закрепить значение'], ['strip', 'Срезать из запросов'], ['block', 'Блокировать Set-Cookie']], ed.action, (v) => { ed.action = v; paint(); }));
     help.textContent = HELP[ed.action];
     for (const n of valueRow) n.hidden = ed.action !== 'pin';
   };
   const body = h('div', { class: 'form' },
-    h('label', null, 'Action'), segBox, help,
-    field('Domain', h('input', { type: 'text', value: ed.domain, placeholder: 'example.com, or * for every site', spellcheck: false, oninput: (ev) => { ed.domain = ev.target.value; } }), 'Matches the domain and its subdomains.'),
+    h('label', null, 'Действие'), segBox, help,
+    field('Домен', h('input', { type: 'text', value: ed.domain, placeholder: 'example.com или * для всех сайтов', spellcheck: false, oninput: (ev) => { ed.domain = ev.target.value; } }), 'Совпадает с доменом и его поддоменами.'),
     field('Cookie', name), valueRow,
-    field('Note', h('input', { type: 'text', value: ed.note, oninput: (ev) => { ed.note = ev.target.value; } })),
-    h('label'), sw(ed.enabled, 'Enabled', (v) => { ed.enabled = v; }));
+    field('Заметка', h('input', { type: 'text', value: ed.note, oninput: (ev) => { ed.note = ev.target.value; } })),
+    h('label'), sw(ed.enabled, 'Включено', (v) => { ed.enabled = v; }));
   paint();
-  modal(o ? 'Edit wire rule' : 'New wire rule', body, [
-    { label: 'Cancel' },
-    o ? { label: 'Remove', cls: 'danger', fn: async () => { await ckCall(`/api/cookies/overrides/${o.id}`, undefined, 'DELETE'); toast('Rule removed', 'ok'); } } : null,
-    { label: 'Save', cls: 'primary', fn: async () => {
+  modal(o ? 'Изменить правило на лету' : 'Новое правило на лету', body, [
+    { label: 'Отмена' },
+    o ? { label: 'Удалить', cls: 'danger', fn: async () => { await ckCall(`/api/cookies/overrides/${o.id}`, undefined, 'DELETE'); toast('Правило удалено', 'ok'); } } : null,
+    { label: 'Сохранить', cls: 'primary', fn: async () => {
       const payload = { ...ed, domain: ed.domain.trim(), name: ed.name.trim() };
       await ckCall(o ? `/api/cookies/overrides/${o.id}` : '/api/cookies/overrides', payload);
-      toast(o ? 'Rule saved' : 'Rule added — it applies to the next requests', 'ok');
+      toast(o ? 'Правило сохранено' : 'Правило добавлено — применяется к следующим запросам', 'ok');
     } },
   ].filter(Boolean));
 }
 
 function ckImportModal() {
-  const text = h('textarea', { class: 'code ck-import', rows: 12, spellcheck: false, placeholder: 'Paste cookies: a JSON array (EditThisCookie / Cookie-Editor / CupNet export) or a Netscape cookies.txt' });
-  const out = h('div', { class: 'muted' }, 'Nothing checked yet.');
+  const text = h('textarea', { class: 'code ck-import', rows: 12, spellcheck: false, placeholder: 'Вставьте cookie: JSON-массив (экспорт EditThisCookie / Cookie-Editor / CupNet) или Netscape cookies.txt' });
+  const out = h('div', { class: 'muted' }, 'Пока ничего не проверено.');
   const file = h('input', { type: 'file', accept: '.json,.txt,application/json,text/plain', onchange: () => {
     const fl = file.files[0]; if (!fl) return;
     const r = new FileReader();
@@ -2548,22 +2528,22 @@ function ckImportModal() {
     r.readAsText(fl);
   } });
   const preview = guard(async () => {
-    if (!text.value.trim()) { clear(out).append('Nothing to import.'); return; }
+    if (!text.value.trim()) { clear(out).append('Нечего импортировать.'); return; }
     const r = await post('/api/cookies/import', { text: text.value, dryRun: true });
-    append(clear(out), [h('b', { class: r.parsed ? 'ok' : 'warn' }, `${r.parsed} cookie(s) recognised`),
+    append(clear(out), [h('b', { class: r.parsed ? 'ok' : 'warn' }, `Распознано cookie: ${r.parsed}`),
       r.errors.length ? h('ul', { class: 'ck-errs' }, r.errors.slice(0, 12).map((e) => h('li', { class: 'warn' }, e))) : null]);
   });
   text.addEventListener('input', () => debounce('ckimp', 400, preview));
-  modal('Import cookies into Chrome', h('div', null,
-    h('p', { class: 'muted' }, 'Imported cookies are queued and written into Chrome on the next page load from each site.'),
+  modal('Импорт cookie в Chrome', h('div', null,
+    h('p', { class: 'muted' }, 'Импортированные cookie ставятся в очередь и записываются в Chrome при следующей загрузке страницы с каждого сайта.'),
     h('div', { class: 'ck-file' }, file), text, out), [
-    { label: 'Cancel' },
-    { label: 'Import', cls: 'primary', fn: async () => {
-      if (!text.value.trim()) { toast('Paste or pick a file first', 'warn'); return false; }
+    { label: 'Отмена' },
+    { label: 'Импорт', cls: 'primary', fn: async () => {
+      if (!text.value.trim()) { toast('Сначала вставьте текст или выберите файл', 'warn'); return false; }
       const r = await post('/api/cookies/import', { text: text.value });
       applyCookies(r);
-      if (!r.queued) { toast(r.errors[0] || 'No cookies recognised', 'warn'); return false; }
-      toast(`${r.queued} cookie(s) queued for Chrome${r.errors.length ? ` · ${r.errors.length} skipped` : ''}`, 'ok');
+      if (!r.queued) { toast(r.errors[0] || 'Cookie не распознаны', 'warn'); return false; }
+      toast(`В очередь для Chrome поставлено cookie: ${r.queued}${r.errors.length ? ` · пропущено: ${r.errors.length}` : ''}`, 'ok');
       return undefined;
     } },
   ]);
@@ -2576,16 +2556,16 @@ function ckExportModal(selectedOnly = false) {
   const paint = () => {
     clear(fmtBox).append(seg([['json', 'JSON'], ['netscape', 'Netscape cookies.txt']], fmt, (v) => { fmt = v; store.set('ck-fmt', v); paint(); }));
     const opts = [];
-    if (CK.checked.size) opts.push(['selected', `Selected (${CK.checked.size})`]);
+    if (CK.checked.size) opts.push(['selected', `Выбранные (${CK.checked.size})`]);
     if (CK.site) opts.push(['site', CK.site]);
-    opts.push(['all', 'All sites']);
+    opts.push(['all', 'Все сайты']);
     clear(scopeBox).append(seg(opts, scope, (v) => { scope = v; paint(); }));
   };
   paint();
-  modal('Export cookies', h('div', { class: 'form' }, h('label', null, 'Format'), fmtBox, h('label', null, 'Cookies'), scopeBox,
-    h('div', { class: 'hint' }, 'The file holds cookie values — treat it like a password.')), [
-    { label: 'Cancel' },
-    { label: 'Download', cls: 'primary', fn: async () => {
+  modal('Экспорт cookie', h('div', { class: 'form' }, h('label', null, 'Формат'), fmtBox, h('label', null, 'Cookies'), scopeBox,
+    h('div', { class: 'hint' }, 'Файл содержит значения cookie — обращайтесь с ним как с паролем.')), [
+    { label: 'Отмена' },
+    { label: 'Скачать', cls: 'primary', fn: async () => {
       const q = new URLSearchParams({ format: fmt });
       if (scope === 'selected') q.set('ids', [...CK.checked].join(','));
       if (scope === 'site') q.set('domain', CK.site);
@@ -2612,7 +2592,7 @@ $('ckExport').addEventListener('click', () => ckExportModal(false));
 // ─────────────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   if (!(await auth())) {
-    $('login').hidden = false; $('pages').hidden = true; $('stats').textContent = 'no access token';
+    $('login').hidden = false; $('pages').hidden = true; $('stats').textContent = 'нет токена доступа';
     return;
   }
   buildFilter();
