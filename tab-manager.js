@@ -29,6 +29,7 @@ const { resolveNavigationUrlWithBase } = require('./utils');
 const settingsStore = require('./main-process/services/settings-store');
 const { applyRendererUserAgentToSession } = require('./user-agent-utils');
 const loggingState = require('./main-process/services/logging-state.js');
+const { tabNeedsWebRtcProtection, setWebRtcPolicy } = require('./main-process/services/webrtc-policy.js');
 let mainWindow = null;
 let onTabEventCb = null;
 
@@ -258,22 +259,33 @@ function proxyUrlToRules(proxyUrl) {
 }
 
 /**
- * WebRTC IP leak prevention — applied per-webContents when proxy is active.
- * Не через глобальный Chromium --force-webrtc-ip-handling-policy (Cloudflare детектит).
+ * WebRTC IP leak prevention (A-054) — applied per-webContents, not via the global Chromium
+ * --force-webrtc-ip-handling-policy switch (Cloudflare detects it). See webrtc-policy.js.
  */
 function applyWebRtcPolicy(webContents) {
-    if (!webContents || webContents.isDestroyed()) return;
-    try {
-        webContents.setWebRTCIPHandlingPolicy('default_public_interface_only');
-        webContents.setWebRTCUDPPortRange?.({ min: 0, max: 0 });
-    } catch {}
+    setWebRtcPolicy(webContents, true);
 }
 
 function resetWebRtcPolicy(webContents) {
-    if (!webContents || webContents.isDestroyed()) return;
-    try {
-        webContents.setWebRTCIPHandlingPolicy('default');
-    } catch {}
+    setWebRtcPolicy(webContents, false);
+}
+
+/** Fail-closed egress state from MITM (proxy required but unavailable); injected by the runtime. */
+let _isEgressBlocked = null;
+function setEgressBlockedCheck(fn) {
+    _isEgressBlocked = typeof fn === 'function' ? fn : null;
+}
+
+/** Protect the tab when it is proxied globally or per-tab, or when egress is blocked. */
+function applyWebRtcPolicyForTab(tab) {
+    let egressBlocked = false;
+    try { egressBlocked = !!_isEgressBlocked?.(); } catch { /* treat as not blocked */ }
+    const protect = tabNeedsWebRtcProtection({
+        globalUpstream: _upstreamProxyRules,
+        tabProxyProfileId: tab?.proxyProfileId,
+        egressBlocked,
+    });
+    setWebRtcPolicy(tab?.view?.webContents, protect);
 }
 
 /** Dynamically adjust how far down the tab WebContentsView starts (to reveal overlays). */
@@ -717,8 +729,7 @@ async function createTab(opts = {}) {
         const sess = view.webContents.session;
         if (_trustMitmCA) _trustMitmCA(sess);
         sess.setProxy(getProxyOptsForTab(tab)).catch(() => {});
-        if (_upstreamProxyRules) applyWebRtcPolicy(view.webContents);
-        else resetWebRtcPolicy(view.webContents);
+        applyWebRtcPolicyForTab(tab);
     }
 
     // Identity hook (CDP emulation) is started synchronously BEFORE the first load so its commands
@@ -747,6 +758,7 @@ async function setTabProxy(tabId, proxyProfileId) {
     if (!tab) return { success: false, error: 'Tab not found' };
 
     tab.proxyProfileId = proxyProfileId || null;
+    applyWebRtcPolicyForTab(tab);
     broadcastTabList(true);
     return { success: true, proxyProfileId: tab.proxyProfileId };
 }
@@ -796,6 +808,7 @@ async function setTabCookieGroup(tabId, cookieGroupId) {
     attachTabListeners(tab);
 
     newView.webContents.session.setProxy(getProxyOptsForTab(tab)).catch(() => {});
+    applyWebRtcPolicyForTab(tab);
     _runTabCreatedHook(tab);
 
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1022,8 +1035,7 @@ async function setProxyAll(proxyRules) {
                 const sess = tab.view.webContents.session;
                 if (_trustMitmCA) _trustMitmCA(sess);
                 await sess.setProxy(getProxyOptsForTab(tab));
-                if (_upstreamProxyRules) applyWebRtcPolicy(tab.view.webContents);
-                else resetWebRtcPolicy(tab.view.webContents);
+                applyWebRtcPolicyForTab(tab);
             } else {
                 if (_trustMitmCA) _trustMitmCA(tab.tabSession);
                 await tab.tabSession.setProxy(getProxyOptsForTab(tab));
@@ -1433,7 +1445,7 @@ module.exports = {
     injectStorageActivityMonitor,
     setTrafficOpts,
     permissionDecisionsFor,
-    applyWebRtcPolicy, resetWebRtcPolicy,
+    applyWebRtcPolicy, resetWebRtcPolicy, applyWebRtcPolicyForTab, setEgressBlockedCheck,
     // New per-tab controls
     setTabProxy, setTabCookieGroup,
     setWindowSwitcherOverlayVisible,

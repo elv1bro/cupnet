@@ -30,6 +30,7 @@ npx playwright test tests/e2e/fts-search.e2e.spec.js
 npx playwright test tests/e2e/request-editor.e2e.spec.js
 npx playwright test tests/e2e/onboarding.e2e.spec.js
 npx playwright test tests/e2e/p2-features.e2e.spec.js
+CUPNET_MITM_PORT=18877 npx playwright test tests/e2e/webrtc-leak.e2e.spec.js
 ```
 
 Требования: интернет (запросы к `httpbin.org`, `ipinfo.io` для geo/direct-ip), установленные зависимости (`npm ci`).

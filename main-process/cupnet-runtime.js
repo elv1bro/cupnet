@@ -96,12 +96,12 @@ let mitmProxy = null;
 const { MitmProxy, ExternalProxyPort } = require('../mitm-proxy.js');
 
 applyCupnetEarlyChromiumFlags(app, { path, fs, safeCatch });
-// MITM self-signed certs обрабатываются через setCertificateVerifyProc + certificate-error,
-// а НЕ глобальным --ignore-certificate-errors (Cloudflare детектит этот флаг и блокирует challenge).
+// MITM self-signed certs are handled via setCertificateVerifyProc + certificate-error,
+// NOT the global --ignore-certificate-errors switch (Cloudflare detects it and blocks the challenge).
 //
-// WebRTC / WebGL ограничения теперь применяются только когда подключён прокси (через session-level webRequest),
-// а НЕ глобальными Chromium-флагами. Причина: CF Turnstile детектит отсутствие WEBGL_debug_renderer_info
-// и нестандартное WebRTC-поведение как признаки модифицированного браузера.
+// WebRTC / WebGL restrictions are applied only while a proxy is in use, per-webContents
+// (tab-manager applyWebRtcPolicyForTab), NOT via global Chromium switches: CF Turnstile treats a missing
+// WEBGL_debug_renderer_info and non-standard WebRTC behaviour as signs of a modified browser.
 
 // ─── App state ────────────────────────────────────────────────────────────────
 let actProxy                   = '';
@@ -996,6 +996,9 @@ app.whenReady().then(async () => {
         function trustMitmCA(sess) {
             sess.setCertificateVerifyProc((_, callback) => callback(0));
         }
+
+        // A fail-closed egress block keeps WebRTC on disable_non_proxied_udp too (A-054).
+        tabManager.setEgressBlockedCheck(() => !!mitmProxy?.isEgressBlocked?.());
 
         if (STEALTH < 4) {
             tabManager.setTrustMitmCA(trustMitmCA);

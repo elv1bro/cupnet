@@ -43,7 +43,7 @@ The uncommitted refactor left the app in a broken intermediate state. These are 
 - [ ] **Native HTTPS fallback** must use the upstream proxy, not a direct connection (real-IP leak). (`mitm-proxy.js` fallback finding.)
 - [ ] **Script/transform intercept rules = arbitrary code in the main process.** Require explicit confirmation on import/enable, show a clear "runs code" warning, and consider a stricter sandbox or an opt-in flag. (`request-interceptor.js`, `rules-ipc.js`.)
 - [ ] **Renderer XSS:** escape server-controlled Content-Type / form.method / header names shown in the privileged log & analyzer windows; sanitize Quill HTML export. (`log-viewer`, `page-analyzer`, notes.)
-- [ ] **WebRTC leak protection** is currently ineffective — revisit the policy and apply it to per-tab-proxy and recreated tabs.
+- [x] **WebRTC leak protection** is currently ineffective — revisit the policy and apply it to per-tab-proxy and recreated tabs. _2026-10-21: A-054 — `disable_non_proxied_udp` per tab (global upstream, per-tab proxy, egress block); e2e confirms no srflx candidates._
 - [ ] **Cookie IPC ownership checks** on remove/clear/consolidate; don't allow cross-site jar reads.
 - [ ] **Packaging:** tighten `build.files` allowlist; per-arch artifact names + workers.
 
