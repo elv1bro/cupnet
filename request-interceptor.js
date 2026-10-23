@@ -369,6 +369,39 @@ function urlMatchesStrictPattern(pattern, url) {
     return rp.startsWith(`${bp}/`);
 }
 
+/**
+ * A pattern with no scheme and no glob, e.g. "example.com" or "example.com/app", is a host[+path]
+ * the user typed (the natural way to point a mirror at a site). Match it against the request's host
+ * (any scheme/port) and, if given, a path prefix. Without this a bare host used to compile to the
+ * regex /^example\.com$/ and match no full URL at all, so the rule silently never fired.
+ */
+function hostPatternMatches(pattern, url) {
+    const p = String(pattern || '').trim().replace(/^\/+/, '');
+    if (!p || p.includes('*')) return false;
+    const slash = p.indexOf('/');
+    let host = (slash === -1 ? p : p.slice(0, slash)).toLowerCase();
+    const pathPrefix = slash === -1 ? '' : p.slice(slash);
+    const colon = host.indexOf(':');
+    if (colon !== -1) host = host.slice(0, colon); // drop an optional :port from the typed host
+    host = host.replace(/\.$/, '');
+    if (!host) return false;
+    let req;
+    try { req = new URL(url); } catch { return false; }
+    if (req.hostname.toLowerCase().replace(/\.$/, '') !== host) return false;
+    if (!pathPrefix || pathPrefix === '/') return true;
+    const rp = req.pathname || '/';
+    if (rp === pathPrefix) return true;
+    if (pathPrefix.endsWith('/')) return rp.startsWith(pathPrefix);
+    return rp.startsWith(`${pathPrefix}/`);
+}
+
+/** A bare host[/path] token: no glob, no scheme, and the first segment looks like a hostname. */
+function isBareHostPattern(p) {
+    if (!p || p.includes('*') || /:\/\//.test(p)) return false;
+    const head = p.replace(/^\/+/, '').split('/')[0].split(':')[0];
+    return head === 'localhost' || head.includes('.');
+}
+
 function ruleMatchesUrl(pattern, url) {
     if (isStrictInterceptMode()) return urlMatchesStrictPattern(pattern, url);
     const p = String(pattern || '').trim();
@@ -377,6 +410,10 @@ function ruleMatchesUrl(pattern, url) {
     // href, so ?culture=… blocked mocks for URLs copied from DevTools without *.
     if (/^https?:\/\//i.test(p) && !p.includes('*')) {
         return urlMatchesStrictPattern(p, url);
+    }
+    // Bare host ("example.com", "example.com/app") typed without a scheme → match by host (+ path).
+    if (isBareHostPattern(p)) {
+        return hostPatternMatches(p, url);
     }
     return matchesPattern(pattern, url);
 }

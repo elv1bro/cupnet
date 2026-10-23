@@ -511,8 +511,8 @@ function renderMhEditor() {
   const form = h('div', { class: 'form' });
   form.append(...field('Включено', sw(ed.enabled, '', (v) => { ed.enabled = v; changed(); })));
   form.append(...field('Название', h('input', { value: ed.name, placeholder: 'Что делает это зеркало', oninput: (ev) => { ed.name = ev.target.value; changed(); } })));
-  form.append(...field('Хост клиента (URL-шаблон)', h('input', { class: 'mono', value: ed.url_pattern, spellcheck: false, placeholder: 'https://mirror.example.com/  ·  *://mirror.local/*',
-    oninput: (ev) => { ed.url_pattern = ev.target.value; changed(); } }), 'Адрес, который открывает браузер. URL без * — это origin и префикс пути (query игнорируется). * — подстановка по всему URL.'));
+  form.append(...field('Хост клиента (URL-шаблон)', h('input', { class: 'mono', value: ed.url_pattern, spellcheck: false, placeholder: 'example.com  ·  https://mirror.example.com/  ·  *://mirror.local/*',
+    oninput: (ev) => { ed.url_pattern = ev.target.value; changed(); } }), 'Адрес, который открывает браузер. Можно просто хост (example.com) — совпадёт с любой схемой и путём. URL без * — origin и префикс пути (query игнорируется). * — подстановка по всему URL.'));
   form.append(...field('Апстрим-хост', h('input', { class: 'mono', value: ed.upstreamHost, spellcheck: false, placeholder: 'origin.example.com',
     oninput: (ev) => { ed.upstreamHost = ev.target.value; changed(); } }), 'Реальный хост, который загружается. Его тело, Location и Set-Cookie переписываются обратно на хост клиента.'));
   form.append(...field('Порт апстрима', h('input', { type: 'number', min: 0, max: 65535, value: ed.upstreamPort || 0,

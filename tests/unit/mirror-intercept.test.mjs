@@ -92,4 +92,30 @@ describe('mirror intercept rule', () => {
             ...mirrorRule({}), params: { upstreamHost: 'origin.example.com', replace: [{ from: '(', to: 'x', regex: true }] },
         }).ok).toBe(false);
     });
+
+    it('matches a bare-host url_pattern (no scheme) typed by the user', async () => {
+        // Regression: "example.com" used to compile to /^example\.com$/ and match no full URL, so the
+        // mirror silently never fired (hit_count stayed 0).
+        const rule = { ...mirrorRule({ upstreamHost: 'example.com' }), url_pattern: 'example.com' };
+        const plan = await I.planMitmIntercept(
+            { url: 'https://example.com/', method: 'GET', headers: { Host: 'example.com' }, orderedHeaders: [[':authority', 'example.com']] },
+            { rulesOverride: [rule] },
+        );
+        expect(plan.postProcess?._mitmPost).toBe('mirror');
+    });
+});
+
+describe('ruleMatchesUrl — bare host patterns', () => {
+    it('matches the host with any scheme/port and path', () => {
+        expect(I.ruleMatchesUrl('example.com', 'https://example.com/')).toBe(true);
+        expect(I.ruleMatchesUrl('example.com', 'http://example.com/page?x=1')).toBe(true);
+        expect(I.ruleMatchesUrl('example.com/app', 'https://example.com/app/x')).toBe(true);
+        expect(I.ruleMatchesUrl('localhost', 'http://localhost:3000/')).toBe(true);
+    });
+    it('does not match a different or sibling host', () => {
+        expect(I.ruleMatchesUrl('example.com', 'https://www.example.com/')).toBe(false);
+        expect(I.ruleMatchesUrl('example.com', 'https://example.com.evil.com/')).toBe(false);
+        expect(I.ruleMatchesUrl('example.com', 'https://notexample.com/')).toBe(false);
+        expect(I.ruleMatchesUrl('example.com/app', 'https://example.com/apple')).toBe(false);
+    });
 });
