@@ -23,7 +23,7 @@ const crypto = require('crypto');
 
 const { SessionLog } = require('./session-log');
 const sessionCrypto = require('./session-crypto');
-const { spkiHashFromCertPem, fingerprintSha256, caInstructions } = require('./ca');
+const { spkiHashFromCertPem, fingerprintSha256, caInstructions, caTrustStatus, installCa } = require('./ca');
 const { launchChrome, launchAppWindow } = require('./chrome');
 const { createUiServer } = require('./ui-server');
 const { RuleStore } = require('./rule-store');
@@ -153,6 +153,8 @@ class MiniApp {
         this.browser = o.browser || DEFAULT_SETTINGS.browser;
         this.upstream = o.upstream || null;
         this.trust = o.trust === 'system' ? 'system' : 'spki';
+        /** When --trust was not given, auto-pick system once we see the CA is already trusted. */
+        this.trustForced = o.trust === 'system' || o.trust === 'spki';
         this.chromeBinary = o.chromeBinary || null;
         this.onQuit = o.onQuit || null;
         this.mitm = null;
@@ -216,6 +218,14 @@ class MiniApp {
     async start() {
         const ca = this.loadCa();
         this.ca = ca;
+        // If the user never forced --trust, drop the SPKI flag (and its Chrome banner) the moment the
+        // CA is already trusted in the OS store.
+        if (!this.trustForced) {
+            try {
+                this.caStatusCache = caTrustStatus(ca.certPath);
+                if (this.caStatusCache.trusted) this.trust = 'system';
+            } catch { /* keep spki */ }
+        }
         // The Go worker always runs as a child process here (no in-process ffi without Electron).
         process.env.CUPNET_AZURETLS_CHILD_PROCESS = '1';
         // Log everything: full bodies, media included. Read by mitm-proxy.js at require time.
@@ -323,6 +333,40 @@ class MiniApp {
     requestQuit() {
         if (this.onQuit) setImmediate(this.onQuit);
         return !!this.onQuit;
+    }
+
+    /** Read-only trust-store status for the UI (is the CA installed/trusted, and which mode is live). */
+    caStatus() {
+        const ca = this.ca || this.loadCa();
+        let st;
+        try {
+            st = caTrustStatus(ca.certPath);
+        } catch (e) {
+            st = { platform: process.platform, installed: false, trusted: false, supported: true, error: String(e?.message || e) };
+        }
+        this.caStatusCache = st;
+        return {
+            ...st,
+            trust: this.trust,
+            forced: this.trustForced,
+            certPath: ca.certPath,
+            sha256: ca.sha256,
+            commands: ca.commands,
+        };
+    }
+
+    /**
+     * Install the CA on the user's click. The OS raises its own password prompt; on success we switch
+     * to trust=system so the next Chrome launch drops the --ignore-certificate-errors-spki-list flag.
+     */
+    async installCaIntoStore() {
+        const ca = this.ca || this.loadCa();
+        const r = await installCa(ca.certPath);
+        if (r.ok) {
+            this.trust = 'system';
+            try { this.caStatusCache = caTrustStatus(ca.certPath); } catch { /* best effort */ }
+        }
+        return { ...r, trust: this.trust };
     }
 
     launchChrome(url) {

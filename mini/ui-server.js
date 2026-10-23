@@ -387,6 +387,16 @@ async function _route(app, req, res, u, { sessionSource, streams }) {
         return _send(res, 200, { ok: true });
     }
 
+    // ── CA trust (certificate install) ───────────────────────────────────────────
+    if (p === '/api/ca/status' && m === 'GET') {
+        return _send(res, 200, app.caStatus());
+    }
+    if (p === '/api/ca/install' && m === 'POST') {
+        // Runs the OS install command; macOS shows its own password dialog and may block here a while.
+        const r = await app.installCaIntoStore();
+        return _send(res, r.ok ? 200 : 500, r);
+    }
+
     // ── Proxy manager ───────────────────────────────────────────────────────────
     if (p.startsWith('/api/proxies') || p === '/api/egress') {
         const r = await _proxyRoute(app, req, res, u).catch((e) => _badRequest(res, e));

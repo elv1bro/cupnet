@@ -348,6 +348,9 @@ mark.cur { background: var(--warn); color: #000; }
 .w-80 { width: 80px; } .w-110 { width: 110px; } .w-180 { width: 180px; } .w-300 { width: 330px; }
 .setup-grid { display: grid; grid-template-columns: 170px 1fr; gap: 6px 12px; align-items: baseline; }
 .setup-grid > div:nth-child(odd) { color: var(--dim); }
+.ca-setup { max-width: 640px; }
+.ca-setup p { margin: 6px 0 10px; }
+.ca-setup .codebox { margin-top: 6px; }
 
 /* ── sidebar version + Guide page ── */
 .brand .ver { margin-left: auto; color: var(--muted); font-size: 11px; }

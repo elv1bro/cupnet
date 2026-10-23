@@ -230,6 +230,16 @@ function renderEgress() {
   $('egressText').textContent = text; pill.title = title;
 }
 let _lastPaused = 0;
+/** Offer to install the CA once per app load if it isn't trusted yet (removes Chrome's flag banner). */
+let _caOffered = false;
+async function maybeOfferCaInstall() {
+  if (_caOffered) return;
+  _caOffered = true;
+  const ca = await api('/api/ca/status').catch(() => null);
+  if (!ca || ca.supported === false || ca.trusted) return;
+  toast('Сертификат CupNet не установлен в систему — Chrome показывает предупреждение', 'warn',
+    { ms: 12000, action: { label: 'Установить', fn: () => go('settings') } });
+}
 async function pollStatus() {
   try {
     const st = await api('/api/status');
@@ -267,6 +277,7 @@ async function pollStatus() {
     onCookieStatus(st.cookies);
     renderEgress();
     if (PAGE === 'proxies') { P.status = st.proxy; renderConn(); }
+    maybeOfferCaInstall();
   } catch (e) {
     $('stats').textContent = `нет соединения: ${e.message}`; $('stats').className = 'mono err';
   }
@@ -1842,18 +1853,70 @@ async function loadSettings() {
   $('sAgent').checked = !!s.pageAgent; $('sAgentEx').value = (s.pageAgentExclude || []).join('\n');
   renderShareState(s);
   const st = ST || await api('/api/status');
+  const caSt = await api('/api/ca/status').catch(() => null);
+  const trustText = (caSt?.trust || st.trust) === 'system'
+    ? 'CupNet CA в системном хранилище доверия'
+    : 'SPKI-пин в выделенном профиле Chrome (ничего не ставится в систему)';
   const setup = clear($('setup'));
   const row = (k, v) => [h('div', null, k), h('div', null, v)];
   setup.append(h('h2', null, 'Настройка'), h('div', { class: 'setup-grid' },
     row('Прокси для Chrome', h('code', null, `http://127.0.0.1:${st.mitmPort}`)),
-    row('Доверие к сертификату', st.trust === 'spki' ? 'SPKI-пин в выделенном профиле Chrome (ничего не ставится в систему)' : 'CupNet CA в системном хранилище доверия'),
+    row('Доверие к сертификату', trustText),
     row('Файл CA', h('code', null, st.ca.certPath)),
     row('CA SHA-256', h('code', null, st.ca.sha256)),
     row('CA SPKI', h('code', null, st.ca.spki)),
     row('Файл правил', h('code', null, st.rulesFile)),
     row('Каталог данных', h('code', null, st.dataDir))),
-  h('h3', null, 'Установить CA в систему (только для --trust system; выполните сами)'), h('pre', { class: 'codebox' }, st.ca.commands.install),
-  h('h3', null, 'Удалить его'), h('pre', { class: 'codebox' }, st.ca.commands.remove));
+  h('h3', null, 'Сертификат CupNet CA'), caInstallPanel(caSt, st));
+}
+
+/**
+ * One-click CA install. When the CA is not yet trusted, offers a button that asks the app to install
+ * it (the OS shows its own password dialog). When it is trusted, confirms and shows the remove command.
+ */
+function caInstallPanel(caSt, st) {
+  const wrap = h('div', { class: 'ca-setup' });
+  if (!caSt) {
+    wrap.append(h('p', { class: 'muted' }, 'Не удалось получить статус сертификата.'),
+      h('h4', null, 'Установить вручную'), h('pre', { class: 'codebox' }, st.ca.commands.install));
+    return wrap;
+  }
+  if (caSt.supported === false) {
+    wrap.append(h('p', { class: 'muted' }, 'Автоустановка недоступна на этой системе (нужен NSS certutil). Установите CA вручную:'),
+      h('pre', { class: 'codebox' }, caSt.commands.install));
+    return wrap;
+  }
+  if (caSt.trusted) {
+    wrap.append(
+      h('p', null, '✓ Сертификат установлен и доверен — Chrome запускается без предупреждающего баннера.'),
+      h('p', { class: 'muted' }, 'Чтобы удалить его из системы, выполните в терминале:'),
+      h('pre', { class: 'codebox' }, caSt.commands.remove));
+    return wrap;
+  }
+  const btn = h('button', { class: 'btn primary' }, 'Установить сертификат');
+  btn.onclick = async () => {
+    const old = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Устанавливаю…';
+    toast('Подтвердите пароль в системном окне', 'warn', { ms: 6000 });
+    try {
+      const r = await post('/api/ca/install');
+      if (r && r.ok) {
+        toast('Сертификат установлен', 'ok');
+        toast('Закройте окна Chrome CupNet и откройте заново, чтобы убрать баннер', 'ok', { ms: 9000 });
+        await loadSettings();
+      } else {
+        toast((r && r.error) || 'Не удалось установить сертификат', 'err');
+        btn.disabled = false; btn.textContent = old;
+      }
+    } catch (e) {
+      toast(e.message || 'Не удалось установить сертификат', 'err');
+      btn.disabled = false; btn.textContent = old;
+    }
+  };
+  wrap.append(
+    h('p', null, 'Chrome показывает предупреждение про флаг командной строки, потому что сертификат CupNet ещё не в системе. Установите его — предупреждение исчезнет, и Chrome будет доверять сертификатам CupNet как обычным.'),
+    btn);
+  return wrap;
 }
 function renderTls() {
   const box = clear($('tlsProfiles'));
