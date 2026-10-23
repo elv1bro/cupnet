@@ -949,7 +949,9 @@ textarea.in-pl { width: 100%; min-height: 72px; max-height: 200px; resize: verti
 .mir-rep-badge { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); background: var(--accent-bg); border-radius: 8px; padding: 0 6px; }
 
 /* ── Mirror: fullscreen replace studio ──────────────────────────────────────── */
-.rsx { position: fixed; inset: 0; z-index: 1000; background: var(--bg0); display: flex; flex-direction: column; }
+/* z-index sits below the shared popover layer (#modalWrap 40, .cs-pop 45, #toasts 50) so the
+   custom-select dropdowns and the regex-helper modal open ABOVE this fullscreen overlay, not under it. */
+.rsx { position: fixed; inset: 0; z-index: 30; background: var(--bg0); display: flex; flex-direction: column; }
 .rsx-head { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--bg1); flex-wrap: wrap; }
 .rsx-title { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; }
 .rsx-title .muted { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
