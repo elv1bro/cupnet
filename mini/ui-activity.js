@@ -13,7 +13,7 @@ const ACT = {
   q: '', re: null,
   view: [], scanned: 0, pool: [],
   cnt: { request: 0, rule: 0, console: 0, ws: 0, ip: 0, 'page-event': 0 },
-  bin: 0, bout: 0, err: 0, ruleErr: 0, cnErr: 0, cnWarn: 0,
+  bin: 0, bout: 0, err: 0, ruleErr: 0, cnErr: 0, cnWarn: 0, ipErr: 0,
 };
 const ACT_KINDS = [
   ['request', 'Запросы'], ['rule', 'Правила'], ['console', 'Консоль'],
@@ -26,8 +26,11 @@ let actGrid, actSpacer, actBuilt = false, actQueued = false, actStick = false;
 const actText = (e) => e._at || (e._at = [e.method, e.url, e.note, e.type].filter(Boolean).join(' ').toLowerCase());
 function actIsErr(e) {
   if (e.kind === 'request') return !e.status || e.status >= 400;
+  if (e.kind === 'ip') return e.type === 'error';          // IP-monitor failures carry type, not sev
   return (e.kind === 'console' || e.kind === 'rule') && e.sev === 'error';
 }
+// Total error events across every kind — matches exactly what the "только ошибки" filter keeps.
+const actErrTotal = () => ACT.err + ACT.cnErr + ACT.ruleErr + ACT.ipErr;
 function actMatch(e) {
   const k = e.kind;
   if (k === 'session-start' || k === 'session-end') return false;
@@ -42,6 +45,7 @@ function actTally(e) {
   if (e.kind === 'request') { if (!e.status || e.status >= 400) ACT.err++; ACT.bin += e.resSize || 0; ACT.bout += e.reqSize || 0; }
   else if (e.kind === 'rule') { if (e.sev === 'error') ACT.ruleErr++; }
   else if (e.kind === 'console') { if (e.sev === 'error') ACT.cnErr++; else if (e.sev === 'warn') ACT.cnWarn++; }
+  else if (e.kind === 'ip') { if (e.type === 'error') ACT.ipErr++; }
 }
 
 /** ingest() hook: all[] already holds the new entries, so scan its tail once (tally + filter). */
@@ -59,15 +63,15 @@ function activityIngest() {
 function activityReset() {
   ACT.view = []; ACT.scanned = 0;
   ACT.cnt = { request: 0, rule: 0, console: 0, ws: 0, ip: 0, 'page-event': 0 };
-  ACT.bin = ACT.bout = ACT.err = ACT.ruleErr = ACT.cnErr = ACT.cnWarn = 0;
+  ACT.bin = ACT.bout = ACT.err = ACT.ruleErr = ACT.cnErr = ACT.cnWarn = ACT.ipErr = 0;
   actBadge();
   if (PAGE === 'activity') { renderActStats(); renderActChips(); scheduleActDraw(true); }
 }
 
-/** Nav-button badge: count of attention-worthy events (request + console + rule errors). */
+/** Nav-button badge: count of attention-worthy events (request / console / rule / IP errors). */
 function actBadge() {
   const b = $('actBadge'); if (!b) return;
-  const n = ACT.err + ACT.cnErr + ACT.ruleErr;
+  const n = actErrTotal();
   b.hidden = !n; b.textContent = n > 999 ? '999+' : String(n);
 }
 
@@ -84,7 +88,8 @@ function renderActStats() {
     cell('трафик', fmtSize(traffic) || '0 B', 'accent', `↓ получено ${fmtSize(ACT.bin) || '0 B'} · ↑ отправлено ${fmtSize(ACT.bout) || '0 B'}`),
     s && s.reqPerSec ? cell('в секунду', `${s.reqPerSec}/с`, '') : null,
     s && s.avgMs ? cell('сред.', `${Math.round(s.avgMs)} мс`, '', `мин ${Math.round(s.minMs || 0)} · макс ${Math.round(s.maxMs || 0)} мс`) : null,
-    cell('ошибок', actNum(ACT.err), ACT.err ? 'err' : '', 'HTTP-ответы 4xx/5xx и сбои'),
+    cell('ошибок', actNum(actErrTotal()), actErrTotal() ? 'err' : '',
+      `столько же, сколько показывает «только ошибки» · запросы 4xx/5xx и сбои ${ACT.err} · консоль ${ACT.cnErr} · правила ${ACT.ruleErr} · IP ${ACT.ipErr}`),
     cell('правил', actNum(ACT.cnt.rule), ACT.ruleErr ? 'warn' : ACT.cnt.rule ? 'ok' : '', `${ACT.cnt.rule} срабатываний${ACT.ruleErr ? `, ${ACT.ruleErr} с ошибкой` : ''}`),
     cell('консоль', actNum(ACT.cnt.console), ACT.cnErr ? 'err' : ACT.cnWarn ? 'warn' : '', `${ACT.cnErr} ошибок · ${ACT.cnWarn} предупреждений`),
     cell('WebSocket', actNum(ACT.cnt.ws), '', 'кадров WebSocket'),
