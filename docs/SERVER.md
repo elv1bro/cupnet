@@ -29,7 +29,11 @@ Node ≥ 22 already installed, no Go toolchain).
   calls `node` directly).
 
 Node is **not** bundled (`--no-node`) because the packed tree is built on a Mac;
-the server uses its own `node` on disk, resolved by absolute path at deploy time.
+the server uses its own `node` on disk, resolved (on the login PATH, in case it
+lives somewhere like a panel install under `/www`) at deploy time. That `node`
+can sit in a root-only directory (mode `0700`) the service's `DynamicUser` cannot
+traverse, so deploy stages a world-readable copy at `<app-dir>/runtime/node` and
+the unit runs from there — the Node executable is self-contained.
 
 ## Deploy / update
 

@@ -70,9 +70,15 @@ if [ "$ASSUME_YES" != "1" ]; then
 fi
 
 # 3. Resolve the server's node and prepare dirs.
+# The server's login shell may be fish, and Node may live only on the *login* PATH
+# (e.g. a panel install under /www), so resolve it with `bash -ls` over stdin and
+# keep only an absolute path from the output (profiles may print banners).
 say "Resolving Node on the server…"
-NODE_BIN="$(ssh "$HOST" bash -lc 'command -v node || true')"
-[ -n "$NODE_BIN" ] || { echo "deploy.sh: Node.js not found on $HOST (need >= 20)" >&2; exit 1; }
+NODE_BIN="$(ssh "$HOST" bash -ls <<'EOF' 2>/dev/null | grep -E '^/' | tail -1
+command -v node || command -v nodejs || true
+EOF
+)"
+[ -n "$NODE_BIN" ] || { echo "deploy.sh: Node.js not found on $HOST login PATH (need >= 20)" >&2; exit 1; }
 echo "    node: $NODE_BIN"
 ssh "$HOST" bash -s <<EOF
 set -e
@@ -89,6 +95,21 @@ set -e
 chmod 0755 "$APP_DIR/cupnet-mini" || true
 chmod 0755 "$APP_DIR"/app/azuretls-go/bin/azuretls-worker-* || true
 EOF
+
+# The server's Node may live in a root-only directory (e.g. a panel install under
+# /www with mode 0700) that the service's DynamicUser cannot traverse. The node
+# binary is self-contained, so stage a world-readable copy under the app dir and
+# run the service from there (atomic replace avoids ETXTBSY on redeploy).
+say "Staging Node for the service user"
+ssh "$HOST" bash -s "$NODE_BIN" "$APP_DIR" <<'EOF'
+set -e
+mkdir -p "$2/runtime"
+cp -f "$1" "$2/runtime/node.new"
+chmod 0755 "$2/runtime/node.new"
+mv -f "$2/runtime/node.new" "$2/runtime/node"
+"$2/runtime/node" -v >/dev/null
+EOF
+NODE_BIN="$APP_DIR/runtime/node"
 
 # 5. Optional upstream env file (kept 0600; the value never appears in argv or logs).
 if [ -n "$UPSTREAM" ]; then
@@ -112,9 +133,11 @@ UNIT="$(sed \
 if [ -n "$UPSTREAM" ]; then
     UNIT="$(printf '%s\n' "$UNIT" | sed '/^\[Service\]/a EnvironmentFile=/etc/cupnet-mini.env')"
 fi
-printf '%s\n' "$UNIT" | ssh "$HOST" bash -s <<'EOF'
+# Send the unit content and the control commands separately — one stdin each
+# (a heredoc and a pipe cannot both be a remote command's stdin).
+printf '%s\n' "$UNIT" | ssh "$HOST" "cat > /etc/systemd/system/cupnet-mini.service"
+ssh "$HOST" bash -s <<'EOF'
 set -e
-cat > /etc/systemd/system/cupnet-mini.service
 systemctl daemon-reload
 systemctl enable cupnet-mini >/dev/null 2>&1 || true
 systemctl restart cupnet-mini
