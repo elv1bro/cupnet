@@ -13,7 +13,14 @@ import (
 	http "github.com/Noooste/fhttp"
 )
 
-var connErrPattern = regexp.MustCompile(`(?i)\bEOF\b|connection reset|ECONNRESET|ETIMEDOUT|ECONNREFUSED|broken pipe`)
+// connErrPattern marks errors that mean the underlying connection is unusable, so an idempotent
+// request should retry on a fresh one instead of surfacing the error. Besides the plain socket
+// failures it also matches connection-desync errors: when a pooled keep-alive connection is reused
+// after the upstream (or a sticky proxy that just rotated its exit) silently dropped it, Go reads
+// leftover bytes where a status line belongs and reports `transport connection broken: malformed
+// HTTP status code "…"`, or `unexpected EOF`, or `use of closed network connection`. Those are not
+// origin errors — a fresh connection recovers them.
+var connErrPattern = regexp.MustCompile(`(?i)\bEOF\b|connection reset|ECONNRESET|ETIMEDOUT|ECONNREFUSED|broken pipe|transport connection broken|malformed HTTP|use of closed`)
 
 func upstreamTimeoutMs() int {
 	return envInt("CUPNET_TIMEOUT_UPSTREAM_REQUEST_MS", 30000, 1000, 600000)
@@ -327,7 +334,10 @@ func handleHTTPRequest(in *incomingLine) outgoingLine {
 	}
 
 	if err != nil {
-		releaseSession(pkey, sess)
+		// A failed upstream request leaves the connection in an unknown state (a timeout can abort
+		// mid-body, leaving unread bytes that the next borrower would read as a status line). Drop it
+		// rather than returning it to the idle pool, so one failure does not poison every reuse after.
+		discardSession(pkey, sess)
 		return outgoingLine{ID: id, StatusCode: 0, Body: nil, Headers: map[string]any{}, Error: err.Error()}
 	}
 

@@ -101,6 +101,17 @@ func TestIsConnErr(t *testing.T) {
 	if isConnErr(errors.New("bad request")) {
 		t.Fatal("non-conn")
 	}
+	// Connection-desync on a reused pooled connection (e.g. after a sticky proxy rotated its exit):
+	// Go read leftover body bytes where a status line belongs. Must be retryable on a fresh conn.
+	if !isConnErr(errors.New(`net/http: HTTP/1.x transport connection broken: malformed HTTP status code "html>"`)) {
+		t.Fatal("desync: malformed status line")
+	}
+	if !isConnErr(errors.New("unexpected EOF")) {
+		t.Fatal("desync: unexpected EOF")
+	}
+	if !isConnErr(errors.New("use of closed network connection")) {
+		t.Fatal("desync: closed conn reused")
+	}
 }
 
 func TestBuildAzureRequestWithOrderedHeaders(t *testing.T) {

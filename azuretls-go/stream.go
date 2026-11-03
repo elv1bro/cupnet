@@ -316,7 +316,10 @@ func handleHTTPStream(in *incomingLine) {
 			sendLine(handleHTTPRequest(in))
 			return
 		}
-		releaseSession(pkey, sess)
+		// Non-conn error here means the request failed before any body (often the header-phase
+		// timeout, which cancelled the request mid-flight): the connection is suspect, so drop it
+		// instead of returning it to the idle pool.
+		discardSession(pkey, sess)
 		sendLine(outgoingLine{ID: id, Headers: map[string]any{}, Error: err.Error()})
 		return
 	}
