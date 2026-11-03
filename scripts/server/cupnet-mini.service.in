@@ -1,0 +1,40 @@
+# CupNet mini systemd unit (template).
+# deploy.sh renders the @PLACEHOLDER@ tokens and installs this as
+# /etc/systemd/system/cupnet-mini.service on the server.
+#
+# Loopback-only service: mini binds the proxy and UI to 127.0.0.1 in code
+# (mitm-proxy.js / ui-server.js). Reach it from your machine over `ssh -L`;
+# run `cupnet-mini connect` on the server for per-user instructions.
+#
+# ExecStart calls node by absolute path on purpose — a systemd service has a
+# minimal PATH, so `node` from a shell profile / version manager is not visible.
+[Unit]
+Description=CupNet mini — MITM proxy + AzureTLS worker (loopback only)
+Documentation=file:///opt/cupnet-mini/app/mini/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# A transient, unprivileged user per start; data lives in /var/lib/<StateDirectory>.
+DynamicUser=yes
+StateDirectory=cupnet-mini
+WorkingDirectory=@APPDIR@
+ExecStart=@NODE@ @APPDIR@/app/mini/cupnet-mini.js start --data @DATADIR@ --port @PROXY_PORT@ --ui-port @UI_PORT@
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+# Defense in depth (the proxy still needs outbound network, so no IPAddress* filters).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=@DATADIR@
+
+[Install]
+WantedBy=multi-user.target

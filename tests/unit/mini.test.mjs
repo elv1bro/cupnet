@@ -25,7 +25,7 @@ process.env.CUPNET_AZURETLS_CHILD_PROCESS = '1';
 
 const { buildChromeArgs, ensureProfilePrefs, WEBRTC_POLICY } = require('../../mini/chrome.js');
 const { spkiHashFromCertPem, caInstructions } = require('../../mini/ca.js');
-const { parseArgs } = require('../../mini/cupnet-mini.js');
+const { parseArgs, buildConnectInstructions } = require('../../mini/cupnet-mini.js');
 const { SessionLog, SessionIndex, newSessionId, bodySize } = require('../../mini/session-log.js');
 const { RuleStore } = require('../../mini/rule-store.js');
 const { BODY_PREVIEW_CHARS } = require('../../mini/ui-server.js');
@@ -95,6 +95,32 @@ describe('parseArgs', () => {
     it('handles commands, --k v, --k=v and flags', () => {
         expect(parseArgs(['start', '--port', '9000', '--chrome', '--url=https://a/?x=1', '--trust', 'system']))
             .toEqual({ _: ['start'], port: '9000', chrome: true, url: 'https://a/?x=1', trust: 'system' });
+    });
+});
+
+describe('buildConnectInstructions', () => {
+    const { MiniApp } = require('../../mini/mini-app.js');
+
+    it('prints the SSH-tunnel + browser-proxy + CA-trust steps with live ports and the CA fingerprint', () => {
+        const app = new MiniApp({ dataDir: tmp(), mitmPort: 18877, uiPort: 18878 });
+        const ca = app.loadCa();
+        const out = buildConnectInstructions(app, { 'public-host': '203.0.113.7', 'ssh-login': 'root@203.0.113.7' });
+        // Proxy tunnel + browser proxy on the real proxy port.
+        expect(out).toContain('ssh -N -L 18877:127.0.0.1:18877 root@203.0.113.7');
+        expect(out).toContain('HTTPS proxy = 127.0.0.1:18877');
+        // CA copied from the server and verified by fingerprint (no trust command is run here).
+        expect(out).toContain(`scp root@203.0.113.7:${ca.certPath} ./cupnet-ca.pem`);
+        expect(out).toContain(`CA SHA-256: ${ca.sha256}`);
+        expect(out).toMatch(/macOS:.*add-trusted-cert/);
+        // Admin UI over its own tunnel on the UI port.
+        expect(out).toContain('ssh -N -L 18878:127.0.0.1:18878 root@203.0.113.7');
+    });
+
+    it('defaults the ssh login to root@<public-host> and falls back to the hostname', () => {
+        const app = new MiniApp({ dataDir: tmp(), mitmPort: 8877, uiPort: 8878 });
+        app.loadCa();
+        expect(buildConnectInstructions(app, { 'public-host': 'h.example' })).toContain('ssh -N -L 8877:127.0.0.1:8877 root@h.example');
+        expect(buildConnectInstructions(app, {})).toContain(`root@${os.hostname()}`);
     });
 });
 
@@ -371,6 +397,18 @@ describe('pack-mini', () => {
         expect([...packages.keys()].sort()).toEqual(['better-sqlite3', 'electron']);
         expect([...packages.get('better-sqlite3')]).toEqual(['db.js']);
         expect(files).toEqual(expect.arrayContaining(['mitm-proxy.js', 'request-interceptor.js', 'mini/ui-server.js']));
+    });
+
+    it('a standalone-packed tree runs the connect command under plain node (server deploy smoke test)', () => {
+        const { pack } = require('../../scripts/pack-mini.cjs');
+        const { execFileSync } = require('child_process');
+        const out = tmp();
+        const { base } = pack({ out, dir: true, node: false, allPlatforms: true });
+        const entry = path.join(base, 'app', 'mini', 'cupnet-mini.js');
+        expect(existsSync(entry)).toBe(true);
+        const text = execFileSync(process.execPath, [entry, 'connect', '--data', tmp(), '--public-host', 'srv.test'], { encoding: 'utf8' });
+        expect(text).toContain('ssh -N -L 8877:127.0.0.1:8877 root@srv.test');
+        expect(text).toMatch(/CA SHA-256: [0-9A-F:]{95}/);
     });
 });
 

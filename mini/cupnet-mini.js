@@ -14,12 +14,15 @@
  *   open KEYFILE [--sealed FILE]   decrypt a sealed session to stdout (JSONL)
  *   host [--share-port 8879]       serve viewer.html + sealed/*.cupsess on 127.0.0.1 (local test host
  *                                  for Share links; keys never leave the .cupkey / #k= fragment)
+ *   connect [--public-host H]      print the SSH-tunnel + browser + CA-trust instructions for end users
+ *           [--ssh-login U@H]      (the server binds loopback only; users reach it over `ssh -L`)
  *
  * Options: --data DIR  --port 8877  --ui-port 8878  --browser chrome_120  --upstream URL
  *          --trust spki|system  --chrome-bin PATH
  */
 
 const fs = require('fs');
+const os = require('os');
 const http = require('http');
 const path = require('path');
 const { MiniApp } = require('./mini-app');
@@ -74,6 +77,52 @@ function appFromArgs(a) {
         trust: a.trust,
         chromeBinary: a['chrome-bin'],
     });
+}
+
+/**
+ * End-user connection instructions for a loopback-only server deployment (e.g. pink110).
+ * Nothing is exposed on the network: each user forwards the proxy port over SSH and points
+ * their browser at 127.0.0.1, then trusts the CupNet CA once on their own machine.
+ * @param {MiniApp} app
+ * @param {Record<string, any>} a  parsed args (--public-host, --ssh-login)
+ * @returns {string}
+ */
+function buildConnectInstructions(app, a = {}) {
+    const ca = app.loadCa();
+    const pub = (typeof a['public-host'] === 'string' && a['public-host']) || process.env.CUPNET_PUBLIC_HOST || os.hostname();
+    const login = (typeof a['ssh-login'] === 'string' && a['ssh-login']) || `root@${pub}`;
+    const P = app.mitmPort;
+    const U = app.uiPort;
+    return [
+        'CupNet mini — how to connect',
+        '(SSH-tunnel model: the proxy and UI bind to 127.0.0.1 on the server; nothing is open on the network.)',
+        '',
+        `Server: ${login}   proxy port ${P}   UI port ${U}`,
+        '',
+        '1) Open the proxy tunnel and keep it running in a terminal:',
+        `     ssh -N -L ${P}:127.0.0.1:${P} ${login}`,
+        '',
+        '2) Point your browser (or OS network settings) at the proxy:',
+        `     HTTP proxy  = 127.0.0.1:${P}`,
+        `     HTTPS proxy = 127.0.0.1:${P}`,
+        `   Chrome, dedicated profile, one command:`,
+        `     chrome --proxy-server=127.0.0.1:${P} --user-data-dir=/tmp/cupnet-profile`,
+        '',
+        '3) Trust the CupNet CA once, on YOUR machine, so HTTPS pages load:',
+        `     scp ${login}:${ca.certPath} ./cupnet-ca.pem`,
+        `     CA SHA-256: ${ca.sha256}`,
+        '   Install cupnet-ca.pem:',
+        '     macOS:   sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain cupnet-ca.pem',
+        '     Linux:   sudo cp cupnet-ca.pem /usr/local/share/ca-certificates/cupnet-ca.crt && sudo update-ca-certificates',
+        '     Windows: certutil -addstore -f Root cupnet-ca.pem        (Administrator PowerShell)',
+        '     Firefox: Settings → Privacy & Security → Certificates → Import → trust for websites',
+        '',
+        '4) Admin only — open the control UI over its own tunnel:',
+        `     ssh -N -L ${U}:127.0.0.1:${U} ${login}`,
+        `   then open the http://127.0.0.1:${U}/#t=... URL from the service logs:`,
+        `     ssh ${login} journalctl -u cupnet-mini -n 40 --no-pager | grep -i 'UI:'`,
+        '',
+    ].join('\n');
 }
 
 async function main() {
@@ -146,8 +195,13 @@ async function main() {
         return;
     }
 
+    if (cmd === 'connect') {
+        process.stdout.write(buildConnectInstructions(app, a) + '\n');
+        return;
+    }
+
     if (cmd !== 'start') {
-        console.error(`Unknown command "${cmd}". Use start | window | chrome | ca | seal | open | host.`);
+        console.error(`Unknown command "${cmd}". Use start | window | chrome | ca | seal | open | host | connect.`);
         process.exitCode = 2;
         return;
     }
@@ -199,4 +253,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { parseArgs, callRunning };
+module.exports = { parseArgs, callRunning, buildConnectInstructions };
