@@ -67,6 +67,22 @@ function _dialTargetIp(errorMessage) {
     return null;
 }
 
+/** host + effective port of the request URL (default 80/443 by scheme). */
+function _hostPort(url) {
+    try {
+        const u = new URL(String(url || ''));
+        return { host: u.hostname, port: u.port || (u.protocol === 'http:' ? '80' : '443') };
+    } catch {
+        return { host: '', port: '' };
+    }
+}
+
+// Upstream never produced response headers in time (worker message e.g. "Worker request timeout (30000ms)").
+const _TIMEOUT_RE = /\btimed?\s?out\b|ETIMEDOUT|deadline exceeded|request timeout/i;
+// Upstream spoke something that is not a valid HTTP response — framing desync, or the exit injecting a
+// raw page where a status line belongs. Over a (rotating/residential) proxy this is almost always the exit.
+const _DESYNC_RE = /malformed HTTP|transport connection broken|unexpected EOF|use of closed network/i;
+
 /**
  * Resolve DNS override metadata for gateway errors (explicit MITM rule or inferred from dial target).
  * @param {{ url?: string, errorMessage?: string, dnsOverride?: { host?: string, ip?: string, rewriteHost?: string, inferred?: boolean } | null }} ctx
@@ -97,7 +113,7 @@ function resolveMitmGatewayDnsContext(ctx) {
 }
 
 /**
- * @param {{ url?: string, errorMessage?: string, dnsOverride?: { host?: string, ip?: string, rewriteHost?: string, inferred?: boolean } | null }} ctx
+ * @param {{ url?: string, errorMessage?: string, viaProxy?: boolean, dnsOverride?: { host?: string, ip?: string, rewriteHost?: string, inferred?: boolean } | null }} ctx
  * @returns {string}
  */
 function summarizeMitmGatewayError(ctx) {
@@ -112,33 +128,38 @@ function summarizeMitmGatewayError(ctx) {
         }
         return `${prefix}: ${dns.host} → ${dns.ip}: ${msg}`;
     }
+    const viaProxy = !!ctx?.viaProxy;
+    const { host, port } = _hostPort(ctx?.url);
     if (/ECONNREFUSED|connection refused/i.test(msg)) {
         return `Connection refused — server not reachable`;
     }
-    if (/ETIMEDOUT|timeout/i.test(msg)) {
+    if (_TIMEOUT_RE.test(msg)) {
+        if (viaProxy && host) return `${host}:${port} — the proxy exit could not reach it (timed out)`;
         return `Connection timed out`;
+    }
+    if (_DESYNC_RE.test(msg)) {
+        if (host) return `${host} — garbled response${viaProxy ? ' from the proxy exit' : ''}`;
+        return `Upstream returned a garbled response`;
     }
     if (/ENOTFOUND|no such host/i.test(msg)) {
         return `Host not found (DNS)`;
     }
-    try {
-        const u = new URL(String(ctx?.url || ''));
-        return `${u.hostname}: ${msg}`;
-    } catch {
-        return msg;
-    }
+    if (host) return `${host}: ${msg}`;
+    return msg;
 }
 
 /**
- * @param {{ url?: string, errorMessage?: string, dnsOverride?: { host?: string, ip?: string, rewriteHost?: string } | null }} ctx
+ * @param {{ url?: string, errorMessage?: string, viaProxy?: boolean, dnsOverride?: { host?: string, ip?: string, rewriteHost?: string } | null }} ctx
  * @returns {{ statusCode: number, headers: Record<string, string>, bodyBase64: string }}
  */
 function buildMitmGatewayErrorResponse(ctx) {
     const url = String(ctx?.url || '');
     const errorMessage = String(ctx?.errorMessage || 'Upstream connection failed');
+    const viaProxy = !!ctx?.viaProxy;
     const dns = resolveMitmGatewayDnsContext(ctx);
-    const summary = summarizeMitmGatewayError({ url, errorMessage, dnsOverride: dns });
+    const summary = summarizeMitmGatewayError({ url, errorMessage, dnsOverride: dns, viaProxy });
     const dial = _dialTargetIp(errorMessage);
+    const { host, port } = _hostPort(url);
 
     let hint = 'Check your proxy profile, upstream connectivity, and DNS Overrides in the DNS Manager toolbar button.';
     if (dns?.host && dns?.ip) {
@@ -172,6 +193,24 @@ function buildMitmGatewayErrorResponse(ctx) {
         }
     } else if (/ECONNREFUSED|connection refused/i.test(errorMessage)) {
         hint = 'The upstream server refused the connection. If you use a proxy, check that it is running and the profile is valid.';
+    } else if (_TIMEOUT_RE.test(errorMessage)) {
+        const target = host ? `<strong>${_escHtml(host)}:${_escHtml(port)}</strong>` : 'the server';
+        if (viaProxy) {
+            hint = `The site is most likely up — this <strong>proxy exit</strong> could not reach ${target} before the request timed out. `
+                + `A residential or rotating exit often cannot reach every host. `
+                + `Click <strong>New IP</strong> in the toolbar to get a different exit, or open another site to confirm the proxy itself still works.`;
+        } else {
+            hint = `${target} did not respond before the request timed out. It may be slow, down, or dropping this connection.`;
+        }
+    } else if (_DESYNC_RE.test(errorMessage)) {
+        const target = host ? `<strong>${_escHtml(host)}</strong>` : 'the upstream';
+        if (viaProxy) {
+            hint = `The <strong>proxy exit</strong> returned a malformed or garbled response for ${target}. `
+                + `This is almost always the exit node, not the site. `
+                + `Click <strong>New IP</strong> in the toolbar for a different exit, then reload.`;
+        } else {
+            hint = `${target} returned a malformed HTTP response. Reload, or check whether a proxy or middlebox is interfering with the connection.`;
+        }
     }
 
     const html = `<!DOCTYPE html>

@@ -1853,15 +1853,20 @@ class MitmProxy {
             dbg(`[mitm] 502 ${url} — ${dnsOverride.inferred ? 'routed to' : 'DNS override'} `
                 + `${dnsOverride.host} → ${dnsOverride.ip}: ${errorMessage}\n`);
         }
-        const errRes = buildMitmGatewayErrorResponse({ url, errorMessage, dnsOverride });
+        // Whether this request actually egressed through an upstream proxy — the message for a
+        // timeout / garbled response differs: via a proxy exit it is almost always the exit node.
+        let viaProxy = false;
+        try { viaProxy = !!this._resolveUpstreamForTab(tabId).proxy; } catch (_) { /* ignore */ }
+        const errRes = buildMitmGatewayErrorResponse({ url, errorMessage, dnsOverride, viaProxy });
         if (this.onGatewayError && (!req || isLikelyDocumentNavigation(req))) {
             try {
                 this.onGatewayError({
                     url,
                     errorMessage,
                     dnsOverride,
+                    viaProxy,
                     tabId: tabId ?? null,
-                    summary: summarizeMitmGatewayError({ url, errorMessage, dnsOverride }),
+                    summary: summarizeMitmGatewayError({ url, errorMessage, dnsOverride, viaProxy }),
                 });
             } catch (_) { /* ignore */ }
         }
