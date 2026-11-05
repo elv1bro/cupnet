@@ -21,27 +21,6 @@ function isDevtoolsHostileUrl(url) {
 }
 
 /** CDP Network.* логирование, очередь записи в БД, rule actions из CDP-пути. */
-
-function _remoteObjectToString(ro) {
-    if (!ro || typeof ro !== 'object') return '';
-    if (ro.unserializableValue != null) return String(ro.unserializableValue);
-    if (ro.value !== undefined && ro.value !== null) {
-        if (typeof ro.value === 'object') {
-            try { return JSON.stringify(ro.value); } catch { return String(ro.description || '[Object]'); }
-        }
-        return String(ro.value);
-    }
-    if (ro.description) return String(ro.description);
-    return '';
-}
-
-function _stackTraceFirstUrl(st) {
-    if (!st || !Array.isArray(st.callFrames) || !st.callFrames.length) return { url: null, line: null };
-    const f = st.callFrames[0];
-    return { url: f.url || null, line: f.lineNumber != null ? f.lineNumber + 1 : null };
-}
-
-/** CDP Network.* логирование, очередь записи в БД, rule actions из CDP-пути. */
 function createCdpNetworkLogging({
     safeCatch,
     shouldFilterUrl,
@@ -299,9 +278,20 @@ function createCdpNetworkLogging({
 
         const activityMonitorOn = !!(getSettings() && getSettings().activityMonitorEnabled) && loggingEnabled;
         if (activityMonitorOn) {
-            await cdp.sendCommand('Runtime.enable', {}).catch((err) => {
-                safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Runtime.enable', tabId: state.tabId } }, err, 'info');
-            });
+            // Console + page exceptions are captured WITHOUT enabling the Runtime
+            // domain — `Runtime.enable` is the classic CDP bot-detection leak (the
+            // browser starts serializing console/object previews for the inspector,
+            // which page JS can observe via getter/Error.stack traps). Those two
+            // event kinds come instead from a main-world hook (activity-monitor-
+            // script.js) that the tab preload injects and that forwards each event
+            // over the `activity-monitor-event` IPC into ingestActivityEvent() below.
+            // (CDP's own `Page.addScriptToEvaluateOnNewDocument` can't be used for
+            // this: in Electron's debugger it always runs in an ISOLATED world, so
+            // it can't see the page's console.)
+            //
+            // `Log.enable` (browser-generated log entries: CSP, network/deprecation
+            // warnings) and `DOMStorage.enable` do NOT enable Runtime and do not
+            // leak, so they stay on the CDP path and are handled below.
             await cdp.sendCommand('Log.enable', {}).catch((err) => {
                 safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'Log.enable', tabId: state.tabId } }, err, 'info');
             });
@@ -309,6 +299,14 @@ function createCdpNetworkLogging({
                 safeCatch({ module: 'main', eventCode: 'cdp.command.failed', context: { command: 'DOMStorage.enable', tabId: state.tabId } }, err, 'info');
             });
         }
+        // Tell the tab preload whether to inject/keep the leak-free main-world
+        // console/exception hook. setupNetworkLogging re-runs on recording
+        // start/stop, the Activity Monitor toggle, and each navigation, so this
+        // single push keeps capture in step with the recording state on
+        // already-open tabs too (no reload needed — the preload hook is
+        // idempotent). When off, the preload stops forwarding; main also drops
+        // late events in ingestActivityEvent, so a stale hook is harmless.
+        try { webContents.send('activity-monitor-update', { enabled: activityMonitorOn }); } catch (_) { /* tab gone */ }
 
         function _cupnetRidFromHeaders(headers) {
             if (!headers || typeof headers !== 'object') return null;
@@ -344,6 +342,10 @@ function createCdpNetworkLogging({
                 });
             }
         };
+        // Expose the enqueue closure on the per-webContents state so ingestActivityEvent()
+        // (driven by the preload `activity-monitor-event` IPC) can reuse the exact same
+        // queue + flush as the CDP-sourced events here.
+        state._enqueueActivity = finalizeBrowserActivityLog;
 
         const _processLogQueue = async () => {
             state.logQueueScheduled = false;
@@ -499,70 +501,14 @@ function createCdpNetworkLogging({
             const activityMonitorEnabled = !!(getSettings() && getSettings().activityMonitorEnabled);
             const settings      = getSettings();
             const filterPatterns = settings.filterPatterns || [];
-            const rateLimit = Math.max(1, Math.min(500, Number(settings.activityMonitorRateLimit) || 100));
 
             if (activityMonitorEnabled) {
-                if (method === 'Runtime.consoleAPICalled') {
-                    const w = state.activityRate || (state.activityRate = { windowStart: Date.now(), count: 0, suppressed: 0 });
-                    const now = Date.now();
-                    if (now - w.windowStart > 1000) {
-                        if (w.suppressed > 0) {
-                            finalizeBrowserActivityLog({
-                                event_type: 'console',
-                                level: 'info',
-                                summary: `${w.suppressed} console message(s) suppressed (rate limit)`,
-                                detail: JSON.stringify({ suppressed: w.suppressed, rateLimitPerSec: rateLimit }),
-                                source_url: null,
-                                source_line: null,
-                                origin: null,
-                            });
-                        }
-                        w.windowStart = now;
-                        w.count = 0;
-                        w.suppressed = 0;
-                    }
-                    w.count += 1;
-                    if (w.count > rateLimit) {
-                        w.suppressed += 1;
-                        return;
-                    }
-                    const args = params.args || [];
-                    const argStrs = args.map(_remoteObjectToString);
-                    let summary = argStrs.join(' ');
-                    if (summary.length > 500) summary = summary.slice(0, 497) + '...';
-                    const st = _stackTraceFirstUrl(params.stackTrace);
-                    const detail = {
-                        args: args.map((a) => ({ type: a.type, description: a.description, value: a.value })),
-                        stackTrace: params.stackTrace || null,
-                    };
-                    finalizeBrowserActivityLog({
-                        event_type: 'console',
-                        level: String(params.type || 'log'),
-                        summary: summary || '(console)',
-                        detail: JSON.stringify(detail),
-                        source_url: st.url,
-                        source_line: st.line,
-                        origin: null,
-                    });
-                    return;
-                }
-                if (method === 'Runtime.exceptionThrown') {
-                    const ex = params.exceptionDetails || {};
-                    const exc = ex.exception || {};
-                    const msg = String(exc.description || exc.value || ex.message || 'Exception');
-                    const detail = JSON.stringify(ex);
-                    const st = _stackTraceFirstUrl(ex.stackTrace);
-                    finalizeBrowserActivityLog({
-                        event_type: 'exception',
-                        level: 'error',
-                        summary: msg.slice(0, 8000),
-                        detail,
-                        source_url: ex.url || st.url,
-                        source_line: ex.lineNumber != null ? ex.lineNumber + 1 : st.line,
-                        origin: null,
-                    });
-                    return;
-                }
+                // NOTE: console calls + page exceptions do NOT arrive here. They are
+                // captured in the page's main world by activity-monitor-script.js and
+                // delivered over the `activity-monitor-event` IPC into
+                // ingestActivityEvent(); enabling Runtime just to receive them is the
+                // leak we are avoiding. Only browser-generated Log/DOMStorage events
+                // (which don't enable Runtime) come through this CDP handler.
                 if (method === 'Log.entryAdded') {
                     const e = params.entry || {};
                     const src = String(e.source || '');
@@ -918,7 +864,89 @@ function createCdpNetworkLogging({
         }
     }
 
-    return { setupNetworkLogging };
+    /**
+     * Sink for the leak-free Activity Monitor transport.
+     *
+     * The main-world hook injected by `activity-monitor-script.js` (via the tab
+     * preload) forwards every captured console call / page exception over the
+     * `activity-monitor-event` IPC; the IPC handler calls this with the sending
+     * `webContents` and the structured `data` object the hook emitted. We feed it
+     * into the exact same per-tab Activity Monitor queue + DB flush that the CDP
+     * Log/DOMStorage events use, so nothing downstream changes — only the source
+     * of console/exception events moved off `Runtime.enable`.
+     *
+     * Console calls are rate-limited per-second (same cap the old CDP path used)
+     * to stop a page spamming the DB; the window state lives on the per-wc state.
+     *
+     * @param {Electron.WebContents} webContents sender of the IPC event
+     * @param {{k:string,[k:string]:any}} data   event object from the main-world hook
+     */
+    function ingestActivityEvent(webContents, data) {
+        if (!webContents || !data || typeof data !== 'object') return;
+        if (!getIsLoggingEnabled()) return;
+        const settings = getSettings();
+        if (!settings || !settings.activityMonitorEnabled) return;
+
+        const state = _wcLogState.get(webContents);
+        // No recording session wired up for this tab yet (setupNetworkLogging not
+        // run, or torn down) — drop rather than queue against a missing state.
+        if (!state || typeof state._enqueueActivity !== 'function') return;
+
+        const enqueue = state._enqueueActivity;
+
+        if (data.k === 'c') {
+            const rateLimit = Math.max(1, Math.min(500, Number(settings.activityMonitorRateLimit) || 100));
+            const w = state.activityRate || (state.activityRate = { windowStart: Date.now(), count: 0, suppressed: 0 });
+            const now = Date.now();
+            if (now - w.windowStart > 1000) {
+                if (w.suppressed > 0) {
+                    enqueue({
+                        event_type: 'console',
+                        level: 'info',
+                        summary: `${w.suppressed} console message(s) suppressed (rate limit)`,
+                        detail: JSON.stringify({ suppressed: w.suppressed, rateLimitPerSec: rateLimit }),
+                        source_url: null,
+                        source_line: null,
+                        origin: null,
+                    });
+                }
+                w.windowStart = now;
+                w.count = 0;
+                w.suppressed = 0;
+            }
+            w.count += 1;
+            if (w.count > rateLimit) {
+                w.suppressed += 1;
+                return;
+            }
+            let summary = String(data.summary || '');
+            if (summary.length > 500) summary = `${summary.slice(0, 497)}...`;
+            enqueue({
+                event_type: 'console',
+                level: String(data.level || 'log'),
+                summary: summary || '(console)',
+                detail: JSON.stringify({ args: Array.isArray(data.args) ? data.args : [], stackUrl: data.url || null }),
+                source_url: data.url || null,
+                source_line: data.line != null ? data.line : null,
+                origin: null,
+            });
+            return;
+        }
+
+        if (data.k === 'e') {
+            enqueue({
+                event_type: 'exception',
+                level: 'error',
+                summary: String(data.summary || 'Exception').slice(0, 8000),
+                detail: JSON.stringify({ message: data.summary || null, stack: data.stack || null, url: data.url || null, line: data.line != null ? data.line : null }),
+                source_url: data.url || null,
+                source_line: data.line != null ? data.line : null,
+                origin: null,
+            });
+        }
+    }
+
+    return { setupNetworkLogging, ingestActivityEvent };
 }
 
 module.exports = { createCdpNetworkLogging };

@@ -134,6 +134,7 @@ function ipcScopeGet(k) {
         case 'sessionProfileModalWindow': return sessionProfileModalWindow;
         case 'settingsStore': return settingsStore;
         case 'setupNetworkLogging': return setupNetworkLogging;
+        case 'ingestActivityEvent': return ingestActivityEvent;
         case 'shell': return shell;
         case 'siteInfoPopoverWindow': return siteInfoPopoverWindow;
         case 'stabilityMetrics': return stabilityMetrics;

@@ -133,6 +133,7 @@
   "sessionProfileModalWindow",
   "settingsStore",
   "setupNetworkLogging",
+  "ingestActivityEvent",
   "shell",
   "siteInfoPopoverWindow",
   "stabilityMetrics",

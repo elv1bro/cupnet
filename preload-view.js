@@ -11,6 +11,55 @@ try {
     }
 } catch { /* ignore — internal pages, handler not ready, etc. */ }
 
+// Activity Monitor (leak-free console/exception capture). When a recording session
+// is live and the setting is on, we inject a hook into the page's MAIN world that
+// wraps console.* and catches errors, then dispatches each as a DOM CustomEvent
+// named with an unguessable nonce. Our isolated-world listener forwards each to
+// the main process, which feeds it into the normal Activity Monitor log. No CDP
+// Runtime domain is enabled, so this is invisible to page bot-detection.
+// See main-process/services/activity-monitor-script.js + ipc/handlers/activity-monitor-ipc.js.
+//
+// The nonce is generated HERE and stays stable for this document, so injection at
+// document-start and any later re-inject (recording toggled on while the tab is
+// already open — `activity-monitor-update`) share one CustomEvent name; the hook's
+// own idempotency guard makes a repeat injection a no-op.
+(() => {
+    let amNonce = null;
+    let amEnabled = false;
+    let amListening = false;
+    const makeNonce = () => {
+        try {
+            const b = new Uint8Array(16);
+            (globalThis.crypto || window.crypto).getRandomValues(b);
+            let s = '';
+            for (let i = 0; i < b.length; i++) s += b[i].toString(16).padStart(2, '0');
+            return `cupnet_am_${s}`;
+        } catch {
+            return `cupnet_am_${Math.random().toString(16).slice(2)}${Date.now().toString(16)}`;
+        }
+    };
+    const forward = (e) => {
+        if (!amEnabled) return; // stop forwarding when recording/setting is off
+        try { ipcRenderer.send('activity-monitor-event', (e && e.detail) || null); } catch { /* ignore */ }
+    };
+    const ensure = () => {
+        try {
+            if (!amNonce) amNonce = makeNonce();
+            const amData = ipcRenderer.sendSync('get-activity-monitor-sync', { nonce: amNonce });
+            amEnabled = !!(amData && amData.enabled);
+            if (!amEnabled) return;
+            if (!amListening) { document.addEventListener(amNonce, forward, true); amListening = true; }
+            if (amData.script) webFrame.executeJavaScript(amData.script); // idempotent in the page
+        } catch { /* internal pages, handler not ready, recording off, etc. */ }
+    };
+    ensure(); // document-start: inject if capture is already active
+    // Live transitions from main (recording start/stop, setting toggle, navigation).
+    ipcRenderer.on('activity-monitor-update', (_, payload) => {
+        if (payload && payload.enabled) ensure();
+        else amEnabled = false;
+    });
+})();
+
 // Camera filter: inject into main world BEFORE any page scripts.
 // Uses synchronous IPC so it blocks until the script is ready — guaranteed early.
 try {

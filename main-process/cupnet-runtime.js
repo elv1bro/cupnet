@@ -501,6 +501,7 @@ const _cdpNetworkLogging = createCdpNetworkLogging({
     requestScreenshot,
 });
 const setupNetworkLogging = _cdpNetworkLogging.setupNetworkLogging;
+const ingestActivityEvent = _cdpNetworkLogging.ingestActivityEvent;
 
 function getInternalPageUrl(pageName) {
     const name = String(pageName || '').trim().toLowerCase();
@@ -1396,6 +1397,7 @@ app.whenReady().then(async () => {
             case 'session': return session;
             case 'settingsStore': return settingsStore;
             case 'setupNetworkLogging': return setupNetworkLogging;
+            case 'ingestActivityEvent': return ingestActivityEvent;
             case 'shell': return shell;
             case 'stabilityMetrics': return stabilityMetrics;
             case 'startupMetrics': return startupMetrics;

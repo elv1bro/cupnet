@@ -162,6 +162,16 @@ function registerDbLoggingIpc(ctx) {
     ctx.ipcMain.handle('toggle-logging-stop', async () => {
         ctx.isLoggingEnabled = false;
         ctx.hadLoggingBeenStopped = true;
+        // Tell open tabs' preloads to stop forwarding Activity Monitor events.
+        // Correctness doesn't depend on this (ingestActivityEvent drops events
+        // while logging is off), but it saves wasted IPC from chatty pages.
+        try {
+            for (const tab of ctx.tabManager.getAllTabs()) {
+                const wc = tab.view?.webContents;
+                if (!wc || wc.isDestroyed()) continue;
+                try { wc.send('activity-monitor-update', { enabled: false }); } catch { /* tab gone */ }
+            }
+        } catch { /* tabManager unavailable */ }
         ctx.sendLogStatus();
         return { success: true };
     });

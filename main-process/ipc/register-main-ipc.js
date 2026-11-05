@@ -30,6 +30,7 @@ const { registerSessionProfileIpc } = require('./handlers/session-profile-ipc');
 const { registerPageHttpLabIpc } = require('./handlers/page-http-lab-ipc');
 const { registerProfileIpc } = require('./handlers/profile-ipc');
 const { registerIdentityIpc } = require('./handlers/identity-ipc');
+const { registerActivityMonitorIpc } = require('./handlers/activity-monitor-ipc');
 
 function registerMainProcessIpc(ctx) {
     registerMitmStartupIpc(ctx);
@@ -58,6 +59,7 @@ function registerMainProcessIpc(ctx) {
     registerPageHttpLabIpc(ctx);
     registerProfileIpc(ctx);
     registerIdentityIpc(ctx);
+    registerActivityMonitorIpc(ctx);
 }
 
 module.exports = { registerMainProcessIpc };
