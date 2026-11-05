@@ -16,11 +16,12 @@ function registerTraceHarIpc(ctx) {
             filters: [{ name: 'HAR Files', extensions: ['har'] }]
         });
         if (canceled) return { success: false, canceled: true };
+        const appVersion = ctx.app.getVersion();
         try {
             if (typeof ctx.harExporter.exportHarToFileStream === 'function' && process.env.CUPNET_HAR_LEGACY_SYNC !== '1') {
-                ctx.harExporter.exportHarToFileStream(filePath, sid);
+                ctx.harExporter.exportHarToFileStream(filePath, sid, { appVersion });
             } else {
-                const har = ctx.harExporter.exportHar(sid);
+                const har = ctx.harExporter.exportHar(sid, { appVersion });
                 ctx.fs.writeFileSync(filePath, JSON.stringify(har, null, 2));
             }
             let sidecarPath = null;

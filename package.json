@@ -1,6 +1,6 @@
 {
   "name": "cupnet",
-  "version": "27.06.2026-5",
+  "version": "2.0.0",
   "productName": "CupNet",
   "description": "An Electron browser with proxy selection and advanced network logging.",
   "main": "main.js",
@@ -100,7 +100,19 @@
       "**/*",
       "!dist",
       "!node_modules/.cache",
-      "!azuretls/node_modules/.cache"
+      "!azuretls/node_modules/.cache",
+      "!tests${/*}",
+      "!docs${/*}",
+      "!.github${/*}",
+      "!.claude${/*}",
+      "!.cursor${/*}",
+      "!*.md",
+      "!**/*.log",
+      "!_debug*",
+      "!**/_debug*",
+      "!azuretls-go/**/*.go",
+      "!azuretls-go/go.mod",
+      "!azuretls-go/go.sum"
     ],
     "extraResources": [
       {
@@ -126,7 +138,7 @@
           ]
         }
       ],
-      "artifactName": "MacOS_CupNet-${version}.${ext}"
+      "artifactName": "MacOS_CupNet-${version}-${arch}.${ext}"
     },
     "win": {
       "icon": "icons/icon.ico",

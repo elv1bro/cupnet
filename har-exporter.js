@@ -189,13 +189,32 @@ function exportWebSocketSidecarPayload(sessionId) {
 }
 
 /**
+ * Builds the HAR `log.creator` object. Pure: the version is whatever the caller
+ * threads through from `app.getVersion()`, never a hard-coded literal, so the HAR
+ * always stamps the running app version.
+ * @param {string} appVersion
+ * @param {string} comment
+ * @returns {{name: string, version: string, comment: string}}
+ */
+function buildHarCreator(appVersion, comment) {
+    return {
+        name: 'CupNet',
+        version: typeof appVersion === 'string' && appVersion ? appVersion : 'unknown',
+        comment: comment || '',
+    };
+}
+
+/**
  * Exports requests from the SQLite DB as HAR 1.2 format.
  * @param {number|null} sessionId  – export only this session; null = all
- * @param {object}      filters    – same filters as db.queryRequests
+ * @param {object}      filters    – same filters as db.queryRequests; `appVersion`
+ *                                    (if present) stamps log.creator.version and is
+ *                                    stripped before the DB query.
  * @returns {object} HAR 1.2 object
  */
 function exportHar(sessionId, filters = {}) {
-    const mergedFilters = { ...filters };
+    const { appVersion, ...restFilters } = filters || {};
+    const mergedFilters = { ...restFilters };
     if (sessionId) mergedFilters.sessionId = sessionId;
 
     const total = db.countRequests(mergedFilters);
@@ -217,11 +236,7 @@ function exportHar(sessionId, filters = {}) {
     return {
         log: {
             version: '1.2',
-            creator: {
-                name: 'CupNet',
-                version: '2.0',
-                comment: creatorComment,
-            },
+            creator: buildHarCreator(appVersion, creatorComment),
             browser: { name: 'Electron', version: process.versions.electron || '', comment: '' },
             pages: buildPages(sessionId, entries),
             entries,
@@ -297,10 +312,13 @@ function statusText(code) {
  * Output is compact JSON (not pretty-printed).
  * @param {string} filePath
  * @param {number|null} sessionId
- * @param {object} [filters]
+ * @param {object} [filters]  same filters as db.queryRequests; `appVersion` (if
+ *                            present) stamps log.creator.version and is stripped
+ *                            before the DB query.
  */
 function exportHarToFileStream(filePath, sessionId, filters = {}) {
-    const mergedFilters = { ...filters };
+    const { appVersion, ...restFilters } = filters || {};
+    const mergedFilters = { ...restFilters };
     if (sessionId) mergedFilters.sessionId = sessionId;
 
     const total = db.countRequests(mergedFilters);
@@ -330,7 +348,7 @@ function exportHarToFileStream(filePath, sessionId, filters = {}) {
         sessionProxyInfo: egress.sessionProxyInfo || null,
     };
 
-    const creator = { name: 'CupNet', version: '2.0', comment: creatorComment };
+    const creator = buildHarCreator(appVersion, creatorComment);
     const browser = { name: 'Electron', version: process.versions.electron || '', comment: '' };
 
     const fd = fs.openSync(filePath, 'w');
@@ -355,6 +373,7 @@ function exportHarToFileStream(filePath, sessionId, filters = {}) {
 module.exports = {
     exportHar,
     exportHarToFileStream,
+    buildHarCreator,
     buildHarEntryFromRow,
     exportWebSocketSidecarPayload,
     getHarExportMaxChars,
