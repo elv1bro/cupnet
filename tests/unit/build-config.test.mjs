@@ -44,6 +44,17 @@ describe('electron-builder config', () => {
         expect(goBin.to).toBe('azuretls-go/bin');
     });
 
+    it('dist:mac forces BOTH arches (A-045: CLI target overrides mac.target arch)', () => {
+        // `electron-builder --mac dmg` builds only the host arch unless the arches
+        // are forced, so the x64 DMG silently goes missing. The scripts must pass
+        // --x64 --arm64 explicitly.
+        for (const script of ['dist:mac', 'dist:mac:local']) {
+            const cmd = pkg.scripts?.[script] || '';
+            expect(cmd, `${script} must force --x64`).toContain('--x64');
+            expect(cmd, `${script} must force --arm64`).toContain('--arm64');
+        }
+    });
+
     it('wires the afterPack Go-worker guard (A-045: per-arch worker must ship)', () => {
         // The mac DMG target builds both x64+arm64; extraResources copies whatever
         // is in azuretls-go/bin into EACH. The afterPack hook fails the build if the

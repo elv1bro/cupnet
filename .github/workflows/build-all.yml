@@ -117,6 +117,25 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run dist:mac:local
 
+      # The mac DMG target is multi-arch (x64 + arm64). Passing a target on the
+      # electron-builder CLI overrides mac.target, so the arches MUST be forced
+      # with --x64 --arm64 (see dist:mac:local). Assert BOTH DMGs landed, or an
+      # Intel user would download nothing / the wrong slice (A-045). afterPack
+      # can't catch this — it only sees arches that were actually packaged.
+      - name: Verify both macOS DMGs were produced
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          x64=(dist/*-x64.dmg)
+          arm=(dist/*-arm64.dmg)
+          ls -l dist/*.dmg || true
+          if [ ${#x64[@]} -eq 0 ] || [ ${#arm[@]} -eq 0 ]; then
+            echo "::error::Expected both an -x64.dmg and an -arm64.dmg; got x64=${#x64[@]} arm64=${#arm[@]} (A-045)."
+            exit 1
+          fi
+          echo "OK: shipped ${x64[*]} and ${arm[*]}"
+
       - name: Build Windows
         if: runner.os == 'Windows'
         shell: powershell
@@ -160,10 +179,13 @@ jobs:
           name: CupNet ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: false
+          # Only the NSIS installer, not the stray unpacked CupNet.exe / elevate.exe
+          # / azuretls-worker-*.exe that live beside it in the build dir (A-194).
           files: |
-            release-assets/**/*.dmg
-            release-assets/**/*.exe
-            release-assets/**/*.AppImage
-            release-assets/**/*.blockmap
+            release-assets/**/MacOS_CupNet-*.dmg
+            release-assets/**/Windows_CupNet-*.exe
+            release-assets/**/Linux_CupNet-*.AppImage
+            release-assets/**/MacOS_CupNet-*.dmg.blockmap
+            release-assets/**/Windows_CupNet-*.exe.blockmap
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
