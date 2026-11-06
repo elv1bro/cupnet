@@ -43,4 +43,12 @@ describe('electron-builder config', () => {
         expect(goBin).toBeTruthy();
         expect(goBin.to).toBe('azuretls-go/bin');
     });
+
+    it('wires the afterPack Go-worker guard (A-045: per-arch worker must ship)', () => {
+        // The mac DMG target builds both x64+arm64; extraResources copies whatever
+        // is in azuretls-go/bin into EACH. The afterPack hook fails the build if the
+        // packaged app for its arch is missing the worker it loads at runtime, so a
+        // CI step that only built the host-arch worker can't ship a workerless DMG.
+        expect(build.afterPack).toBe('scripts/after-pack-verify-go-worker.cjs');
+    });
 });

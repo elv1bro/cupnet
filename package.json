@@ -89,6 +89,7 @@
   },
   "build": {
     "appId": "com.cup.net",
+    "afterPack": "scripts/after-pack-verify-go-worker.cjs",
     "publish": [
       "github"
     ],

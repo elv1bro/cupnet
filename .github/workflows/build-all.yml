@@ -74,8 +74,29 @@ jobs:
           go-version: '1.24.x'
           cache-dependency-path: azuretls-go/go.sum
 
-      - name: Build AzureTLS Go worker (macOS/Linux)
-        if: runner.os != 'Windows'
+      # macOS ships a universal release: the DMG target builds BOTH x64 and arm64,
+      # and extraResources copies azuretls-go/bin/** into each. So both darwin
+      # worker arches must exist before dist:mac, or the x64 DMG has no worker and
+      # every tab fails at MITM start (AUDIT A-045). Cross-compiling darwin amd64 on
+      # the arm64 runner is pure Go (no cgo in the worker).
+      - name: Build AzureTLS Go worker (macOS, both arches)
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: azuretls-go
+        env:
+          GO111MODULE: 'on'
+          GOTOOLCHAIN: 'auto'
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p bin
+          GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o "bin/azuretls-worker-darwin-amd64" .
+          GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o "bin/azuretls-worker-darwin-arm64" .
+          test -f bin/azuretls-worker-darwin-amd64
+          test -f bin/azuretls-worker-darwin-arm64
+          ls -l bin/
+
+      - name: Build AzureTLS Go worker (Linux)
+        if: runner.os == 'Linux'
         shell: bash
         run: npm run build:go:local
 
